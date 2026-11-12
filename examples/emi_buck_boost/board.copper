@@ -2,6 +2,8 @@
 // Run: copper emi-check examples/emi_buck_boost/board.copper --allow-proxy-footprints
 // The cell has two hot loops: the input loop (CIN, VIN, PGND) and the output loop (COUT, VOUT, PGND).
 // COUT is placed farther from the regulator than CIN so the two loops differ.
+// `load_current` is a buck attribute (CMP133 for any other topology): this cell has no operating point and both
+// loops report the current-limit scenario, a worst case.
 board EmiBuckBoost {
     import p "./parts";
 

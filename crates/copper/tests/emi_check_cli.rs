@@ -275,3 +275,75 @@ fn write_finds_the_route_report_above_a_checkpoint_file() {
 fn write_the_example_run_for_manual_inspection() {
     let _ = write_routed_run("manual");
 }
+
+/// `examples/emi_buck_filter` copied to a scratch directory, with the switch pin's current transition times and the
+/// input capacitor's `capacitance_at_bias` added.
+fn declared_operating_inputs(name: &str) -> PathBuf {
+    let source = workspace().join("examples").join("emi_buck_filter");
+    let target = std::env::temp_dir().join(format!("copper-emi-query-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::create_dir_all(target.join("parts")).unwrap();
+    for entry in std::fs::read_dir(source.join("parts")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), target.join("parts").join(entry.file_name())).unwrap();
+    }
+    let board = std::fs::read_to_string(source.join("board.copper")).unwrap();
+    let edited = board.replace(
+        "component CIN: p.Cap { value = 10uF;",
+        "component CIN: p.Cap { value = 10uF; capacitance_at_bias = 4.2uF;",
+    );
+    assert_ne!(board, edited, "the example declares CIN");
+    std::fs::write(target.join("board.copper"), edited).unwrap();
+    let buck = std::fs::read_to_string(source.join("parts").join("buck.copper")).unwrap();
+    let edited =
+        buck.replace("rise_time = 5ns;", "rise_time = 5ns; current_rise_time = 8ns; current_fall_time = 12ns;");
+    assert_ne!(buck, edited, "the example declares the switch pin edge");
+    std::fs::write(target.join("parts").join("buck.copper"), edited).unwrap();
+    target
+}
+
+#[test]
+fn query_emi_prints_the_operating_point_the_current_transitions_and_the_capacitance_at_bias() {
+    let directory = declared_operating_inputs("emi");
+    let board = directory.join("board.copper");
+    let board = board.to_str().unwrap();
+    let output = copper(&["query", board, "emi", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
+    let Ok(Value::Object(model)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
+    let cells = model.get("cells").and_then(Value::as_array).expect("cells");
+    let Some(Value::Object(cell)) = cells.first() else { panic!("a cell") };
+    let quantity = |key: &str| {
+        let Some(Value::Object(q)) = cell.get(key) else { panic!("{key} is {:?}", cell.get(key)) };
+        q.get("base_value").and_then(Value::as_str).expect("base_value").to_owned()
+    };
+    assert_eq!(quantity("load_current"), "2");
+    assert_eq!(quantity("current_rise_time"), "0.000000008");
+    assert_eq!(quantity("current_fall_time"), "0.000000012");
+    assert_eq!(quantity("current_peak"), "4.5");
+    let capacitors = cell.get("hot_capacitors").and_then(Value::as_array).expect("hot capacitors");
+    let Some(Value::Object(cin)) = capacitors.first() else { panic!("a hot capacitor") };
+    assert_eq!(cin.get("component").and_then(Value::as_str), Some("CIN"));
+    let Some(Value::Object(bias)) = cin.get("capacitance_at_bias") else { panic!("capacitance_at_bias on CIN") };
+    assert_eq!(bias.get("base_value").and_then(Value::as_str), Some("0.0000042"));
+    // The text form prints the same facts.
+    let text = stdout(&copper(&["query", board, "emi"]));
+    for needle in ["\"load_current\"", "\"current_rise_time\"", "\"current_fall_time\"", "\"capacitance_at_bias\""] {
+        assert!(text.contains(needle), "{needle} in {text}");
+    }
+    // A board that declares none of them prints null, not a key that is missing.
+    let plain = stdout(&copper(&["query", "examples/emi_buck/board.copper", "emi", "--json"]));
+    let Ok(Value::Object(plain)) = copper_json::parse(&plain) else { panic!("an object") };
+    let Some(Value::Object(plain_cell)) = plain.get("cells").and_then(Value::as_array).and_then(|c| c.first()) else {
+        panic!("a cell")
+    };
+    for key in ["load_current", "current_rise_time", "current_fall_time"] {
+        assert_eq!(plain_cell.get(key), Some(&Value::Null), "{key}");
+    }
+    let Some(Value::Object(plain_cin)) =
+        plain_cell.get("hot_capacitors").and_then(Value::as_array).and_then(|c| c.first())
+    else {
+        panic!("a hot capacitor")
+    };
+    assert_eq!(plain_cin.get("capacitance_at_bias"), Some(&Value::Null));
+    let _ = std::fs::remove_dir_all(&directory);
+}

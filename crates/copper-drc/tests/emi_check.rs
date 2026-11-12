@@ -458,6 +458,24 @@ fn a_buck_boost_cell_has_an_input_and_an_output_loop() {
 }
 
 #[test]
+fn a_non_buck_cell_is_never_told_to_declare_a_load_current() {
+    // CMP133 refuses load_current on a non-buck part, so the advice would send the user into an error.
+    let report = buck_boost("bb-scenario", &[]);
+    let loops = find(&report, "EMI-HOT-LOOP");
+    assert_eq!(loops.len(), 2);
+    for hot in loops {
+        assert_eq!(text(hot, "scenario"), "current_limit");
+        let message = &hot.finding.message;
+        assert!(message.contains("buck stage only") && message.contains("this cell is a buck_boost"), "{message}");
+        assert!(!message.contains("declare load_current"), "{message}");
+        assert_eq!(operating_point(hot).get("how_to_declare"), Some(&Value::Null));
+        assert_eq!(operating_point(hot).get("topology").and_then(Value::as_str), Some("buck_boost"));
+        assert!(hot.tags.contains(&"scenario_current_limit".to_owned()), "{:?}", hot.tags);
+        assert!(!text_lines(hot).iter().any(|l| l.contains("declare load_current")), "{:?}", text_lines(hot));
+    }
+}
+
+#[test]
 fn a_buck_boost_without_an_output_capacitor_reports_the_output_loop_as_not_applicable() {
     let report = buck_boost(
         "buck-boost-no-cout",
@@ -1654,6 +1672,25 @@ fn parallel_hot_capacitors_are_branches_of_their_own_with_a_stated_connection_in
     let largest = finding.measures.get("largest_current_share_fundamental").unwrap();
     let Value::Object(largest) = largest else { panic!("largest {largest:?}") };
     assert_eq!(largest.get("component").and_then(Value::as_str), Some("CIN2"));
+    // The shares are ratios of magnitudes, not a partition: the output says so wherever it prints them.
+    let lines = text_lines(finding);
+    assert!(
+        lines.iter().any(|l| l.starts_with("capacitor CIN2") && l.contains("branch current over source current")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("|I_branch| / |I_source|") && l.contains("not a partition of the source current")),
+        "{lines:?}"
+    );
+    let message = &finding.finding.message;
+    assert!(
+        message.contains("largest branch-current ratio |I_branch| / |I_source|") && message.contains("not a partition"),
+        "{message}"
+    );
+    assert!(!message.contains("ripple-current share"), "{message}");
+    assert!(text(finding, "current_share_definition").contains("add to more than 100 %"));
     // Doubling the capacitance on the hot net lowers the fundamental: the lumped single-capacitor model cannot.
     let fundamental = |report: &EmiCheckReport| harmonic_rows(conducted(report))[0].1;
     assert!(
@@ -1661,6 +1698,36 @@ fn parallel_hot_capacitors_are_branches_of_their_own_with_a_stated_connection_in
         "{} against {}",
         fundamental(&report),
         fundamental(&single)
+    );
+}
+
+#[test]
+fn current_shares_of_circulating_branches_can_add_to_more_than_a_hundred_percent_and_the_output_says_what_they_are() {
+    // The filter example: the hot capacitor CIN and, behind the filter inductor, CUP. At the fundamental CIN carries
+    // slightly more than the source current (it also passes the current CUP returns through the inductor).
+    let report = run_board("emi_buck_filter", "shares", &[], |_| {});
+    let finding = conducted(&report);
+    let branches = finding.measures.get("capacitor_branches").and_then(Value::as_array).unwrap();
+    let total: f64 = branches.iter().map(|b| number(row_object(b).get("current_share_fundamental").unwrap())).sum();
+    let cin = branch_of(finding, "CIN");
+    assert!(number(cin.get("current_share_fundamental").unwrap()) > 1.0, "{cin:?}");
+    assert!(total > 1.0, "the shares add to {total}");
+    let lines = text_lines(finding);
+    assert!(lines.iter().any(|l| l.contains("not a partition of the source current")), "{lines:?}");
+    // The printed ratios show what the note says: CIN 100.4 % and CUP 0.42 % add to more than 100 %.
+    assert!(
+        lines.iter().any(|l| l.starts_with("capacitor CIN") && l.contains("100.4 % at the fundamental")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("capacitor CUP") && l.contains("0.42 % at the fundamental")),
+        "{lines:?}"
+    );
+    let message = &finding.finding.message;
+    assert!(
+        message.contains("largest branch-current ratio |I_branch| / |I_source|")
+            && message.contains("can add to more than 100 %"),
+        "{message}"
     );
 }
 
@@ -1697,11 +1764,80 @@ fn unlike_capacitors_on_the_hot_net_show_an_anti_resonance_in_the_report() {
     let expect = 1.0 / (2.0 * std::f64::consts::PI * ((l1 + l2) * (c1 * c2 / (c1 + c2))).sqrt());
     assert!((f / expect - 1.0).abs() < 0.1, "peak {f} Hz against 1/(2 pi sqrt(L C)) = {expect} Hz");
     let message = &finding.finding.message;
-    assert!(message.contains("anti-resonance of the input network at"), "{message}");
+    assert!(message.contains("significant anti-resonance of the input network at"), "{message}");
     assert!(text_lines(finding).iter().any(|l| l.starts_with("anti-resonance of the input network at")));
     // A single capacitor has none.
     let single = conducted(&run("antiresonance-single", &[])).measures.get("anti_resonances").cloned();
     assert_eq!(single, Some(Value::Array(Vec::new())));
+}
+
+#[test]
+fn an_insignificant_anti_resonance_is_listed_but_neither_tagged_nor_in_the_headline() {
+    // Two identical 10 uF capacitors 5 mm apart: the model finds a peak between them, true but small.
+    let report = run("antiresonance-identical", &with_second_capacitor());
+    let finding = conducted(&report);
+    let peaks = finding.measures.get("anti_resonances").and_then(Value::as_array).unwrap();
+    assert!(!peaks.is_empty(), "the identical pair has a (small) anti-resonance");
+    for peak in peaks {
+        let Value::Object(peak) = peak else { panic!("peak") };
+        assert_eq!(peak.get("significant"), Some(&Value::Bool(false)), "{peak:?}");
+        assert!(number(peak.get("rise_over_envelope_db").unwrap()) < 6.03, "{peak:?}");
+        assert!(text_of(peak, "text").contains("not significant"));
+    }
+    assert!(!finding.tags.contains(&"anti_resonance_in_band".to_owned()), "{:?}", finding.tags);
+    assert!(
+        !finding.finding.message.contains("significant anti-resonance of the input network"),
+        "{}",
+        finding.finding.message
+    );
+    assert!(
+        finding.finding.message.contains("further anti-resonance(s) not significant"),
+        "{}",
+        finding.finding.message
+    );
+    // Every detected peak is still in the text lines with its verdict.
+    assert!(
+        text_lines(finding)
+            .iter()
+            .any(|l| l.starts_with("anti-resonance of the input network at") && l.contains("not significant"))
+    );
+}
+
+#[test]
+fn a_significant_anti_resonance_carries_the_tag_the_headline_and_the_criterion_fields() {
+    let edits = [
+        (
+            "    component CBOOT:",
+            "    component CSMALL: p.Cap { value = 100nF; footprint = \"C_0402\"; }\n    component CBOOT:",
+        ),
+        ("net VIN { U1.VIN; CIN.A; }", "net VIN { U1.VIN; CIN.A; CSMALL.A; }"),
+        ("D1.A; COUT.B;", "D1.A; CSMALL.B; COUT.B;"),
+        (
+            "    constraint fixed_placement(J1)",
+            "    constraint fixed_placement(CSMALL) { x = 20.5mm; y = 29mm; rotation = 180; }\n    constraint fixed_placement(J1)",
+        ),
+    ];
+    let report = run("antiresonance-significant", &edits);
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"anti_resonance_in_band".to_owned()), "{:?}", finding.tags);
+    let peaks = finding.measures.get("anti_resonances").and_then(Value::as_array).unwrap();
+    let significant: Vec<_> = peaks
+        .iter()
+        .filter_map(|p| if let Value::Object(p) = p { Some(p) } else { None })
+        .filter(|p| p.get("significant") == Some(&Value::Bool(true)))
+        .collect();
+    assert!(!significant.is_empty(), "{peaks:?}");
+    for peak in &significant {
+        assert!(number(peak.get("harmonic_rise_db").unwrap()) >= 6.02, "{peak:?}");
+        assert!(number(peak.get("rise_over_envelope_db").unwrap()) >= 6.02, "{peak:?}");
+        assert!(number(peak.get("envelope_impedance_ohm").unwrap()) < number(peak.get("impedance_ohm").unwrap()));
+        assert!(text_of(peak, "text").contains("SIGNIFICANT"));
+    }
+    assert!(
+        finding.finding.message.contains("significant anti-resonance of the input network at"),
+        "{}",
+        finding.finding.message
+    );
 }
 
 #[test]
@@ -1774,31 +1910,185 @@ fn declaring_the_frequency_on_the_component_restores_the_detector_comparison() {
     assert!(!finding.tags.contains(&"detector_not_applicable".to_owned()));
 }
 
-#[test]
-fn harmonics_closer_than_the_if_bandwidth_are_line_amplitudes_with_no_margin() {
-    // 15 kHz switching: the harmonic spacing is below twice the 9 kHz Band B bandwidth, so several lines share
-    // the IF filter and the per-line RMS level is not a quasi-peak or average reading.
-    let report = run_full(
+fn slow_board(name: &str, frequency: &str) -> EmiCheckReport {
+    run_full(
         "emi_buck",
-        "slow",
+        name,
         &[],
-        &[("buck.copper", "switching_frequency = 500kHz;", "switching_frequency = 15kHz;")],
+        &[("buck.copper", "switching_frequency = 500kHz;", &format!("switching_frequency = {frequency};"))],
         |_| {},
-    );
+    )
+}
+
+fn receiver_of(finding: &EmiFinding) -> &copper_json::Object {
+    match finding.measures.get("receiver_emulation") {
+        Some(Value::Object(receiver)) => receiver,
+        other => panic!("receiver_emulation {other:?}"),
+    }
+}
+
+fn row_object(value: &Value) -> &copper_json::Object {
+    match value {
+        Value::Object(row) => row,
+        other => panic!("row {other:?}"),
+    }
+}
+
+#[test]
+fn harmonics_closer_than_the_if_bandwidth_are_read_by_the_receiver_emulation_where_selected() {
+    // 15 kHz switching: the harmonic spacing is below twice the 9 kHz Band B bandwidth, so the isolated-line
+    // reading does not hold. One constant frequency, strictly periodic: the receiver emulation reads a bounded
+    // selection of the harmonics; the rest are line amplitudes.
+    let report = slow_board("slow", "15kHz");
     let finding = conducted(&report);
-    assert_eq!(text(finding, "detector_applicability"), "not_applicable");
+    assert_eq!(text(finding, "detector_applicability"), "receiver_emulation");
     assert!(text(finding, "detector_reason").contains("resolution bandwidth"), "{}", text(finding, "detector_reason"));
     let Some(Value::Array(bands)) = finding.measures.get("detector_bands") else { panic!("bands") };
     assert_eq!(bands.len(), 1, "only Band B holds harmonics of 150 kHz to 30 MHz");
-    assert!(finding.margin_db.is_none() && finding.measures.get("margins_available") == Some(&Value::Bool(false)));
-    assert!(finding.finding.message.contains("NOT a detector reading"), "{}", finding.finding.message);
-    assert!(finding.tags.contains(&"line_amplitudes_only".to_owned()));
-    let row = first_row(finding);
-    assert_eq!(row.get("limit_qp"), Some(&Value::Null));
-    assert_eq!(row.get("margin_avg_db"), Some(&Value::Null));
-    // Everything that reads the finding sees the status: the JSON and the coverage entry.
-    assert!(report.json().contains("\"detector_applicability\": \"not_applicable\""));
-    assert!(coverage(&report, "EMI-CONDUCTED:U1").detail.contains("NOT applicable"));
+    assert_eq!(row_object(&bands[0]).get("status").and_then(Value::as_str), Some("receiver_emulation"));
+    assert!(finding.tags.contains(&"detector_receiver_emulation".to_owned()), "{:?}", finding.tags);
+    assert!(!finding.tags.contains(&"line_amplitudes_only".to_owned()));
+    assert!(!finding.tags.contains(&"detector_not_applicable".to_owned()));
+    assert_eq!(finding.measures.get("margins_available"), Some(&Value::Bool(true)));
+    assert_eq!(text(finding, "margins_scope"), "evaluated_harmonics_only");
+    assert_eq!(finding.estimate.as_ref().unwrap().quantity, "conducted_emission");
+    let message = &finding.finding.message;
+    assert!(
+        message.contains("detector readings by receiver emulation at") && message.contains("NOT detector readings"),
+        "{message}"
+    );
+    // The selection is stated and bounded; margins exist for the evaluated harmonics only.
+    let receiver = receiver_of(finding);
+    assert_eq!(text_of(receiver, "status"), "evaluated");
+    let evaluated = number(receiver.get("harmonics_evaluated").unwrap()) as usize;
+    let reported = number(receiver.get("harmonics_reported").unwrap()) as usize;
+    assert!((8..=48).contains(&evaluated), "{evaluated}");
+    assert!(reported > 1900, "{reported} lines in 150 kHz .. 30 MHz at 15 kHz");
+    assert!(text_of(receiver, "selection_rule").contains("at most 48 harmonics"));
+    let cases = number(receiver.get("cases").unwrap()) as usize;
+    assert!(cases >= 2, "the DC-bias band of the default capacitors gives corner cases: {cases}");
+    assert_eq!(
+        number(receiver.get("receiver_evaluations").unwrap()) as usize,
+        2 * evaluated * cases,
+        "two LISN ports, every case"
+    );
+    assert!(number(receiver.get("harmonic_solves").unwrap()) <= (reported as f64 + 30.0) * cases as f64);
+    let rows = finding.measures.get("harmonics").and_then(Value::as_array).unwrap();
+    let read: Vec<&copper_json::Object> =
+        rows.iter().map(row_object).filter(|r| matches!(r.get("receiver"), Some(Value::Object(_)))).collect();
+    assert_eq!(read.len(), evaluated);
+    for row in rows.iter().map(row_object) {
+        let has_reading = matches!(row.get("receiver"), Some(Value::Object(_)));
+        for key in ["limit_qp", "limit_avg", "margin_qp_db", "margin_avg_db", "margin_db"] {
+            assert_eq!(row.get(key) != Some(&Value::Null), has_reading, "{key} only where the harmonic was read");
+        }
+    }
+    for row in &read {
+        let Some(Value::Object(r)) = row.get("receiver") else { unreachable!() };
+        let (peak, qp, avg) = (
+            number(r.get("peak_dbuv").unwrap()),
+            number(r.get("quasi_peak_dbuv").unwrap()),
+            number(r.get("average_dbuv").unwrap()),
+        );
+        assert!(peak >= qp - 0.01 && qp >= avg - 0.01, "peak >= quasi-peak >= average: {peak} {qp} {avg}");
+        // 15 kHz is 1.67 x the bandwidth but the Gaussian IF puts the neighbours 67 dB down: the detectors read the line.
+        assert!((qp - number(row.get("total_dbuv").unwrap())).abs() < 0.5, "{row:?}");
+        // The margins are the limits against the high-end quasi-peak and average readings.
+        let (qp_high, avg_high) =
+            (number(r.get("quasi_peak_high_dbuv").unwrap()), number(r.get("average_high_dbuv").unwrap()));
+        assert!(
+            (number(row.get("margin_qp_db").unwrap()) - (number(row.get("limit_qp").unwrap()) - qp_high)).abs() < 0.011
+        );
+        assert!(
+            (number(row.get("margin_avg_db").unwrap()) - (number(row.get("limit_avg").unwrap()) - avg_high)).abs()
+                < 0.011
+        );
+    }
+    // The headline is the least-margin evaluated harmonic.
+    let least = read.iter().map(|r| number(r.get("margin_db").unwrap())).fold(f64::INFINITY, f64::min);
+    assert_eq!(finding.margin_db, Some((least * 100.0).round() / 100.0));
+    // Everything that reads the finding sees the status.
+    assert!(report.json().contains("\"detector_applicability\": \"receiver_emulation\""));
+    let detail = &coverage(&report, "EMI-CONDUCTED:U1").detail;
+    assert!(detail.contains("receiver emulation at") && detail.contains("line amplitudes with no margin"), "{detail}");
+    assert!(
+        text_lines(finding).iter().any(|l| l.contains("unverified") || l.contains("UNVERIFIED"))
+            || finding
+                .measures
+                .get("assumptions")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|a| a.contains("UNVERIFIED against the standard"))
+    );
+}
+
+#[test]
+fn lines_inside_the_if_filter_read_above_the_line_level_and_the_selection_is_bounded() {
+    // 3 kHz switching: three lines and more inside the 9 kHz response, so the peak detector reads well above the
+    // line RMS and the detectors differ. 9 951 harmonics in the band, at most 48 read.
+    let report = slow_board("slower", "3kHz");
+    let finding = conducted(&report);
+    assert_eq!(text(finding, "detector_applicability"), "receiver_emulation");
+    let receiver = receiver_of(finding);
+    let evaluated = number(receiver.get("harmonics_evaluated").unwrap()) as usize;
+    assert!((8..=48).contains(&evaluated), "{evaluated}");
+    assert!(number(receiver.get("harmonics_reported").unwrap()) > 9900.0);
+    let Some(Value::Object(counts)) = receiver.get("selected_as") else { panic!("selected_as") };
+    assert_eq!(counts.iter().map(|(_, n)| number(n) as usize).sum::<usize>(), evaluated);
+    // The average-margin harmonics are the quasi-peak-margin ones here (the same lines), so they add nothing new.
+    for reason in ["least_quasi_peak_margin", "highest_line_level", "spread_over_the_band"] {
+        assert!(counts.get(reason).is_some(), "{reason} in {counts:?}");
+    }
+    let rows = finding.measures.get("harmonics").and_then(Value::as_array).unwrap();
+    let rows: Vec<&copper_json::Object> = rows.iter().map(row_object).collect();
+    // The first and last reported harmonics and the highest line level are among the evaluated.
+    let read = |row: &&copper_json::Object| matches!(row.get("receiver"), Some(Value::Object(_)));
+    assert!(read(&rows[0]) && read(rows.last().unwrap()));
+    let highest = rows
+        .iter()
+        .max_by(|a, b| number(a.get("total_dbuv").unwrap()).total_cmp(&number(b.get("total_dbuv").unwrap())))
+        .unwrap();
+    assert!(read(highest));
+    // Several lines in the IF: the detector readings differ from the line amplitude and from each other.
+    let mut apart = 0;
+    for row in rows.iter().filter(|r| read(r)) {
+        let Some(Value::Object(r)) = row.get("receiver") else { unreachable!() };
+        let (peak, qp, avg) = (
+            number(r.get("peak_dbuv").unwrap()),
+            number(r.get("quasi_peak_dbuv").unwrap()),
+            number(r.get("average_dbuv").unwrap()),
+        );
+        assert!(peak >= qp - 0.01 && qp >= avg - 0.01, "{peak} {qp} {avg}");
+        if peak - avg > 1.0 {
+            apart += 1;
+        }
+    }
+    assert!(apart > 0, "at 3 kHz the detectors disagree with each other");
+}
+
+#[test]
+fn a_range_or_a_modulated_frequency_never_gets_the_receiver_emulation() {
+    let report = run_full(
+        "emi_buck",
+        "range-no-receiver",
+        &[("component U1: p.Buck { footprint = \"QFN-5\"; }", "component U1: p.Buck { footprint = \"QFN-5\"; }")],
+        &[(
+            "buck.copper",
+            "switching_frequency = 500kHz;",
+            "switching_frequency_min = 10kHz; switching_frequency_max = 15kHz;",
+        )],
+        |_| {},
+    );
+    let scenarios: Vec<_> = find(&report, "EMI-CONDUCTED");
+    assert_eq!(scenarios.len(), 2);
+    for finding in scenarios {
+        assert_eq!(text(finding, "detector_applicability"), "not_applicable");
+        assert_eq!(finding.measures.get("receiver_emulation"), Some(&Value::Null));
+        assert!(finding.margin_db.is_none());
+        assert!(finding.tags.contains(&"detector_not_applicable".to_owned()));
+    }
 }
 
 #[test]
@@ -2230,9 +2520,219 @@ fn a_declared_operating_point_is_the_headline_and_the_current_limit_the_secondar
     assert_eq!(none.get("status").and_then(Value::as_str), Some("not_declared"));
     assert!(none.get("how_to_declare").and_then(Value::as_str).unwrap().contains("load_current"));
     assert!((band_of(rows_of(plain)[0]).1 - number(second_fundamental.get("high_dbuv").unwrap())).abs() < 1e-6);
-    // The radiated estimate and the field map stay at the current limit: a declared load changes nothing there.
+    // The hot-loop estimates follow the same scenario (see the hot-loop tests below).
     let radiated = |report: &EmiCheckReport| find(report, "EMI-HOT-LOOP").remove(0).estimate.as_ref().unwrap().value;
-    assert_eq!(radiated(&report), radiated(&run("load-none-radiated", &[])));
+    assert!(radiated(&report) < radiated(&plain_report) - 1.0, "a 2 A mean is below the 4.5 A limit");
+}
+
+/// The Fourier line `n` of the ramp-on-pedestal buck input current with finite edges, by a direct numerical
+/// transform of the sampled waveform (written here: no code of `copper_emi::harmonic` is used). `ramp` is the
+/// 0-100 % duration of both current edges, `valley` and `peak` the ramp's values at the 50 % points of the edges.
+fn brute_force_line(n: u32, valley: f64, peak: f64, duty: f64, period: f64, ramp: f64) -> f64 {
+    let t_on = duty * period;
+    let slope = (peak - valley) / t_on;
+    let at = |t: f64| valley + slope * (t - ramp / 2.0);
+    let (fall_start, fall_end) = (ramp / 2.0 + t_on - ramp / 2.0, ramp / 2.0 + t_on + ramp / 2.0);
+    let x = |t: f64| {
+        if t < 0.0 || t >= fall_end {
+            0.0
+        } else if t < ramp {
+            at(ramp) * t / ramp
+        } else if t < fall_start {
+            at(t)
+        } else {
+            at(fall_start) * (fall_end - t) / (fall_end - fall_start)
+        }
+    };
+    let samples = 1usize << 17;
+    let dt = period / samples as f64;
+    let w = 2.0 * std::f64::consts::PI * f64::from(n) / period;
+    let (mut re, mut im) = (0.0, 0.0);
+    for k in 0..samples {
+        let t = (k as f64 + 0.5) * dt;
+        let v = x(t);
+        re += v * (w * t).cos();
+        im -= v * (w * t).sin();
+    }
+    2.0 * re.hypot(im) * dt / period
+}
+
+/// The brute-force field level (dBuV/m) of the worst line in `30 MHz .. 1 GHz` of a declared point of the example,
+/// and its frequency: E = 1.316e-14 I f^2 A / r with the finding's own loop area, the 10 m of CISPR 32.
+fn brute_force_radiated(hot: &EmiFinding, ripple: f64, load: f64, duty: f64, ramp: f64) -> (f64, f64) {
+    let area = measure(hot, "loop_area_mm2") * 1e-6;
+    let (mut best_level, mut best_f) = (f64::NEG_INFINITY, 0.0);
+    for n in 60..=2000u32 {
+        let c = brute_force_line(n, load - ripple / 2.0, load + ripple / 2.0, duty, 2e-6, ramp);
+        let f = f64::from(n) * 500e3;
+        let level = 20.0 * (1.316e-14 * c * f * f * area / 10.0 / 1e-6).log10();
+        if level > best_level {
+            (best_level, best_f) = (level, f);
+        }
+    }
+    (best_level, best_f)
+}
+
+fn hot_loop(report: &EmiCheckReport) -> &EmiFinding {
+    find(report, "EMI-HOT-LOOP").remove(0)
+}
+
+fn loop_current(finding: &EmiFinding) -> &copper_json::Object {
+    match finding.measures.get("loop_current") {
+        Some(Value::Object(current)) => current,
+        other => panic!("loop_current {other:?}"),
+    }
+}
+
+fn text_of<'a>(object: &'a copper_json::Object, key: &str) -> &'a str {
+    object.get(key).and_then(Value::as_str).unwrap_or_else(|| panic!("{key}"))
+}
+
+#[test]
+fn the_hot_loop_radiated_field_uses_the_declared_operating_point_lines() {
+    let declared = with_load("hl-declared", "2A", None);
+    let plain = run("hl-plain", &[]);
+    let hot = hot_loop(&declared);
+    assert_eq!(text(hot, "scenario"), "declared_operating_point");
+    for tag in ["scenario_declared_operating_point", "declared_operating_point"] {
+        assert!(hot.tags.contains(&tag.to_owned()), "{tag} in {:?}", hot.tags);
+    }
+    assert!(!hot.tags.contains(&"worst_case_current".to_owned()));
+    // The scenario is the one EMI-CONDUCTED reports (same operating point, same valley and peak).
+    let conducted_point = operating_point(conducted(&declared));
+    let hot_point = operating_point(hot);
+    for key in ["status", "ripple_peak_to_peak_a", "valley_a", "peak_a", "inductor"] {
+        assert_eq!(hot_point.get(key), conducted_point.get(key), "{key}");
+    }
+    let current = loop_current(hot);
+    assert_eq!(text_of(current, "waveform"), "ramp_on_pedestal");
+    let ripple = 7.0 * (5.0 / 12.0) / (4.7e-6 * 500e3);
+    assert!((number(current.get("peak_a").unwrap()) - (2.0 + ripple / 2.0)).abs() < 1e-5);
+    assert!((number(current.get("field_amplitude_a").unwrap()) - (2.0 + ripple / 2.0)).abs() < 1e-5);
+    // The level is the worst line of an independent numerical transform of the same waveform, within 0.1 dB, at the
+    // same frequency (a 5 ns 10-90 % edge is a 6.25 ns ramp).
+    let (level, frequency) = brute_force_radiated(hot, ripple, 2.0, 5.0 / 12.0, 6.25e-9);
+    let estimate = hot.estimate.as_ref().expect("estimate");
+    assert!((estimate.value - level).abs() < 0.1, "model {} dBuV/m, brute force {level}", estimate.value);
+    assert_eq!(estimate.frequency_hz, Some(frequency));
+    assert!(estimate.method.contains("harmonic lines of the high-side switch current"), "{}", estimate.method);
+    // The current limit is the secondary worst case and equals what a board without an operating point reports.
+    let plain_estimate = hot_loop(&plain).estimate.as_ref().unwrap();
+    let Some(Value::Object(second)) = hot.measures.get("secondary_scenario") else { panic!("secondary_scenario") };
+    assert_eq!(second.get("scenario").and_then(Value::as_str), Some("current_limit"));
+    assert!((number(second.get("level_dbuv_per_m").unwrap()) - plain_estimate.value).abs() < 1e-9);
+    assert!(estimate.value < plain_estimate.value - 1.0, "{} against {}", estimate.value, plain_estimate.value);
+    let message = &hot.finding.message;
+    assert!(message.contains("scenario declared_operating_point (declared operating point: load 2 A"), "{message}");
+    assert!(message.contains("secondary worst case, current limit 4.5 A"), "{message}");
+}
+
+#[test]
+fn without_an_operating_point_or_outside_the_model_the_hot_loop_stays_at_the_current_limit_and_says_so() {
+    let plain = run("hl-limit", &[]);
+    let hot = hot_loop(&plain);
+    assert_eq!(text(hot, "scenario"), "current_limit");
+    for tag in ["scenario_current_limit", "worst_case_current"] {
+        assert!(hot.tags.contains(&tag.to_owned()), "{tag} in {:?}", hot.tags);
+    }
+    assert_eq!(operating_point(hot).get("status").and_then(Value::as_str), Some("not_declared"));
+    assert_eq!(hot.measures.get("secondary_scenario"), None);
+    let message = &hot.finding.message;
+    assert!(
+        message.contains("scenario current_limit (current limit 4.5 A, a worst case")
+            && message.contains("NOT a prediction"),
+        "{message}"
+    );
+    assert!(
+        message.contains("stored energy L I^2/2")
+            && message.contains("the current limit 4.5 A (current_peak, a worst case)"),
+        "{message}"
+    );
+    assert_eq!(number(loop_current(hot).get("field_amplitude_a").unwrap()), 4.5);
+    // A point outside continuous conduction gives exactly the current-limit figures and names why.
+    let dcm = with_load("hl-dcm", "2A", Some("1.45uH"));
+    let hot_dcm = hot_loop(&dcm);
+    assert_eq!(text(hot_dcm, "scenario"), "current_limit");
+    assert_eq!(operating_point(hot_dcm).get("status").and_then(Value::as_str), Some("outside_model"));
+    assert!(hot_dcm.tags.contains(&"operating_point_outside_model".to_owned()), "{:?}", hot_dcm.tags);
+    assert!(hot_dcm.finding.message.contains("outside the supported model"), "{}", hot_dcm.finding.message);
+    assert_eq!(hot_dcm.estimate.as_ref().unwrap().value, hot.estimate.as_ref().unwrap().value);
+    assert_eq!(number(loop_current(hot_dcm).get("field_amplitude_a").unwrap()), 4.5);
+}
+
+#[test]
+fn a_declared_point_gives_a_field_estimate_without_a_current_limit() {
+    let no_limit = [("buck.copper", " current_peak = 4.5A;", "")];
+    let board = [(U1_DECLARATION, "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }")];
+    let report = run_full("emi_buck", "hl-no-limit", &board, &no_limit, |_| {});
+    let hot = hot_loop(&report);
+    let estimate = hot.estimate.as_ref().expect("a declared point needs no current limit");
+    assert_eq!(text(hot, "scenario"), "declared_operating_point");
+    assert_eq!(hot.measures.get("secondary_scenario"), None);
+    assert!(estimate.value.is_finite());
+    // Without the declaration the estimate is skipped, as before.
+    let plain = run_full("emi_buck", "hl-no-limit-plain", &[], &no_limit, |_| {});
+    assert!(hot_loop(&plain).estimate.is_none());
+}
+
+#[test]
+fn the_ringing_figures_state_which_current_they_are_at() {
+    let declared = with_load("ring-load-declared", "2A", None);
+    let hot = hot_loop(&declared);
+    let ripple = 7.0 * (5.0 / 12.0) / (4.7e-6 * 500e3);
+    let (valley, peak) = (2.0 - ripple / 2.0, 2.0 + ripple / 2.0);
+    let l = measure(hot, "loop_inductance_nh") * 1e-9;
+    let c = measure(hot, "switch_node_capacitance_pf") * 1e-12;
+    // The headline is at the turn-off current I_out + dI/2 (the larger commutation); the valley and the limit follow.
+    assert!(
+        (measure(hot, "ring_energy_nj") - 0.5 * l * peak * peak * 1e9).abs()
+            < 2e-4 * measure(hot, "ring_energy_nj").max(50.0)
+    );
+    assert!(
+        (measure(hot, "ring_energy_turn_on_nj") - 0.5 * l * valley * valley * 1e9).abs()
+            < 2e-4 * measure(hot, "ring_energy_nj").max(50.0)
+    );
+    assert!(
+        (measure(hot, "ring_energy_current_limit_nj") - 0.5 * l * 4.5 * 4.5 * 1e9).abs()
+            < 2e-4 * measure(hot, "ring_energy_nj").max(50.0)
+    );
+    assert!(
+        (measure(hot, "ring_overshoot_v") - peak * (l / c).sqrt()).abs()
+            < 0.002 * measure(hot, "ring_overshoot_current_limit_v")
+    );
+    assert!(
+        (measure(hot, "ring_overshoot_turn_on_v") - valley * (l / c).sqrt()).abs()
+            < 0.002 * measure(hot, "ring_overshoot_current_limit_v")
+    );
+    assert!(
+        (measure(hot, "ring_overshoot_current_limit_v") - 4.5 * (l / c).sqrt()).abs()
+            < 0.002 * measure(hot, "ring_overshoot_current_limit_v")
+    );
+    assert!(measure(hot, "ring_energy_nj") < measure(hot, "ring_energy_current_limit_nj"));
+    let message = &hot.finding.message;
+    assert!(message.contains("the turn-off current 2.62") && message.contains("I_out + dI/2"), "{message}");
+    assert!(message.contains("at turn-on, the valley"), "{message}");
+    // The diode's default capacitance still uses the current limit as its rating, not the operating current.
+    let plain_report = run("ring-plain", &[]);
+    let plain = hot_loop(&plain_report);
+    assert_eq!(measure(hot, "switch_node_capacitance_pf"), measure(plain, "switch_node_capacitance_pf"));
+    assert_eq!(measure(hot, "ring_frequency_mhz"), measure(plain, "ring_frequency_mhz"));
+    assert!((measure(plain, "ring_energy_nj") - 0.5 * l * 4.5 * 4.5 * 1e9).abs() < 2e-4 * 50.0);
+}
+
+#[test]
+fn the_report_notes_say_how_radiated_estimates_of_different_scenarios_are_ordered() {
+    let report = with_load("rank-note", "2A", None);
+    assert!(
+        report
+            .limits
+            .notes
+            .iter()
+            .any(|n| n.contains("ordered by their headline level") && n.contains("each in its own cell's scenario")),
+        "{:?}",
+        report.limits.notes
+    );
+    assert!(!report.limits.notes.iter().any(|n| n.contains("different radiated scenarios")), "one cell, one scenario");
 }
 
 #[test]

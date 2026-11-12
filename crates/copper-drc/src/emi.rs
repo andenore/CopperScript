@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
 
 use copper_emi::estimate::{self, limits};
+use copper_emi::harmonic::PeriodicSpectrum;
 use copper_emi::inductance::{self, Segment};
 use copper_json::{Dumps, Object, Value};
 use copper_lang::emi::{EmiModel, HotCapacitor, Provenance, SwitchingCell};
@@ -827,6 +828,19 @@ struct Worst {
     margin_db: Option<f64>,
 }
 
+/// Keep `candidate` when it is worse than the current worst point: the least margin when the line gives margins,
+/// else the highest level.
+fn consider(worst: &mut Option<Worst>, candidate: Worst) {
+    let better = match (&*worst, candidate.margin_db) {
+        (None, _) => true,
+        (Some(current), Some(m)) => current.margin_db.is_none_or(|c| m < c - 1e-9),
+        (Some(current), None) => candidate.level_dbuvpm > current.level_dbuvpm + 0.01,
+    };
+    if better {
+        *worst = Some(candidate);
+    }
+}
+
 /// Evaluate `field(f)` (V/m at the standard's distance) on a logarithmic grid
 /// over `[low, high]` and return the worst frequency: the least margin when a
 /// limit line is given, else the highest level (the lowest such frequency).
@@ -843,15 +857,30 @@ fn sweep(low: f64, high: f64, line: Option<&limits::LimitLine>, field: impl Fn(f
             continue;
         }
         let margin_db = line.and_then(|line| line.margin(f, level));
-        let candidate = Worst { frequency: f, level_dbuvpm: level, margin_db };
-        let better = match (&worst, margin_db) {
-            (None, _) => true,
-            (Some(current), Some(m)) => current.margin_db.is_none_or(|c| m < c - 1e-9),
-            (Some(current), None) => level > current.level_dbuvpm + 0.01,
-        };
-        if better {
-            worst = Some(candidate);
+        consider(&mut worst, Worst { frequency: f, level_dbuvpm: level, margin_db });
+    }
+    worst
+}
+
+/// The worst point over the harmonic lines `n f0` of `spectrum` for `n` in `[n_min, n_max]`: `field(amplitude, f)`
+/// is the field (V/m at the standard's distance) of the line of peak amplitude `amplitude` at `f`. Unlike
+/// [`sweep`] this evaluates the lines themselves, not an envelope over them.
+fn sweep_harmonics(
+    spectrum: &PeriodicSpectrum,
+    n_min: u32,
+    n_max: u32,
+    line: Option<&limits::LimitLine>,
+    field: impl Fn(f64, f64) -> f64,
+) -> Option<Worst> {
+    let mut worst: Option<Worst> = None;
+    for n in n_min.max(1)..=n_max {
+        let f = spectrum.frequency(n);
+        let level = estimate::vpm_to_dbuvpm(field(spectrum.harmonic(n).abs(), f));
+        if !level.is_finite() {
+            continue;
         }
+        let margin_db = line.and_then(|line| line.margin(f, level));
+        consider(&mut worst, Worst { frequency: f, level_dbuvpm: level, margin_db });
     }
     worst
 }
@@ -1027,7 +1056,6 @@ struct Drive {
     swing: Option<f64>,
     /// Information about the edge inputs (wide-bandgap class, slew rate and rise time disagreeing).
     edge_notes: Vec<String>,
-    current: Option<f64>,
     duty: f64,
     duty_note: String,
 }
@@ -1154,7 +1182,6 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
         }
         None => edge.clone().map(|e| Edge { origin: EdgeOrigin::CurrentFromVoltage, ..e }),
     };
-    let current = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
     let vout = supply_voltage(view, cell.magnetic.as_ref().and_then(|m| m.output_net.as_ref()));
     let (duty, duty_note) = match (swing, vout) {
         (Some(vin), Some(vout)) if vin > 0.0 && vout > 0.0 && vout < vin => {
@@ -1162,18 +1189,7 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
         }
         _ => (DEFAULT_DUTY, format!("duty {DEFAULT_DUTY} assumed (input and output voltage not both declared)")),
     };
-    Ok(Drive {
-        frequency,
-        frequency_note,
-        edge,
-        current_edge,
-        edge_missing,
-        swing,
-        edge_notes,
-        current,
-        duty,
-        duty_note,
-    })
+    Ok(Drive { frequency, frequency_note, edge, current_edge, edge_missing, swing, edge_notes, duty, duty_note })
 }
 
 /// The result of sweeping an estimate over the edge band.
@@ -1960,6 +1976,7 @@ fn output_stage(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Outpu
             supply_pin: endpoint.clone(),
             return_pin: other,
             declared,
+            capacitance_at_bias: None,
         });
     }
     capacitors.sort_by_key(|capacitor| !capacitor.declared);
@@ -2360,8 +2377,10 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
 
     // Radiated differential-mode estimate, ringing, ring energy.
     let drive = drive_of(cx.layout.view, cell);
-    radiated_estimate(cx, cell, best, &check, &drive, &mut finding);
-    ringing_estimate(cx, cell, best, &check, &drive, &mut finding);
+    let scenario = loop_scenario(cx.layout.view, cell, &drive);
+    record_scenario(&mut finding, &scenario, cell);
+    radiated_estimate(cx, cell, best, &check, &drive, &scenario, &mut finding);
+    ringing_estimate(cx, cell, best, &check, &scenario, &mut finding);
     finding.cell = Some(cell.controller.clone());
     cx.findings.push(finding);
 }
@@ -2397,15 +2416,328 @@ fn band_text(band: [f64; 2], unit: &str) -> String {
     format!("[{:.1} .. {:.1}] {unit}", band[0], band[1])
 }
 
+/// The most harmonic lines the declared-operating-point radiated estimate will evaluate (the cost is linear in it).
+const MAX_RADIATED_LINES: u32 = 400_000;
+
+/// The current the hot loop carries: one scenario for every estimate of a cell (radiated field, stored energy,
+/// overshoot, near-field map), decided once from the declared operating point exactly as `EMI-CONDUCTED` decides it.
+struct LoopScenario {
+    /// `Declared` only for a buck in continuous conduction at the declared `load_current`.
+    kind: conducted::Kind,
+    /// `not_declared`, `declared_ccm`, `outside_model` or `not_evaluated`.
+    status: &'static str,
+    /// Why the declared point is not used, or what is missing to evaluate it.
+    reason: Option<String>,
+    point: Option<conducted::OperatingPoint>,
+    vin: Option<f64>,
+    vout: Option<f64>,
+    /// The switch pin's `current_peak`, the current limit.
+    limit: Option<f64>,
+    /// The cell's topology (declared or implied by its category).
+    topology: Option<Topology>,
+}
+
+impl LoopScenario {
+    fn declared(&self) -> bool {
+        self.kind == conducted::Kind::Declared
+    }
+
+    /// The operating point of a declared scenario.
+    fn declared_point(&self) -> Option<&conducted::OperatingPoint> {
+        self.point.as_ref().filter(|_| self.declared())
+    }
+
+    /// The current of the largest commutation (turn-off of the high-side switch, `I_out + dI/2`) for a declared
+    /// point, else the current limit: the one current the ringing and the near-field map use.
+    fn headline_current(&self) -> Option<f64> {
+        match self.declared_point() {
+            Some(point) => Some(point.peak()),
+            None => self.limit,
+        }
+    }
+
+    /// The scenario tags.
+    fn tags(&self) -> Vec<&'static str> {
+        let mut tags =
+            vec![if self.declared() { "scenario_declared_operating_point" } else { "scenario_current_limit" }];
+        tags.push(if self.declared() { "declared_operating_point" } else { "worst_case_current" });
+        if self.status == "outside_model" {
+            tags.push("operating_point_outside_model");
+        }
+        if self.declared_point().is_some_and(|p| matches!(p.ripple, conducted::Ripple::Rule { .. })) {
+            tags.push(defaults::TAG_RIPPLE);
+        }
+        tags
+    }
+
+    /// One sentence naming the scenario and its current.
+    fn describe(&self, controller: &str) -> String {
+        match (self.declared_point(), self.limit) {
+            (Some(p), _) => format!(
+                "declared operating point: load {} A, ripple {} A peak to peak, high-side switch current a ramp from {} A to {} A, continuous conduction",
+                rounded(p.load, 4),
+                rounded(p.nominal_ripple(), 4),
+                rounded(p.valley(), 4),
+                rounded(p.peak(), 4)
+            ),
+            (None, Some(limit)) => format!(
+                "current limit {} A, a worst case that bounds operation, NOT a prediction of it ({})",
+                rounded(limit, 4),
+                self.why_not_declared(controller)
+            ),
+            (None, None) => "no current: neither a usable load_current nor a current_peak".to_owned(),
+        }
+    }
+
+    /// Why the current limit is the scenario.
+    fn why_not_declared(&self, controller: &str) -> String {
+        match self.status {
+            "outside_model" => format!(
+                "the declared load_current is outside the supported model: {}",
+                self.reason.as_deref().unwrap_or("continuous conduction of a fixed-frequency buck is required")
+            ),
+            "not_evaluated" => {
+                format!("the operating point could not be evaluated: {}", self.reason.as_deref().unwrap_or(""))
+            }
+            _ => match self.topology {
+                Some(Topology::Buck) => format!("declare load_current on {controller} for an operating point"),
+                None => format!(
+                    "declare load_current on {controller} for an operating point; the topology is not declared as a buck, so also declare `topology = buck` on the part"
+                ),
+                Some(other) => format!(
+                    "the operating-point model exists for a buck stage only and this cell is a {}: the current limit is its only scenario",
+                    other.value()
+                ),
+            },
+        }
+    }
+
+    /// `component U1 { load_current = <current>; }` for a cell that can have an operating point, else `None`.
+    fn how_to_declare(&self, controller: &str) -> Option<String> {
+        (self.topology == Some(Topology::Buck))
+            .then(|| format!("component {controller} {{ load_current = <current>; }}"))
+    }
+}
+
+/// Decide the scenario of a cell's hot-loop estimates.
+fn loop_scenario(view: &FlatElectricalView, cell: &SwitchingCell, drive: &Result<Drive, String>) -> LoopScenario {
+    let limit = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
+    let mut out = LoopScenario {
+        kind: conducted::Kind::CurrentLimit,
+        status: "not_declared",
+        reason: None,
+        point: None,
+        vin: None,
+        vout: None,
+        limit,
+        topology: cell.topology,
+    };
+    let Some(load) = cell.load_current.as_ref().map(quantity).filter(|i| *i > 0.0) else {
+        return out;
+    };
+    let drive = match drive {
+        Ok(drive) => drive,
+        Err(reason) => {
+            out.status = "not_evaluated";
+            out.reason = Some(reason.clone());
+            return out;
+        }
+    };
+    if cell.topology != Some(Topology::Buck) {
+        out.status = "outside_model";
+        out.reason = Some(
+            "the operating point model is a buck stage in continuous conduction; the cell's topology is not declared as a buck"
+                .to_owned(),
+        );
+        return out;
+    }
+    let vin = conducted::supply_of(view, cell.hot_supply_net.as_ref()).map(|(_, v)| v);
+    let vout = conducted::supply_of(view, cell.magnetic.as_ref().and_then(|m| m.output_net.as_ref())).map(|(_, v)| v);
+    out.vin = vin;
+    out.vout = vout;
+    let (Some(vin), Some(vout)) = (vin, vout) else {
+        out.status = "outside_model";
+        out.reason =
+            Some("the hot supply net and the magnetic's output net must both declare a supply voltage".to_owned());
+        return out;
+    };
+    if !(vout > 0.0 && vin > vout) {
+        out.status = "outside_model";
+        out.reason = Some(format!("Vout {vout} V is not below Vin {vin} V: there is no buck duty cycle"));
+        return out;
+    }
+    let point = conducted::operating_point(view, cell, load, drive.frequency, vin, vout);
+    if point.ccm {
+        out.kind = conducted::Kind::Declared;
+        out.status = "declared_ccm";
+    } else {
+        out.status = "outside_model";
+        out.reason = Some(format!(
+            "I_out < dI/2 (dI = {} A peak to peak): the inductor current reaches zero in the off-time; discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the supported model",
+            rounded(point.nominal_ripple(), 4)
+        ));
+    }
+    out.point = Some(point);
+    out
+}
+
+/// The loop-current scenario of a cell as measures: `scenario`, `operating_point` and `loop_current`.
+fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &SwitchingCell) {
+    for tag in scenario.tags() {
+        add_tag(finding, tag);
+    }
+    put(&mut finding.measures, "scenario", Value::from(scenario.kind.name()));
+    let mut operating = Object::new();
+    put(&mut operating, "status", Value::from(scenario.status));
+    put(&mut operating, "how_to_declare", scenario.how_to_declare(&cell.controller).map_or(Value::Null, Value::from));
+    put(&mut operating, "topology", cell.topology.map_or(Value::Null, |t| Value::from(t.value())));
+    put(&mut operating, "reason", scenario.reason.as_deref().map_or(Value::Null, Value::from));
+    put(&mut operating, "load_current_a", scenario.point.as_ref().map_or(Value::Null, |p| num(p.load, 6)));
+    put(&mut operating, "current_limit_a", scenario.limit.map_or(Value::Null, |i| num(i, 6)));
+    if let Some(p) = &scenario.point {
+        put(&mut operating, "inductor", p.inductor.as_ref().map_or(Value::Null, |(n, _)| Value::from(n.as_str())));
+        put(&mut operating, "inductance_uh", p.inductor.as_ref().map_or(Value::Null, |(_, l)| num(l * 1e6, 6)));
+        put(&mut operating, "ripple_peak_to_peak_a", num(p.nominal_ripple(), 6));
+        put(
+            &mut operating,
+            "ripple_basis",
+            Value::from(match p.ripple {
+                conducted::Ripple::Computed(_) => "computed_from_inductance",
+                conducted::Ripple::Rule { .. } => "rule_of_thumb_ratio",
+            }),
+        );
+        put(&mut operating, "valley_a", num(p.valley(), 6));
+        put(&mut operating, "peak_a", num(p.peak(), 6));
+        put(&mut operating, "continuous_conduction", Value::Bool(p.ccm));
+    }
+    put(&mut finding.measures, "operating_point", Value::Object(operating));
+    let mut current = Object::new();
+    put(&mut current, "scenario", Value::from(scenario.kind.name()));
+    let (waveform, field_basis, ring_basis) = if scenario.declared() {
+        (
+            "ramp_on_pedestal",
+            "I_out + dI/2, the peak of the high-side switch current (the largest current the hot loop carries); the near-field map is a static |H| of this current",
+            "turn-off: the current commutated is the peak I_out + dI/2; turn-on commutates the valley I_out - dI/2 (also reported); the peak is the larger, so it bounds the ringing",
+        )
+    } else {
+        (
+            "flat_top_trapezoid",
+            "current_peak, the switch current limit (a worst case, not a load current)",
+            "the switch current limit current_peak (a worst case, not a load current)",
+        )
+    };
+    put(&mut current, "waveform", Value::from(waveform));
+    put(&mut current, "mean_a", scenario.declared_point().map_or(Value::Null, |p| num(p.load, 6)));
+    put(&mut current, "valley_a", scenario.declared_point().map_or(Value::Null, |p| num(p.valley(), 6)));
+    put(&mut current, "peak_a", scenario.declared_point().map_or(Value::Null, |p| num(p.peak(), 6)));
+    put(&mut current, "current_limit_a", scenario.limit.map_or(Value::Null, |i| num(i, 6)));
+    put(&mut current, "field_amplitude_a", scenario.headline_current().map_or(Value::Null, |i| num(i, 6)));
+    put(&mut current, "field_amplitude_basis", Value::from(field_basis));
+    put(&mut current, "ring_current_a", scenario.headline_current().map_or(Value::Null, |i| num(i, 6)));
+    put(&mut current, "ring_current_basis", Value::from(ring_basis));
+    put(&mut finding.measures, "loop_current", Value::Object(current));
+}
+
+/// What the radiated sweep of one scenario found.
+struct RadiatedResult {
+    banded: Banded,
+}
+
+/// The current-limit scenario: the trapezoid envelope of flat-top pulses of amplitude `current` swept on a log grid.
+fn radiated_current_limit(
+    cx: &Context,
+    drive: &Drive,
+    edge: &Edge,
+    current: f64,
+    best: &LoopCandidate,
+    high: f64,
+) -> Option<RadiatedResult> {
+    let period = 1.0 / drive.frequency;
+    let field = |f: f64, t: f64| {
+        let amplitude = estimate::trapezoid_envelope(current, drive.duty, period, t, f);
+        estimate::differential_mode_field(amplitude, f, best.area, cx.standard.distance)
+    };
+    sweep_edge(edge, BAND.0, high, cx.standard.line.as_ref(), field).map(|banded| RadiatedResult { banded })
+}
+
+/// The declared-operating-point scenario: the exact harmonic lines of the high-side switch current (the ramp on a
+/// pedestal of `EMI-CONDUCTED`), evaluated at every line `n f0` in `30 MHz .. high`, for the nominal case and the
+/// corners of the rule-of-thumb bands (current edge fast and slow, ripple low and high). The band is the lowest and
+/// highest worst level over those cases and the margin the least margin over them.
+fn radiated_declared(
+    cx: &Context,
+    drive: &Drive,
+    edge: &Edge,
+    point: &conducted::OperatingPoint,
+    duty: f64,
+    best: &LoopCandidate,
+    high: f64,
+) -> Result<RadiatedResult, String> {
+    let f0 = drive.frequency;
+    let period = 1.0 / f0;
+    let n_max = (high / f0).floor();
+    let n_min = (BAND.0 / f0).ceil();
+    if n_max < n_min {
+        return Err(format!("no harmonic of {f0} Hz lies between 30 MHz and {:.0} MHz", high * 1e-6));
+    }
+    if n_max > f64::from(MAX_RADIATED_LINES) {
+        return Err(format!(
+            "{n_max} harmonic lines of {f0} Hz would be needed up to {:.0} MHz, more than the {MAX_RADIATED_LINES} the estimate evaluates",
+            high * 1e-6
+        ));
+    }
+    let (n_min, n_max) = (n_min as u32, n_max as u32);
+    let ripples = point.ripples();
+    let mut cases: Vec<(Corner, f64)> = vec![(Corner::Nominal, ripples[0])];
+    if edge.banded() || ripples.len() > 1 {
+        let edge_corners: &[Corner] = if edge.banded() { &[Corner::Fast, Corner::Slow] } else { &[Corner::Nominal] };
+        for corner in edge_corners {
+            for ripple in &ripples {
+                cases.push((*corner, *ripple));
+            }
+        }
+    }
+    let line = cx.standard.line.as_ref();
+    let mut results: Vec<Worst> = Vec::new();
+    for (corner, ripple) in &cases {
+        let (rise_10_90, fall_10_90) = edge.rise_fall(*corner);
+        let (rise, fall) = (rise_10_90 / defaults::RAMP_10_90, fall_10_90 / defaults::RAMP_10_90);
+        let spectrum = PeriodicSpectrum::buck_input_current(
+            point.load - ripple / 2.0,
+            point.load + ripple / 2.0,
+            duty,
+            period,
+            rise,
+            fall,
+            n_max,
+        )
+        .map_err(|e| e.to_string())?;
+        let worst = sweep_harmonics(&spectrum, n_min, n_max, line, |amplitude, f| {
+            estimate::differential_mode_field(amplitude, f, best.area, cx.standard.distance)
+        })
+        .ok_or_else(|| "every harmonic line has a zero amplitude".to_owned())?;
+        results.push(worst);
+    }
+    let nominal = results[0];
+    let band = (results.len() > 1).then(|| {
+        [
+            results.iter().map(|w| w.level_dbuvpm).fold(f64::INFINITY, f64::min),
+            results.iter().map(|w| w.level_dbuvpm).fold(f64::NEG_INFINITY, f64::max),
+        ]
+    });
+    let margin_db = results.iter().filter_map(|w| w.margin_db).reduce(f64::min);
+    Ok(RadiatedResult { banded: Banded { nominal, band, margin_db } })
+}
+
 fn radiated_estimate(
     cx: &mut Context,
     cell: &SwitchingCell,
     best: &LoopCandidate,
     base: &str,
     drive: &Result<Drive, String>,
+    scenario: &LoopScenario,
     finding: &mut EmiFinding,
 ) {
-    let _ = cell;
     let check = format!("{base}:radiated");
     let drive = match drive {
         Ok(drive) => drive,
@@ -2414,28 +2746,55 @@ fn radiated_estimate(
             return;
         }
     };
-    let (Some(edge), Some(current)) = (drive.current_edge.as_ref(), drive.current) else {
-        let mut missing: Vec<&str> = Vec::new();
-        if drive.current_edge.is_none() {
-            missing.push(&drive.edge_missing);
-        }
-        if drive.current.is_none() {
-            missing.push("the switch pin declares no current_peak");
-        }
+    let Some(edge) = drive.current_edge.as_ref() else {
         cx.cover(
             check,
             CoverageStatus::NotApplicable,
-            format!("differential-mode field skipped: {}", missing.join("; ")),
+            format!("differential-mode field skipped: {}", drive.edge_missing),
         );
         return;
     };
-    let period = 1.0 / drive.frequency;
+    if !scenario.declared() && scenario.limit.is_none() {
+        cx.cover(
+            check,
+            CoverageStatus::NotApplicable,
+            format!(
+                "differential-mode field skipped: the switch pin declares no current_peak and {}",
+                match scenario.status {
+                    "outside_model" => format!(
+                        "the declared load_current is outside the supported model ({})",
+                        scenario.reason.as_deref().unwrap_or("")
+                    ),
+                    _ => "the cell declares no usable load_current for an operating point".to_owned(),
+                }
+            ),
+        );
+        return;
+    }
     let high = BAND.1.min(copper_emi::C0 / (SMALL_LOOP_FRACTION * best.length));
-    let field = |f: f64, t: f64| {
-        let amplitude = estimate::trapezoid_envelope(current, drive.duty, period, t, f);
-        estimate::differential_mode_field(amplitude, f, best.area, cx.standard.distance)
+    // The headline scenario, the one every estimate of the cell uses. A declared point whose lines cannot be
+    // evaluated gives no field estimate (it is not replaced by the current limit: one report, one scenario).
+    let headline_declared = scenario.declared();
+    let result: Option<RadiatedResult> = match (scenario.declared_point(), scenario.vin, scenario.vout) {
+        (Some(point), Some(vin), Some(vout)) => match radiated_declared(cx, drive, edge, point, vout / vin, best, high)
+        {
+            Ok(found) => Some(found),
+            Err(error) => {
+                cx.cover(
+                    check,
+                    CoverageStatus::NotApplicable,
+                    format!("differential-mode field skipped: the declared operating point could not be evaluated for the field: {error}"),
+                );
+                return;
+            }
+        },
+        _ => scenario.limit.and_then(|limit| radiated_current_limit(cx, drive, edge, limit, best, high)),
     };
-    let Some(banded) = sweep_edge(edge, BAND.0, high, cx.standard.line.as_ref(), field) else {
+    let secondary: Option<RadiatedResult> = match (headline_declared, scenario.limit) {
+        (true, Some(limit)) => radiated_current_limit(cx, drive, edge, limit, best, high),
+        _ => None,
+    };
+    let Some(RadiatedResult { banded }) = result else {
         cx.cover(
             check,
             CoverageStatus::NotApplicable,
@@ -2485,9 +2844,21 @@ fn radiated_estimate(
     if truncated {
         add_tag(finding, "radiated_band_truncated");
     }
+    let source = match scenario.declared_point() {
+        Some(p) => format!(
+            "the harmonic lines of the high-side switch current at the declared operating point (the ramp on a pedestal of EMI-CONDUCTED: load {} A, ripple {} A peak to peak, valley {} A, peak {} A; every line n f0 from 30 MHz, not an envelope)",
+            rounded(p.load, 4),
+            rounded(p.nominal_ripple(), 4),
+            rounded(p.valley(), 4),
+            rounded(p.peak(), 4)
+        ),
+        None => format!(
+            "the trapezoid envelope of the switch current (scenario current_limit: amplitude current_peak {} A, a worst case)",
+            rounded(scenario.limit.unwrap_or(0.0), 4)
+        ),
+    };
     let method = format!(
-        "small-loop formula E = 1.316e-14 I f^2 A / r on the trapezoid envelope of the switch current \
-         (amplitude current_peak, {} Hz {}, current edge {}, {}), worst point of 30 MHz to {:.0} MHz at {} m{}",
+        "small-loop formula E = 1.316e-14 I f^2 A / r on {source}, {} Hz {}, current edge {}, {}; worst point of 30 MHz to {:.0} MHz at {} m{}",
         rounded(drive.frequency, 0),
         drive.frequency_note,
         edge.describe(drive.swing),
@@ -2495,7 +2866,11 @@ fn radiated_estimate(
         high * 1e-6,
         cx.standard.distance,
         if banded.band.is_some() {
-            "; the value is the nominal edge, the band covers the fast and slow bound and the margin is the fast bound's"
+            if headline_declared {
+                "; the value is the nominal case, the band spans the fast and slow edge and the rule-of-thumb ripple cases and the margin is the least over them"
+            } else {
+                "; the value is the nominal edge, the band covers the fast and slow bound and the margin is the fast bound's"
+            }
         } else {
             ""
         }
@@ -2514,16 +2889,18 @@ fn radiated_estimate(
     });
     finding.margin_db = banded.margin_db.map(|m| rounded(m, 2));
     finding.finding.message.push_str(&format!(
-        "; differential-mode field about {:.1} dBuV/m at {:.0} MHz, {} m",
+        "; differential-mode field about {:.1} dBuV/m at {:.0} MHz, {} m, scenario {} ({})",
         worst.level_dbuvpm,
         worst.frequency * 1e-6,
-        cx.standard.distance
+        cx.standard.distance,
+        scenario.kind.name(),
+        scenario.describe(&cell.controller)
     ));
     if let Some(band) = banded.band {
-        finding.finding.message.push_str(&format!(
-            " (band {} for the slow .. fast edge of a rule-of-thumb slew rate, nominal shown)",
-            band_text(band, "dBuV/m")
-        ));
+        finding
+            .finding
+            .message
+            .push_str(&format!(" (band {} over the rule-of-thumb inputs, nominal shown)", band_text(band, "dBuV/m")));
     }
     if let Some(margin) = banded.margin_db {
         finding.finding.message.push_str(&format!(
@@ -2567,16 +2944,82 @@ fn radiated_estimate(
     record_edge(finding, drive, edge);
     push_input(
         finding,
-        format!(
-            "current amplitude {} A = current_peak, the current limit (worst case, not a load current); a declared load_current is not applied to this estimate",
-            rounded(current, 4)
-        ),
+        match scenario.declared_point() {
+            Some(p) => format!(
+                "current: scenario declared_operating_point, the high-side switch current is a ramp on a pedestal from {} A (valley, I_out - dI/2) to {} A (peak, I_out + dI/2), load_current {} A declared on {}, dI = {} A peak to peak{}; the same source as EMI-CONDUCTED",
+                rounded(p.valley(), 4),
+                rounded(p.peak(), 4),
+                rounded(p.load, 4),
+                cell.controller,
+                rounded(p.nominal_ripple(), 4),
+                match (&p.inductor, p.ripple) {
+                    (Some((name, l)), _) =>
+                        format!(" from {name} {} uH at {} Hz", rounded(l * 1e6, 4), rounded(drive.frequency, 0)),
+                    (None, conducted::Ripple::Rule { low, high, .. }) => format!(
+                        " (the power inductor's value was not found: rule-of-thumb ratio, band {} to {} A)",
+                        rounded(low, 4),
+                        rounded(high, 4)
+                    ),
+                    _ => String::new(),
+                }
+            ),
+            None => format!(
+                "current: scenario current_limit, amplitude {} A = current_peak, the switch current limit (a worst case, not a load current; {})",
+                rounded(scenario.limit.unwrap_or(0.0), 4),
+                scenario.why_not_declared(&cell.controller)
+            ),
+        },
     );
+    if let (Some(second), Some(limit)) = (&secondary, scenario.limit) {
+        let w = second.banded.nominal;
+        let mut item = Object::new();
+        put(&mut item, "scenario", Value::from(conducted::Kind::CurrentLimit.name()));
+        put(&mut item, "current_limit_a", num(limit, 6));
+        put(&mut item, "spectrum", Value::from("trapezoid_envelope"));
+        put(&mut item, "level_dbuv_per_m", num(w.level_dbuvpm, 2));
+        put(&mut item, "frequency_hz", num(w.frequency, 0));
+        put(&mut item, "margin_db", second.banded.margin_db.map_or(Value::Null, |m| num(m, 2)));
+        put(
+            &mut item,
+            "band_db",
+            second.banded.band.map_or(Value::Null, |b| Value::Array(vec![num(b[0], 2), num(b[1], 2)])),
+        );
+        put(
+            &mut item,
+            "definition",
+            Value::from(
+                "the current limit current_peak as the amplitude of flat-top pulses of the same duty and edges, the upper envelope of the trapezoid swept over 30 MHz .. the loop's validity limit: a worst case that bounds operation, not a prediction of it",
+            ),
+        );
+        put(&mut finding.measures, "secondary_scenario", Value::Object(item));
+        finding.finding.message.push_str(&format!(
+            "; secondary worst case, current limit {} A: {:.1} dBuV/m at {:.0} MHz{}",
+            rounded(limit, 4),
+            w.level_dbuvpm,
+            w.frequency * 1e-6,
+            second
+                .banded
+                .margin_db
+                .map(|m| format!(" ({m:+.1} dB to the {} line)", cx.standard.name.as_deref().unwrap_or("")))
+                .unwrap_or_default()
+        ));
+        push_input(
+            finding,
+            format!(
+                "secondary scenario current_limit: {:.1} dBuV/m at {:.0} MHz with current_peak {} A as flat-top pulses (envelope)",
+                w.level_dbuvpm,
+                w.frequency * 1e-6,
+                rounded(limit, 4)
+            ),
+        );
+    }
     cx.cover(
         check,
         CoverageStatus::Executed,
         format!(
-            "{}; current edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied; small-loop validity {} (evaluated {:.0} .. {:.0} MHz, loop path {:.3} lambda at the worst point, {} m is {:.1} x lambda/(2 pi) at 30 MHz and {:.1} x the loop size){}",
+            "scenario {} ({}); {}; current edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied; small-loop validity {} (evaluated {:.0} .. {:.0} MHz, loop path {:.3} lambda at the worst point, {} m is {:.1} x lambda/(2 pi) at 30 MHz and {:.1} x the loop size){}",
+            scenario.kind.name(),
+            scenario.describe(&cell.controller),
             drive.duty_note,
             edge.describe(drive.swing),
             edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
@@ -2592,12 +3035,24 @@ fn radiated_estimate(
     );
 }
 
+/// The current a ringing figure is at, worded.
+fn ring_current_text(scenario: &LoopScenario, current: f64) -> String {
+    if scenario.declared() {
+        format!(
+            "the turn-off current {} A (I_out + dI/2, the peak of the high-side switch current)",
+            rounded(current, 4)
+        )
+    } else {
+        format!("the current limit {} A (current_peak, a worst case)", rounded(current, 4))
+    }
+}
+
 fn ringing_estimate(
     cx: &mut Context,
     cell: &SwitchingCell,
     best: &LoopCandidate,
     base: &str,
-    drive: &Result<Drive, String>,
+    scenario: &LoopScenario,
     finding: &mut EmiFinding,
 ) {
     let check = format!("{base}:ringing");
@@ -2606,7 +3061,11 @@ fn ringing_estimate(
         let instance = view.components.iter().find(|c| c.reference == component)?;
         view.library.get(&instance.part)?.emi.as_ref()?.output_capacitance.as_ref().map(quantity)
     };
-    let current = drive.as_ref().ok().and_then(|d| d.current).or_else(|| cell.current_peak.as_ref().map(quantity));
+    // The current the ringing is figured at: the peak of the high-side switch current for a declared point (the
+    // current commutated at turn-off, I_out + dI/2, the larger of the two commutations), else the current limit.
+    let current = scenario.headline_current();
+    // The default diode capacitance needs a rating: the current limit stands in for it whatever the scenario.
+    let rating = scenario.limit;
     let reverse_voltage = supply_voltage(view, cell.hot_supply_net.as_ref());
     // (device, capacitance band, rule text when the band is a default)
     let mut parts: Vec<(String, defaults::CapacitanceBand, Option<String>)> = Vec::new();
@@ -2618,7 +3077,7 @@ fn ringing_estimate(
         None => parts.push((cell.controller.clone(), defaults::fet_capacitance(), Some(defaults::fet_rule()))),
     }
     if let Some(diode) = &cell.catch_diode {
-        match (capacitance_of(&diode.component), current) {
+        match (capacitance_of(&diode.component), rating) {
             (Some(c), _) => {
                 parts.push((diode.component.clone(), defaults::CapacitanceBand { low: c, nominal: c, high: c }, None));
             }
@@ -2640,10 +3099,36 @@ fn ringing_estimate(
     if let (Some(l), Some(i)) = (best.inductance, current) {
         let energy = estimate::ring_energy(l, i);
         put(&mut finding.measures, "ring_energy_nj", num(energy * 1e9, 3));
-        finding.finding.message.push_str(&format!("; stored energy L I^2/2 = {:.1} nJ", energy * 1e9));
-        notes.push(format!("ring energy {:.1} nJ", energy * 1e9));
+        put(&mut finding.measures, "ring_current_a", num(i, 6));
+        let mut also = String::new();
+        if let Some(point) = scenario.declared_point() {
+            let at_valley = estimate::ring_energy(l, point.valley());
+            put(&mut finding.measures, "ring_energy_turn_on_nj", num(at_valley * 1e9, 3));
+            also.push_str(&format!(
+                "; at turn-on, the valley {} A: {:.1} nJ",
+                rounded(point.valley(), 4),
+                at_valley * 1e9
+            ));
+            if let Some(limit) = scenario.limit {
+                let at_limit = estimate::ring_energy(l, limit);
+                put(&mut finding.measures, "ring_energy_current_limit_nj", num(at_limit * 1e9, 3));
+                also.push_str(&format!(
+                    "; at the current limit {} A (worst case): {:.1} nJ",
+                    rounded(limit, 4),
+                    at_limit * 1e9
+                ));
+            }
+        }
+        finding.finding.message.push_str(&format!(
+            "; stored energy L I^2/2 = {:.1} nJ at {}{also}",
+            energy * 1e9,
+            ring_current_text(scenario, i)
+        ));
+        notes.push(format!("ring energy {:.1} nJ at {}", energy * 1e9, ring_current_text(scenario, i)));
     } else {
-        notes.push("ring energy needs the loop inductance and current_peak".to_owned());
+        notes.push(
+            "ring energy needs the loop inductance and a switch current (load_current or current_peak)".to_owned(),
+        );
     }
     if !unavailable.is_empty() {
         cx.cover(
@@ -2711,11 +3196,31 @@ fn ringing_estimate(
     if let Some(i) = current {
         let overshoot = estimate::ring_overshoot(l, total.nominal, i);
         put(&mut finding.measures, "ring_overshoot_v", num(overshoot, 2));
-        finding.finding.message.push_str(&format!(", overshoot up to {overshoot:.1} V"));
+        finding
+            .finding
+            .message
+            .push_str(&format!(", overshoot up to {overshoot:.1} V at {}", ring_current_text(scenario, i)));
         if defaulted {
             let band = [estimate::ring_overshoot(l, total.high, i), estimate::ring_overshoot(l, total.low, i)];
             put(&mut finding.measures, "ring_overshoot_band_v", Value::Array(vec![num(band[0], 2), num(band[1], 2)]));
             finding.finding.message.push_str(&format!(" [{:.1} .. {:.1}] V", band[0], band[1]));
+        }
+        if let Some(point) = scenario.declared_point() {
+            let at_valley = estimate::ring_overshoot(l, total.nominal, point.valley());
+            put(&mut finding.measures, "ring_overshoot_turn_on_v", num(at_valley, 2));
+            finding
+                .finding
+                .message
+                .push_str(&format!(" (turn-on, valley {} A: {at_valley:.1} V", rounded(point.valley(), 4)));
+            if let Some(limit) = scenario.limit {
+                let at_limit = estimate::ring_overshoot(l, total.nominal, limit);
+                put(&mut finding.measures, "ring_overshoot_current_limit_v", num(at_limit, 2));
+                finding
+                    .finding
+                    .message
+                    .push_str(&format!("; current limit {} A, worst case: {at_limit:.1} V", rounded(limit, 4)));
+            }
+            finding.finding.message.push(')');
         }
     }
     let names = parts.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>().join(" + ");
@@ -3327,6 +3832,53 @@ fn si_frequency(hertz: f64) -> String {
     }
 }
 
+/// The order of findings in a report. Absolute radiated estimates (dBuV/m) come first, by headline level
+/// (highest first); each is in its own cell's scenario (`declared_operating_point` or `current_limit`), so the order
+/// between cells in different scenarios compares an estimate with a worst case as numbers (said in the report's
+/// notes, see [`radiated_ranking_notes`]); ties break by loop area, larger first. Then conducted estimates (dBuV at
+/// a LISN, a different quantity that is never compared with them) by margin when margins exist, else by level;
+/// then the ranking scores (dB, relative: compared only with each other) by score; then findings without an
+/// estimate; `EMI-ACCEPT-UNUSED` last.
+fn compare_findings(a: &EmiFinding, b: &EmiFinding) -> std::cmp::Ordering {
+    let key = |f: &EmiFinding| {
+        if f.finding.code == "EMI-ACCEPT-UNUSED" {
+            (4, 0.0)
+        } else {
+            match f.estimate.as_ref() {
+                None => (3, 0.0),
+                Some(e) if e.kind == EstimateKind::RankingScore => (2, -e.value),
+                Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
+                Some(e) => (0, -e.value),
+            }
+        }
+    };
+    let (ka, kb) = (key(a), key(b));
+    ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1)).then(b.rank.total_cmp(&a.rank))
+}
+
+/// The notes that state how radiated estimates of different scenarios are ordered.
+fn radiated_ranking_notes(findings: &[EmiFinding]) -> Vec<String> {
+    let scenarios: BTreeSet<&str> = findings
+        .iter()
+        .filter(|f| f.finding.code == "EMI-HOT-LOOP" && f.estimate.is_some())
+        .filter_map(|f| f.measures.get("scenario").and_then(Value::as_str))
+        .collect();
+    let mut notes = Vec::new();
+    if !scenarios.is_empty() {
+        notes.push(
+            "radiated hot-loop estimates are ordered by their headline level in dBuV/m, each in its own cell's scenario (declared_operating_point or current_limit); levels of unlike scenarios are compared as numbers, not as like with like: a current_limit level is a worst case that bounds the cell, a declared_operating_point level an estimate of its operation (ties break by loop area, larger first)"
+                .to_owned(),
+        );
+    }
+    if scenarios.len() > 1 {
+        notes.push(
+            "the cells of this board are in different radiated scenarios (see each hot-loop finding's `scenario` and its `secondary_scenario`): the order between a declared_operating_point and a current_limit finding compares an estimate with a worst case"
+                .to_owned(),
+        );
+    }
+    notes
+}
+
 /// Screen the switching cells of `model` on the placed `board`. `view` is the
 /// flat electrical view the model was derived from (it carries the pin to pad
 /// numbers, supplies, the `emission` and `emi_accept` constraints and the part
@@ -3433,25 +3985,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
     );
 
     let mut findings = std::mem::take(&mut cx.findings);
-    findings.sort_by(|a, b| {
-        // Absolute radiated estimates (dBuV/m) by level, then conducted estimates (dBuV at a LISN, a different
-        // quantity that is never compared with them) by margin when margins exist, else by level, then the
-        // ranking scores (dB, relative: compared only with each other) by score.
-        let key = |f: &EmiFinding| {
-            if f.finding.code == "EMI-ACCEPT-UNUSED" {
-                (4, 0.0)
-            } else {
-                match f.estimate.as_ref() {
-                    None => (3, 0.0),
-                    Some(e) if e.kind == EstimateKind::RankingScore => (2, -e.value),
-                    Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
-                    Some(e) => (0, -e.value),
-                }
-            }
-        };
-        let (ka, kb) = (key(a), key(b));
-        ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1)).then(b.rank.total_cmp(&a.rank))
-    });
+    findings.sort_by(compare_findings);
 
     let mut notes = vec![
         "screening evidence: ranks likely noise sources, never establishes EMC qualification".to_owned(),
@@ -3459,9 +3993,10 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         "uncertainty is reported as three separate things per estimate: numerical sensitivity (null for closed forms), parameter bands from rule-of-thumb defaults (band_db), and the named mechanisms not modelled (not_modelled)".to_owned(),
         "common-mode radiation is a relative coupling-risk score (ranking only): it has no distance, no field value and no margin, and is never compared with an emission limit".to_owned(),
         "hot-loop geometry is the traced copper path where routed copper joins the loop pads (traced_copper, partially_traced) and the pad-centre polygon elsewhere (placement_estimate)".to_owned(),
-        "differential-mode loop field is free space; the radiated sweep is the upper envelope of the trapezoid, peak against quasi-peak limits".to_owned(),
+        "differential-mode loop field is free space; in the current_limit scenario the radiated sweep is the upper envelope of the trapezoid, in the declared_operating_point scenario it is the harmonic lines of the ramp-on-pedestal switch current; peak against quasi-peak limits".to_owned(),
         "limit tables are transcribed from the published numbers and must be verified against the standards".to_owned(),
     ];
+    notes.extend(radiated_ranking_notes(&findings));
     let on_rules = findings.iter().filter(|f| f.tags.iter().any(|t| defaults::is_rule_tag(t))).count();
     if on_rules > 0 {
         notes.push(format!(
@@ -3834,6 +4369,75 @@ mod tests {
         let margin = sweep(30e6, 200e6, Some(&line), |_| 10e-6).expect("a point");
         assert!((margin.margin_db.expect("margin") - 10.0).abs() < 1e-9);
         assert!(sweep(1e9, 30e6, None, |_| 1.0).is_none());
+    }
+
+    fn hot_loop_finding(cell: &str, scenario: &str, level: f64, area_mm2: f64) -> EmiFinding {
+        let mut measures = Object::new();
+        put(&mut measures, "scenario", Value::from(scenario));
+        EmiFinding {
+            finding: Finding::new("EMI-HOT-LOOP", Severity::Warning, cell.to_owned()),
+            cell: Some(cell.to_owned()),
+            provenance: None,
+            tags: Vec::new(),
+            estimate: Some(Estimate {
+                quantity: "dm_radiated_field".to_owned(),
+                value: level,
+                unit: "dBuV/m".to_owned(),
+                method: String::new(),
+                kind: EstimateKind::Absolute,
+                definition: None,
+                not_modelled: Vec::new(),
+                frequency_hz: None,
+                band_db: None,
+                basis: None,
+            }),
+            margin_db: None,
+            accepted: None,
+            measures,
+            subjects: Vec::new(),
+            rank: area_mm2,
+        }
+    }
+
+    #[test]
+    fn radiated_findings_of_unlike_scenarios_are_ordered_by_headline_level_then_area_and_the_notes_say_so() {
+        let mut findings = vec![
+            hot_loop_finding("U1", "declared_operating_point", 20.0, 10.0),
+            hot_loop_finding("U2", "current_limit", 25.0, 5.0),
+            hot_loop_finding("U3", "declared_operating_point", 25.0, 9.0),
+        ];
+        findings.sort_by(compare_findings);
+        let order: Vec<_> = findings.iter().map(|f| f.cell.as_deref().unwrap()).collect();
+        // Highest headline level first whatever the scenario; equal levels: the larger loop first.
+        assert_eq!(order, ["U3", "U2", "U1"]);
+        let notes = radiated_ranking_notes(&findings);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("each in its own cell's scenario") && notes[0].contains("ties break by loop area"));
+        assert!(
+            notes[1].contains("different radiated scenarios") && notes[1].contains("an estimate with a worst case")
+        );
+        // One scenario: the ordering note, not the mixed one.
+        let same: Vec<EmiFinding> = findings
+            .iter()
+            .filter(|f| f.cell.as_deref() != Some("U2"))
+            .map(|f| hot_loop_finding(f.cell.as_deref().unwrap(), "declared_operating_point", 1.0, 1.0))
+            .collect();
+        assert_eq!(radiated_ranking_notes(&same).len(), 1);
+        assert!(radiated_ranking_notes(&[]).is_empty());
+    }
+
+    #[test]
+    fn sweep_harmonics_evaluates_the_lines_not_an_envelope() {
+        // Lines at 100 kHz spacing; amplitude 1 at every line except n = 400 (40 MHz) which is 3 times larger.
+        let mut spectrum = PeriodicSpectrum::zero(100e3);
+        spectrum.harmonics =
+            (1..=1000u32).map(|n| copper_emi::spectrum::Complex::new(if n == 400 { 3.0 } else { 1.0 }, 0.0)).collect();
+        let worst = sweep_harmonics(&spectrum, 300, 900, None, |a, _| a * 1e-6).expect("a line");
+        assert!((worst.frequency - 40e6).abs() < 1.0, "{worst:?}");
+        assert!((worst.level_dbuvpm - 20.0 * 3.0f64.log10() - 0.0).abs() < 1e-6);
+        // Only the lines inside [n_min, n_max] count.
+        let outside = sweep_harmonics(&spectrum, 401, 900, None, |a, _| a * 1e-6).expect("a line");
+        assert!((outside.level_dbuvpm - 0.0).abs() < 1e-9 && (outside.frequency - 40.1e6).abs() < 1.0, "{outside:?}");
     }
 
     #[test]

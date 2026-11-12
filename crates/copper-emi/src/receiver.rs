@@ -177,12 +177,6 @@ fn to_dbuv(v: f64) -> f64 {
 /// is resolved (Band B: at least 0.5 ms). The record may have any length; it is
 /// taken as exactly one period of a periodic signal (see the module docs).
 pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -> Vec<Reading> {
-    let silent = |f: f64| Reading {
-        frequency: f,
-        peak: f64::NEG_INFINITY,
-        quasi_peak: f64::NEG_INFINITY,
-        average: f64::NEG_INFINITY,
-    };
     if signal.is_empty() {
         return frequencies.iter().map(|&f| silent(f)).collect();
     }
@@ -193,6 +187,42 @@ pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -
         s.re = x;
     }
     dft(&mut spectrum).expect("non-empty record");
+    scan_spectrum(&spectrum, sample_rate, frequencies, band)
+}
+
+/// [`scan`] of a strictly periodic signal given by its harmonic lines instead of a sampled record:
+/// `phasors[k - 1]` is the PEAK phasor of the line at `k * fundamental` (so a sinusoid of amplitude `A`
+/// at the line is `A`, and it reads `A / sqrt 2` RMS). The signal is the sum of these lines and nothing
+/// else (no DC term: the IF filter does not see it), which is the record `scan` would be given if it
+/// held one period sampled at `fundamental * (2 * phasors.len() + 2)` and the lines were exactly
+/// represented; the result is identical to `scan` on that record (a test checks it), without
+/// synthesising the waveform. The tuned frequencies must be below `phasors.len() * fundamental`; the
+/// lines above the last are taken as zero, so a tuned frequency within two IF half-bandwidths of it
+/// reads low.
+///
+/// Cost: per tuned frequency one inverse FFT of a few dozen points and the detector run over the
+/// settled repetitions (quasi-peak: about `10 (discharge + meter) / period` passes, at most).
+pub fn scan_lines(fundamental: f64, phasors: &[Complex], frequencies: &[f64], band: Band) -> Vec<Reading> {
+    if phasors.is_empty() || fundamental.is_nan() || fundamental <= 0.0 {
+        return frequencies.iter().map(|&f| silent(f)).collect();
+    }
+    // A record of n = 2 K + 2 points holds K lines below Nyquist; the DFT of A cos(w t + p) over n points is
+    // n A / 2 e^{jp} at its bin.
+    let n = 2 * phasors.len() + 2;
+    let mut spectrum = vec![Complex::ZERO; n];
+    for (k, phasor) in phasors.iter().enumerate() {
+        spectrum[k + 1] = phasor.scale(n as f64 / 2.0);
+    }
+    scan_spectrum(&spectrum, fundamental * n as f64, frequencies, band)
+}
+
+fn silent(f: f64) -> Reading {
+    Reading { frequency: f, peak: f64::NEG_INFINITY, quasi_peak: f64::NEG_INFINITY, average: f64::NEG_INFINITY }
+}
+
+/// The receiver on the DFT `spectrum` (length `n`) of one period sampled at `sample_rate`.
+fn scan_spectrum(spectrum: &[Complex], sample_rate: f64, frequencies: &[f64], band: Band) -> Vec<Reading> {
+    let n = spectrum.len();
     let df = sample_rate / n as f64;
     let half_bw = band.rbw() / 2.0;
     let kspan = ((4.0 * half_bw / df).ceil() as i64).max(1);
@@ -228,7 +258,7 @@ pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::estimate::trapezoid_harmonic;
     use std::f64::consts::PI;
@@ -374,7 +404,7 @@ mod tests {
     /// with the Gaussian impulse response `h(t) = a sqrt(pi) exp(-(pi a t)^2)`, `a = (B/2)/sqrt(ln 2)`
     /// (the inverse transform of `H(f) = exp(-ln 2 (f/(B/2))^2)`, unit gain at DC), magnitude, x2 for
     /// the single-sided scale and 1/sqrt 2 for RMS. No FFT is involved.
-    fn brute_force_envelope(x: &[f64], fs: f64, f0: f64, band: Band) -> Vec<f64> {
+    pub(crate) fn brute_force_envelope(x: &[f64], fs: f64, f0: f64, band: Band) -> Vec<f64> {
         let n = x.len();
         let a = (band.rbw() / 2.0) / std::f64::consts::LN_2.sqrt();
         let sigma = 1.0 / (PI * a * 2f64.sqrt());
@@ -445,6 +475,101 @@ mod tests {
         let loss = 20.0 * (24_000f64 / 32_768.0).log10();
         assert!((padded.average - proper.average - loss).abs() < 0.15, "{} vs {}", padded.average, proper.average);
         assert!(proper.average - padded.average > 2.0);
+    }
+
+    /// The peak phasors (`2 X_k / N`) of harmonics `1..=count` of a one-period record, by a direct sum (no FFT).
+    fn lines_of(record: &[f64], count: usize) -> Vec<Complex> {
+        let n = record.len();
+        (1..=count)
+            .map(|k| {
+                let mut acc = Complex::ZERO;
+                for (i, &v) in record.iter().enumerate() {
+                    acc = acc + Complex::from_polar(v, -2.0 * PI * (k * i) as f64 / n as f64);
+                }
+                acc.scale(2.0 / n as f64)
+            })
+            .collect()
+    }
+
+    /// One period of a trapezoid (0 to 1, duty 0.4, 100 ns edges) of `period_samples` samples at `fs`.
+    fn trapezoid_period(fs: f64, period_samples: usize) -> Vec<f64> {
+        let (tr, period) = (100e-9, period_samples as f64 / fs);
+        let flat = 0.4 * period - tr;
+        (0..period_samples)
+            .map(|i| {
+                let t = i as f64 / fs;
+                if t < tr {
+                    t / tr
+                } else if t < tr + flat {
+                    1.0
+                } else if t < 2.0 * tr + flat {
+                    1.0 - (t - tr - flat) / tr
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_lines_is_scan_of_the_record_that_holds_those_lines() {
+        // 12 kHz trapezoid sampled at 2.4 MHz (200 samples a period), 40 periods: the record `scan` is given.
+        // The lines are the DFT of one period; `scan_lines` must read the same as `scan` on the record.
+        let (fs, p) = (2.4e6, 200usize);
+        let one = trapezoid_period(fs, p);
+        let record: Vec<f64> = (0..40).flat_map(|_| one.iter().copied()).collect();
+        let lines = lines_of(&one, p / 2 - 1);
+        let f0 = fs / p as f64;
+        let tuned = [f0 * 10.0, f0 * 25.0, f0 * 41.0];
+        let from_record = scan(&record, fs, &tuned, Band::B);
+        let from_lines = scan_lines(f0, &lines, &tuned, Band::B);
+        for (a, b) in from_record.iter().zip(&from_lines) {
+            for (x, y) in [(a.peak, b.peak), (a.quasi_peak, b.quasi_peak), (a.average, b.average)] {
+                // (the two sample the settled envelope on different grids: 0.04 dB on the peak)
+                assert!((x - y).abs() < 0.1, "{a:?} against {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lines_closer_than_the_if_bandwidth_read_as_the_time_domain_reference_does() {
+        // 3 kHz trapezoid: at the 9 kHz Band B bandwidth three or more lines are inside the IF response, so the
+        // detectors disagree with the line level and with each other. Reference: the periodic signal sampled at
+        // 1.536 MHz (512 samples a period), mixed down and convolved with the Gaussian impulse response in the time
+        // domain, then the same detector arithmetic; `scan_lines` never forms a waveform.
+        let (fs, p) = (1.536e6, 512usize);
+        let one = trapezoid_period(fs, p);
+        let f0 = fs / p as f64;
+        assert!((f0 - 3000.0).abs() < 1e-9);
+        let lines = lines_of(&one, p / 2 - 1);
+        let tuned = [f0 * 100.0, f0 * 101.0, f0 * 150.0];
+        let got = scan_lines(f0, &lines, &tuned, Band::B);
+        for (reading, &f) in got.iter().zip(&tuned) {
+            // The period is the whole record; the circular convolution is exact for a periodic signal.
+            let env = brute_force_envelope(&one, fs, f, Band::B);
+            let d = detect_envelope(&env, 1.0 / fs, Band::B);
+            assert!((reading.peak - to_dbuv(d.peak)).abs() < 0.3, "{f}: peak {} vs {}", reading.peak, to_dbuv(d.peak));
+            assert!(
+                (reading.quasi_peak - to_dbuv(d.quasi_peak)).abs() < 0.3,
+                "{f}: qp {} vs {}",
+                reading.quasi_peak,
+                to_dbuv(d.quasi_peak)
+            );
+            assert!(
+                (reading.average - to_dbuv(d.average)).abs() < 0.3,
+                "{f}: avg {} vs {}",
+                reading.average,
+                to_dbuv(d.average)
+            );
+            assert!(reading.peak >= reading.quasi_peak && reading.quasi_peak >= reading.average, "{reading:?}");
+            // And the lines really are inside the IF: the average is the line RMS summed with its neighbours, not one line.
+            let k = (f / f0).round() as usize;
+            let line = to_dbuv(lines[k - 1].abs() / 2f64.sqrt());
+            assert!(
+                (reading.average - line).abs() > 0.3 || (reading.peak - line).abs() > 0.3,
+                "{reading:?} vs line {line}"
+            );
+        }
     }
 
     #[test]

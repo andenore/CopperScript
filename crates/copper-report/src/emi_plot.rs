@@ -3,9 +3,11 @@
 //! finding, harmonic stems on a log-frequency axis from 150 kHz to 30 MHz,
 //! the quasi-peak and average limit lines and the assumptions that qualify the
 //! numbers. Limit lines and margins are drawn only where the finding says its
-//! levels are detector readings (`detector_applicability = isolated_lines`);
-//! otherwise the panel is headed "line amplitudes, NOT a detector reading" and
-//! shows no limit. Only the conducted spectrum is plotted: the common-mode
+//! levels are detector readings (`detector_applicability = isolated_lines`), or,
+//! for `receiver_emulation` (closely spaced harmonics of one constant frequency),
+//! for the harmonics the receiver emulation read (diamonds; the stems stay line
+//! amplitudes, "NOT a detector reading"); otherwise the panel is headed
+//! "line amplitudes, NOT a detector reading" and shows no limit. Only the conducted spectrum is plotted: the common-mode
 //! coupling-risk score of `EMI-SWITCH-NODE` is a relative ranking score and is
 //! never drawn against a limit.
 //!
@@ -47,6 +49,9 @@ pub struct Harmonic {
     pub limit_qp: Option<f64>,
     pub limit_avg: Option<f64>,
     pub margin_db: Option<f64>,
+    /// The high-end quasi-peak and average readings of the receiver emulation, where it read this harmonic.
+    pub reading_qp: Option<f64>,
+    pub reading_avg: Option<f64>,
 }
 
 impl Harmonic {
@@ -77,6 +82,9 @@ pub struct SpectrumPanel {
     /// `None` when the levels are detector readings (isolated lines); else why they are only line amplitudes.
     /// Limit lines and margins are not drawn for a panel that has a reason.
     pub detector_reason: Option<String>,
+    /// The isolated-line reading fails but the receiver emulation read some harmonics (`detector_reason` is then
+    /// the reason the isolated-line reading fails): limit lines and margins are drawn for those harmonics only.
+    pub receiver_emulation: bool,
     /// The frequency scenario of a declared range (`range lower bound` ...), when the finding is one.
     pub scenario: Option<String>,
     pub harmonics: Vec<Harmonic>,
@@ -85,6 +93,11 @@ pub struct SpectrumPanel {
 impl SpectrumPanel {
     fn detector_ok(&self) -> bool {
         self.detector_reason.is_none()
+    }
+
+    /// Whether limit lines and margins are drawn (isolated lines, or the harmonics the receiver emulation read).
+    fn shows_limits(&self) -> bool {
+        self.detector_ok() || self.receiver_emulation
     }
 }
 
@@ -127,6 +140,8 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
                     limit_qp: field(h, "limit_qp"),
                     limit_avg: field(h, "limit_avg"),
                     margin_db: field(h, "margin_db"),
+                    reading_qp: h.get("receiver").and_then(|r| field(r, "quasi_peak_high_dbuv")),
+                    reading_avg: h.get("receiver").and_then(|r| field(r, "average_high_dbuv")),
                 })
             })
             .collect();
@@ -140,7 +155,8 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
             .and_then(|c| field(c, "frequency_hz"))
             .or_else(|| field(measures, "switching_frequency_hz"));
         // A report that does not state the status is not taken to hold detector readings.
-        let detector_reason = match measures.get("detector_applicability").and_then(Value::as_str) {
+        let status = measures.get("detector_applicability").and_then(Value::as_str);
+        let detector_reason = match status {
             Some("isolated_lines") => None,
             _ => Some(
                 measures
@@ -159,6 +175,7 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
             cell,
             frequency_hz,
             detector_reason,
+            receiver_emulation: status == Some("receiver_emulation"),
             scenario,
             standard: measures.get("limit_standard").and_then(Value::as_str).map(str::to_owned),
             tags: finding
@@ -222,11 +239,11 @@ fn ceil10(value: f64) -> f64 {
 }
 
 /// The worst harmonic: the least margin when margins exist, else the highest level.
-fn worst(harmonics: &[Harmonic], detector_ok: bool) -> Option<usize> {
+fn worst(harmonics: &[Harmonic], limits_shown: bool) -> Option<usize> {
     let by_margin = harmonics
         .iter()
         .enumerate()
-        .filter_map(|(i, h)| h.margin_db.filter(|_| detector_ok).map(|m| (i, m)))
+        .filter_map(|(i, h)| h.margin_db.filter(|_| limits_shown).map(|m| (i, m)))
         .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     by_margin.map(|(i, _)| i).or_else(|| {
         harmonics
@@ -254,6 +271,8 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 
 fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) {
     let ok = panel.detector_ok();
+    let emulated = panel.receiver_emulation;
+    let limits = panel.shows_limits();
     let plot_w = WIDTH - LEFT - RIGHT;
     let (x0, y0) = (LEFT, top + TOP);
     let (lo_f, hi_f) = (BAND_HZ.0.log10(), BAND_HZ.1.log10());
@@ -264,15 +283,22 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     for h in &panel.harmonics {
         values.push(h.level());
         values.extend(h.band().map(|b| b.0));
-        values.extend(h.limit_qp.filter(|_| ok));
-        values.extend(h.limit_avg.filter(|_| ok));
+        values.extend(h.limit_qp.filter(|_| limits));
+        values.extend(h.limit_avg.filter(|_| limits));
+        values.extend(h.reading_qp.filter(|_| emulated));
     }
     let (data_lo, data_hi) = values.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, v| (a.0.min(*v), a.1.max(*v)));
     let hi = ceil10(data_hi + 5.0);
     let lo = floor10(data_lo).max(hi - 90.0).min(hi - 30.0);
     let py = |v: f64| y0 + PLOT_HEIGHT - (v - lo) / (hi - lo) * PLOT_HEIGHT;
 
-    let what = if ok { "conducted emission" } else { "conducted line amplitudes, NOT a detector reading" };
+    let what = if ok {
+        "conducted emission"
+    } else if emulated {
+        "conducted line amplitudes (NOT detector readings; receiver emulation at the diamonds)"
+    } else {
+        "conducted line amplitudes, NOT a detector reading"
+    };
     let title = match (panel.frequency_hz, &panel.scenario) {
         (Some(f), Some(scenario)) => {
             format!("{}: {what} at the input, switching at {} ({scenario})", panel.cell, frequency_text(f))
@@ -289,6 +315,10 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         escape(&title)
     ));
     let standard = match (&panel.detector_reason, panel.standard.as_deref()) {
+        (Some(reason), standard) if emulated => format!(
+            "limit lines and margins apply to the receiver-emulation readings at the marked harmonics only{}; the isolated-line assumption fails: {reason}",
+            standard.map_or(String::new(), |s| format!(" ({s}, quasi-peak and average)"))
+        ),
         (Some(reason), _) => format!("no limit lines and no margin, the isolated-line assumption fails: {reason}"),
         (None, None) => {
             "no emission standard with a conducted table is declared: levels only, no limit lines".to_owned()
@@ -386,7 +416,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     ] {
         let points: Vec<String> = sorted
             .iter()
-            .filter_map(|h| pick(h).filter(|_| ok).map(|l| format!("{},{}", n(px(h.frequency_hz)), n(py(l)))))
+            .filter_map(|h| pick(h).filter(|_| limits).map(|l| format!("{},{}", n(px(h.frequency_hz)), n(py(l)))))
             .collect();
         if points.len() >= 2 {
             out.push(format!(
@@ -395,7 +425,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             ));
         }
     }
-    let worst_index = worst(&panel.harmonics, ok);
+    let worst_index = worst(&panel.harmonics, limits);
     // Bands of the rule-of-thumb inputs: a whisker from the low to the high end behind each stem.
     for h in &panel.harmonics {
         if let Some((low, high)) = h.band() {
@@ -439,6 +469,23 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             n(y)
         ));
     }
+    // Receiver-emulation readings: a diamond at the high-end quasi-peak reading, a warning colour above its limit.
+    if emulated {
+        for h in &panel.harmonics {
+            let Some(qp) = h.reading_qp else { continue };
+            let over = h.reading_avg.zip(h.limit_avg).is_some_and(|(r, l)| r > l) || h.limit_qp.is_some_and(|l| qp > l);
+            let (x, y) = (px(h.frequency_hz), py(qp));
+            out.push(format!(
+                "<path class=\"reading{}\" data-frequency-hz=\"{}\" data-quasi-peak-dbuv=\"{}\" d=\"M {} {} l 5 5 l -5 5 l -5 -5 z\" fill=\"{BACKGROUND}\" stroke=\"{}\" stroke-width=\"1.5\"/>",
+                if over { " over-limit" } else { "" },
+                n(h.frequency_hz),
+                n(qp),
+                n(x),
+                n(y - 5.0),
+                if over { WARNING } else { INK }
+            ));
+        }
+    }
     // Mode series only when common mode exists.
     let has_cm = panel.harmonics.iter().any(|h| h.cm_dbuv.is_some());
     if has_cm {
@@ -468,6 +515,13 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         let label = if ok {
             let margin = h.margin_db.map_or(String::new(), |m| format!(", {:+} dB to the average line", n(m)));
             format!("worst harmonic: {} at {} dBuV{margin}", frequency_text(h.frequency_hz), n(h.level()))
+        } else if emulated && h.margin_db.is_some() {
+            format!(
+                "worst evaluated harmonic: {} at {} dBuV quasi-peak reading, {:+} dB to the nearer limit (receiver emulation; the other harmonics are not detector readings)",
+                frequency_text(h.frequency_hz),
+                n(h.reading_qp.unwrap_or(h.level())),
+                n(h.margin_db.unwrap_or(0.0))
+            )
         } else {
             format!(
                 "highest line amplitude: {} at {} dBuV (not a detector reading, no limit)",
@@ -520,13 +574,19 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         ));
         entries.push((format!("<rect x=\"-3\" y=\"-7\" width=\"6\" height=\"6\" fill=\"{BACKGROUND}\" stroke=\"{CM}\" stroke-width=\"1.5\"/>"), "common mode".to_owned()));
     }
-    if ok && panel.harmonics.iter().any(|h| h.limit_qp.is_some()) {
+    if emulated {
+        entries.push((
+            format!("<path d=\"M 0 -10 l 5 5 l -5 5 l -5 -5 z\" fill=\"{BACKGROUND}\" stroke=\"{INK}\" stroke-width=\"1.5\"/>"),
+            "quasi-peak reading (receiver emulation)".to_owned(),
+        ));
+    }
+    if limits && panel.harmonics.iter().any(|h| h.limit_qp.is_some()) {
         entries.push((
             format!("<line x1=\"-8\" y1=\"-4\" x2=\"8\" y2=\"-4\" stroke=\"{LIMIT_QP}\" stroke-width=\"2\"/>"),
             "quasi-peak limit".to_owned(),
         ));
     }
-    if ok && panel.harmonics.iter().any(|h| h.limit_avg.is_some()) {
+    if limits && panel.harmonics.iter().any(|h| h.limit_avg.is_some()) {
         entries.push((format!("<line x1=\"-8\" y1=\"-4\" x2=\"8\" y2=\"-4\" stroke=\"{LIMIT_AVG}\" stroke-width=\"2\" stroke-dasharray=\"6 4\"/>"), "average limit".to_owned()));
     }
     let mut x = LEFT + 10.0;
@@ -598,6 +658,8 @@ mod tests {
             limit_qp: qp,
             limit_avg: avg,
             margin_db: avg.map(|a| a - level),
+            reading_qp: None,
+            reading_avg: None,
         }
     }
 
@@ -613,6 +675,7 @@ mod tests {
                 "differential_mode_only".to_owned(),
             ],
             detector_reason: None,
+            receiver_emulation: false,
             scenario: None,
             harmonics: vec![
                 harmonic(1, 60.0, limit(56.0), limit(46.0)),
@@ -775,6 +838,37 @@ mod tests {
         // The same panel with the status "isolated lines" draws them.
         p.detector_reason = None;
         assert!(spectrum_svg("EmiBuck", &[p]).contains("<polyline class=\"limit-qp\""));
+    }
+
+    #[test]
+    fn a_receiver_emulation_panel_marks_the_evaluated_harmonics_and_keeps_the_stems_as_line_amplitudes() {
+        let report = copper_json::parse(
+            r#"{"findings":[
+              {"code":"EMI-CONDUCTED","cell":"U1","tags":["detector_receiver_emulation"],"measures":{"detector_applicability":"receiver_emulation",
+               "detector_reason":"the harmonic spacing 15000 Hz is not above twice the Band B resolution bandwidth","limit_standard":"cispr32_class_b",
+               "harmonics":[
+                {"frequency_hz":600000.0,"total_dbuv":40.0,"limit_qp":56.0,"limit_avg":46.0,"margin_db":6.0,
+                 "receiver":{"quasi_peak_high_dbuv":40.0,"average_high_dbuv":40.0}},
+                {"frequency_hz":615000.0,"total_dbuv":39.0,"limit_qp":null,"limit_avg":null,"margin_db":null,"receiver":null},
+                {"frequency_hz":630000.0,"total_dbuv":38.0,"limit_qp":56.0,"limit_avg":46.0,"margin_db":-2.0,
+                 "receiver":{"quasi_peak_high_dbuv":48.0,"average_high_dbuv":48.0}}]}}]}"#,
+        )
+        .unwrap();
+        let panels = panels_from_report(&report);
+        assert!(panels[0].receiver_emulation && panels[0].detector_reason.is_some());
+        let svg = spectrum_svg("EmiBuck", &panels);
+        assert!(svg.contains("NOT detector readings; receiver emulation at the diamonds"), "{svg}");
+        assert!(svg.contains("limit lines and margins apply to the"), "{svg}");
+        assert_eq!(svg.matches("class=\"reading").count(), 2, "one diamond per evaluated harmonic");
+        assert_eq!(
+            svg.matches("reading over-limit").count(),
+            1,
+            "the 48 dBuV average reading is above the 46 dBuV line"
+        );
+        assert!(svg.contains("<polyline class=\"limit-qp\""));
+        assert!(svg.contains("worst evaluated harmonic: 630 kHz"), "{svg}");
+        // The stems are still line amplitudes: no stem is in the warning colour for the isolated-line rule.
+        assert_eq!(svg.matches("class=\"harmonic over-average\"").count(), 0);
     }
 
     #[test]

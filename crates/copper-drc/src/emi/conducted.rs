@@ -836,7 +836,7 @@ fn conducted_class(standard: &Standard) -> Option<Class> {
     }
 }
 
-fn supply_of<'a>(view: &'a FlatElectricalView, net: Option<&String>) -> Option<(&'a str, f64)> {
+pub(super) fn supply_of<'a>(view: &'a FlatElectricalView, net: Option<&String>) -> Option<(&'a str, f64)> {
     let net = net?;
     view.supplies.iter().find(|s| &s.net == net).map(|s| (s.name.as_str(), quantity(&s.voltage)))
 }
@@ -912,7 +912,7 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
 
 /// Which source spectrum a scenario uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(super) enum Kind {
     /// The buck's input current at the declared operating point (ramp on a pedestal, continuous conduction).
     Declared,
     /// The switch current limit as the amplitude of a flat-top pulse: a worst case, not a prediction.
@@ -920,7 +920,7 @@ enum Kind {
 }
 
 impl Kind {
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Kind::Declared => "declared_operating_point",
             Kind::CurrentLimit => "current_limit",
@@ -930,7 +930,7 @@ impl Kind {
 
 /// The inductor ripple of the declared operating point.
 #[derive(Clone, Copy, Debug)]
-enum Ripple {
+pub(super) enum Ripple {
     /// Computed from the power inductor's value: `dI = (Vin - Vout) D / (L f)`, A peak to peak.
     Computed(f64),
     /// The power inductor's value was not found: the rule-of-thumb ratio band times the load current.
@@ -938,21 +938,75 @@ enum Ripple {
 }
 
 /// The declared operating point of a cell, checked against continuous conduction.
-struct OperatingPoint {
-    load: f64,
+pub(super) struct OperatingPoint {
+    pub(super) load: f64,
     /// The power inductor's reference and value, when found.
-    inductor: Option<(String, f64)>,
-    ripple: Ripple,
+    pub(super) inductor: Option<(String, f64)>,
+    pub(super) ripple: Ripple,
     /// `I_out >= dI / 2`: the valley of the ramp is not below zero.
-    ccm: bool,
+    pub(super) ccm: bool,
+}
+
+/// The declared operating point of a buck cell at `frequency`: the inductor ripple from the power inductor on the
+/// switch net (`dI = (Vin - Vout) D / (L f)`), else the rule-of-thumb ratio band, and the check against continuous
+/// conduction. Shared by `EMI-CONDUCTED` and the hot-loop radiated estimate, so one report holds one scenario.
+pub(super) fn operating_point(
+    view: &FlatElectricalView,
+    cell: &SwitchingCell,
+    load: f64,
+    frequency: f64,
+    vin: f64,
+    vout: f64,
+) -> OperatingPoint {
+    let duty = vout / vin;
+    let inductor =
+        cell.magnetic.as_ref().and_then(|m| inductance_of(view, &m.component).map(|l| (m.component.clone(), l)));
+    match inductor {
+        Some((name, l)) => {
+            let ripple = (vin - vout) * duty / (l * frequency);
+            OperatingPoint {
+                load,
+                inductor: Some((name, l)),
+                ripple: Ripple::Computed(ripple),
+                ccm: ripple / 2.0 <= load * (1.0 + 1e-9),
+            }
+        }
+        None => {
+            let ratio = defaults::RIPPLE_RATIO;
+            OperatingPoint {
+                load,
+                inductor: None,
+                ripple: Ripple::Rule { nominal: ratio.0 * load, low: ratio.1 * load, high: ratio.2 * load },
+                ccm: true,
+            }
+        }
+    }
 }
 
 impl OperatingPoint {
-    fn nominal_ripple(&self) -> f64 {
+    pub(super) fn nominal_ripple(&self) -> f64 {
         match self.ripple {
             Ripple::Computed(r) => r,
             Ripple::Rule { nominal, .. } => nominal,
         }
+    }
+
+    /// The ripples to evaluate: the nominal first, then the low and high end of a rule-of-thumb band.
+    pub(super) fn ripples(&self) -> Vec<f64> {
+        match self.ripple {
+            Ripple::Computed(r) => vec![r],
+            Ripple::Rule { nominal, low, high } => vec![nominal, low, high],
+        }
+    }
+
+    /// The current the high-side switch commutates at turn-on, `I_out - dI/2`, A (nominal ripple).
+    pub(super) fn valley(&self) -> f64 {
+        self.load - self.nominal_ripple() / 2.0
+    }
+
+    /// The current the high-side switch commutates at turn-off, `I_out + dI/2`, A (nominal ripple).
+    pub(super) fn peak(&self) -> f64 {
+        self.load + self.nominal_ripple() / 2.0
     }
 }
 
@@ -1028,6 +1082,46 @@ struct Row {
     margin_avg: Option<f64>,
     /// Peak branch currents of the nominal case over the source current, in the order of `Evaluation::labels`.
     shares: Vec<f64>,
+    /// The receiver emulation of this harmonic, when it was evaluated (see [`Receiver`]).
+    reading: Option<RowReading>,
+}
+
+/// The detector readings of one harmonic from the receiver emulation, dBuV.
+#[derive(Clone, Copy, Debug)]
+struct RowReading {
+    /// Readings of the nominal case.
+    peak: f64,
+    quasi_peak: f64,
+    average: f64,
+    /// The highest reading over the nominal case and the corner cases of the rule-of-thumb inputs (every case is
+    /// emulated; the unfavourable end drives the margin).
+    peak_high: f64,
+    quasi_peak_high: f64,
+    average_high: f64,
+    /// The lowest reading over those cases.
+    quasi_peak_low: f64,
+    average_low: f64,
+    /// Why this harmonic was selected.
+    reason: &'static str,
+}
+
+impl RowReading {
+    fn json(&self, row: &Row) -> Value {
+        let mut item = Object::new();
+        put(&mut item, "peak_dbuv", num(self.peak, 2));
+        put(&mut item, "quasi_peak_dbuv", num(self.quasi_peak, 2));
+        put(&mut item, "average_dbuv", num(self.average, 2));
+        put(&mut item, "peak_high_dbuv", num(self.peak_high, 2));
+        put(&mut item, "quasi_peak_high_dbuv", num(self.quasi_peak_high, 2));
+        put(&mut item, "average_high_dbuv", num(self.average_high, 2));
+        put(&mut item, "quasi_peak_low_dbuv", num(self.quasi_peak_low, 2));
+        put(&mut item, "average_low_dbuv", num(self.average_low, 2));
+        put(&mut item, "line_dbuv", num(row.total, 2));
+        put(&mut item, "quasi_peak_over_line_db", num(self.quasi_peak - row.total, 2));
+        put(&mut item, "average_over_line_db", num(self.average - row.total, 2));
+        put(&mut item, "selected_as", Value::from(self.reason));
+        Value::Object(item)
+    }
 }
 
 impl Row {
@@ -1053,6 +1147,7 @@ impl Row {
         put(&mut item, "margin_qp_db", self.margin_qp.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "margin_avg_db", self.margin_avg.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "margin_db", self.margin().map_or(Value::Null, |v| num(v, 2)));
+        put(&mut item, "receiver", self.reading.as_ref().map_or(Value::Null, |r| r.json(self)));
         Value::Object(item)
     }
 }
@@ -1060,6 +1155,8 @@ impl Row {
 /// The result of one scenario: its rows, the nominal-case report and the cases behind the bands.
 struct Evaluation {
     rows: Vec<Row>,
+    /// The inputs of every case, the nominal case first (the receiver emulation runs on each).
+    inputs: Vec<ConductedInput>,
     nominal: conducted::ConductedReport,
     cases: usize,
     dc_band: bool,
@@ -1088,8 +1185,244 @@ struct Record<'a> {
 }
 
 fn percent(share: f64) -> String {
-    if share >= 0.1 { format!("{:.0} %", share * 100.0) } else { format!("{:.2} %", share * 100.0) }
+    if share >= 0.1 { format!("{:.1} %", share * 100.0) } else { format!("{:.2} %", share * 100.0) }
 }
+
+/// One anti-resonance, worded with its significance.
+fn anti_resonance_text(peak: &conducted::AntiResonance) -> String {
+    let verdict = match (peak.significant, peak.harmonic, peak.harmonic_rise_db) {
+        (true, Some(n), Some(rise)) => {
+            format!("SIGNIFICANT: harmonic {n} in its lobe is raised {rise:.1} dB over the best capacitor branch alone")
+        }
+        (false, Some(n), Some(rise)) => format!(
+            "not significant: the harmonic in its lobe with the largest rise ({n}) is raised {rise:.1} dB, below {:.1} dB",
+            conducted::ANTI_RESONANCE_SIGNIFICANT_DB
+        ),
+        _ => "not significant: no reported harmonic lies in its lobe".to_owned(),
+    };
+    format!(
+        "anti-resonance of the input network at {} with |Z| {} seen at the hot capacitor's node ({:.1} dB above the {} of the best single capacitor branch there); {verdict}",
+        si(peak.frequency, "Hz"),
+        si(peak.impedance, "ohm"),
+        peak.rise_db,
+        si(peak.envelope_impedance, "ohm")
+    )
+}
+
+/// The most harmonics the receiver emulation reads (the cost is linear in it: each is one small inverse FFT and the
+/// detector run, for both LISN ports).
+const RECEIVER_CAP: usize = 48;
+
+/// What the receiver emulation did for a headline scenario.
+struct Receiver {
+    /// Harmonics reported in the scenario.
+    total: usize,
+    /// Harmonics read by the emulation.
+    evaluated: usize,
+    /// The selection rule, worded.
+    rule: String,
+    /// Harmonics selected for each reason.
+    counts: Vec<(&'static str, usize)>,
+    /// Harmonic solves of the emulation (lines up to the highest read plus the IF margin, per case).
+    solves: usize,
+    /// Receiver evaluations (harmonics read x 2 LISN ports x cases).
+    scans: usize,
+    /// Cases emulated (the nominal case and the corners of the rule-of-thumb bands).
+    cases: usize,
+    /// The CISPR bands read.
+    bands: Vec<copper_emi::receiver::Band>,
+}
+
+impl Receiver {
+    fn model_text(&self) -> String {
+        let bands = self
+            .bands
+            .iter()
+            .map(|band| {
+                let c = band.quasi_peak_constants();
+                format!(
+                    "Band {band:?}: IF bandwidth {} Hz, quasi-peak charge {} ms / discharge {} ms / meter {} ms",
+                    band.rbw(),
+                    rounded(c.charge * 1e3, 3),
+                    rounded(c.discharge * 1e3, 3),
+                    rounded(c.meter * 1e3, 3)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "receiver emulation (copper_emi::receiver) of one strictly periodic waveform: the LISN port voltage of both lines from every harmonic of the nominal case, a Gaussian IF filter of 6 dB bandwidth the band's resolution bandwidth (a stand-in for the standard's selectivity mask), the envelope calibrated to RMS, peak = envelope maximum, average = envelope mean, quasi-peak = charge, discharge and meter time constants of the band ({bands}); the bandwidths and time constants are remembered values of CISPR 16-1-1 Table 1 and UNVERIFIED against the standard, and the larger of the two ports is read. Every case of the rule-of-thumb inputs (the nominal case and each corner of the edge, DC-bias and ripple bands) is emulated at the selected harmonics, the nominal reading is the headline value and the highest and lowest readings over the cases are the band. Jitter, spread spectrum, modulation and burst modes are not modelled and the sweep dwell time of a real receiver is not modelled"
+        )
+    }
+
+    fn json(&self, rows: &[Row]) -> Value {
+        let mut item = Object::new();
+        put(&mut item, "status", Value::from("evaluated"));
+        put(&mut item, "harmonics_reported", Value::from(self.total as i64));
+        put(&mut item, "harmonics_evaluated", Value::from(self.evaluated as i64));
+        put(&mut item, "selection_rule", Value::from(self.rule.as_str()));
+        let mut counts = Object::new();
+        for (reason, count) in &self.counts {
+            put(&mut counts, reason, Value::from(*count as i64));
+        }
+        put(&mut item, "selected_as", Value::Object(counts));
+        put(&mut item, "cap", Value::from(RECEIVER_CAP as i64));
+        put(&mut item, "cases", Value::from(self.cases as i64));
+        put(&mut item, "harmonic_solves", Value::from(self.solves as i64));
+        put(&mut item, "receiver_evaluations", Value::from(self.scans as i64));
+        put(&mut item, "model", Value::from(self.model_text()));
+        put(
+            &mut item,
+            "bands",
+            Value::Array(
+                self.bands
+                    .iter()
+                    .map(|band| {
+                        let c = band.quasi_peak_constants();
+                        let mut entry = Object::new();
+                        put(&mut entry, "band", Value::from(format!("{band:?}")));
+                        put(&mut entry, "rbw_hz", num(band.rbw(), 0));
+                        put(&mut entry, "quasi_peak_charge_s", num(c.charge, 6));
+                        put(&mut entry, "quasi_peak_discharge_s", num(c.discharge, 6));
+                        put(&mut entry, "quasi_peak_meter_s", num(c.meter, 6));
+                        put(
+                            &mut entry,
+                            "constants_source",
+                            Value::from("remembered from CISPR 16-1-1 Table 1, UNVERIFIED"),
+                        );
+                        Value::Object(entry)
+                    })
+                    .collect(),
+            ),
+        );
+        put(&mut item, "readings", Value::Array(rows.iter().filter(|r| r.reading.is_some()).map(Row::json).collect()));
+        put(
+            &mut item,
+            "not_evaluated",
+            Value::from(
+                "the other harmonics are line amplitudes (RMS of one harmonic), not detector readings; they carry no limit and no margin",
+            ),
+        );
+        Value::Object(item)
+    }
+}
+
+/// One evaluated harmonic with the limits at its frequency.
+struct EmulatedRow {
+    reading: RowReading,
+    limit_quasi_peak: Option<f64>,
+    limit_average: Option<f64>,
+}
+
+/// Choose at most [`RECEIVER_CAP`] harmonics: the 8 with the least quasi-peak margin and the 8 with the least
+/// average margin (line level against the limit, when a conducted limit table applies), the 16 highest line levels,
+/// and 8 spread evenly over the reported harmonics (the first and the last included), in that priority.
+fn select_for_receiver(rows: &[Row], class: Option<Class>) -> Vec<(usize, &'static str)> {
+    let mut chosen: Vec<(usize, &'static str)> = Vec::new();
+    let mut take = |indices: Vec<usize>, reason: &'static str| {
+        for index in indices {
+            if chosen.len() < RECEIVER_CAP && !chosen.iter().any(|(i, _)| *i == index) {
+                chosen.push((index, reason));
+            }
+        }
+    };
+    let by = |key: &dyn Fn(&Row) -> f64, count: usize| {
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by(|a, b| key(&rows[*a]).total_cmp(&key(&rows[*b])));
+        order.truncate(count);
+        order
+    };
+    if let Some(class) = class {
+        for (detector, reason) in
+            [(Detector::QuasiPeak, "least_quasi_peak_margin"), (Detector::Average, "least_average_margin")]
+        {
+            if let Some(line) = limits::cispr32_conducted(class, detector) {
+                take(by(&|r: &Row| line.at(r.f).map_or(f64::INFINITY, |limit| limit - r.high), 8), reason);
+            }
+        }
+    }
+    take(by(&|r: &Row| -r.high, 16), "highest_line_level");
+    let spread: Vec<usize> =
+        if rows.len() <= 8 { (0..rows.len()).collect() } else { (0..8).map(|k| k * (rows.len() - 1) / 7).collect() };
+    take(spread, "spread_over_the_band");
+    chosen.sort_by_key(|(i, _)| *i);
+    chosen
+}
+
+/// Run the receiver emulation at the selected harmonics of `rows` for the nominal case (`inputs[0]`) and every
+/// corner case, whose extremes are the band.
+fn emulate(
+    inputs: &[ConductedInput],
+    rows: &[Row],
+    class: Option<Class>,
+) -> Result<(Receiver, Vec<Option<EmulatedRow>>), String> {
+    let chosen = select_for_receiver(rows, class);
+    let harmonics: Vec<u32> = chosen.iter().map(|(i, _)| rows[*i].n).collect();
+    let mut cases = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        cases.push(conducted::receiver_emulation(input, &harmonics).map_err(|e| e.to_string())?);
+    }
+    let readings = cases[0].clone();
+    let qp_line = class.and_then(|c| limits::cispr32_conducted(c, Detector::QuasiPeak));
+    let avg_line = class.and_then(|c| limits::cispr32_conducted(c, Detector::Average));
+    let mut out: Vec<Option<EmulatedRow>> = rows.iter().map(|_| None).collect();
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    let mut bands: Vec<copper_emi::receiver::Band> = Vec::new();
+    for reading in &readings {
+        let Some((index, reason)) = chosen.iter().copied().find(|(i, _)| rows[*i].n == reading.harmonic) else {
+            continue;
+        };
+        let row = &rows[index];
+        let over_cases = |pick: &dyn Fn(&conducted::EmulatedReading) -> f64, high: bool| {
+            cases.iter().filter_map(|case| case.iter().find(|r| r.harmonic == reading.harmonic)).map(pick).fold(
+                if high { f64::NEG_INFINITY } else { f64::INFINITY },
+                |a, b| if high { a.max(b) } else { a.min(b) },
+            )
+        };
+        out[index] = Some(EmulatedRow {
+            reading: RowReading {
+                peak: reading.peak_dbuv,
+                quasi_peak: reading.quasi_peak_dbuv,
+                average: reading.average_dbuv,
+                peak_high: over_cases(&|r| r.peak_dbuv, true),
+                quasi_peak_high: over_cases(&|r| r.quasi_peak_dbuv, true),
+                average_high: over_cases(&|r| r.average_dbuv, true),
+                quasi_peak_low: over_cases(&|r| r.quasi_peak_dbuv, false),
+                average_low: over_cases(&|r| r.average_dbuv, false),
+                reason,
+            },
+            limit_quasi_peak: qp_line.as_ref().and_then(|l| l.at(row.f)),
+            limit_average: avg_line.as_ref().and_then(|l| l.at(row.f)),
+        });
+        match counts.iter_mut().find(|(r, _)| *r == reason) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((reason, 1)),
+        }
+        if !bands.contains(&reading.band) {
+            bands.push(reading.band);
+        }
+    }
+    let highest = harmonics.iter().copied().max().unwrap_or(0) as usize;
+    let rule = format!(
+        "at most {RECEIVER_CAP} harmonics: the 8 with the least quasi-peak margin and the 8 with the least average margin (line level against the limit, when a conducted limit table applies), the 16 highest line levels, and 8 spread evenly over the reported harmonics; every other harmonic stays a line amplitude"
+    );
+    Ok((
+        Receiver {
+            total: rows.len(),
+            evaluated: readings.len(),
+            rule,
+            counts,
+            solves: (highest + 8) * inputs.len(),
+            scans: readings.len() * 2 * inputs.len(),
+            cases: inputs.len(),
+            bands,
+        },
+        out,
+    ))
+}
+
+/// What the per-capacitor `current_share_*` numbers are.
+const SHARE_NOTE: &str = "capacitor branch currents are reported as |I_branch| / |I_source| at one harmonic: a ratio of the magnitudes of complex currents, not a partition of the source current. The branches can circulate current between themselves (an inductive branch against a capacitive one), so the ratios of the branches can add to more than 100 %";
 
 /// The prediction of one cell at one frequency scenario.
 fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&Scenario>) {
@@ -1295,30 +1628,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
 
     // The operating point.
     let duty = vout / vin;
-    let point: Option<OperatingPoint> = load_declared.map(|load| {
-        let inductor =
-            cell.magnetic.as_ref().and_then(|m| inductance_of(view, &m.component).map(|l| (m.component.clone(), l)));
-        match inductor {
-            Some((name, l)) => {
-                let ripple = (vin - vout) * duty / (l * drive.frequency);
-                OperatingPoint {
-                    load,
-                    inductor: Some((name, l)),
-                    ripple: Ripple::Computed(ripple),
-                    ccm: ripple / 2.0 <= load * (1.0 + 1e-9),
-                }
-            }
-            None => {
-                let ratio = defaults::RIPPLE_RATIO;
-                OperatingPoint {
-                    load,
-                    inductor: None,
-                    ripple: Ripple::Rule { nominal: ratio.0 * load, low: ratio.1 * load, high: ratio.2 * load },
-                    ccm: true,
-                }
-            }
-        }
-    });
+    let point: Option<OperatingPoint> =
+        load_declared.map(|load| operating_point(view, cell, load, drive.frequency, vin, vout));
     let declared_ok = point.as_ref().is_some_and(|p| p.ccm);
     let headline = if declared_ok { Kind::Declared } else { Kind::CurrentLimit };
     if headline == Kind::CurrentLimit && limit_current.is_none() {
@@ -1407,7 +1718,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 }
             }
         }
-        let nominal = conducted::predict(&build(kind, cases[0], true)).map_err(|e| e.to_string())?;
+        let input = build(kind, cases[0], true);
+        let nominal = conducted::predict(&input).map_err(|e| e.to_string())?;
+        let mut inputs = vec![input];
         if nominal.harmonics.is_empty() {
             return Err(format!(
                 "no harmonic of {} lies in {} to {}",
@@ -1418,7 +1731,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         }
         let mut corners = Vec::new();
         for case in &cases[1..] {
-            corners.push(conducted::predict(&build(kind, *case, false)).map_err(|e| e.to_string())?);
+            let input = build(kind, *case, false);
+            corners.push(conducted::predict(&input).map_err(|e| e.to_string())?);
+            inputs.push(input);
         }
         let rows: Vec<Row> = nominal
             .harmonics
@@ -1448,18 +1763,40 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                     margin_qp: qp.map(|limit| limit - high),
                     margin_avg: avg.map(|limit| limit - high),
                     shares: h.branch_currents.iter().map(|i| i / h.source_current_peak.max(1e-300)).collect(),
+                    reading: None,
                 }
             })
             .collect();
-        Ok(Evaluation { rows, nominal, cases: cases.len(), dc_band, ripple_band: ripples.len() > 1 })
+        Ok(Evaluation { rows, inputs, nominal, cases: cases.len(), dc_band, ripple_band: ripples.len() > 1 })
     };
-    let main = match evaluate(headline) {
+    let mut main = match evaluate(headline) {
         Ok(evaluation) => evaluation,
         Err(error) => {
             na(cx, format!("prediction skipped: {error}"));
             return;
         }
     };
+    // Closely spaced harmonics of one constant switching frequency: the isolated-line reading does not hold, the
+    // receiver emulation does. A range, a modulated or a burst frequency stays not applicable.
+    let mut receiver: Option<Receiver> = None;
+    let mut receiver_failure: Option<String> = None;
+    if !main.nominal.detector_applicability().is_applicable() && main.inputs[0].frequency_mode == FrequencyMode::Fixed {
+        match emulate(&main.inputs, &main.rows, class) {
+            Ok((outcome, readings)) => {
+                for (row, reading) in main.rows.iter_mut().zip(readings) {
+                    if let Some(reading) = reading {
+                        row.qp = reading.limit_quasi_peak;
+                        row.avg = reading.limit_average;
+                        row.margin_qp = row.qp.map(|limit| limit - reading.reading.quasi_peak_high);
+                        row.margin_avg = row.avg.map(|limit| limit - reading.reading.average_high);
+                        row.reading = Some(reading.reading);
+                    }
+                }
+                receiver = Some(outcome);
+            }
+            Err(error) => receiver_failure = Some(error),
+        }
+    }
     let secondary: Option<Evaluation> = if headline == Kind::Declared && limit_current.is_some() {
         match evaluate(Kind::CurrentLimit) {
             Ok(evaluation) => Some(evaluation),
@@ -1475,6 +1812,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let rows = &main.rows;
     let detector = report.detector_applicability();
     let detector_ok = detector.is_applicable();
+    // `receiver_emulation`: the isolated-line reading fails but the receiver emulation read the selected harmonics.
+    let emulated = !detector_ok && receiver.is_some();
     let has_margins = rows.iter().any(|r| r.margin().is_some());
     let worst_index = worst_row(rows);
     let worst = &rows[worst_index];
@@ -1522,6 +1861,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let largest_fundamental = largest(fundamental_row);
     let largest_worst = largest(worst);
     let anti_resonances = &report.anti_resonances;
+    let significant_peaks: Vec<&conducted::AntiResonance> = anti_resonances.iter().filter(|p| p.significant).collect();
 
     // Tags.
     let mut tags: Vec<String> = Vec::new();
@@ -1553,7 +1893,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     if !skipped.is_empty() {
         tags.push("capacitor_branch_skipped".to_owned());
     }
-    if !anti_resonances.is_empty() {
+    if !significant_peaks.is_empty() {
         tags.push("anti_resonance_in_band".to_owned());
     }
     if let Some(model) = &filter_model {
@@ -1569,7 +1909,10 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     if let Some(suffix) = scenario.and_then(|s| s.suffix) {
         tags.push(format!("frequency_scenario_{suffix}"));
     }
-    if !detector_ok {
+    if emulated {
+        tags.push("detector_receiver_emulation".to_owned());
+        tags.push("line_amplitudes_outside_the_evaluated_harmonics".to_owned());
+    } else if !detector_ok {
         tags.push("detector_not_applicable".to_owned());
         tags.push("line_amplitudes_only".to_owned());
     }
@@ -1758,7 +2101,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     for record in &records {
         let share = |row: &Row| share_at(row, &record.model.component).map_or("n/a".to_owned(), percent);
         lines.push(format!(
-            "capacitor {} ({}): {} nominal {}, ESR {} ({}), ESL {} ({}), {}; {}; share of the source current {} at the fundamental and {} at the worst harmonic",
+            "capacitor {} ({}): {} nominal {}, ESR {} ({}), ESL {} ({}), {}; {}; branch current over source current {} at the fundamental and {} at the worst harmonic",
             record.model.component,
             record.role,
             si(record.model.nominal_capacitance, "F"),
@@ -1780,6 +2123,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             share(worst)
         ));
     }
+    if records.len() > 1 {
+        lines.push(SHARE_NOTE.to_owned());
+    }
     for reason in &skipped {
         lines.push(reason.clone());
     }
@@ -1795,12 +2141,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         );
     } else {
         for peak in anti_resonances {
-            lines.push(format!(
-                "anti-resonance of the input network at {} with |Z| {} seen at the hot capacitor's node",
-                si(peak.frequency, "Hz"),
-                si(peak.impedance, "ohm")
-            ));
+            lines.push(anti_resonance_text(peak));
         }
+        lines.push(format!(
+            "anti-resonance significance: a peak is tagged and named in the headline only when a reported harmonic inside its lobe has its LISN level raised by at least {:.1} dB (a factor 2 in |Z|) over the level with the hot node held by its best single capacitor branch alone (the minimum of the |Z| of the capacitor branches on the hot node at that frequency); a peak that does not reach it is listed here and in measures.anti_resonances",
+            conducted::ANTI_RESONANCE_SIGNIFICANT_DB
+        ));
     }
     lines.push(
         "common mode not modelled: the island capacitance to the board's ground plane is not a path to the LISN reference"
@@ -1856,14 +2202,23 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         );
     }
     assumptions.push(format!("common mode is not modelled: {COMMON_MODE_REASON}"));
-    if let Some(reason) = detector.reason() {
+    if let (Some(reason), Some(outcome)) = (detector.reason(), receiver.as_ref()) {
+        assumptions.push(format!(
+            "isolated-line detector reading NOT applicable: {reason}. The levels in `harmonics` are line amplitudes (RMS of one harmonic); peak, quasi-peak and average were read by the receiver emulation at {} of {} harmonics ({}), and only those carry a limit and a margin",
+            outcome.evaluated, outcome.total, outcome.rule
+        ));
+        assumptions.push(outcome.model_text());
+    } else if let Some(reason) = detector.reason() {
         assumptions.push(format!(
             "detector reading NOT applicable: {reason}. The levels are line amplitudes (RMS of one harmonic), not quasi-peak or average readings, and no limit or margin is attached to them"
         ));
+        if let Some(failure) = &receiver_failure {
+            assumptions.push(format!("the receiver emulation could not be run: {failure}"));
+        }
     }
     if !has_margins {
         assumptions.push(match (&cx.standard.name, class) {
-            _ if !detector_ok => "line amplitudes only: no limit comparison".to_owned(),
+            _ if !detector_ok && !emulated => "line amplitudes only: no limit comparison".to_owned(),
             (Some(name), None) => format!("no conducted limit table for {name}: levels only, no margins"),
             _ => "no emission constraint: levels only, no margins".to_owned(),
         });
@@ -1882,8 +2237,18 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     ));
 
     // Message.
-    let level_part = match worst_margin {
-        Some(m) => format!(
+    let level_part = match (worst_margin, worst.reading) {
+        (Some(m), Some(r)) if emulated => format!(
+            "{:.1} dBuV {} reading (line amplitude {:.1} dBuV, band [{:.1} .. {:.1}] dBuV; {:+.1} dB to the {} line from the high end)",
+            if worst_detector == Some(Detector::Average) { r.average_high } else { r.quasi_peak_high },
+            detector_text(worst_detector),
+            worst.total,
+            if worst_detector == Some(Detector::Average) { r.average_low } else { r.quasi_peak_low },
+            if worst_detector == Some(Detector::Average) { r.average_high } else { r.quasi_peak_high },
+            m,
+            detector_text(worst_detector)
+        ),
+        (Some(m), _) => format!(
             "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {:+.1} dB to the {} line from the high end)",
             worst.high,
             worst.low,
@@ -1892,7 +2257,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             m,
             detector_text(worst_detector)
         ),
-        None => format!(
+        (None, _) => format!(
             "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1})",
             worst.high, worst.low, worst.high, worst.total
         ),
@@ -1914,7 +2279,18 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         ),
         (Kind::Declared, None) => String::new(),
     };
-    let mut message = if detector_ok {
+    let mut message = if emulated {
+        let outcome = receiver.as_ref().expect("emulated");
+        format!(
+            "{}: conducted emission at the input (differential mode only, 50 uH V-network), {scenario_part}, detector readings by receiver emulation at {} of {} harmonics (the others are line amplitudes, NOT detector readings): {} {} {}",
+            cell.controller,
+            outcome.evaluated,
+            outcome.total,
+            if has_margins { "worst evaluated harmonic" } else { "highest evaluated harmonic" },
+            format_args!("{} at {}:", worst.n, si(worst.f, "Hz")),
+            level_part
+        )
+    } else if detector_ok {
         format!(
             "{}: conducted emission at the input (differential mode only, 50 uH V-network), {scenario_part}: {} {} {}",
             cell.controller,
@@ -1944,8 +2320,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     }
     if has_margins {
         message.push_str(&format!(
-            "; {over_qp} of {} harmonics above the quasi-peak line, {over_avg} above the average line (high ends)",
-            rows.len()
+            "; {over_qp} of {} {}harmonics above the quasi-peak line, {over_avg} above the average line (high ends)",
+            receiver.as_ref().map_or(rows.len(), |r| r.evaluated),
+            if emulated { "evaluated " } else { "" }
         ));
     } else if let Some(reason) = detector.reason() {
         message.push_str(&format!("; no quasi-peak or average margin is stated: {reason}"));
@@ -1969,19 +2346,31 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         (&largest_fundamental, &largest_worst, records.len() > 1)
     {
         message.push_str(&format!(
-            "; largest ripple-current share: {fund_name} {} at the fundamental, {worst_name} {} at the worst harmonic",
+            "; largest branch-current ratio |I_branch| / |I_source| (a ratio of magnitudes, not a partition: branches circulate current between themselves, so the ratios can add to more than 100 %): {fund_name} {} at the fundamental, {worst_name} {} at the worst harmonic",
             percent(*fund_share),
             percent(*worst_share)
         ));
     }
-    if !anti_resonances.is_empty() {
+    if !significant_peaks.is_empty() {
         message.push_str(&format!(
-            "; anti-resonance of the input network at {}",
-            anti_resonances
+            "; significant anti-resonance of the input network at {}",
+            significant_peaks
                 .iter()
-                .map(|p| format!("{} (|Z| {})", si(p.frequency, "Hz"), si(p.impedance, "ohm")))
+                .map(|p| format!(
+                    "{} (|Z| {}, harmonic {} raised {:.1} dB over the best capacitor branch alone)",
+                    si(p.frequency, "Hz"),
+                    si(p.impedance, "ohm"),
+                    p.harmonic.unwrap_or(0),
+                    p.harmonic_rise_db.unwrap_or(0.0)
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+    if significant_peaks.len() < anti_resonances.len() {
+        message.push_str(&format!(
+            "; {} further anti-resonance(s) not significant (listed in the measures)",
+            anti_resonances.len() - significant_peaks.len()
         ));
     }
     if let Some(second) = &secondary {
@@ -2058,6 +2447,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         if has_margins { "least-margin" } else { "highest-level" },
         if detector_ok {
             "peak = quasi-peak = average for isolated lines".to_owned()
+        } else if emulated {
+            "a detector reading of the receiver emulation (Gaussian IF filter, CISPR band constants remembered and unverified), the highest over the cases of the rule-of-thumb band".to_owned()
         } else {
             "a line amplitude, not a detector reading".to_owned()
         },
@@ -2077,16 +2468,23 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             "the real stack-up (none is declared; FR-4 spread evenly over the board thickness is assumed)".to_owned(),
         );
     }
+    let (estimate_value, estimate_band) = match (worst.reading, emulated) {
+        (Some(r), true) if worst_detector == Some(Detector::Average) => {
+            (r.average_high, [r.average_low, r.average_high])
+        }
+        (Some(r), true) => (r.quasi_peak_high, [r.quasi_peak_low, r.quasi_peak_high]),
+        _ => (worst.high, [worst.low, worst.high]),
+    };
     finding.estimate = Some(Estimate {
-        quantity: if detector_ok { "conducted_emission" } else { "conducted_line_amplitude" }.to_owned(),
-        value: rounded(worst.high, 2),
+        quantity: if detector_ok || emulated { "conducted_emission" } else { "conducted_line_amplitude" }.to_owned(),
+        value: rounded(estimate_value, 2),
         unit: "dBuV".to_owned(),
         method,
         kind: EstimateKind::Absolute,
         definition: None,
         not_modelled,
         frequency_hz: Some(rounded(worst.f, 0)),
-        band_db: Some([rounded(worst.low, 2), rounded(worst.high, 2)]),
+        band_db: Some([rounded(estimate_band[0], 2), rounded(estimate_band[1], 2)]),
         basis: Some(defaults::BASIS.to_owned()),
     });
     finding.margin_db = worst_margin.map(|m| rounded(m, 2));
@@ -2283,6 +2681,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         Value::Object(item)
     };
     put(m, "capacitor_branches", Value::Array(records.iter().map(capacitor_value).collect()));
+    put(m, "current_share_definition", Value::from(SHARE_NOTE));
     let largest_value = |row: &Row, found: &Option<(String, f64)>| match found {
         Some((component, share)) => {
             let mut item = Object::new();
@@ -2313,6 +2712,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                     let mut item = Object::new();
                     put(&mut item, "frequency_hz", num(p.frequency, 0));
                     put(&mut item, "impedance_ohm", num(p.impedance, 6));
+                    put(&mut item, "envelope_impedance_ohm", num(p.envelope_impedance, 6));
+                    put(&mut item, "rise_over_envelope_db", num(p.rise_db, 2));
+                    put(&mut item, "harmonic", p.harmonic.map_or(Value::Null, |n| Value::from(i64::from(n))));
+                    put(&mut item, "harmonic_rise_db", p.harmonic_rise_db.map_or(Value::Null, |r| num(r, 2)));
+                    put(&mut item, "significant", Value::Bool(p.significant));
+                    put(&mut item, "text", Value::from(anti_resonance_text(p)));
                     Value::Object(item)
                 })
                 .collect(),
@@ -2364,7 +2769,30 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         },
     );
     put(m, "margins_available", Value::Bool(has_margins));
-    put(m, "detector_applicability", Value::from(if detector_ok { "isolated_lines" } else { "not_applicable" }));
+    put(
+        m,
+        "detector_applicability",
+        Value::from(if detector_ok {
+            "isolated_lines"
+        } else if emulated {
+            "receiver_emulation"
+        } else {
+            "not_applicable"
+        }),
+    );
+    put(
+        m,
+        "margins_scope",
+        Value::from(if !has_margins {
+            "none"
+        } else if emulated {
+            "evaluated_harmonics_only"
+        } else {
+            "all_harmonics"
+        }),
+    );
+    put(m, "receiver_emulation", receiver.as_ref().map_or(Value::Null, |r| r.json(rows)));
+    put(m, "receiver_emulation_failure", receiver_failure.as_deref().map_or(Value::Null, Value::from));
     put(m, "detector_reason", detector.reason().map_or(Value::Null, Value::from));
     put(
         m,
@@ -2382,7 +2810,13 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                     put(
                         &mut item,
                         "status",
-                        Value::from(if b.applicability.is_applicable() { "isolated_lines" } else { "not_applicable" }),
+                        Value::from(if b.applicability.is_applicable() {
+                            "isolated_lines"
+                        } else if receiver.as_ref().is_some_and(|r| r.bands.contains(&b.band)) {
+                            "receiver_emulation"
+                        } else {
+                            "not_applicable"
+                        }),
                     );
                     put(&mut item, "reason", b.applicability.reason().map_or(Value::Null, Value::from));
                     Value::Object(item)
@@ -2442,6 +2876,13 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         main.cases,
         match detector.reason() {
             None => "detector applicability: isolated lines (quasi-peak = average = line RMS)".to_owned(),
+            Some(reason) if emulated => {
+                let outcome = receiver.as_ref().expect("emulated");
+                format!(
+                    "detector applicability: receiver emulation at {} of {} harmonics ({} case(s), {} harmonic solves, {} receiver evaluations); the isolated-line reading does not hold ({reason}); the other harmonics are line amplitudes with no margin; the margins are the emulated quasi-peak and average readings against the limits at the evaluated harmonics only",
+                    outcome.evaluated, outcome.total, outcome.cases, outcome.solves, outcome.scans
+                )
+            }
             Some(reason) => format!("detector reading NOT applicable, line amplitudes only, no margin: {reason}"),
         }
     ));

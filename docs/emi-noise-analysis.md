@@ -227,7 +227,8 @@ findings and `EMI-ACCEPT-UNUSED` are implemented with phase 1.
 The Rust types (`copper_lang::emi::{EmiModel, SwitchingCell, ...}`) carry the
 component reference and `component.pin` endpoints of every role pin, magnetic,
 diode and capacitor, plus the first declared `rise_time`, `fall_time`, `slew_rate`,
-`current_peak`, `current_rise_time` and `current_fall_time` of the switch pins and the component's `load_current`, so a
+`current_peak`, `current_rise_time` and `current_fall_time` of the switch pins, the component's `load_current` and the
+`capacitance_at_bias` of each hot capacitor (`null` when undeclared; `copper query BOARD emi` prints all of them), so a
 layout checker needs no second lookup.
 `EmiModel::to_json` prints the cells and nets as
 `copperscript.emi-model/v0.1` (keys sorted, absent facts `null`).
@@ -349,10 +350,10 @@ cluster: its geometry is fixed, the cluster's position is not).
 
 | Code | Status | What is measured | Ranked by |
 | --- | --- | --- | --- |
-| `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | differential-mode field in dBuV/m, then loop area |
+| `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | headline differential-mode field in dBuV/m in the cell's scenario (rule below), then loop area |
 | `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, and the voltage-driven common-mode coupling-risk score (`cm_coupling_score`, a relative ranking score in dB, not a field; no margin) | common-mode coupling-risk score, then copper area; after the absolute estimates |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
-| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the isolated-line detector assumption holds**: `measures.detector_applicability`), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where it does not hold the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
+| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the levels are detector readings**: `measures.detector_applicability` is `isolated_lines` for every harmonic, or `receiver_emulation` for the harmonics the receiver model read), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where neither holds the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
 | `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
@@ -446,18 +447,22 @@ each with the missing input when skipped.
   `rise_time`/`fall_time`, else the edge
   from a declared `slew_rate` (`0.8 V_swing / slew`, exact), else the default
   slew band of section 10.1 (nominal, fast and slow, on the hot-supply voltage
-  as the swing); amplitude:
-  `current_peak` (an upper bound for the pulsed current); duty: Vout/Vin when
+  as the swing); scenario and amplitude: the cell's loop-current scenario, below; duty: Vout/Vin when
   the hot-supply net and the magnetic's output net both have a declared supply,
-  else 0.5. The envelope `trapezoid_envelope` is swept on a log grid over
-  30 MHz to the lower of 1 GHz and `c / (10 * path length)`; the reported level
+  else 0.5. In the `current_limit` scenario the envelope `trapezoid_envelope` of flat-top pulses of
+  amplitude `current_peak` is swept on a log grid over 30 MHz to the lower of 1 GHz and
+  `c / (10 * path length)`; in the `declared_operating_point` scenario every harmonic line `n f0` of the ramp-on-pedestal
+  switch current in the same range is evaluated (the exact lines of `PeriodicSpectrum::buck_input_current`, the source
+  of `EMI-CONDUCTED`, not an envelope over them; at most 400 000 lines, else the field is skipped with the reason and not
+  replaced by the current limit). The reported level
   is the least-margin point against the `emission` line, or the maximum level
   without one, at the standard's distance (10 m for CISPR 32, 3 m or 10 m for
   FCC 15 per the table; 3 m without a standard). Free-space value; the +6 dB
   ground-plane factor is not applied. Peak envelope against quasi-peak limits.
   Skipped with a reason when the frequency, the edge (no edge declared and no
-  hot-supply voltage for the swing) or `current_peak` is missing. With a default
-  edge the sweep is made at the nominal, fast and slow edge: the finding reports
+  hot-supply voltage for the swing) or the current (no usable `load_current` and no `current_peak`) is missing. With a default
+  edge (and, in the declared scenario, a rule-of-thumb ripple) the sweep is made at the nominal case and at every
+  corner of the fast and slow edge and the low and high ripple: the finding reports
   the nominal level, `estimate.band_db = [low, high]` (slow to fast) and
   `estimate.basis = "rule_of_thumb"`, and the margin is the one at the fast
   bound, the unfavourable end. The band covers the defaulted inputs only; the
@@ -474,9 +479,36 @@ each with the missing input when skipped.
   at least three times the loop's longest dimension (a point source). `holds`
   is their conjunction; when one fails the tag `small_loop_validity_failed` and the
   message name it.
+- **Scenario of the hot-loop estimates** (`measures.scenario`, `operating_point`, `loop_current`, tags
+  `scenario_declared_operating_point` / `scenario_current_limit`). The scenario is a property of the cell,
+  decided once exactly as `EMI-CONDUCTED` decides it (`copper_drc::emi::conducted::operating_point`), and the radiated field,
+  the stored energy and overshoot, and the near-field map all use it, so one report holds one operating
+  assumption per cell. `declared_operating_point`: the component declares `load_current`, the topology is `buck`, the supply
+  voltages of the hot-supply and output nets are declared with `Vout < Vin`, and the inductor current stays positive
+  (`I_out >= dI/2`). The high-side switch current is the hot-loop current: the ramp from `I_out - dI/2` to `I_out + dI/2`
+  with the declared current edges. The current limit `current_peak`, when declared, is the secondary worst case
+  (`measures.secondary_scenario`: level, frequency, margin, band of the same estimate with flat-top pulses of the limit's
+  amplitude, as a trapezoid envelope). `current_limit`: no operating point is declared, or it is outside the model
+  (`operating_point.status` `not_declared` / `outside_model` with the `reason`; the tag `operating_point_outside_model`), or
+  the cell is not a buck (`how_to_declare` is `null`; the finding says that the operating-point model is for a buck stage only and
+  does not advise `load_current`, which `CMP133` would refuse); the amplitude is `current_peak`, a worst case that bounds
+  operation and is not a prediction of it (tag `worst_case_current`, the message says so). Without either a usable
+  `load_current` or a `current_peak` the field is skipped as before. **Which current the figures use** (`loop_current`
+  states each): the radiated field uses the whole ramp; the stored energy `L I^2 / 2` and the overshoot `I sqrt(L/C)` use
+  the current commutated at turn-off, `I_out + dI/2` (`ring_current_a`), which is the larger of the two commutations and so
+  bounds the ringing; the turn-on commutation of the valley `I_out - dI/2` is also reported
+  (`ring_energy_turn_on_nj`, `ring_overshoot_turn_on_v`), and so are the figures at the current limit
+  (`ring_energy_current_limit_nj`, `ring_overshoot_current_limit_v`); the diode's default capacitance still uses the current limit
+  as its rating proxy (section 10.1). The near-field map draws `|H|` of the static current `field_amplitude_a`: `I_out + dI/2`
+  (the largest current the loop carries) in the declared scenario, `current_peak` in the current-limit scenario, per ampere
+  without one, and its text names the scenario. **Ranking between cells in different scenarios.** Findings are ordered by
+  headline level in dBuV/m, each in its own cell's scenario, ties by loop area (larger first); the order across a
+  `declared_operating_point` and a `current_limit` cell therefore compares an estimate of operation with a worst case
+  that bounds it as numbers, which `limits.notes` states whenever the board holds both (the secondary scenario of a declared cell
+  gives the like-for-like current-limit level).
 - **Ringing.** With a computed inductance: `ring_frequency`, `ring_overshoot`
-  (needs `current_peak`); ring energy `0.5 L I^2` needs only the inductance and
-  `current_peak`. The capacitance is the sum of the controller's and the catch
+  (need a switch current: `load_current`, else `current_peak`); ring energy `0.5 L I^2` needs the inductance and
+  that current, taken at the turn-off peak in the declared scenario (above). The capacitance is the sum of the controller's and the catch
   diode's `output_capacitance`; a device that declares none gets the default
   capacitance band of section 10.1 (tag `rule_of_thumb_capacitance`), and the
   ring frequency and overshoot are then reported as bands
@@ -524,7 +556,8 @@ each with the missing input when skipped.
   classes and the two FCC 15 classes; `cispr25_class_5` has none: coverage
   `unsupported`), `margin_db` is limit minus level at the evaluated
   frequency, for the absolute estimates only (`EMI-HOT-LOOP` differential mode,
-  `EMI-CONDUCTED` where the detector assumption holds); the common-mode score has none.
+  `EMI-CONDUCTED` for the harmonics that are detector readings: every harmonic of an isolated-line finding, the harmonics read by
+  the receiver emulation otherwise); the common-mode score has none.
   Nothing is printed as pass or fail. The `cable_length` of the constraint is read but no
   cable estimate uses it yet.
 
@@ -621,7 +654,7 @@ translucent whisker from the low to the high end behind each stem for a banded
 harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
 lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
 `emission` standard with a conducted table is declared **and the finding's levels are detector
-readings** (`measures.detector_applicability = isolated_lines`), harmonics above the
+readings** (`measures.detector_applicability = isolated_lines`; for `receiver_emulation` the lines run through the harmonics the receiver model read, which are marked by diamonds at their high-end quasi-peak reading, in the warning colour above a limit, while the stems stay line amplitudes and the panel is headed "NOT detector readings; receiver emulation at the diamonds"), harmonics above the
 average line in the warning colour, and the finding's tags (`scenario_declared_operating_point` or `scenario_current_limit` with
 `worst_case_current`, `rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A panel whose detector
 assumption fails (harmonic spacing inside the IF bandwidth, or a declared frequency range) is headed
@@ -655,10 +688,11 @@ The field is computed by `copper_emi::field` from data the finding carries:
   (z of the nearest ground plane layer, null without one) and
   `measures.field_victims` (`[{kind, name, pads: ["R1.2", ...]}]`, names only:
   the map looks the pads up on the board it draws).
-- The amplitude is the cell's `current_peak` (the switch current limit, the same
-  worst case as the `current_limit` scenario of `EMI-CONDUCTED`, tag `worst_case_current`; the
-  map stays at the limit whatever `load_current` is declared, and its note says so); without
-  one the map is normalised to 1 A and says "per ampere".
+- The amplitude is the finding's own `measures.loop_current.field_amplitude_a`: `I_out + dI/2` (the peak of the
+  high-side switch current) in the `declared_operating_point` scenario, the cell's `current_peak` (the switch current limit,
+  a worst case) in the `current_limit` scenario; the map states the scenario and the amplitude. Without a current the map
+  is normalised to 1 A and says "per ampere". A report written before the finding recorded `loop_current` falls back to the
+  cell's current limit and the map says that the report does not record the scenario.
 - Biot-Savart for each straight filament, `H = I/(4 pi d) (sin a2 - sin a1)`
   around the segment axis (zero on the axis, linear inside a 50 um core), summed
   over the loop; an ideal infinite ground plane at the reference plane's z by
@@ -668,7 +702,7 @@ The field is computed by `copper_emi::field` from data the finding carries:
 Limits, which the legend and footer repeat: a ranking and placement aid, not a
 field prediction. The model is quasi-static (valid where the region is much
 smaller than a wavelength: fine up to a few hundred MHz over a few cm), uses the
-peak switch current as the amplitude of a single current, and only the hot loop
+one static current named above as the amplitude, round the loop, and only the hot loop
 carries current. **The inductor's own field, usually the largest low-frequency
 source for an unshielded inductor, is not included** (coverage
 `unsupported EMI-FIELD:inductor`). The plane is ideal and infinite, no other
@@ -747,12 +781,28 @@ between it and the LISN is solved as one linear circuit
   branches is not modelled.
 * The result states which capacitor carries the largest share of the source
   current at the fundamental and at the worst harmonic
-  (`measures.largest_current_share_fundamental`, `_worst_harmonic`; a share is the
-  peak branch current over the peak source current and can exceed 100 % when
-  branches circulate current) and the anti-resonances of the impedance seen at `K`
-  between 150 kHz and 30 MHz (`measures.anti_resonances`: local maxima of `|Z|`
-  with a prominence of 0.5 dB on both sides, frequency and impedance magnitude,
-  tag `anti_resonance_in_band`).
+  (`measures.largest_current_share_fundamental`, `_worst_harmonic`, and `current_share_*` per branch). A share is
+  `|I_branch| / |I_source|` at one harmonic, a ratio of the magnitudes of complex currents and not a partition of the
+  source current: the branches can circulate current between themselves, so the shares can add to more than 100 % (the
+  filter example reads CIN 100.4 %, CUP 0.42 %). The output says so wherever it prints them
+  (`measures.current_share_definition`, an `input:` line, the headline). The anti-resonances of the impedance seen at `K`
+  between 150 kHz and 30 MHz are all listed in `measures.anti_resonances`: local maxima of `|Z|` with a prominence of
+  0.5 dB on both sides, each with its frequency and impedance magnitude, `envelope_impedance_ohm` (the smallest `|Z|` of a
+  single capacitor branch on `K` at that frequency, each with its connection inductance), `rise_over_envelope_db`, the
+  reported `harmonic` in its lobe (between the nearest local minima of `|Z|` on each side) with the largest
+  `harmonic_rise_db`, `significant` and a `text`. **Significance criterion.** The LISN level of a harmonic is proportional
+  to `|Z_K|` (the source drives `K`, and the path from `K` to the LISN does not depend on the branches on `K`), and
+  parallel real branches that do not interact never exceed the best single branch, so
+  `harmonic_rise_db = 20 log10(|Z_K(f_h)| / min_i |Z_i(f_h)|)` is by how much the interaction of the branches raises that
+  harmonic's level over what `K` held by its best capacitor branch alone would give. A peak is **significant**
+  when a reported harmonic in its lobe has `harmonic_rise_db >= 6.02 dB` (a factor 2, `ANTI_RESONANCE_SIGNIFICANT_DB`); only then
+  is it tagged `anti_resonance_in_band` and named in the headline (the others are counted: "N further anti-resonance(s) not
+  significant"). At the peak of two branches with reactances `+X` and `-X` the ratio to either branch is about
+  `X / (R1 + R2)`, the quality factor of the loop they form, which is why unlike capacitors with low ESR pass and two identical
+  capacitors a few millimetres apart (a 1.7 MHz peak of 18 mohm, 3.1 dB over the better capacitor, in the example test) do
+  not. A sharp peak that falls between the harmonics of a fixed frequency is listed but not significant (it would matter for a
+  tolerance, a range or a spread-spectrum clock, which are not modelled). A peak made by the filter inductor against the hot
+  capacitor is judged against the hot capacitor.
 
 **Scenarios.** `measures.scenario` names the one that is the headline.
 
@@ -785,8 +835,9 @@ between it and the LISN is solved as one linear circuit
   converter is used is not a parameter of the design, so no rule of thumb stands in
   for it). Tag `worst_case_current`.
 
-The radiated estimates (`EMI-HOT-LOOP` field and the near-field map) stay at the
-current limit; a declared `load_current` is not applied to them.
+The radiated estimates (`EMI-HOT-LOOP` field, stored energy and overshoot, and the near-field map) follow the same scenario of the
+cell (section 8, "Scenario of the hot-loop estimates"): the declared `load_current` drives them too, with the current limit
+as the secondary worst case.
 
 Inputs, each recorded with its source in `measures.inputs`, `measures.inputs_text`
 and the coverage detail:
@@ -810,24 +861,54 @@ Levels are RMS dBuV of each harmonic at the worst LISN port. **Detector applicab
 Peak, quasi-peak and average coincide with that RMS level only for an isolated line, and
 `copper_emi::conducted::DetectorApplicability` decides that explicitly, per CISPR band (A:
 200 Hz, B: 9 kHz, C and D: 120 kHz receiver bandwidth), as `measures.detector_applicability`
-(`isolated_lines` or `not_applicable`), `detector_reason` and `detector_bands`
-(`band`, `rbw_hz`, `harmonic_spacing_hz`, `harmonics`, `status`, `reason`). It is `isolated_lines`
-when the switching frequency is one constant value and the harmonic spacing (the switching frequency)
-exceeds twice the band's bandwidth. It is `not_applicable` when
+(`isolated_lines`, `receiver_emulation` or `not_applicable`), `detector_reason` and `detector_bands`
+(`band`, `rbw_hz`, `harmonic_spacing_hz`, `harmonics`, `status`, `reason`). The isolated-line
+decision is `isolated_lines` when the switching frequency is one constant value and the harmonic spacing (the switching frequency)
+exceeds twice the band's bandwidth. It fails when
 (a) the spacing is at most twice the bandwidth (several lines inside the IF filter; 18 kHz in
 Band B), or (b) the frequency is not known to be one constant value: the part declares
 `switching_frequency_min`/`_max` and the component does not fix the frequency (whether the range
-is an adjustable setting or a spread-spectrum or modulated sweep is not declared). Then the levels
-are **line amplitudes, not detector readings**: `limit_qp`, `limit_avg` and every margin are `null`,
+is an adjustable setting or a spread-spectrum or modulated sweep is not declared).
+
+**Case (a), one constant frequency: `receiver_emulation`.** A strictly periodic waveform with closely spaced harmonics
+is run through the time-domain receiver model (`copper_emi::receiver::scan_lines`, which reads a periodic signal given by
+its harmonic lines and is equal to `scan` of the sampled record that holds them, and `conducted::receiver_emulation`, which forms the LISN
+port voltages of both lines from every harmonic of the solution, so the neighbours inside the IF filter are present, and reads the larger port).
+A full scan of the thousands of lines of a low-frequency converter is not a screening-cost computation, so the detectors are
+read at a bounded selection of at most 48 harmonics (`measures.receiver_emulation.selection_rule`,
+`selected_as`): the 8 with the least quasi-peak margin and the 8 with the least average margin (line level against the
+limit, when a conducted table applies), the 16 highest line levels, and 8 spread evenly over the reported harmonics
+(the first and last included), in that priority. Every case of the rule-of-thumb inputs (nominal and each corner) is
+emulated at those harmonics: the nominal reading is the headline, the highest and lowest readings over the cases are the band, and the
+margin is the limit against the highest (an offset of the nominal case does not carry the band: at a spectral null of the
+trapezoid the detector-over-line offset moved by 7 dB between two edge times in a trial, which is why every case is run). Cost is stated
+as counts, not times, so the JSON stays deterministic (`cases`, `harmonic_solves`, `receiver_evaluations`; a harmonic solve
+is one MNA solve, a receiver evaluation one small inverse FFT and the detector run, for each port and case). Measured
+(debug build, `copper emi-check examples/emi_buck/board.copper` with the frequency changed): 15 kHz, 1 991 reported
+harmonics, 23 read, 3 cases: 0.33 s before the receiver path existed, 1.39 s with it; 3 kHz, 9 951 harmonics: 1.41 s and 2.23 s;
+the detector run per read is the cost that grows with the number of reads, which the cap of 48 bounds. Status and margins: the finding stays
+`conducted_emission`, tagged `detector_receiver_emulation` and `line_amplitudes_outside_the_evaluated_harmonics`;
+`margins_available` is true and `margins_scope` is `evaluated_harmonics_only`; only the evaluated rows carry
+`limit_qp`, `limit_avg`, the margins and `receiver` (`peak_dbuv`, `quasi_peak_dbuv`, `average_dbuv`, their high ends and the
+quasi-peak and average low ends, `selected_as`); the other rows are line amplitudes with null limits and margins; the headline is
+the least-margin evaluated harmonic and its message says "detector readings by receiver emulation at N of M harmonics (the
+others are line amplitudes, NOT detector readings)". The secondary current-limit scenario of a declared cell stays line
+amplitudes (the emulation runs on the headline scenario only). **Constants.** The IF bandwidths (A 200 Hz, B 9 kHz, C and D 120 kHz) and the
+quasi-peak charge / discharge / meter time constants (A 45 / 500 / 160 ms, B 1 / 160 / 160 ms, C and D 1 / 550 / 100 ms) are
+per band in `Band::rbw` and `Band::quasi_peak_constants`, used per tuned frequency through `band_of` (so a conducted harmonic of
+150 kHz to 30 MHz uses Band B), and are written from memory of CISPR 16-1-1 Table 1: **unverified against the standard**, and
+the Gaussian IF shape is a stand-in for the standard's selectivity mask. Validation: where the lines are isolated (500 kHz) the
+three detectors read the line level within 0.5 dB; for 15 kHz and 3 kHz converters the readings equal an independent time-domain
+reference (the port waveform mixed down and convolved with the Gaussian impulse response, then the detector arithmetic) within 0.01 dB,
+and at 3 kHz peak, quasi-peak and average differ from the line level and from each other by up to 5 dB. At 15 kHz the neighbouring lines are
+67 dB down in the Gaussian response, so the detectors read the line level: the 2 x bandwidth rule of the isolated-line path is conservative there.
+Jitter, spread-spectrum clocking, frequency modulation and burst or skip modes are not modelled by anything: they need a
+record long enough to contain the modulation, and the receiver's sweep dwell time is not modelled. **Case (b) stays `not_applicable`:** the levels are
+**line amplitudes, not detector readings**: `limit_qp`, `limit_avg` and every margin are `null`,
 `margins_available` is false, the finding is `conducted_line_amplitude` (tags `detector_not_applicable`,
 `line_amplitudes_only`), its message says "NOT a detector reading" and states no margin, the coverage
 detail says the same, and every consumer (text, JSON, plot, issues, the route-report `emi` section)
-carries the status. The time-domain receiver (`copper_emi::receiver`, `receiver_check`) is valid for
-a strictly periodic waveform with several lines inside the bandwidth, so case (a) could be routed
-through it; `emi-check` does not (a full scan of thousands of lines of a low-frequency converter is
-not a screening-cost computation) and withholds instead. Jitter, spread-spectrum clocking,
-frequency modulation and burst or skip modes are not modelled by anything: they need a record
-long enough to contain the modulation, and the receiver's sweep dwell time is not modelled.
+carries the status.
 **A declared range is two fixed-frequency scenarios**: the lower and the upper bound each give one
 `EMI-CONDUCTED` finding (coverage `EMI-CONDUCTED:<cell>@min` and `@max`, tags
 `frequency_range_bound` and `frequency_scenario_min`/`_max`, `measures.frequency_scenario`), both
@@ -849,10 +930,13 @@ holds the `predict` assumptions and the tool's. Tests:
 `crates/copper-emi/src/conducted.rs` (the circuit solution of a hot capacitor alone and of hot capacitor +
 bulk electrolytic + LC filter + damping branch against an independent ladder reduction to 0.1 dB; the anti-resonance of
 unlike capacitors against `1/(2 pi sqrt(L C))`; the independence of the LISN level from the hot-loop inductance; the
-CCM boundary), `crates/copper-emi/src/harmonic.rs` (the ramp-on-pedestal harmonics against an independent analytic
+CCM boundary; the anti-resonance significance criterion on unlike capacitors, identical close capacitors and a peak between harmonics;
+the receiver emulation against the isolated-line level and against an independent time-domain reference for 15 kHz and 3 kHz converters),
+`crates/copper-emi/src/receiver.rs` (`scan_lines` against `scan` and against the time-domain reference), `crates/copper-emi/src/harmonic.rs` (the ramp-on-pedestal harmonics against an independent analytic
 Fourier series to 0.05 dB for 20 harmonics, against numerical integration with finite edges, and the edge roll-off), and
 `crates/copper-drc/tests/emi_check.rs` against hand calculations on `examples/emi_buck` and
-`examples/emi_buck_filter`.
+`examples/emi_buck_filter` (the hot-loop field of a declared operating point against a numerical transform of the same waveform, the
+ringing currents, the receiver-emulation selection and status, the anti-resonance significance on a board, the current-share wording).
 
 
 ### 10.1 Rule-of-thumb defaults and bands
@@ -897,9 +981,9 @@ over the corner cases {current edge fast, slow} x {capacitance un-derated,
 derated} x {ripple ratio nominal, low, high} (only the corners whose input is a
 rule of thumb), plus the nominal case. `total_dbuv` is the nominal case. Below
 the edge corner the edge and DC-bias bands collapse (the level hardly depends on the edge) and a board that
-declares everything has a closed band. The radiated estimate keeps the current
-at the limit (it is a declared `current_peak`) and the near-field map stays at the
-limit as well.
+declares everything has a closed band. The radiated estimate of a declared operating point takes the same ripple corners (and the fast and slow edge) as
+cases of its worst-line search: its band is the lowest and highest worst level over them and its margin the least over them; the
+current-limit scenario keeps the current at the limit (a declared `current_peak`, no band for the current).
 
 No default can make a headline number more favourable than the physics allows:
 the high end includes the un-derated capacitance and the fast edge, and a
@@ -909,8 +993,10 @@ missing edge time no longer restricts the reported harmonics.
 Module `copper_emi::spectrum`: trapezoid and sampled-waveform spectra;
 `copper_emi::lisn`: 50 uH / 5 uH LISN transfer; `copper_emi::receiver`:
 CISPR 16-1-1 style peak, quasi-peak and average detection of a sampled
-waveform by short-time FFT (bands A-D, 200 Hz / 9 kHz / 120 kHz RBW; detector
-time constants are taken from the standard and cited in code). The record is taken as
+waveform, or of a periodic signal given by its harmonic lines (`scan_lines`), by an
+IF filter in the frequency domain (bands A-D, 200 Hz / 9 kHz / 120 kHz RBW; the detector
+time constants are written from memory of CISPR 16-1-1 Table 1 and are
+**unverified against the standard**). The record is taken as
 exactly one period of a periodic signal and transformed at its own length
 (`copper_emi::spectrum::dft`: the radix-2 FFT for a power of two, Bluestein's chirp-z
 algorithm otherwise), so it is never zero-padded: a padded record would be a dead time that

@@ -14,7 +14,7 @@ use copper_json::{Dumps, Object, Value};
 use copper_units::{Decimal, Dimension, Quantity};
 
 use crate::erc::{Context, Diagnostic, build_context};
-use crate::lower::{LOAD_CURRENT, SWITCHING_FREQUENCY, parse_quantity_text};
+use crate::lower::{CAPACITANCE_AT_BIAS, LOAD_CURRENT, SWITCHING_FREQUENCY, parse_quantity_text};
 use crate::model::*;
 use crate::modes::active_device_pads;
 use crate::serializer::quantity_value;
@@ -101,6 +101,8 @@ pub struct HotCapacitor {
     pub return_pin: Endpoint,
     /// Declares `decouples` of one of the cell's hot supply pins.
     pub declared: bool,
+    /// `capacitance_at_bias` on the component: the effective capacitance at the DC bias of its rail.
+    pub capacitance_at_bias: Option<Quantity>,
 }
 
 /// A capacitor between a bootstrap pin's net and a switch net.
@@ -316,6 +318,7 @@ fn cell_value(cell: &SwitchingCell) -> Value {
                 ("supply_pin", Value::from(capacitor.supply_pin.to_string())),
                 ("return_pin", Value::from(capacitor.return_pin.to_string())),
                 ("declared", Value::Bool(capacitor.declared)),
+                ("capacitance_at_bias", optional_quantity(capacitor.capacitance_at_bias.as_ref())),
             ])
         })
         .collect();
@@ -603,7 +606,17 @@ fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefin
                 .and_then(|target| Endpoint::parse(target).ok())
                 .map(|target| context.canonical_endpoint(&target).unwrap_or(target))
                 .is_some_and(|target| roles.supply.contains(&target));
-            hot_capacitors.push(HotCapacitor { component: name, supply_pin, return_pin, declared });
+            let capacitance_at_bias = context
+                .component(&name)
+                .and_then(|capacitor| capacitor.properties.get(CAPACITANCE_AT_BIAS))
+                .and_then(|text| parse_quantity_text(text, Dimension::Capacitance));
+            hot_capacitors.push(HotCapacitor {
+                component: name,
+                supply_pin,
+                return_pin,
+                declared,
+                capacitance_at_bias,
+            });
         }
         hot_capacitors.sort_by_key(|capacitor| !capacitor.declared);
     }

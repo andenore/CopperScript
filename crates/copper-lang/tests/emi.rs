@@ -873,6 +873,17 @@ fn capacitance_at_bias_is_a_component_attribute_for_capacitors() {
     );
     let compiled = design("bias", PARTS, &body);
     assert!(design_json(&compiled).contains("\"capacitance_at_bias\": \"4.2 uF\""));
+    // The cell's hot capacitor carries it (and `copper query BOARD emi` prints it); undeclared it is absent from the IR
+    // and null in the cell.
+    let cell = model(&compiled).cells.remove(0);
+    let cin = cell.hot_capacitors.iter().find(|c| c.component == "CIN").expect("CIN is a hot capacitor");
+    assert_eq!(cin.capacitance_at_bias.as_ref().map(ToString::to_string).as_deref(), Some("4.2 uF"));
+    let view = elaborate(&compiled.electrical).expect("elaborates");
+    let text = copper_lang::query::render_query(&copper_lang::query::run_query(view, "emi", None).expect("query"));
+    assert!(text.contains("\"capacitance_at_bias\""), "{text}");
+    let plain = design("bias-none", PARTS, BUCK);
+    assert!(model(&plain).cells[0].hot_capacitors.iter().all(|c| c.capacitance_at_bias.is_none()));
+    assert!(!design_json(&plain).contains("capacitance_at_bias"));
     // Equal to the value is allowed (a C0G part loses nothing).
     design(
         "bias-equal",

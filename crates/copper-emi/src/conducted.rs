@@ -138,7 +138,7 @@ use crate::estimate::limits::{Class, Detector, LimitLine, cispr32_conducted};
 use crate::estimate::volts_to_dbuv;
 use crate::harmonic::{HarmonicError, HarmonicResponse, PeriodicSpectrum, harmonic_steady_state};
 use crate::lisn::VNetwork;
-use crate::receiver::{Band, Reading, scan};
+use crate::receiver::{Band, Reading, scan, scan_lines};
 use crate::spectrum::Complex;
 use std::f64::consts::SQRT_2;
 
@@ -536,7 +536,36 @@ pub struct AntiResonance {
     pub frequency: f64,
     /// Impedance magnitude at the peak, ohm.
     pub impedance: f64,
+    /// The impedance of the best single capacitor branch on `K` at the peak frequency (the hot capacitor and the
+    /// other capacitors of the hot net, each with its own connection inductance), ohm.
+    pub envelope_impedance: f64,
+    /// `20 log10(impedance / envelope_impedance)` at the peak, dB: how far the peak stands above what `K` would
+    /// have if its best capacitor branch were alone.
+    pub rise_db: f64,
+    /// The reported harmonic attributed to this peak (one that lies in its lobe, between the nearest local
+    /// minima of `|Z|` on each side) with the largest [`AntiResonance::harmonic_rise_db`]; `None` when no
+    /// harmonic is attributed.
+    pub harmonic: Option<u32>,
+    /// `20 log10(|Z_K(f_h)| / envelope(f_h))` at that harmonic, dB: by how much the harmonic's level at the LISN
+    /// is above the level the same source would give with `K` held by its best capacitor branch alone (the LISN
+    /// level is proportional to `|Z_K|`: the source drives `K` and the path from `K` to the LISN does not depend on
+    /// the branches on `K`).
+    pub harmonic_rise_db: Option<f64>,
+    /// Whether the peak matters: a reported harmonic attributed to it is raised by at least
+    /// [`ANTI_RESONANCE_SIGNIFICANT_DB`] over that reference.
+    pub significant: bool,
 }
+
+/// A detected anti-resonance is significant when it raises the LISN level of a reported harmonic by at least this
+/// much (6.02 dB, a factor 2 in `|Z_K|` and so in the voltage at the LISN) above the level with `K` held by its
+/// best single capacitor branch alone. The reference is what one capacitor gives; parallel real branches that do
+/// not interact never exceed it, so any excess is the branches working against each other. At the peak of two
+/// branches with reactances `+X` and `-X` and resistances `R1`, `R2` the parallel impedance is about
+/// `X^2 / (R1 + R2)` against `X` for either branch, a ratio of `X / (R1 + R2)`, the quality factor of the loop the
+/// two capacitors form. A harmonic must be involved: a sharp peak between harmonics changes nothing for a fixed
+/// switching frequency (it would for a tolerance, a frequency range or a spread-spectrum clock, which are not
+/// modelled), and is listed without the tag.
+pub const ANTI_RESONANCE_SIGNIFICANT_DB: f64 = 6.020_599_913_279_624;
 
 /// Result of [`predict`].
 #[derive(Debug, Clone, PartialEq)]
@@ -750,10 +779,29 @@ fn build(input: &ConductedInput) -> Network {
     Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port, k, y, branches }
 }
 
+/// The smallest `|Z|` of a single capacitor branch on `K` at `frequency`: `R + j (w (L_connection + ESL) - 1/(w C))`
+/// for the hot capacitor and the other capacitors of the hot net. The supply-side capacitors and the filter are not
+/// branches on `K`; a peak made by the filter inductor against the hot capacitor is judged against the hot
+/// capacitor.
+fn branch_envelope(net: &Network, frequency: f64) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * frequency;
+    net.branches
+        .iter()
+        .filter(|(info, _)| matches!(info.kind, BranchKind::Hot | BranchKind::Parallel))
+        .map(|(info, _)| {
+            let reactance =
+                w * (info.connection_inductance + info.capacitor.esl) - 1.0 / (w * info.capacitor.capacitance);
+            info.capacitor.esr.hypot(reactance)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// Peaks of the driving-point impedance `|Z(K, Y)|` between `f_lo` and `f_hi` (all sources off): a log grid,
 /// local maxima with a prominence of at least 0.5 dB on both sides, each refined by a parabola through the
-/// logarithm of the three grid points around it and solved again at the refined frequency.
-fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64) -> Vec<AntiResonance> {
+/// logarithm of the three grid points around it and solved again at the refined frequency. Every reported harmonic
+/// (`harmonics`: number and frequency) that lies in a peak's lobe (between the nearest local minima of `|Z|` on each
+/// side) is attributed to that peak and judged against [`ANTI_RESONANCE_SIGNIFICANT_DB`].
+fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64, harmonics: &[(u32, f64)]) -> Vec<AntiResonance> {
     const POINTS: usize = 1500;
     const PROMINENCE_DB: f64 = 0.5;
     let freqs = crate::circuit::log_space(f_lo, f_hi, POINTS);
@@ -761,6 +809,8 @@ fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64) -> Vec<AntiResonance> {
     let mag: Vec<f64> = z.iter().map(|z| z.abs()).collect();
     let db = |a: f64, b: f64| 20.0 * (a / b).log10();
     let mut out = Vec::new();
+    // The lobe of each peak: from the nearest local minimum of |Z| on its left to the one on its right (or the band edge).
+    let mut lobes: Vec<(f64, f64)> = Vec::new();
     for i in 1..POINTS - 1 {
         if !(mag[i] > mag[i - 1] && mag[i] >= mag[i + 1]) {
             continue;
@@ -788,7 +838,44 @@ fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64) -> Vec<AntiResonance> {
         let frequency = (freqs[i].ln() + shift * step).exp();
         let impedance =
             net.circuit.impedance(net.k, net.y, frequency).map_or(mag[i], |z| z.abs()).max(mag[i] * (1.0 - 1e-9));
-        out.push(AntiResonance { frequency, impedance });
+        let envelope_impedance = branch_envelope(net, frequency);
+        let rise_db =
+            if envelope_impedance > 0.0 { 20.0 * (impedance / envelope_impedance).log10() } else { f64::INFINITY };
+        let (mut lo, mut hi) = (i, i);
+        while lo > 0 && mag[lo - 1] < mag[lo] {
+            lo -= 1;
+        }
+        while hi + 1 < POINTS && mag[hi + 1] < mag[hi] {
+            hi += 1;
+        }
+        lobes.push((freqs[lo], freqs[hi]));
+        out.push(AntiResonance {
+            frequency,
+            impedance,
+            envelope_impedance,
+            rise_db,
+            harmonic: None,
+            harmonic_rise_db: None,
+            significant: false,
+        });
+    }
+    // Attribute each harmonic to the peak whose lobe holds it and keep the largest rise per peak.
+    for &(n, f) in harmonics {
+        let Some(nearest) = lobes.iter().position(|&(lo, hi)| f >= lo && f <= hi) else { continue };
+        let envelope = branch_envelope(net, f);
+        let Ok(z) = net.circuit.impedance(net.k, net.y, f) else { continue };
+        if envelope <= 0.0 || !envelope.is_finite() {
+            continue;
+        }
+        let rise = 20.0 * (z.abs() / envelope).log10();
+        let peak = &mut out[nearest];
+        if peak.harmonic_rise_db.is_none_or(|best| rise > best) {
+            peak.harmonic = Some(n);
+            peak.harmonic_rise_db = Some(rise);
+        }
+    }
+    for peak in &mut out {
+        peak.significant = peak.harmonic_rise_db.is_some_and(|rise| rise >= ANTI_RESONANCE_SIGNIFICANT_DB - 1e-9);
     }
     out
 }
@@ -929,7 +1016,8 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
         }
     }
     let anti_resonances = if input.anti_resonance_scan {
-        anti_resonances(&net, input.min_frequency, input.max_frequency)
+        let lines: Vec<(u32, f64)> = harmonics.iter().map(|h| (h.harmonic, h.frequency)).collect();
+        anti_resonances(&net, input.min_frequency, input.max_frequency, &lines)
     } else {
         Vec::new()
     };
@@ -1057,6 +1145,74 @@ pub fn port_waveform(
         out.extend_from_slice(&one);
     }
     Ok((out, input.switching_frequency * samples_per_period as f64))
+}
+
+/// One harmonic read by the receiver emulation of a strictly periodic waveform.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmulatedReading {
+    /// Harmonic number.
+    pub harmonic: u32,
+    /// Frequency, Hz.
+    pub frequency: f64,
+    /// The CISPR band whose bandwidth and quasi-peak constants were used.
+    pub band: Band,
+    /// RMS level of the line alone at the worse LISN port, dBuV: what the isolated-line path reports.
+    pub line_dbuv: f64,
+    /// Peak detector, dBuV (the larger of the two ports).
+    pub peak_dbuv: f64,
+    /// Quasi-peak detector, dBuV (the larger of the two ports).
+    pub quasi_peak_dbuv: f64,
+    /// Average detector, dBuV (the larger of the two ports).
+    pub average_dbuv: f64,
+}
+
+/// Peak, quasi-peak and average readings of the receiver emulation at the listed harmonics of a strictly periodic
+/// waveform (one constant switching frequency): the LISN port voltages of both lines are formed from the harmonic
+/// solution (every line, not only the listed ones, so the neighbours inside the IF filter are present) and run
+/// through [`scan_lines`] with the bandwidth and quasi-peak constants of the CISPR band of each frequency
+/// ([`Band::rbw`], [`Band::quasi_peak_constants`]: the band constants are remembered values of CISPR 16-1-1 Table 1
+/// and unverified). DM and CM, when both are present, act together with their phases. Each detector reads the larger
+/// of the two ports. Not modelled: jitter, spread spectrum, frequency modulation and burst modes (they need a
+/// record that holds the modulation), the sweep dwell time of a real receiver.
+///
+/// Cost: one harmonic solve per line up to the highest requested (as [`predict`]), then per requested frequency
+/// and port one small inverse FFT and the detector run.
+pub fn receiver_emulation(input: &ConductedInput, harmonics: &[u32]) -> Result<Vec<EmulatedReading>, ConductedError> {
+    validate(input)?;
+    let f0 = input.switching_frequency;
+    let highest = harmonics.iter().copied().max().unwrap_or(0);
+    if highest == 0 {
+        return Ok(Vec::new());
+    }
+    // A few lines above the highest requested are needed for the IF filter around it.
+    let lines = highest + 8;
+    let (net, resp) = port_response(input, lines)?;
+    let phasors =
+        |node: Node| -> Vec<Complex> { (0..lines as usize).map(|k| resp.harmonics[k].voltage(node)).collect() };
+    let (positive, negative) = (phasors(net.port_p), phasors(net.port_n));
+    let mut out: Vec<EmulatedReading> = Vec::with_capacity(harmonics.len());
+    for band in [Band::A, Band::B, Band::C, Band::D] {
+        let wanted: Vec<u32> = harmonics.iter().copied().filter(|&n| band_of(f64::from(n) * f0) == band).collect();
+        if wanted.is_empty() {
+            continue;
+        }
+        let freqs: Vec<f64> = wanted.iter().map(|&n| f64::from(n) * f0).collect();
+        let (a, b) = (scan_lines(f0, &positive, &freqs, band), scan_lines(f0, &negative, &freqs, band));
+        for (i, &n) in wanted.iter().enumerate() {
+            let line = positive[n as usize - 1].abs().max(negative[n as usize - 1].abs());
+            out.push(EmulatedReading {
+                harmonic: n,
+                frequency: freqs[i],
+                band,
+                line_dbuv: to_dbuv_rms(line),
+                peak_dbuv: a[i].peak.max(b[i].peak),
+                quasi_peak_dbuv: a[i].quasi_peak.max(b[i].quasi_peak),
+                average_dbuv: a[i].average.max(b[i].average),
+            });
+        }
+    }
+    out.sort_by_key(|r| r.harmonic);
+    Ok(out)
 }
 
 /// One harmonic compared between the analytic line level and the receiver
@@ -1500,6 +1656,94 @@ mod tests {
     }
 
     #[test]
+    fn the_receiver_emulation_reproduces_the_isolated_line_levels() {
+        // 500 kHz: the lines are 500 kHz apart, far outside the 9 kHz IF response, so peak = quasi-peak = average =
+        // the line RMS level (the claim of the isolated-line path), within 0.5 dB.
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let input = ConductedInput::buck(12.0, 5.0, 2.0, 500e3, 5e-9, hot);
+        let report = predict(&input).unwrap();
+        let readings = receiver_emulation(&input, &[1, 2, 3, 7, 20, 40, 59]).unwrap();
+        assert_eq!(readings.len(), 7);
+        for r in &readings {
+            let analytic = report.harmonics.iter().find(|h| h.harmonic == r.harmonic).unwrap().dm_dbuv;
+            assert!(
+                (r.line_dbuv - analytic).abs() < 1e-6,
+                "harmonic {}: {} against {analytic}",
+                r.harmonic,
+                r.line_dbuv
+            );
+            for (name, v) in [("peak", r.peak_dbuv), ("quasi-peak", r.quasi_peak_dbuv), ("average", r.average_dbuv)] {
+                assert!(
+                    (v - analytic).abs() < 0.5,
+                    "harmonic {} {name}: {v} dBuV against the line {analytic} dBuV",
+                    r.harmonic
+                );
+            }
+            assert_eq!(r.band, Band::B);
+        }
+    }
+
+    /// The LISN port waveform of one period (`spp` samples, a power of two) of `input`, read by the time-domain
+    /// receiver reference (mix down, convolve with the Gaussian impulse response, the detector arithmetic) at `f`, for
+    /// both ports: (peak, quasi-peak, average) in dBuV of the larger.
+    fn time_domain_reference(input: &ConductedInput, spp: usize, f: f64) -> (f64, f64, f64) {
+        let mut best = (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for line in [Line::Positive, Line::Negative] {
+            let (wave, fs) = port_waveform(input, line, 1, spp).unwrap();
+            let env = crate::receiver::tests::brute_force_envelope(&wave, fs, f, Band::B);
+            let d = crate::receiver::detect_envelope(&env, 1.0 / fs, Band::B);
+            let db = |v: f64| 20.0 * (v / 1e-6).log10();
+            best = (best.0.max(db(d.peak)), best.1.max(db(d.quasi_peak)), best.2.max(db(d.average)));
+        }
+        best
+    }
+
+    #[test]
+    fn closely_spaced_lines_read_as_an_independent_time_domain_reference_does() {
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        // (switching frequency, samples per period of the reference waveform, harmonics read)
+        for (f0, spp, harmonics) in [(15e3, 128usize, vec![41u32, 42]), (3e3, 512, vec![200, 201, 250])] {
+            let mut input = ConductedInput::buck(12.0, 5.0, 2.0, f0, 20e-9, hot);
+            input.hot_loop_inductance = 5e-9;
+            let started = std::time::Instant::now();
+            let readings = receiver_emulation(&input, &harmonics).unwrap();
+            println!("{f0} Hz: {} harmonic(s) read in {:?}", harmonics.len(), started.elapsed());
+            for r in &readings {
+                let (peak, qp, avg) = time_domain_reference(&input, spp, r.frequency);
+                println!(
+                    "f0 {f0} n {} line {:.2} | emulation peak {:.2} qp {:.2} avg {:.2} | reference peak {peak:.2} qp {qp:.2} avg {avg:.2}",
+                    r.harmonic, r.line_dbuv, r.peak_dbuv, r.quasi_peak_dbuv, r.average_dbuv
+                );
+                assert!(
+                    (r.peak_dbuv - peak).abs() < 0.5,
+                    "f0 {f0} n {}: peak {} against {peak}",
+                    r.harmonic,
+                    r.peak_dbuv
+                );
+                assert!(
+                    (r.quasi_peak_dbuv - qp).abs() < 0.5,
+                    "f0 {f0} n {}: qp {} against {qp}",
+                    r.harmonic,
+                    r.quasi_peak_dbuv
+                );
+                assert!(
+                    (r.average_dbuv - avg).abs() < 0.5,
+                    "f0 {f0} n {}: avg {} against {avg}",
+                    r.harmonic,
+                    r.average_dbuv
+                );
+                // (a nearly CW line reads equal on the three detectors; the quasi-peak model lags the envelope by up to 0.01 dB)
+                assert!(r.peak_dbuv >= r.quasi_peak_dbuv - 0.01 && r.quasi_peak_dbuv >= r.average_dbuv - 0.01, "{r:?}");
+            }
+        }
+        // At 3 kHz the lines are close enough that the detectors really differ from the line level and each other.
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 3e3, 20e-9, hot);
+        input.hot_loop_inductance = 5e-9;
+        let r = receiver_emulation(&input, &[200]).unwrap()[0];
+        assert!(r.peak_dbuv > r.average_dbuv + 1.0 || (r.peak_dbuv - r.line_dbuv).abs() > 1.0, "{r:?}");
+    }
+
+    #[test]
     fn the_isolated_line_decision_is_made_per_band_from_the_spacing_and_the_rbw() {
         use DetectorApplicability::{IsolatedLines, NotApplicable};
         let fixed = FrequencyMode::Fixed;
@@ -1710,6 +1954,87 @@ mod tests {
             }
             println!("{name}: worst difference to the independent reference {worst:.2e} dB");
         }
+    }
+
+    /// `|Z|` of a capacitor branch with a series connection inductance (independent of the library's envelope code).
+    fn z_branch(c: &Capacitor, connection: f64, f: f64) -> f64 {
+        z_cap(&Capacitor { esl: c.esl + connection, ..*c }, f).abs()
+    }
+
+    fn pair(c: f64, esr: f64, esl: f64, connection: f64, switching_frequency: f64) -> ConductedReport {
+        let mut input = buck(cap(c, esr, esl));
+        input.switching_frequency = switching_frequency;
+        input.hot_capacitor_label = "C1".to_owned();
+        input.parallel_capacitors = vec![CapacitorBranch::new("C2", cap(c, esr, esl)).with_connection(connection)];
+        predict(&input).unwrap()
+    }
+
+    #[test]
+    fn a_sharp_anti_resonance_of_unlike_capacitors_at_a_harmonic_is_significant() {
+        // A 10 uF ceramic (0.5 nH, 2 mohm) beside a 100 uF polymer (5 nH, 2 mohm): the loop formed by the two has
+        // Q = X / (R1 + R2) of about 5. Switching at half the peak frequency puts harmonic 2 on it.
+        let (ceramic, polymer) = (cap(10e-6, 2e-3, 0.5e-9), cap(100e-6, 2e-3, 5e-9));
+        let expect: f64 = 1.0 / (2.0 * PI * ((0.5e-9_f64 + 5e-9) * (10e-6_f64 * 100e-6 / 110e-6)).sqrt());
+        let mut input = buck(ceramic);
+        input.switching_frequency = (expect / 2.0 / 1e3).round() * 1e3;
+        input.hot_capacitor_label = "C1".to_owned();
+        input.parallel_capacitors = vec![CapacitorBranch::new("C2", polymer)];
+        let report = predict(&input).unwrap();
+        assert_eq!(report.anti_resonances.len(), 1, "{:?}", report.anti_resonances);
+        let peak = report.anti_resonances[0];
+        // The envelope is the smaller of the two branch impedances, computed here from the element values.
+        let envelope = z_branch(&ceramic, 0.0, peak.frequency).min(z_branch(&polymer, 0.0, peak.frequency));
+        assert!(
+            (peak.envelope_impedance / envelope - 1.0).abs() < 1e-9,
+            "{} against {envelope}",
+            peak.envelope_impedance
+        );
+        assert!((peak.rise_db - 20.0 * (peak.impedance / envelope).log10()).abs() < 1e-9);
+        assert!(peak.rise_db > 10.0, "a sharp peak stands well above either branch: {} dB", peak.rise_db);
+        // A reported harmonic sits in the lobe and is raised by more than the criterion.
+        assert_eq!(peak.harmonic, Some(2), "{peak:?}");
+        let rise = peak.harmonic_rise_db.expect("a harmonic in the lobe");
+        let f2 = 2.0 * input.switching_frequency;
+        let by_hand = 20.0
+            * ((z_cap(&ceramic, f2).recip() + z_cap(&polymer, f2).recip()).recip().abs()
+                / z_branch(&ceramic, 0.0, f2).min(z_branch(&polymer, 0.0, f2)))
+            .log10();
+        // (the hand value omits the 50 ohm V-network in parallel with the capacitors, 0.01 dB here)
+        assert!((rise - by_hand).abs() < 0.05, "{rise} dB against {by_hand} dB by hand");
+        assert!(rise >= ANTI_RESONANCE_SIGNIFICANT_DB && peak.significant, "{peak:?}");
+    }
+
+    #[test]
+    fn two_identical_capacitors_close_together_have_a_peak_that_is_reported_but_not_significant() {
+        // Two 4.7 uF capacitors (5 mohm, 0.6 nH), the second 3 nH away (about 5 mm of a 0.3 nH/mm go-and-return
+        // loop each way): a true anti-resonance near 1.6 MHz of 26 mohm, only 4.5 dB above the better capacitor alone, and
+        // the harmonic inside it (3) is raised by less than 6 dB.
+        let report = pair(4.7e-6, 5e-3, 0.6e-9, 3e-9, 500e3);
+        assert_eq!(report.anti_resonances.len(), 1, "{:?}", report.anti_resonances);
+        let peak = report.anti_resonances[0];
+        assert!(peak.impedance > 0.02 && peak.impedance < 0.03, "{} ohm", peak.impedance);
+        assert!(peak.rise_db > 0.0 && peak.rise_db < ANTI_RESONANCE_SIGNIFICANT_DB, "{} dB", peak.rise_db);
+        assert!(peak.harmonic_rise_db.is_some_and(|r| r < ANTI_RESONANCE_SIGNIFICANT_DB), "{peak:?}");
+        assert!(!peak.significant, "{peak:?}");
+        // The same two capacitors with 6 nH between them make a peak that matters.
+        let apart = pair(1.1e-6, 5e-3, 0.6e-9, 6e-9, 500e3);
+        assert!(apart.anti_resonances.iter().any(|p| p.significant), "{:?}", apart.anti_resonances);
+    }
+
+    #[test]
+    fn a_sharp_peak_between_the_harmonics_is_listed_but_not_significant() {
+        // The same high-Q pair, switched at 6.5 MHz: the first harmonic is far above the lobe around 0.7 MHz and
+        // nothing is attributed to the peak.
+        let (ceramic, polymer) = (cap(10e-6, 2e-3, 0.5e-9), cap(100e-6, 2e-3, 5e-9));
+        let mut input = buck(ceramic);
+        input.switching_frequency = 6.5e6;
+        input.hot_capacitor_label = "C1".to_owned();
+        input.parallel_capacitors = vec![CapacitorBranch::new("C2", polymer)];
+        let report = predict(&input).unwrap();
+        assert_eq!(report.anti_resonances.len(), 1);
+        let peak = report.anti_resonances[0];
+        assert!(peak.rise_db > 10.0, "{} dB", peak.rise_db);
+        assert_eq!((peak.harmonic, peak.harmonic_rise_db, peak.significant), (None, None, false), "{peak:?}");
     }
 
     #[test]

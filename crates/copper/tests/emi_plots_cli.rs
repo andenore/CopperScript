@@ -99,6 +99,35 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
 }
 
 #[test]
+fn the_field_map_of_a_declared_operating_point_is_drawn_at_the_peak_switch_current_and_says_so() {
+    let directory = scratch("emi-plots-field-declared");
+    let path = directory.join("field.svg");
+    let (result, svg) = plot_field(FILTER, &path, &[]);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    // 12 V to 5 V at 500 kHz, 4.7 uH, 2 A: dI = 7 x (5 / 12) / (4.7 uH x 500 kHz) = 1.241 A, so I_out + dI/2 = 2.62 A.
+    assert!(svg.contains("amplitude 2.62 A, scenario declared_operating_point"), "{svg}");
+    assert!(!svg.contains("4.5 A"), "the 4.5 A limit is not the amplitude of the map");
+    // The finding carries the same amplitude and scenario.
+    let json = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--json"]);
+    let document = copper_json::parse(&stdout(&json)).expect("JSON");
+    let hot = document
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .expect("a hot-loop finding");
+    let current = hot.get("measures").and_then(|m| m.get("loop_current")).expect("loop_current");
+    assert_eq!(current.get("scenario").and_then(Value::as_str), Some("declared_operating_point"));
+    let amplitude = match current.get("field_amplitude_a") {
+        Some(Value::Float(a)) => *a,
+        other => panic!("amplitude {other:?}"),
+    };
+    assert!((amplitude - 2.6205).abs() < 1e-3, "{amplitude}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn the_field_map_has_a_colour_bar_the_loop_outline_and_a_level_at_the_feedback_pad() {
     let directory = scratch("emi-plots-field");
     let path = directory.join("field.svg");
@@ -109,7 +138,10 @@ fn the_field_map_has_a_colour_bar_the_loop_outline_and_a_level_at_the_feedback_p
     assert_eq!(svg.matches("class=\"emi_loop\"").count(), 1, "the loop outline");
     assert!(svg.contains("screening estimate, not a field prediction"));
     assert!(svg.contains("EMI-FIELD:inductor") && svg.contains("NOT included"));
-    assert!(svg.contains("4.5 A") && svg.contains("worst_case_current"), "the cell's current_peak is the amplitude");
+    assert!(
+        svg.contains("amplitude 4.5 A, scenario current_limit"),
+        "no operating point is declared: the cell's current_peak is the amplitude, named as the current limit"
+    );
     assert!(svg.contains("data-net=\"FB\""), "{svg}");
     // The coverage entry says what is missing.
     let coverage = stdout(&copper(&["emi-check", BUCK, "--allow-proxy-footprints"]));

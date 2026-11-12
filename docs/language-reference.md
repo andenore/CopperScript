@@ -2150,7 +2150,13 @@ supply voltages of the hot-supply and output nets, the switching frequency and o
 current is a ramp from `I_out - dI/2` to `I_out + dI/2` during the on-time (zero in the off-time),
 `dI = (Vin - Vout) D / (L f)` with the value of the power inductor on the switch net (when it cannot be read, a
 ripple of 0.2, 0.3 and 0.4 x the load current, tagged `rule_of_thumb_ripple`); the switch pin's `current_peak` then
-appears as a secondary worst case, `measures.secondary_scenario`. A declared point with `I_out < dI/2` is
+appears as a secondary worst case, `measures.secondary_scenario`. The hot-loop estimates of the same cell
+(`EMI-HOT-LOOP` radiated field, stored energy and overshoot, and the near-field map) use the same scenario
+(`measures.scenario`, `operating_point` and `loop_current` of the hot-loop finding; tags `scenario_declared_operating_point`
+or `scenario_current_limit`): the field of a declared point is the exact harmonic lines of the high-side switch current,
+the stored energy and overshoot are figured at the turn-off current `I_out + dI/2` (the turn-on valley and the current
+limit also given), and the map draws that current. Radiated findings are ordered by their headline level in dBuV/m, each in
+its own cell's scenario, and `limits.notes` says so when a board holds both scenarios. A declared point with `I_out < dI/2` is
 discontinuous conduction, pulse skipping or forced-PWM light-load operation, which the model does not cover: the
 finding says so (`measures.operating_point.status = outside_model`, tag `operating_point_outside_model`) and the current-limit
 scenario is the only one. `current_limit`: no operating point is declared, and the switch pin's `current_peak` is the amplitude of
@@ -2166,8 +2172,11 @@ inductance (tag `estimated_connection_inductance`); the hot-loop inductance sits
 capacitor's node and does not change the level at the LISN. A ceramic capacitor's DC-bias loss is a package rule of thumb
 (tag `rule_of_thumb_dc_bias`) unless its component declares `capacitance_at_bias`. The finding reports, per capacitor, which
 values were declared and which defaulted, the capacitor with the largest share of the ripple current at the fundamental and at the worst
-harmonic, and any anti-resonance of the input network between 150 kHz and 30 MHz (`measures.capacitor_branches`,
-`largest_current_share_*`, `anti_resonances`). A missing edge time
+harmonic (a ratio |I_branch| / |I_source| of complex-current magnitudes, not a partition: the ratios can add to more than
+100 %), and every anti-resonance of the input network between 150 kHz and 30 MHz (`measures.capacitor_branches`,
+`largest_current_share_*`, `anti_resonances`, each with its height over the best single capacitor branch); only one that
+raises a reported harmonic at the LISN by at least 6 dB over that reference is tagged `anti_resonance_in_band` and named in the
+headline. A missing edge time
 becomes a default slew band (3 V/ns nominal, 10 V/ns fast, 1 V/ns slow on the
 hot-supply voltage, tagged `rule_of_thumb_edge`) and every harmonic to 30 MHz
 is reported with `low_dbuv` and `high_dbuv`; the headline and the margin use
@@ -2179,8 +2188,14 @@ constraint the worst harmonic carries a margin to the quasi-peak and average
 lines, but only where the levels are detector readings: `measures.detector_applicability`
 is `isolated_lines` when the switching frequency is one constant value and the harmonic
 spacing exceeds twice the receiver bandwidth (9 kHz in Band B), each harmonic then being an
-isolated line with peak = quasi-peak = average. Otherwise it is `not_applicable` (with
-`detector_reason` and the per-band `detector_bands`): the spacing is too small, or the part
+isolated line with peak = quasi-peak = average. When the spacing is too small but the frequency is one constant value it is
+`receiver_emulation`: at most 48 harmonics (the least-margin ones, the highest ones and a spread over the band, stated in
+`measures.receiver_emulation.selection_rule`) are run through a time-domain receiver model of the periodic waveform, with
+the Gaussian IF filter of each CISPR band and quasi-peak time constants remembered from CISPR 16-1-1 and unverified; only
+those harmonics carry `limit_qp`, `limit_avg`, margins and a `receiver` object with the peak, quasi-peak and average
+readings, the finding stays `conducted_emission` tagged `detector_receiver_emulation`, `margins_scope` is
+`evaluated_harmonics_only`, and the other harmonics are line amplitudes. Otherwise it is `not_applicable` (with
+`detector_reason` and the per-band `detector_bands`): the part
 declares `switching_frequency_min`/`_max` without the component fixing the frequency. The
 finding is then `conducted_line_amplitude` instead of `conducted_emission`, tagged
 `detector_not_applicable` and `line_amplitudes_only`, the levels are line amplitudes and are
@@ -2261,16 +2276,17 @@ marked `provisional_placement`.
 `--plot-spectrum OUT.svg` writes the conducted spectrum of every cell with an
 `EMI-CONDUCTED` finding as an SVG (harmonic stems 150 kHz to 30 MHz in dBuV, the
 quasi-peak and average limit lines when a conducted `emission` standard is
-declared and the levels are detector readings, and the assumption tags; a panel whose levels are only line
+declared and the levels are detector readings, and the assumption tags; a `receiver_emulation` panel marks the harmonics
+the receiver model read with diamonds and draws the limits through them only; a panel whose levels are only line
 amplitudes is headed "NOT a detector reading" and draws no limit line or margin). The common-mode score is
 a ranking and is never plotted.
 `--plot-field OUT.svg [--field-height 1mm]` (and `copper view RUN --issue ID
 --emi-field` for an `EMI-HOT-LOOP` issue of a run) draws the quasi-static
 magnetic near field `|H|` of the hot-loop current path, in dB(uA/m) in a plane
 above the top copper, over the layout, with the level at the pads of `sensitive`
-nets and cable connectors. Both are screening estimates: the field uses the
-loop's `current_peak` (per ampere without one) with an ideal ground plane by
-images, and does not include the power inductor's own field (coverage
+nets and cable connectors. Both are screening estimates: the field uses the amplitude and scenario of the hot-loop
+finding (`I_out + dI/2` at a declared operating point, else the loop's `current_peak`, per ampere without one; the map
+names which) with an ideal ground plane by images, and does not include the power inductor's own field (coverage
 `unsupported EMI-FIELD:inductor`). See [the EMI specification](emi-noise-analysis.md).
 
 ### Native copper connectivity and package escape

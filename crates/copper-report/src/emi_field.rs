@@ -7,12 +7,14 @@
 //! The source is the `loop_path_3d_mm` measure of an `EMI-HOT-LOOP` finding
 //! (the loop as a closed 3D polyline, millimetres, z = 0 at the top copper
 //! layer) with the `loop_reference_plane_z_mm` of the reference plane, and the
-//! `field_victims` pad names. The amplitude is the cell's `current_peak` (the
-//! switch current limit, a worst case), or 1 A ("per ampere") when unknown.
+//! `field_victims` pad names. The amplitude is the finding's own
+//! `loop_current.field_amplitude_a`: `I_out + dI/2` (the peak of the high-side switch current) in the
+//! `declared_operating_point` scenario, the cell's `current_peak` (the switch current limit, a worst case) in the
+//! `current_limit` scenario, or 1 A ("per ampere") when unknown.
 //! The field itself is `copper_emi::field`.
 //!
 //! **Screening estimate, not a field prediction.** Quasi-static (the region is
-//! much smaller than a wavelength), the peak switch current as the amplitude,
+//! much smaller than a wavelength), one static current as the amplitude,
 //! only the hot loop carries current (the power inductor's own field, usually
 //! the largest low-frequency source of an unshielded inductor, is NOT
 //! included: coverage `unsupported EMI-FIELD:inductor`), an ideal infinite
@@ -91,6 +93,11 @@ pub struct FieldMap {
     pub height_mm: f64,
     /// Amplitude, A; `None` = normalised to 1 A.
     pub current_a: Option<f64>,
+    /// The scenario of the amplitude (`declared_operating_point` or `current_limit`); `None` for a report written
+    /// before the finding recorded it (the amplitude is then the cell's current limit).
+    pub scenario: Option<String>,
+    /// What the amplitude is, in words (the finding's `loop_current.field_amplitude_basis`).
+    pub amplitude_basis: Option<String>,
     pub plane_z_mm: Option<f64>,
     pub loop_xy: Vec<Point>,
     pub victims: Vec<Victim>,
@@ -130,9 +137,9 @@ pub fn parse_current(text: &str) -> Option<f64> {
     Some(value * scale).filter(|i| *i > 0.0)
 }
 
-/// The amplitude for a cell of an `emi` section: the conducted prediction's `operating_point.current_limit_a`
-/// (the same worst-case `current_peak`; a declared load current is not applied to the map), else the cell's
-/// `current_peak`.
+/// The amplitude for a cell of an `emi` section written before the hot-loop finding recorded its own
+/// (`loop_current`): the conducted prediction's `operating_point.current_limit_a` (the cell's current limit), else
+/// the cell's `current_peak`.
 pub fn cell_current(section: &Value, cell: &str) -> Option<f64> {
     let from_conducted = section
         .get("findings")
@@ -206,7 +213,16 @@ pub fn hot_loop_field(
     let path = path_of(finding)?;
     let cell = finding.get("cell").and_then(Value::as_str).unwrap_or("").to_owned();
     let plane_z_mm = measures.get("loop_reference_plane_z_mm").and_then(number);
-    let current_a = cell_current(section, &cell);
+    // The amplitude is the hot-loop finding's own: the same scenario as its radiated estimate and ringing. A report
+    // written before the finding recorded it falls back to the cell's current limit.
+    let recorded = measures.get("loop_current");
+    let scenario = recorded.and_then(|c| c.get("scenario")).and_then(Value::as_str).map(str::to_owned);
+    let amplitude_basis =
+        recorded.and_then(|c| c.get("field_amplitude_basis")).and_then(Value::as_str).map(str::to_owned);
+    let current_a = match recorded {
+        Some(c) => c.get("field_amplitude_a").and_then(number).filter(|i| *i > 0.0),
+        None => cell_current(section, &cell),
+    };
     let amplitude = current_a.unwrap_or(1.0);
     let segments: Vec<Segment> = (0..path.len())
         .map(|i| {
@@ -352,6 +368,8 @@ pub fn hot_loop_field(
         max_db,
         height_mm,
         current_a,
+        scenario,
+        amplitude_basis,
         plane_z_mm,
         loop_xy,
         victims,
@@ -413,12 +431,24 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
         escape(&label),
         n(map.height_mm)
     ));
-    let amplitude = match map.current_a {
-        Some(i) => format!(
-            "{} A (the cell's current_peak, the switch current limit, worst case, tag worst_case_current: not a load current, a declared load_current is not applied to the map)",
+    let amplitude = match (map.current_a, map.scenario.as_deref()) {
+        (Some(i), Some("declared_operating_point")) => format!(
+            "{} A, scenario declared_operating_point: {}",
+            n(i),
+            map.amplitude_basis.as_deref().unwrap_or("I_out + dI/2, the peak of the high-side switch current")
+        ),
+        (Some(i), Some(_)) => format!(
+            "{} A, scenario current_limit: {}; declare load_current on the converter for an operating point",
+            n(i),
+            map.amplitude_basis
+                .as_deref()
+                .unwrap_or("current_peak, the switch current limit (a worst case, not a load current)")
+        ),
+        (Some(i), None) => format!(
+            "{} A (the cell's current_peak, the switch current limit, worst case, tag worst_case_current: not a load current; this report does not record the scenario)",
             n(i)
         ),
-        None => "1 A: the cell declares no current_peak, so levels are per ampere".to_owned(),
+        (None, _) => "1 A: the cell declares no usable current, so levels are per ampere".to_owned(),
     };
     let plane = match map.plane_z_mm {
         Some(z) => format!("ideal ground plane at z = {} mm by image currents", n(z)),
@@ -667,7 +697,7 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
     ));
     foot += 17.0;
     for text in [
-        "Quasi-static: valid where the board region is much smaller than a wavelength (fine up to a few hundred MHz over a few cm). The peak switch current is the amplitude; only the hot loop carries current.",
+        "Quasi-static: valid where the board region is much smaller than a wavelength (fine up to a few hundred MHz over a few cm). One static current (the amplitude named above) flows round the loop; only the hot loop carries current.",
         "An ideal infinite ground plane is modelled by image currents; no shielding by other copper. The power inductor's own field is not included.",
         &format!(
             "Pads and the loop are drawn schematically from the board scene ({scene_source}); copper of the top layer lies under the map, cells below the scale are transparent."
@@ -783,6 +813,50 @@ mod tests {
         let (cx, cy) = near.grid.center(index % near.grid.nx, index / near.grid.nx);
         let (x, y) = (cx * 1e3, cy * 1e3);
         assert!((3.0..=11.0).contains(&x) && (9.0..=14.0).contains(&y), "{x} {y}");
+    }
+
+    fn section_with_scenario(scenario: &str, amplitude: &str, basis: &str) -> Value {
+        copper_json::parse(&format!(
+            r#"{{"cells":[{{"controller":"U1","current_peak":"4.5 A","magnetic":"L1","catch_diode":"D1"}}],"findings":[
+              {{"code":"EMI-HOT-LOOP","cell":"U1","tags":["placement_estimate"],"measures":{{
+                "loop_capacitor":"CIN","pad_sequence":["input capacitor CIN.1","hot supply U1.1"],
+                "loop_current":{{"scenario":"{scenario}","field_amplitude_a":{amplitude},"field_amplitude_basis":"{basis}"}},
+                "loop_path_3d_mm":[[4,10,0],[10,10,0],[10,13,0],[4,13,0]],"loop_reference_plane_z_mm":-0.2,
+                "field_victims":[{{"kind":"sensitive_net","name":"FB","pads":["R1.2"]}}]}}}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_map_takes_the_amplitude_and_scenario_the_hot_loop_finding_recorded() {
+        // A declared operating point: the peak of the high-side switch current, not the 4.5 A limit of the cell.
+        let declared = section_with_scenario(
+            "declared_operating_point",
+            "2.62",
+            "I_out + dI/2, the peak of the high-side switch current",
+        );
+        let map = hot_loop_field(finding(&declared), &declared, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
+        assert_eq!(map.current_a, Some(2.62));
+        assert_eq!(map.scenario.as_deref(), Some("declared_operating_point"));
+        let svg = field_picture(&map, "test").content;
+        assert!(svg.contains("amplitude 2.62 A, scenario declared_operating_point"), "{svg}");
+        assert!(!svg.contains("worst_case_current"), "the declared scenario is not the current limit");
+        // The same field at the limit scales by 20 log10(4.5 / 2.62) at the victim.
+        let limit = section_with_scenario(
+            "current_limit",
+            "4.5",
+            "current_peak, the switch current limit (a worst case, not a load current)",
+        );
+        let at_limit = hot_loop_field(finding(&limit), &limit, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
+        assert_eq!(at_limit.current_a, Some(4.5));
+        assert!((at_limit.victims[0].level_db - map.victims[0].level_db - 20.0 * (4.5f64 / 2.62).log10()).abs() < 1e-9);
+        let svg = field_picture(&at_limit, "test").content;
+        assert!(svg.contains("amplitude 4.5 A, scenario current_limit") && svg.contains("load_current"), "{svg}");
+        // A report from before the finding recorded its scenario falls back to the cell's current limit and says so.
+        let old = section("\"4.5 A\"");
+        let old_map = hot_loop_field(finding(&old), &old, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
+        assert_eq!((old_map.current_a, old_map.scenario.clone()), (Some(4.5), None));
+        assert!(field_picture(&old_map, "test").content.contains("does not record the"));
     }
 
     #[test]

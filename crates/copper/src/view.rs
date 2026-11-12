@@ -228,7 +228,7 @@ fn emi_field_view(
             map.grid.nx * map.grid.ny,
             map.grid.step * 1e3
         ),
-        "quasi-static, hot-loop current only (peak switch current as amplitude, or per ampere when undeclared); the inductor's own field is NOT included (coverage unsupported EMI-FIELD:inductor); ideal ground plane by images".to_owned(),
+        "quasi-static, hot-loop current only (one static current: the finding's own amplitude, I_out + dI/2 at a declared operating point or the current limit, or per ampere when undeclared; the scenario is named on the map); the inductor's own field is NOT included (coverage unsupported EMI-FIELD:inductor); ideal ground plane by images".to_owned(),
     ];
     for victim in map.victims.iter().take(8) {
         lines.push(format!(
