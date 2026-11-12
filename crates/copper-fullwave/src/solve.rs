@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use ems::csx::primitives::{BoxShape, LinPoly, Polygon};
 use ems::csx::{ContinuousStructure, Material, Primitive, Property};
-use ems::engine::StopReason;
+use ems::engine::RunLimits;
 use ems::prelude::*;
 
 use crate::model::{PML_CELLS, RegionModel};
@@ -48,6 +48,8 @@ pub struct RunStats {
     pub trace: Vec<(f64, f64)>,
     /// Wall time of the time loop alone, seconds.
     pub loop_seconds: f64,
+    /// The run was ended by the ring-down fit (see [`crate::fit`]) before the energy had decayed.
+    pub stopped_by_fit: bool,
 }
 
 /// A run stopped by the wall-clock guard: what it had done by then.
@@ -160,6 +162,8 @@ pub struct PortColumn {
     pub s: Vec<Vec<Complex64>>,
     pub stats: RunStats,
     pub record: Record,
+    /// The ring-down fit that completed `z_in` (the record had not decayed), if one was used.
+    pub fit: Option<crate::fit::FitInfo>,
 }
 
 /// All columns: the full S matrix over the grid.
@@ -373,16 +377,66 @@ impl RegionModel {
         let mut trace: Vec<(f64, f64)> = Vec::new();
         let mut exceeded: Option<(u64, f64, f64)> = None;
         let loop_started = Instant::now();
-        let results = sim
-            .run_with(|p| {
-                trace.push((p.time * 1e9, p.energy_db));
-                if p.elapsed.as_secs_f64() > wall_limit {
-                    exceeded = Some((p.steps, p.time * 1e9, p.energy_db));
-                    return std::ops::ControlFlow::Break(());
+        // The time loop in chunks of one energy-check interval: the energy criterion of the solver (the
+        // same schedule and the same stop one step after the deciding check), and, for a loop that rings,
+        // a fit of the ring-down to the records so far that ends the run when it is stable.
+        let limits = sim.run_limits();
+        let pulse_end = limits.excitation_end.unwrap_or(0.0);
+        let interval = limits.check_interval().max(1);
+        let max_steps = limits.max_timesteps;
+        let decay_db = self.spec.decay_db;
+        let band = (50e6, 150e6);
+        let fit_freqs: Vec<f64> = (0..=10).map(|k| band.0 + (band.1 - band.0) * f64::from(k) / 10.0).collect();
+        let tail_start = pulse_end + 0.3e-9;
+        let first_fit_at = pulse_end + 2.5e-9;
+        let fit_every = 1.5e-9;
+        let (mut total_steps, mut w_max, mut decayed, mut stopped_by_fit) = (0u64, 0.0_f64, false, false);
+        let mut next_fit = first_fit_at;
+        let mut previous: Option<f64> = None;
+        let mut agreeing = 0;
+        loop {
+            let this = interval.min(max_steps.saturating_sub(total_steps));
+            if this == 0 {
+                break;
+            }
+            let outcome = sim
+                .engine_mut()
+                .run_until_with(&RunLimits::new(this), |p| {
+                    w_max = w_max.max(p.energy);
+                    let db = if w_max > 0.0 && p.energy > 0.0 { 10.0 * (p.energy / w_max).log10() } else { 0.0 };
+                    trace.push((p.time * 1e9, db));
+                    if loop_started.elapsed().as_secs_f64() > wall_limit {
+                        exceeded = Some((total_steps + p.steps, p.time * 1e9, db));
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    if p.time > pulse_end && w_max > 0.0 && db < decay_db {
+                        decayed = true;
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    std::ops::ControlFlow::Continue(())
+                })
+                .map_err(|e| Error::Solver(e.to_string()))?;
+            total_steps += outcome.steps;
+            if decayed || exceeded.is_some() {
+                break;
+            }
+            let t = sim.engine().time();
+            let db_now = trace.last().map_or(0.0, |x| x.1);
+            if self.spec.ring_fit && t >= next_fit && db_now > decay_db + 3.0 {
+                next_fit = t + fit_every;
+                let record = self.record_of(&sim.results(), &ports, excited)?;
+                if let Some((_, info)) = record.z_fitted(&fit_freqs, None, tail_start, band) {
+                    let ring_ok = info.ring_hz.is_some_and(|(f, _)| info.tail_s >= (2.0 / f).max(2.0e-9));
+                    let close = previous.is_some_and(|p| ((info.inductance - p) / info.inductance).abs() < 0.003);
+                    agreeing = if ring_ok && info.spread < 0.01 && close { agreeing + 1 } else { 0 };
+                    previous = Some(info.inductance);
+                    if agreeing >= 2 {
+                        stopped_by_fit = true;
+                        break;
+                    }
                 }
-                std::ops::ControlFlow::Continue(())
-            })
-            .map_err(|e| Error::Solver(e.to_string()))?;
+            }
+        }
         let loop_seconds = loop_started.elapsed().as_secs_f64();
         if let Some((steps, simulated_ns, energy_db)) = exceeded {
             return Err(Error::BudgetExceeded(PartialRun {
@@ -395,9 +449,9 @@ impl RegionModel {
                 limit_seconds: wall_limit,
             }));
         }
-        let outcome = results.outcome().cloned();
-        let converged = matches!(outcome.as_ref().map(|o| &o.reason), Some(StopReason::EnergyDecay { .. }));
-        let steps = outcome.as_ref().map_or(0, |o| o.steps);
+        let results = sim.results();
+        let converged = decayed;
+        let steps = total_steps;
         let analysed: Vec<_> = ports
             .iter()
             .map(|p| {
@@ -405,25 +459,19 @@ impl RegionModel {
                     .map_err(|e| Error::Solver(format!("{e}; solver setup warnings: {}", warnings.join(" | "))))
             })
             .collect::<Result<_>>()?;
-        let z_in = analysed[excited].z_in();
+        let mut z_in = analysed[excited].z_in();
         let s = analysed.iter().map(|out| ems::post::port::s_param(out, &analysed[excited])).collect();
-        let record = {
-            let props =
-                ports[excited].properties().ok_or_else(|| Error::Solver("port without properties".to_owned()))?;
-            let v = results.probe(&props.voltage.0).ok_or_else(|| Error::Solver("no voltage probe".to_owned()))?;
-            let i = results
-                .lumped_current(&props.element.0)
-                .ok_or_else(|| Error::Solver("no element current".to_owned()))?;
-            let p = &self.ports[excited];
-            let sign = if p.stop[p.axis] >= p.start[p.axis] { -1.0 } else { 1.0 };
-            Record {
-                dt: v.dt(),
-                t0_v: v.times().first().copied().unwrap_or(0.0),
-                t0_i: i.times().first().copied().unwrap_or(0.0),
-                v: v.scalar().unwrap_or(&[]).to_vec(),
-                i: i.scalar().unwrap_or(&[]).iter().map(|x| x * sign).collect(),
-            }
-        };
+        let record = self.record_of(&results, &ports, excited)?;
+        // A record that has not decayed is completed by the fitted ring-down.
+        let mut fit = None;
+        if !converged
+            && self.spec.ring_fit
+            && let Some((zf, info)) = record.z_fitted(&freqs, None, tail_start, band)
+            && info.spread < 0.05
+        {
+            z_in = zf;
+            fit = Some(info);
+        }
         let keep = (trace.len() / 400).max(1);
         let trace: Vec<(f64, f64)> = trace.into_iter().step_by(keep).collect();
         Ok(PortColumn {
@@ -444,8 +492,27 @@ impl RegionModel {
                 expected_steps: expected_steps as u64,
                 trace,
                 loop_seconds,
+                stopped_by_fit,
             },
             record,
+            fit,
+        })
+    }
+
+    /// The excited port's voltage and current records from the results so far.
+    fn record_of(&self, results: &Results, ports: &[LumpedPort], excited: usize) -> Result<Record> {
+        let props = ports[excited].properties().ok_or_else(|| Error::Solver("port without properties".to_owned()))?;
+        let v = results.probe(&props.voltage.0).ok_or_else(|| Error::Solver("no voltage probe".to_owned()))?;
+        let i =
+            results.lumped_current(&props.element.0).ok_or_else(|| Error::Solver("no element current".to_owned()))?;
+        let p = &self.ports[excited];
+        let sign = if p.stop[p.axis] >= p.start[p.axis] { -1.0 } else { 1.0 };
+        Ok(Record {
+            dt: v.dt(),
+            t0_v: v.times().first().copied().unwrap_or(0.0),
+            t0_i: i.times().first().copied().unwrap_or(0.0),
+            v: v.scalar().unwrap_or(&[]).to_vec(),
+            i: i.scalar().unwrap_or(&[]).iter().map(|x| x * sign).collect(),
         })
     }
 

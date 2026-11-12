@@ -160,7 +160,7 @@ pub struct ExtraTrace {
 /// A rectangle of the board where the mesh is finer than elsewhere (the ports,
 /// the bridges and the pads of a loop). Cells are `cell_nm` inside, grow by
 /// 0.3 per unit of distance outside (neighbouring cells stay within 1.5) and
-/// the 1/3 edge rule uses the local cell. Because the mesh is a tensor
+/// the edge rule uses the local cell. Because the mesh is a tensor
 /// product, the rectangle's x range is fine for every y and the y range for
 /// every x.
 #[derive(Clone, Debug, PartialEq)]
@@ -233,14 +233,19 @@ pub struct RegionSpec {
     /// through the air into the PML. Off: they end at the window edge
     /// (a limitation, flagged `planes_truncated`).
     pub extend_planes: bool,
-    /// Fraction of the copper cell by which every outward-facing copper edge
-    /// (pads, tracks, polygons, ports' terminals) is moved into the metal before
-    /// meshing: the 1/3 rule. A PEC edge on a mesh line behaves as if the metal
-    /// reached about half a cell further (its singular field fills the dual
-    /// cell), which made the microstrip of the validation 9 to 19 % low in
-    /// impedance; moving the edge a third of a cell inward removes most of it.
-    /// 0 puts edges on the mesh lines as drawn.
+    /// The edge rule: every outward-facing copper edge (pads, tracks, polygons, ports' terminals) is moved
+    /// into the metal before meshing by `edge_inset` times the lateral cell plus `edge_inset_z` times the
+    /// vertical cell at the layer. A PEC edge on a mesh line behaves as if the metal reached further (its
+    /// singular field fills the dual cell, which spans half a lateral and half a vertical cell on each
+    /// side), which made the validation microstrip 9 to 19 % low in impedance with the edges as drawn. The
+    /// extent of the excess was measured on shorted microstrip lines of different heights and cells (the
+    /// distance that makes the line inductance exact: 0.23 lateral cell + 0.13 cell of the dielectric below, within
+    /// noise at four points), see `docs/emi-noise-analysis.md` section 11. `edge_inset` 0 and
+    /// `edge_inset_z` 0 put edges on the mesh lines as drawn; 1/3 and 0 is the earlier rule of a third
+    /// of the lateral cell.
     pub edge_inset: f64,
+    /// See [`RegionSpec::edge_inset`]: the fraction of the vertical cell at the edge's layer.
+    pub edge_inset_z: f64,
     /// Include the pads of components on the included nets.
     pub include_pads: bool,
     /// Include copper zones (as their outline minus holes; fills are unknown).
@@ -248,6 +253,9 @@ pub struct RegionSpec {
     /// The excitation pulse is a baseband Gaussian with 20 dB at `band_hz.1 x pulse_scale` (default 1).
     /// A larger scale makes the pulse, which sets the shortest run, proportionally shorter.
     pub pulse_scale: f64,
+    /// Complete a record that has not decayed with a fit of its ring-down (see `crate::fit`) and end the run
+    /// when the fit is stable instead of waiting for the energy to decay. Records that do decay are unchanged.
+    pub ring_fit: bool,
     /// Stop when the field energy has decayed this far (dB, negative).
     pub decay_db: f64,
     /// Simulated-time cap, ns; `None` derives it from the window.
@@ -256,6 +264,10 @@ pub struct RegionSpec {
     pub threads: usize,
     pub budget: Budget,
 }
+
+/// The default edge rule: fractions of the lateral and of the vertical cell (see [`RegionSpec::edge_inset`]).
+pub const EDGE_INSET: f64 = 0.23;
+pub const EDGE_INSET_Z: f64 = 0.11;
 
 impl RegionSpec {
     pub fn new(window_nm: [i64; 4]) -> RegionSpec {
@@ -276,10 +288,12 @@ impl RegionSpec {
             refine_scale: 1.0,
             air_margin_nm: None,
             extend_planes: false,
-            edge_inset: 1.0 / 3.0,
+            edge_inset: EDGE_INSET,
+            edge_inset_z: EDGE_INSET_Z,
             include_pads: true,
             include_zones: true,
             pulse_scale: 1.0,
+            ring_fit: true,
             decay_db: -35.0,
             max_time_ns: None,
             threads: 0,

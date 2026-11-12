@@ -221,18 +221,21 @@ pub struct HotLoopResult {
     /// inductance of a loop that resonates not far above the band; `None` without a resonance below 1 GHz.
     pub inductance_static_nh: Option<f64>,
     pub flatness_static: Option<f64>,
-    /// First-order extrapolation of the standard and refined meshes to a zero refinement cell,
-    /// `L2 + (L2 - L1)/(r - 1)` with r = 1.5, nH; only with a refined second mesh and a falling L.
-    /// Reported next to `inductance_nh`, never in its place (see the validation section).
-    pub inductance_extrapolated_nh: Option<f64>,
+    /// The stated uncertainty of `inductance_nh` from the mesh, percent: the larger of the difference of the
+    /// two meshes (`mesh_error_estimate_pct`) and [`MESH_UNCERTAINTY_FLOOR_PCT`], the scatter of L over
+    /// meshes of one loop that the difference of two meshes cannot see (mesh decisions: which lines merge,
+    /// which small gaps a cell resolves). It leaves out the model's own approximations (assumed stack-up,
+    /// zone outlines, bridged components, strap bias).
+    pub inductance_uncertainty_pct: f64,
 }
 
-/// The first-order (Richardson, p = 1) value for a zero cell from L1 on a cell h and L2 on h / ratio.
-/// `None` unless L falls with the cell, the only case in which a first-order law has been observed.
-pub fn extrapolate_first_order(l_standard: f64, l_refined: f64, ratio: f64) -> Option<f64> {
-    (ratio > 1.0 && l_refined < l_standard && l_refined > 0.0)
-        .then(|| l_refined + (l_refined - l_standard) / (ratio - 1.0))
-}
+/// The least mesh uncertainty stated for a hot-loop inductance, percent. Measured on the placed `emi_buck`
+/// loop: 11 meshes with refinement cells of 0.10 to 0.25 mm and merge distances of 0.1 to 0.4 of the cell
+/// gave 4.62 to 4.90 nH (a half range of 3 %), the standard and the refined mesh of the pair differing by
+/// only 0.5 % while the 0.10 mm mesh is 4.6 % below the standard one; the 6 x 4 mm loop drifts 2.2 % between a
+/// 0.25 and a 0.083 mm cell, and the shorted lines of the validation are within 3 % of their closed form
+/// at the standard mesh.
+pub const MESH_UNCERTAINTY_FLOOR_PCT: f64 = 4.0;
 
 fn invalid(m: &str) -> Error {
     Error::Invalid(m.to_owned())
@@ -498,7 +501,6 @@ pub fn extract_hot_loop(
     let (mut reported, mut reported_model, mut spread) = (l1, model, spread1);
     let mut reported_column = column;
     let mut error_pct: Option<f64> = None;
-    let mut extrapolated: Option<f64> = None;
     let mut pair_note: Option<String> = None;
     if options.convergence && !spec.refine.is_empty() {
         let rate = {
@@ -534,7 +536,6 @@ pub fn extract_hot_loop(
                     runs.push(mesh_run(role, &model2, &column2, l2));
                     if role == "refined" {
                         error_pct = Some(100.0 * (l2 - l1).abs() / l2);
-                        extrapolated = extrapolate_first_order(l1, l2, 1.5);
                         (reported, reported_model, reported_column, spread) = (l2, model2, column2, spread2);
                     } else {
                         error_pct = Some(100.0 * (l1 - l2).abs() / l1);
@@ -562,7 +563,17 @@ pub fn extract_hot_loop(
     });
     let resistance = column.resistance_band(lo, hi);
     let mut flags = model.flags.clone();
-    if !column.stats.converged {
+    if let Some(fit) = &column.fit {
+        flags.push("ring_fitted".to_owned());
+        let ring = fit.ring_hz.map_or(String::new(), |(f, q)| format!(", ring at {:.0} MHz with Q {:.0}", f * 1e-6, q));
+        notes.push(format!(
+            "the record had not decayed ({} steps{}): L is read from the transform of the record completed by a fit of its ring-down ({:.1} ns of tail{ring}); the fitted orders agree to {:.2} %",
+            column.stats.steps,
+            if column.stats.stopped_by_fit { ", ended by the fit" } else { ", at the time cap" },
+            fit.tail_s * 1e9,
+            100.0 * fit.spread
+        ));
+    } else if !column.stats.converged {
         flags.push("energy_not_converged".to_owned());
     }
     if spread > 0.05 {
@@ -629,7 +640,7 @@ pub fn extract_hot_loop(
         max_grading_ratio: model.mesh.max_ratio,
         ratio_violations: model.mesh.ratio_violations,
         port_strap_nh,
-        inductance_extrapolated_nh: extrapolated.map(|v| v * 1e9),
+        inductance_uncertainty_pct: error_pct.unwrap_or(0.0).max(MESH_UNCERTAINTY_FLOOR_PCT),
         inductance_static_nh: static_l.map(|v| v.0 * 1e9),
         flatness_static: static_l.map(|v| v.1),
     })

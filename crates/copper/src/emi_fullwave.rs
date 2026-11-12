@@ -62,11 +62,7 @@ fn result_value(r: &HotLoopResult) -> Value {
     let model: Vec<String> = r.description.lines().map(str::to_owned).collect();
     put(&mut o, "model", strings(&model));
     put(&mut o, "mesh_error_estimate_pct", r.mesh_error_estimate_pct.map_or(Value::Null, |v| Value::from(round(v, 2))));
-    put(
-        &mut o,
-        "inductance_extrapolated_nh",
-        r.inductance_extrapolated_nh.map_or(Value::Null, |v| Value::from(round(v, 3))),
-    );
+    put(&mut o, "inductance_uncertainty_pct", Value::from(round(r.inductance_uncertainty_pct, 1)));
     put(&mut o, "inductance_static_nh", r.inductance_static_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
     put(&mut o, "flatness_static", r.flatness_static.map_or(Value::Null, |v| Value::from(round(v, 4))));
     put(&mut o, "port_strap_nh", r.port_strap_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
@@ -111,8 +107,9 @@ fn exceeded_value(p: &PartialRun) -> Value {
 
 fn text_line(r: &HotLoopResult) -> String {
     let mut text = format!(
-        "hot-loop inductance {:.2} nH over {:.0}-{:.0} MHz (flat to {:.1} %)",
+        "hot-loop inductance {:.2} nH +-{:.0} % over {:.0}-{:.0} MHz (flat to {:.1} %)",
         r.inductance_nh,
+        r.inductance_uncertainty_pct,
         r.band_mhz[0],
         r.band_mhz[1],
         100.0 * r.flatness
@@ -120,9 +117,6 @@ fn text_line(r: &HotLoopResult) -> String {
     match r.mesh_error_estimate_pct {
         Some(e) => text.push_str(&format!(" (mesh error estimate {e:.1} %, from {} meshes)", r.meshes.len())),
         None => text.push_str(" (single mesh: no mesh error estimate)"),
-    }
-    if let Some(l) = r.inductance_extrapolated_nh {
-        text.push_str(&format!(", first-order extrapolation to a zero cell {l:.2} nH (not the reported value)"));
     }
     if let Some(l) = r.inductance_static_nh {
         text.push_str(&format!(", static inductance (resonance factor removed) {l:.2} nH"));

@@ -6,6 +6,16 @@ use copper_physical::CopperLayer;
 
 const MM: i64 = 1_000_000;
 
+/// The validation meshes of cases 3a-3e keep the edge rule they were validated with (a third of the lateral
+/// cell, nothing for the vertical) so that they stay as they were; `VALIDATION_RULE=default` runs them with
+/// the default rule of the model instead (the numbers of the section 11 table, column "default rule").
+fn validation_rule(spec: &mut RegionSpec) {
+    if std::env::var("VALIDATION_RULE").as_deref() != Ok("default") {
+        spec.edge_inset = 1.0 / 3.0;
+        spec.edge_inset_z = 0.0;
+    }
+}
+
 /// Hammerstad-Jensen microstrip impedance and effective permittivity, zero thickness.
 fn hammerstad(w_over_h: f64, er: f64) -> (f64, f64) {
     let er_eff = (er + 1.0) / 2.0 + (er - 1.0) / (2.0 * (1.0 + 12.0 / w_over_h).sqrt());
@@ -47,6 +57,7 @@ fn microstrip_cell(
     let end = |a: i64, b: i64| Terminal::rect(CopperLayer::Front, [a, y - width / 2, b, y + width / 2]);
     let half = (width / 2 + 4 * height).max(3 * MM);
     let mut spec = RegionSpec::new([x0, y - half, x1, y + half]);
+    validation_rule(&mut spec);
     spec.margin_nm = 2 * MM;
     spec.band_hz = (0.5e9, 3.0e9);
     spec.fidelity = fidelity;
@@ -253,6 +264,8 @@ mod loops {
         pub pulse: f64,
         /// Smooth meshes (as the hot loop uses).
         pub smooth: bool,
+        /// Keep the edge rule the validation meshes were validated with (see `validation_rule`).
+        pub pinned: bool,
     }
 
     pub fn default_opts() -> Opts {
@@ -273,6 +286,7 @@ mod loops {
             strap: false,
             pulse: 1.0,
             smooth: false,
+            pinned: true,
         }
     }
 
@@ -307,6 +321,9 @@ mod loops {
             board.zones.push(zone("GND", &[CopperLayer::Back], r));
         }
         let mut spec = RegionSpec::new([x0 - w / 2, y0 - w / 2, x1 + w / 2, y1 + w / 2]);
+        if o.pinned {
+            validation_rule(&mut spec);
+        }
         spec.margin_nm = o.margin;
         spec.band_hz = (50e6, 1.0e9);
         spec.fidelity = o.fidelity;
@@ -317,6 +334,7 @@ mod loops {
         spec.smooth_mesh = o.smooth;
         if let Some(f) = o.inset {
             spec.edge_inset = f;
+            spec.edge_inset_z = 0.0;
         }
         let port = PortSpec::gap(
             "loop",
@@ -368,6 +386,7 @@ mod loops {
         }
         board.zones.push(zone("GND", &[CopperLayer::Back], [0, 0, 100 * MM, 100 * MM]));
         let mut spec = RegionSpec::new([x0 - w / 2, y0 - w / 2, x1 + w / 2, y1 + w / 2]);
+        validation_rule(&mut spec);
         spec.margin_nm = 5 * MM;
         spec.band_hz = (50e6, 1.0e9);
         spec.fidelity = fidelity;
@@ -508,10 +527,11 @@ fn mesh_convergence() {
 fn convergence_order() {
     let base =
         loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), smooth: true, ..loops::default_opts() };
-    for inset in [Some(1.0 / 3.0), Some(0.5)] {
+    // The default edge rule, and the earlier one: a third of the lateral cell, nothing for the vertical.
+    for inset in [None, Some(1.0 / 3.0)] {
         let mut values = Vec::new();
         for cell in [250_000_i64, 167_000, 125_000, 83_000] {
-            let lp = loops::build(loops::Opts { cell: Some(cell), inset, ..base });
+            let lp = loops::build(loops::Opts { cell: Some(cell), inset, pinned: false, ..base });
             let col = lp.model.solve_port(0).expect("solve");
             let (l, _) = inductance_band(&col, 50e6, 150e6);
             println!(
@@ -533,7 +553,54 @@ fn convergence_order() {
             "inset {:?}: differences {:+.4} and {:+.4} nH over h {:.3} -> {:.3} -> {:.3} mm",
             inset, d01, d12, h0, h1, h2
         );
+        if inset.is_none() {
+            // The default rule: L moves by less than 3 % between a 0.25 and a 0.083 mm cell (the earlier rule: 6.4 %).
+            assert!((values[0].1 / values[3].1 - 1.0).abs() < 0.03, "{values:?}");
+        }
     }
+}
+
+fn env_i(name: &str, default: i64) -> i64 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+/// One loop from the environment (`LP_*`, nm), for the attribution study of the cell dependence.
+#[test]
+#[ignore = "study; parameters from LP_* environment variables"]
+fn loop_probe() {
+    let o = loops::Opts {
+        a: env_i("LP_A", 6 * MM),
+        b: env_i("LP_B", 4 * MM),
+        w: env_i("LP_W", 500_000),
+        h: env_i("LP_H", 200_000),
+        gap: env_i("LP_GAP", 500_000),
+        margin: 3 * MM,
+        air: Some(5 * MM),
+        smooth: env_i("LP_SMOOTH", 1) == 1,
+        cell: Some(env_i("LP_CELL", 250_000)),
+        pinned: false,
+        inset: std::env::var("LP_INSET").ok().map(|v| v.parse::<f64>().unwrap() / 1000.0),
+        ..loops::default_opts()
+    };
+    let lp = loops::build(o);
+    let col = lp.model.solve_port(0).expect("solve");
+    let (l, spread) = inductance_band(&col, 50e6, 150e6);
+    println!(
+        "LOOP a {} b {} w {} h {} gap {} cell {} inset {:?}: L {:.4} nH (spread {:.2} %), closed form {:.4} nH, {} cells, {} steps, {:.0} s",
+        o.a,
+        o.b,
+        o.w,
+        o.h,
+        o.gap,
+        env_i("LP_CELL", 250_000),
+        o.inset,
+        l * 1e9,
+        100.0 * spread,
+        lp.closed_form * 1e9,
+        lp.model.mesh.cells,
+        col.stats.steps,
+        col.stats.seconds
+    );
 }
 
 /// The meshes of the convergence sweep, without running them.

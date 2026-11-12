@@ -211,15 +211,23 @@ pub(crate) fn placed_pads(board: &PhysicalBoard, poses: &IndexMap<String, Placem
     out
 }
 
-/// The 1/3 rule with a local cell: the fraction of the cell by which an edge is moved into the metal,
-/// where the cell is the general copper cell or, near a refinement box, the refined one.
+/// The edge rule with local cells: the distance by which an edge is moved into the metal is
+/// `fraction` of the lateral cell at the edge plus `fraction_z` of the vertical cell at the layer. The
+/// lateral cell is the general copper cell or, near a refinement box, the refined one; the vertical
+/// cell is that of the dielectric slabs next to the layer (see [`slab_counts`]).
 #[derive(Clone, Debug)]
 pub(crate) struct InsetRule {
     pub(crate) fraction: f64,
+    pub(crate) fraction_z: f64,
     pub(crate) cell: f64,
     /// Refinement intervals `(lo, hi, cell)` of x and y, millimetres.
     pub(crate) zones: [Vec<(f64, f64, f64)>; 2],
+    /// Dielectric slabs `(bottom, top, cells)` as the z mesh will cut them.
+    pub(crate) slabs: Vec<(f64, f64, usize)>,
 }
+
+/// The growth of the cell above the top copper, where the z mesh leaves the last slab.
+const AIR_GROWTH: f64 = 1.3;
 
 impl InsetRule {
     /// The mesher's target cell along `axis` at `v`: the general cell, or the smallest refinement cell grown by 0.3 per mm of distance.
@@ -227,17 +235,64 @@ impl InsetRule {
         self.zones[axis].iter().map(|(lo, hi, c)| c + 0.3 * (lo - v).max(v - hi).max(0.0)).fold(self.cell, f64::min)
     }
 
-    pub(crate) fn delta(&self, mid: Pt, inward: Pt) -> f64 {
-        let (wx, wy) = (inward.0.abs(), inward.1.abs());
-        self.fraction * (wx * self.cell_at(0, mid.0) + wy * self.cell_at(1, mid.1)) / (wx + wy).max(1e-12)
+    /// The vertical cell at the layer plane `z`: the mean of the cells above and below it, where a
+    /// side without dielectric (air above the top layer) counts as the other side's cell grown once.
+    pub(crate) fn dz_at(&self, z: f64) -> f64 {
+        let below = self.slabs.iter().find(|(_, top, _)| (top - z).abs() < 1e-6).map(|(b, t, n)| (t - b) / *n as f64);
+        let above =
+            self.slabs.iter().find(|(bottom, _, _)| (bottom - z).abs() < 1e-6).map(|(b, t, n)| (t - b) / *n as f64);
+        match (below, above) {
+            (Some(b), Some(a)) => 0.5 * (a + b),
+            (Some(c), None) | (None, Some(c)) => 0.5 * (1.0 + AIR_GROWTH) * c,
+            (None, None) => self.cell,
+        }
     }
 
-    pub(crate) fn ring(&self, ring: &[Pt], fixed: [f64; 4]) -> Option<Vec<Pt>> {
-        if self.fraction <= 0.0 {
+    /// The offset of an edge with midpoint `mid` and inward normal `inward` on the plane `z`.
+    pub(crate) fn delta(&self, mid: Pt, inward: Pt, z: f64) -> f64 {
+        let (wx, wy) = (inward.0.abs(), inward.1.abs());
+        let lateral = (wx * self.cell_at(0, mid.0) + wy * self.cell_at(1, mid.1)) / (wx + wy).max(1e-12);
+        self.fraction * lateral + self.fraction_z * self.dz_at(z)
+    }
+
+    pub(crate) fn is_off(&self) -> bool {
+        self.fraction <= 0.0 && self.fraction_z <= 0.0
+    }
+
+    pub(crate) fn ring(&self, ring: &[Pt], fixed: [f64; 4], z: f64) -> Option<Vec<Pt>> {
+        if self.is_off() {
             return Some(ring.to_vec());
         }
-        geom::inset_ring_by(ring, &|m, n| self.delta(m, n), fixed)
+        geom::inset_ring_by(ring, &|m, n| self.delta(m, n, z), fixed)
     }
+}
+
+/// The cells of each dielectric slab `(bottom, top, n)`: at least two (three at fine fidelity) and at least
+/// one per 1.25 times the smallest copper-region cell, not thinner than 0.45 of the slab.
+pub(crate) fn slab_counts(
+    stack: &Stack,
+    fidelity: Fidelity,
+    cell: f64,
+    zones: &[Vec<(f64, f64, f64)>; 2],
+) -> Vec<(f64, f64, usize)> {
+    let n_min = match fidelity {
+        Fidelity::Coarse => 2usize,
+        Fidelity::Fine => 3usize,
+    };
+    let zones_cell = zones.iter().flatten().map(|z| z.2).fold(cell, f64::min);
+    let min_cell = (0.4 * cell).max(0.04);
+    let thinnest = stack.thinnest();
+    let min_cell_z = if thinnest.is_finite() { min_cell.min(0.45 * thinnest) } else { min_cell };
+    stack
+        .slabs
+        .iter()
+        .map(|s| {
+            let t = s.top - s.bottom;
+            let n = (t / (1.25 * zones_cell)).ceil().max(n_min as f64) as usize;
+            let n = n.min(((t / min_cell_z).floor() as usize).max(1));
+            (s.bottom, s.top, n)
+        })
+        .collect()
 }
 
 pub(crate) fn mm_point(p: Point) -> Pt {
@@ -269,7 +324,7 @@ struct Builder<'a> {
     counts: Counts,
     flags: Vec<String>,
     notes: Vec<String>,
-    /// The 1/3 rule.
+    /// The edge rule.
     inset: InsetRule,
 }
 
@@ -285,13 +340,13 @@ impl Builder<'_> {
         }
     }
 
-    /// The 1/3 rule: move the ring's edges into the metal; a ring too small
+    /// The edge rule: move the ring's edges into the metal; a ring too small
     /// for it keeps its drawn edges.
-    fn inset_ring(&mut self, ring: Vec<Pt>) -> Vec<Pt> {
-        if self.inset.fraction <= 0.0 {
+    fn inset_ring(&mut self, ring: Vec<Pt>, z: f64) -> Vec<Pt> {
+        if self.inset.is_off() {
             return ring;
         }
-        match self.inset.ring(&ring, self.region) {
+        match self.inset.ring(&ring, self.region, z) {
             Some(r) => r,
             None => {
                 self.flag("edge_inset_skipped_small_feature");
@@ -318,7 +373,7 @@ impl Builder<'_> {
         if ring.len() < 3 || geom::area(&ring) < 1e-9 {
             return;
         }
-        let ring = self.inset_ring(ring);
+        let ring = self.inset_ring(ring, z);
         if ring.len() < 3 {
             return;
         }
@@ -501,7 +556,7 @@ struct Barrel {
     z_bottom: f64,
 }
 
-/// The layer, outline (moved inward by `inset`, the 1/3 rule) and net of a terminal.
+/// The layer, outline (moved inward by the edge rule) and net of a terminal.
 fn terminal_info(
     t: &Terminal,
     pads: &[PlacedPad],
@@ -509,7 +564,10 @@ fn terminal_info(
     inset: Option<&InsetRule>,
     region: [f64; 4],
 ) -> Result<(CopperLayer, Vec<Pt>, Option<String>)> {
-    let shrink = |ring: Vec<Pt>| inset.and_then(|rule| rule.ring(&ring, region)).unwrap_or(ring);
+    let shrink = |ring: Vec<Pt>, layer: CopperLayer| {
+        let z = stack.z(layer).unwrap_or(0.0);
+        inset.and_then(|rule| rule.ring(&ring, region, z)).unwrap_or(ring)
+    };
     match t {
         Terminal::Pad { component, pad } => {
             let found = pads
@@ -518,14 +576,14 @@ fn terminal_info(
                 .ok_or_else(|| Error::Invalid(format!("pad {component}.{pad} is not placed on the board")))?;
             let layer =
                 *found.layers.first().ok_or_else(|| Error::Invalid(format!("pad {component}.{pad} has no layer")))?;
-            Ok((layer, shrink(found.ring.clone()), found.net.clone()))
+            Ok((layer, shrink(found.ring.clone(), layer), found.net.clone()))
         }
         Terminal::Rect { layer, rect } => {
             if stack.z(*layer).is_none() {
                 return Err(Error::Invalid(format!("terminal layer {} is not in the stack-up", layer.value())));
             }
             let r = [nm_to_mm(rect[0]), nm_to_mm(rect[1]), nm_to_mm(rect[2]), nm_to_mm(rect[3])];
-            Ok((*layer, shrink(vec![(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]), None))
+            Ok((*layer, shrink(vec![(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])], *layer), None))
         }
     }
 }
@@ -536,7 +594,7 @@ pub struct Strap {
     pub net: String,
     pub layer: CopperLayer,
     pub z: f64,
-    /// The rectangle, millimetres (already moved in by the 1/3 rule across its width).
+    /// The rectangle, millimetres (already moved in by the edge rule across its width).
     pub ring: Vec<Pt>,
     /// The centre line, millimetres: for the inductance estimate.
     pub from: Pt,
@@ -603,7 +661,7 @@ fn strap_port(e: StrapEnds, inset: &InsetRule) -> Result<(ResolvedPort, Vec<Stra
     let dims = [a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]];
     let narrowest = dims.iter().copied().fold(f64::INFINITY, f64::min);
     let width = narrowest.clamp(0.2, 1.0);
-    let delta = inset.fraction * cell;
+    let delta = inset.fraction * cell + inset.fraction_z * inset.dz_at(z);
     let into = cell.min(0.5 * narrowest);
     // The centre line from the pad A to the pad B: axis-aligned legs.
     let b_right = b[0] >= a[2] - eps;
@@ -948,7 +1006,14 @@ impl RegionModel {
         let base_cell = copper_cell(spec, narrowest);
         // A coarser mesh (refine_scale above 1) coarsens the general cell too; a finer one only the zones.
         let cell = base_cell * spec.refine_scale.max(1.0);
-        let inset = InsetRule { fraction: spec.edge_inset.max(0.0), cell, zones: refine_zones(spec, base_cell, cell) };
+        let inset_zones = refine_zones(spec, base_cell, cell);
+        let inset = InsetRule {
+            fraction: spec.edge_inset.max(0.0),
+            fraction_z: spec.edge_inset_z.max(0.0),
+            cell,
+            slabs: slab_counts(&stack, spec.fidelity, cell, &inset_zones),
+            zones: inset_zones,
+        };
         let mut b = Builder {
             spec,
             stack: stack.clone(),
@@ -1293,7 +1358,7 @@ impl Builder<'_> {
         let z = self.stack.z(la).expect("layer in stack");
         let net_id = self.net_id(&net);
         let ring = geom::clip_rect(&hull, self.region);
-        let ring = if ring.len() >= 3 { self.inset_ring(ring) } else { ring };
+        let ring = if ring.len() >= 3 { self.inset_ring(ring, z) } else { ring };
         if ring.len() >= 3 {
             let thickness_m = self.thickness_m(board, la);
             self.sheets.push(Sheet {
@@ -1315,10 +1380,7 @@ impl Builder<'_> {
 impl RegionModel {
     fn build_mesh(&mut self, cell: f64, zones: [Vec<(f64, f64, f64)>; 2]) -> Result<()> {
         let spec = &self.spec;
-        let (n_min, f_top) = match spec.fidelity {
-            Fidelity::Coarse => (2usize, spec.band_hz.1),
-            Fidelity::Fine => (3usize, spec.band_hz.1),
-        };
+        let f_top = spec.band_hz.1;
         let er_max = self.stack.max_er();
         let lambda_diel = C0_MM_PER_S / f_top / er_max.sqrt();
         let max_inner = (lambda_diel / 15.0).min(1.0).max(cell);
@@ -1381,18 +1443,12 @@ impl RegionModel {
             lines[2].push(Line::new(s.top, Rank::Copper, None));
             lines[2].push(Line::new(s.bottom, Rank::Copper, None));
         }
-        let mut gap_counts = Vec::new();
-        for s in &self.stack.slabs {
-            let t = s.top - s.bottom;
-            let n = (t / (1.25 * zones_cell)).ceil().max(n_min as f64) as usize;
-            let n = n.min(((t / min_cell_z).floor() as usize).max(1));
-            gap_counts.push((s.bottom, s.top, n));
-        }
+        let gap_counts = slab_counts(&self.stack, spec.fidelity, cell, &zones);
 
         // The fine zone of x and y: around every non-window line.
         // With local refinement the merge distance shrinks with the cell, so the floor below which lines of
-        // different nets are taken to overlap stays at 0.075 mm: the 1/3 rule moves the edges of placed
-        // straight legs and of the pads they cross by a third of a cell, which leaves artefact slivers
+        // different nets are taken to overlap stays at 0.075 mm: the edge rule moves the edges of placed
+        // straight legs and of the pads they cross by a fraction of a cell, which leaves artefact slivers
         // of that size, and a sliver sets the global time step.
         let refined = self.spec.smooth_mesh || zones.iter().any(|z| !z.is_empty());
         let net_floor_xy = if refined { (0.25 * min_cell).max(0.075) } else { 0.25 * min_cell };
@@ -1636,6 +1692,11 @@ impl RegionModel {
             m.lines[0], m.lines[1], m.lines[2], m.cells, m.copper_cell_mm, m.smallest[0], m.smallest[1], m.smallest[2], m.largest[0], m.largest[1], m.largest[2], m.max_ratio, m.ratio_violations
         ));
         s.push_str(&format!(
+            "edge rule: copper edges moved in by {:.2} lateral cell + {:.2} vertical cell
+",
+            self.spec.edge_inset, self.spec.edge_inset_z
+        ));
+        s.push_str(&format!(
             "geometry moved by merging: {} line(s), at most {:.4} mm; {} sliver(s) kept between nets\n",
             m.moved_edges,
             m.max_move_mm,
@@ -1741,4 +1802,53 @@ pub fn excitation_of(lo: f64, hi: f64) -> (f64, f64) {
     }
     let (f0, half) = ((lo + hi) / 2.0, (hi - lo) / 2.0);
     (f0, (2.0 * half).min(0.95 * f0).max(half))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::{EDGE_INSET, EDGE_INSET_Z};
+
+    fn rule(slabs: Vec<(f64, f64, usize)>) -> InsetRule {
+        InsetRule { fraction: EDGE_INSET, fraction_z: EDGE_INSET_Z, cell: 0.25, zones: [Vec::new(), Vec::new()], slabs }
+    }
+
+    #[test]
+    fn the_vertical_cell_is_that_of_the_slabs_next_to_the_layer() {
+        // F.Cu at 0, 0.5 mm of dielectric in two cells, In1 at -0.5, 0.2 mm in two cells, B.Cu at -0.7.
+        let r = rule(vec![(-0.5, 0.0, 2), (-0.7, -0.5, 2)]);
+        // The top layer has dielectric below only: its 0.25 mm cell counts with the air cell above (1.3 times).
+        assert!((r.dz_at(0.0) - 0.25 * 1.15).abs() < 1e-12);
+        // An inner layer has both: the mean of 0.25 and 0.1.
+        assert!((r.dz_at(-0.5) - 0.175).abs() < 1e-12);
+        assert!((r.dz_at(-0.7) - 0.1 * 1.15).abs() < 1e-12);
+        // No slab next to the plane (an air bridge): the lateral cell.
+        assert!((r.dz_at(0.3) - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_edge_moves_in_by_the_lateral_and_the_vertical_part() {
+        let r = rule(vec![(-0.2, 0.0, 2)]);
+        let d = r.delta((0.0, 0.0), (1.0, 0.0), 0.0);
+        let expected = EDGE_INSET * 0.25 + EDGE_INSET_Z * 0.1 * 1.15;
+        assert!((d - expected).abs() < 1e-12, "{d} against {expected}");
+        // Both fractions zero put the edges as drawn.
+        let off = InsetRule { fraction: 0.0, fraction_z: 0.0, ..rule(vec![(-0.2, 0.0, 2)]) };
+        assert!(off.is_off());
+        let ring = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert_eq!(off.ring(&ring, [-9.0, -9.0, 9.0, 9.0], 0.0), Some(ring));
+    }
+
+    #[test]
+    fn slab_counts_follow_the_finest_cell() {
+        let mut board = crate::testing::bare_board();
+        crate::testing::two_layer(&mut board, 500_000, "4.3");
+        let stack = crate::stack::stack(&board).expect("stack");
+        let none: [Vec<(f64, f64, f64)>; 2] = [Vec::new(), Vec::new()];
+        // 0.5 mm in cells of at most 1.25 x 0.25: two; with a 0.1 mm zone: four.
+        assert_eq!(slab_counts(&stack, Fidelity::Coarse, 0.25, &none)[0].2, 2);
+        let zones = [vec![(0.0, 1.0, 0.1)], vec![(0.0, 1.0, 0.1)]];
+        assert_eq!(slab_counts(&stack, Fidelity::Coarse, 0.25, &zones)[0].2, 4);
+        assert_eq!(slab_counts(&stack, Fidelity::Fine, 0.25, &none)[0].2, 3);
+    }
 }

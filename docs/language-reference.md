@@ -2147,8 +2147,8 @@ levels (dBuV) are not comparable with the radiated ones (dBuV/m).
 `--fullwave` adds, for each `buck` cell (asynchronous or synchronous), the hot-loop
 inductance from a region full-wave (FDTD) model of the loop on the pinned `ems`
 solver (`copper-fullwave`): the finding gains a `fullwave:` line and
-`measures.fullwave` (`inductance_nh`, `mesh_error_estimate_pct`,
-`inductance_extrapolated_nh`, `meshes`, `closed_form_nh`, `ratio`, `port_strap_nh`,
+`measures.fullwave` (`inductance_nh`, `inductance_uncertainty_pct`, `mesh_error_estimate_pct`,
+`meshes`, `closed_form_nh`, `ratio`, `port_strap_nh`,
 `inductance_static_nh`, `band_mhz`, `flatness`, `cells`, `steps`, `seconds`, `flags`,
 `solver`, `model`, ...), and coverage `EMI-FULLWAVE:<cell>` says `executed`,
 `not_applicable` (other topologies) or `failed` with the reason (for example a model
@@ -2160,11 +2160,15 @@ the budget is short, two meshes are run, the standard one and one with the refin
 cell divided by 1.5 (or, when that does not fit, multiplied by 1.5): the reported
 `inductance_nh` is that of the finer of the two and `mesh_error_estimate_pct` is their
 relative difference, a screening estimate of the discretisation error, not a bound.
-L falls with the cell at first order, so the error of the reported value is about
-twice the estimate, and `inductance_extrapolated_nh` is the first-order limit of the
-two meshes (never the reported value). `--fullwave-single-mesh`, or a budget that
-fits one mesh only, gives one mesh: `mesh_error_estimate_pct` is `null` and the flag
-`single_mesh` is set. A port whose pads do not face each other across free space is
+`inductance_uncertainty_pct` is the stated uncertainty of `inductance_nh` from the mesh: the larger of that
+difference and a floor of 4 %, the scatter of L over meshes of one loop that two meshes cannot see
+(the placed example reads 4.62 to 4.90 nH over eleven meshes while its standard and refined meshes differ
+by 0.5 %); it leaves out the model's approximations (assumed stack-up, zone outlines, bridged
+components, strap bias). `--fullwave-single-mesh`, or a budget that
+fits one mesh only, gives one mesh: `mesh_error_estimate_pct` is `null`, the uncertainty is the floor and the flag
+`single_mesh` is set. A loop whose record has not decayed (it rings) is completed by a fit of its
+ring-down, ends when the fit is stable instead of at the 3x time cap, and gets the flag `ring_fitted` (and a
+note with the ring frequency and Q) instead of `energy_not_converged`. A port whose pads do not face each other across free space is
 joined to them by short copper straps (`port_strap`; in the air above a package's
 exposed pad, `port_strap_in_air`); their closed-form inductance is `port_strap_nh`, a
 bias that the inductance includes. A loop that resonates under 750 MHz gets

@@ -19,6 +19,7 @@
 //! copper is lossless unless a net is marked conducting. Everything here is
 //! screening evidence.
 
+pub mod fit;
 pub mod geom;
 pub mod hotloop;
 pub mod mesh;

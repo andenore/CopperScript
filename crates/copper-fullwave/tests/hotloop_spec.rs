@@ -365,17 +365,3 @@ fn a_pour_on_the_pad_layer_is_cut_around_foreign_copper() {
     let plane = model.sheets.iter().find(|s| s.kind == "zone" && s.layer == CopperLayer::In1).expect("plane");
     assert!(top.ring.len() > plane.ring.len() + 8, "{} against {}", top.ring.len(), plane.ring.len());
 }
-
-/// The first-order law the convergence section shows: the extrapolation from a standard and a refined mesh
-/// predicts a third, finer mesh of the same series (the placed emi_buck: 4.920 nH at 0.25 mm and 4.695 nH at
-/// 0.167 mm give 4.245 nH at zero and 4.514 nH at 0.1 mm, against 4.482 nH measured).
-#[test]
-fn first_order_extrapolation_follows_the_measured_series() {
-    use copper_fullwave::hotloop::extrapolate_first_order;
-    let zero = extrapolate_first_order(4.920, 4.695, 1.5).expect("a falling series");
-    assert!((zero - 4.245).abs() < 1e-9, "{zero}");
-    let at_tenth = zero + (4.920 - zero) / 0.25 * 0.1;
-    assert!((at_tenth / 4.482 - 1.0).abs() < 0.01, "{at_tenth}");
-    // A rising series is not extrapolated.
-    assert!(extrapolate_first_order(4.695, 4.920, 1.5).is_none());
-}
