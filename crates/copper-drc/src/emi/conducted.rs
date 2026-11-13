@@ -1022,6 +1022,10 @@ struct Connection {
     inductance: f64,
     text: String,
     estimated: bool,
+    /// Taken from an extraction of the board's copper (then `estimated` is false and `estimate` keeps the estimate).
+    extracted: bool,
+    /// The estimate of this section, kept when the value comes from the extraction.
+    estimate: Option<f64>,
 }
 
 /// `2 x distance x (hot-loop inductance / hot-loop path length)`: the inductance of the go-and-return connection
@@ -1047,6 +1051,8 @@ fn estimate_connection(cx: &Context, per_length: Option<f64>, from: &Endpoint, t
                     si(inductance, "H")
                 ),
                 estimated: true,
+                extracted: false,
+                estimate: Some(inductance),
             }
         }
         _ => Connection {
@@ -1055,6 +1061,8 @@ fn estimate_connection(cx: &Context, per_length: Option<f64>, from: &Endpoint, t
                 "not estimated ({from} or {to} has no placed pad, or the hot loop has no length): taken as 0"
             ),
             estimated: false,
+            extracted: false,
+            estimate: None,
         },
     }
 }
@@ -1586,6 +1594,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                         inductance: 0.0,
                         text: "not estimated (no hot capacitor pin)".to_owned(),
                         estimated: false,
+                        extracted: false,
+                        estimate: None,
                     },
                 };
                 extras.push(Extra { model, role: "hot_net", connection });
@@ -1611,6 +1621,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 inductance: 0.0,
                 text: "not estimated (no hot capacitor pin)".to_owned(),
                 estimated: false,
+                extracted: false,
+                estimate: None,
             },
         };
         extras.push(Extra { model, role: "behind_transparent_feed", connection });
@@ -1625,6 +1637,62 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 .collect()
         })
         .unwrap_or_default();
+
+    // Connection inductances from an extraction of the board's copper, where the cell has one: they replace the
+    // estimates (which stay in the finding for comparison) and the off-diagonal terms become mutual inductances.
+    let extraction = cx.extracted.iter().find(|e| e.controller == cell.controller).cloned();
+    let mut couplings: Vec<conducted::Coupling> = Vec::new();
+    let mut extraction_notes: Vec<String> = Vec::new();
+    let mut loop_used = loop_inductance;
+    let mut loop_extracted = false;
+    if let Some(ex) = &extraction {
+        let at = |label: &str| ex.labels.iter().position(|l| l == label);
+        let mut used: Vec<(String, usize)> = Vec::new();
+        if let Some(i) = at(conducted::LOOP_LABEL) {
+            loop_used = ex.inductance_h[i][i];
+            loop_extracted = true;
+            used.push((conducted::LOOP_LABEL.to_owned(), i));
+        }
+        for extra in extras.iter_mut() {
+            if let Some(i) = at(&extra.model.component) {
+                let value = ex.inductance_h[i][i];
+                let estimate = extra.connection.estimate.or(Some(extra.connection.inductance).filter(|l| *l > 0.0));
+                extra.connection = Connection {
+                    inductance: value,
+                    text: format!(
+                        "extracted: the self inductance of the port across {} in the quasi-static extraction of the copper at {:.0} MHz{}",
+                        extra.model.component,
+                        ex.frequency_hz * 1e-6,
+                        estimate.map_or(String::new(), |e| format!(" (the estimate was {})", si(e, "H")))
+                    ),
+                    estimated: false,
+                    extracted: true,
+                    estimate,
+                };
+                used.push((extra.model.component.clone(), i));
+            }
+        }
+        for (a, &(ref first, i)) in used.iter().enumerate() {
+            for &(ref second, j) in &used[a + 1..] {
+                let mutual = ex.inductance_h[i][j];
+                let (l1, l2) = (ex.inductance_h[i][i], ex.inductance_h[j][j]);
+                if mutual == 0.0 {
+                    continue;
+                }
+                if !mutual.is_finite() || mutual.abs() >= (l1 * l2).sqrt() {
+                    extraction_notes
+                        .push(format!("coupling {first} - {second} left out: |M| is not below sqrt(L1 L2)"));
+                    continue;
+                }
+                couplings.push(conducted::Coupling { first: first.clone(), second: second.clone(), mutual });
+            }
+        }
+        for label in
+            ex.labels.iter().filter(|l| l.as_str() != conducted::LOOP_LABEL && !used.iter().any(|(u, _)| u == *l))
+        {
+            extraction_notes.push(format!("{label}: extracted but not a branch of this network, left out"));
+        }
+    }
 
     // The operating point.
     let duty = vout / vin;
@@ -1674,7 +1742,8 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             input.ripple_current = Some(case.ripple);
         }
         input.hot_capacitor_label = hot.component.clone();
-        input.hot_loop_inductance = loop_inductance;
+        input.hot_loop_inductance = loop_used;
+        input.couplings = couplings.clone();
         input.parallel_capacitors = extras
             .iter()
             .map(|e| {
@@ -1889,6 +1958,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     }
     if records.iter().any(|r| r.connection.is_some_and(|c| c.estimated)) {
         tags.push("estimated_connection_inductance".to_owned());
+    }
+    if records.iter().any(|r| r.connection.is_some_and(|c| c.extracted)) || loop_extracted {
+        tags.push("extracted_connection_inductance".to_owned());
+        if extraction.as_ref().is_some_and(|e| e.status != "ok") {
+            tags.push("extraction_indicative".to_owned());
+        }
     }
     if !skipped.is_empty() {
         tags.push("capacitor_branch_skipped".to_owned());
@@ -2200,6 +2275,13 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         assumptions.push(
             "the connection inductance of a capacitor other than the hot capacitor is an estimate: 2 x the nearest pad-centre distance to the hot capacitor (or to the filter inductor for a supply-side capacitor) x the EMI-HOT-LOOP inductance per unit of path length; mutual coupling between the branches is not modelled".to_owned(),
         );
+    }
+    if extraction.is_some() {
+        assumptions.push(format!(
+            "connection inductances tagged extracted_connection_inductance (and {} mutual inductance(s)) come from a quasi-static extraction of the board's copper (extraction status {}); the estimate stays in each branch's connection_inductance_estimate_nh; the resistance of the interconnect is not in the circuit",
+            couplings.len(),
+            extraction.as_ref().map_or("", |e| e.status.as_str())
+        ));
     }
     assumptions.push(format!("common mode is not modelled: {COMMON_MODE_REASON}"));
     if let (Some(reason), Some(outcome)) = (detector.reason(), receiver.as_ref()) {
@@ -2641,6 +2723,22 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 Some(c) => c.text.clone(),
             }),
         );
+        if extraction.is_some() {
+            put(
+                &mut item,
+                "connection_source",
+                Value::from(match record.connection {
+                    None => "none",
+                    Some(c) if c.extracted => "extracted",
+                    Some(_) => "estimated",
+                }),
+            );
+            put(
+                &mut item,
+                "connection_inductance_estimate_nh",
+                record.connection.and_then(|c| c.estimate).map_or(Value::Null, |e| num(e * 1e9, 4)),
+            );
+        }
         let mut declared = Object::new();
         put(&mut declared, "esr", Value::Bool(model.esr_declared));
         put(&mut declared, "esl", Value::Bool(model.esl != EslBasis::PackageDefault));
@@ -2729,10 +2827,57 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     put(
         m,
         "hot_loop_inductance_placement",
-        Value::from(
-            "between the converter's current source and the hot capacitor's node; does not change the level at the LISN",
-        ),
+        Value::from(if couplings.is_empty() {
+            "between the converter's current source and the hot capacitor's node; does not change the level at the LISN"
+        } else {
+            "between the converter's current source and the hot capacitor's node; coupled to the connection inductors by the extracted mutual inductances, so it does change the level at the LISN"
+        }),
     );
+    if let Some(ex) = &extraction {
+        let mut o = Object::new();
+        put(&mut o, "status", Value::from(ex.status.as_str()));
+        put(&mut o, "status_reasons", Value::Array(ex.reasons.iter().map(|r| Value::from(r.as_str())).collect()));
+        put(&mut o, "frequency_mhz", num(ex.frequency_hz * 1e-6, 3));
+        put(&mut o, "ports", Value::Array(ex.labels.iter().map(|l| Value::from(l.as_str())).collect()));
+        put(
+            &mut o,
+            "inductance_matrix_nh",
+            Value::Array(
+                ex.inductance_h.iter().map(|row| Value::Array(row.iter().map(|v| num(v * 1e9, 4)).collect())).collect(),
+            ),
+        );
+        put(&mut o, "hot_loop_inductance_closed_form_nh", num(loop_inductance * 1e9, 4));
+        put(&mut o, "hot_loop_inductance_used_nh", num(loop_used * 1e9, 4));
+        put(
+            &mut o,
+            "mutual_inductances",
+            Value::Array(
+                couplings
+                    .iter()
+                    .map(|c| {
+                        let mut co = Object::new();
+                        put(&mut co, "first", Value::from(c.first.as_str()));
+                        put(&mut co, "second", Value::from(c.second.as_str()));
+                        put(&mut co, "mutual_nh", num(c.mutual * 1e9, 4));
+                        Value::Object(co)
+                    })
+                    .collect(),
+            ),
+        );
+        put(
+            &mut o,
+            "notes",
+            Value::Array(ex.notes.iter().chain(&extraction_notes).map(|n| Value::from(n.as_str())).collect()),
+        );
+        put(
+            &mut o,
+            "definition",
+            Value::from(
+                "inductance matrix of the ports across the hot loop (the switch, with the hot capacitor and the catch diode closed by copper bars) and across each capacitor of the cell's input network that hangs on the hot node (its pads open), read at one frequency from a quasi-static partial-element extraction of the filled copper; port currents leave the hot node along the copper they share, so a positive off-diagonal term is a mutual inductance between the corresponding branches of the network; the resistance of the copper and the capacitors that hang on the filter's supply-side node are not part of it",
+            ),
+        );
+        put(m, "extracted_connections", Value::Object(o));
+    }
     put(m, "input_filter", Value::from(filter_text.as_str()));
     match &filter_model {
         Some(model) => {

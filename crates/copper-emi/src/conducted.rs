@@ -72,8 +72,10 @@
 //!   into the circuit by [`crate::circuit::Circuit::add_v_network`]); the supply
 //!   impedance behind the LISN is neglected. The measured voltage is the
 //!   voltage of port `P` on each line.
-//! * Not in the network: mutual inductance between capacitor branches or
-//!   between the loop and the branches, skin and proximity effect, the return
+//! * Mutual inductance between the connection inductors and the hot-loop
+//!   inductor is in the network only when [`ConductedInput::couplings`] gives
+//!   it (from an extraction of the copper); by default there is none.
+//! * Not in the network: skin and proximity effect, the return
 //!   conductor's own impedance beyond the connection inductances, and any
 //!   impedance of the converter.
 //!
@@ -140,6 +142,7 @@ use crate::harmonic::{HarmonicError, HarmonicResponse, PeriodicSpectrum, harmoni
 use crate::lisn::VNetwork;
 use crate::receiver::{Band, Reading, scan, scan_lines};
 use crate::spectrum::Complex;
+use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
 
 /// A real capacitor: capacitance in series with `ESR` and `ESL`.
@@ -184,6 +187,20 @@ impl CapacitorBranch {
         self.connection_inductance = henries;
         self
     }
+}
+
+/// The label of the hot-loop inductor in a [`Coupling`].
+pub const LOOP_LABEL: &str = "hot loop";
+
+/// A mutual inductance between two of the network's connection inductors: a branch's (by its label, with a positive
+/// connection inductance) or the hot-loop inductor's ([`LOOP_LABEL`]). The dots are at the terminals on `K`, so a
+/// positive value couples two currents that both leave `K` along copper they share.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Coupling {
+    pub first: String,
+    pub second: String,
+    /// Mutual inductance, H (`|M| < sqrt(L1 L2)`).
+    pub mutual: f64,
 }
 
 /// Series input-filter inductor with the capacitors on its supply side.
@@ -331,6 +348,9 @@ pub struct ConductedInput {
     pub parallel_capacitors: Vec<CapacitorBranch>,
     /// Hot-loop inductance between the converter's current source and `K`, H (0 for none).
     pub hot_loop_inductance: f64,
+    /// Mutual inductances between the connection inductors (and the hot-loop inductor, labelled [`LOOP_LABEL`]),
+    /// from an extraction of the board's copper. Empty: no coupling (the default).
+    pub couplings: Vec<Coupling>,
     /// Optional input filter between the hot capacitor and the supply lines.
     pub filter: Option<InputFilter>,
     /// Optional common-mode choke between the LISN and the filter.
@@ -385,6 +405,7 @@ impl ConductedInput {
             hot_capacitor_label: "hot capacitor".to_owned(),
             parallel_capacitors: Vec::new(),
             hot_loop_inductance: 0.0,
+            couplings: Vec::new(),
             filter: None,
             common_mode_choke: None,
             lisn: VNetwork::cispr_50uh(),
@@ -650,6 +671,34 @@ fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
     for branch in &input.parallel_capacitors {
         validate_branch("parallel_capacitors", branch)?;
     }
+    for coupling in &input.couplings {
+        let inductance_of = |label: &str| -> Option<f64> {
+            if label == LOOP_LABEL {
+                return Some(input.hot_loop_inductance).filter(|l| *l > 0.0);
+            }
+            let branches =
+                input.parallel_capacitors.iter().chain(input.filter.iter().flat_map(|f| &f.supply_capacitors));
+            branches.into_iter().find(|b| b.label == label).map(|b| b.connection_inductance).filter(|l| *l > 0.0)
+        };
+        let (Some(l1), Some(l2)) = (inductance_of(&coupling.first), inductance_of(&coupling.second)) else {
+            return Err(ConductedError::InvalidInput(format!(
+                "coupling {} - {}: both ends need a connection inductor with a positive inductance",
+                coupling.first, coupling.second
+            )));
+        };
+        if coupling.first == coupling.second
+            || !coupling.mutual.is_finite()
+            || coupling.mutual.abs() >= (l1 * l2).sqrt()
+        {
+            return Err(ConductedError::InvalidInput(format!(
+                "coupling {} - {}: the mutual inductance {} H must be finite and below sqrt(L1 L2) = {} H",
+                coupling.first,
+                coupling.second,
+                coupling.mutual,
+                (l1 * l2).sqrt()
+            )));
+        }
+    }
     if let Some(ripple) = input.ripple_current {
         finite_nonneg("ripple_current", ripple)?;
         if ripple / 2.0 > input.output_current * (1.0 + 1e-12) {
@@ -702,15 +751,16 @@ fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
 }
 
 /// A capacitor branch `top - L_connection - (ESL, ESR, C) - bottom`; returns the element carrying its current.
-fn add_branch(c: &mut Circuit, branch: &CapacitorBranch, top: Node, bottom: Node) -> ElementId {
-    let attach = if branch.connection_inductance > 0.0 {
+fn add_branch(c: &mut Circuit, branch: &CapacitorBranch, top: Node, bottom: Node) -> (ElementId, Option<ElementId>) {
+    let (attach, inductor) = if branch.connection_inductance > 0.0 {
         let m = c.new_node();
-        c.inductor(top, m, branch.connection_inductance);
-        m
+        (m, Some(c.inductor(top, m, branch.connection_inductance)))
     } else {
-        top
+        (top, None)
     };
-    c.real_capacitor(attach, bottom, branch.capacitor.capacitance, branch.capacitor.esr, branch.capacitor.esl).capacitor
+    let cap =
+        c.real_capacitor(attach, bottom, branch.capacitor.capacitance, branch.capacitor.esr, branch.capacitor.esl);
+    (cap.capacitor, inductor)
 }
 
 fn build(input: &ConductedInput) -> Network {
@@ -731,8 +781,12 @@ fn build(input: &ConductedInput) -> Network {
     };
     let y = an;
     let mut branches: Vec<(BranchInfo, ElementId)> = Vec::new();
+    let mut inductors: BTreeMap<String, (ElementId, f64)> = BTreeMap::new();
     let mut record = |c: &mut Circuit, branch: &CapacitorBranch, kind: BranchKind, top: Node| {
-        let id = add_branch(c, branch, top, y);
+        let (id, inductor) = add_branch(c, branch, top, y);
+        if let Some(inductor) = inductor {
+            inductors.insert(branch.label.clone(), (inductor, branch.connection_inductance));
+        }
         branches.push((
             BranchInfo {
                 label: branch.label.clone(),
@@ -763,11 +817,18 @@ fn build(input: &ConductedInput) -> Network {
     // DM source: draws current from S, returns it into Y. S is K behind the hot-loop inductance.
     let s = if input.hot_loop_inductance > 0.0 {
         let s = c.new_node();
-        c.inductor(k, s, input.hot_loop_inductance);
+        let id = c.inductor(k, s, input.hot_loop_inductance);
+        inductors.insert(LOOP_LABEL.to_owned(), (id, input.hot_loop_inductance));
         s
     } else {
         k
     };
+    // Mutual inductances from the extraction (validated: both inductors exist and |M| < sqrt(L1 L2)).
+    for coupling in &input.couplings {
+        if let (Some(&(a, la)), Some(&(b, lb))) = (inductors.get(&coupling.first), inductors.get(&coupling.second)) {
+            c.mutual(a, b, coupling.mutual / (la * lb).sqrt());
+        }
+    }
     let dm_source = c.current_source(s, y, Complex::ZERO);
     // CM source: V_sw (to ground) through C_par into K.
     let cm_source = input.switch_node_capacitance.map(|cpar| {
@@ -1037,7 +1098,11 @@ fn assumptions(input: &ConductedInput, bands: &[BandDetector]) -> Vec<String> {
         "Linear time-invariant network: all passives are linear; capacitor and inductor parasitics are single-element ESR/ESL/parallel-C models with no frequency dependence (no skin or proximity effect, no ferrite or dielectric dispersion).".to_string(),
         "The capacitances are used as given: DC-bias and temperature derating of an MLCC (more than half of the capacitance at rated bias) is the caller's input, not part of this model.".to_string(),
         "The converter is an ideal harmonic current source (infinite source impedance): no control-loop effects, no negative input resistance, no interaction with filter resonances beyond the linear network.".to_string(),
-        "Every capacitor is its own R-L-C branch with its own connection inductance; the supply feed attaches at the hot capacitor's node K and the hot-loop inductance sits between the converter's current source and K, so it does not change the level at the LISN (an ideal current source is not affected by a series inductance). Mutual coupling between branches is not modelled.".to_string(),
+        if input.couplings.is_empty() {
+            "Every capacitor is its own R-L-C branch with its own connection inductance; the supply feed attaches at the hot capacitor's node K and the hot-loop inductance sits between the converter's current source and K, so it does not change the level at the LISN (an ideal current source is not affected by a series inductance). Mutual coupling between branches is not modelled.".to_string()
+        } else {
+            format!("Every capacitor is its own R-L-C branch with its own connection inductance, and {} mutual inductance(s) between the connection inductors and the hot-loop inductor come from an extraction of the board's copper; with the coupling the hot-loop inductance is no longer without effect on the level at the LISN. The supply feed attaches at the hot capacitor's node K.", input.couplings.len())
+        },
         "Each line ends in one V-network model; the supply impedance behind the LISN is neglected. The LISN component values and topology are unverified against CISPR 16-1-2.".to_string(),
         "Limit lines (CISPR 32 / EN 55032 AC mains port, quasi-peak and average) are transcribed as remembered and are unverified against the standard.".to_string(),
         "Levels are RMS of each harmonic (peak / sqrt 2) in dBuV, as RMS-calibrated receivers read.".to_string(),
@@ -2082,6 +2147,60 @@ mod tests {
         assert!(c1 > 1.5 * source && c2 > 1.5 * source, "{c1} {c2} against {source}");
         assert_eq!(report.branches[0].label, "C1");
         assert_eq!(report.branches[1].kind, BranchKind::Parallel);
+    }
+
+    #[test]
+    fn coupled_connection_inductors_match_a_hand_nodal_solution() {
+        // The hot capacitor C1 on K, a second capacitor C2 behind a 4 nH connection inductor, the feed (the
+        // V-network pair) and the 5 nH hot-loop inductor from K to the source. A mutual inductance M couples the
+        // C2 connection inductor to the hot-loop inductor (both currents leave K). By hand, with V the voltage of K
+        // over the return and i the source current leaving K through the loop inductor:
+        //   V = Z_f I_f = Z_1 I_1 = Z_2 I_2 + jwM i,  I_f + I_1 + I_2 + i = 0
+        // so V = i (jwM / Z_2 - 1) / (1/Z_f + 1/Z_1 + 1/Z_2) and I_2 = (V - jwM i) / Z_2, with Z_2 the whole C2 branch
+        // including its connection inductor.
+        let build_input = |mutual: f64| {
+            let mut input = buck(cap(10e-6, 5e-3, 0.6e-9));
+            input.hot_loop_inductance = 5e-9;
+            input.hot_capacitor_label = "C1".to_owned();
+            input.parallel_capacitors = vec![CapacitorBranch::new("C2", cap(1e-6, 8e-3, 1.2e-9)).with_connection(4e-9)];
+            if mutual != 0.0 {
+                input.couplings = vec![Coupling { first: "C2".to_owned(), second: LOOP_LABEL.to_owned(), mutual }];
+            }
+            input
+        };
+        let mut moved = 0.0_f64;
+        for mutual in [0.0, 1.5e-9, 3.0e-9, -2.0e-9] {
+            let input = build_input(mutual);
+            let report = predict(&input).unwrap();
+            let plain = predict(&build_input(0.0)).unwrap();
+            for n in [1u32, 3, 9, 20, 45, 60] {
+                let h = level(&report, n);
+                let (z_eut, _) = vnetwork_by_hand(&input.lisn, h.frequency);
+                let z_f = z_eut.scale(2.0);
+                let hot = CapacitorBranch::new("C1", input.hot_capacitor);
+                let z_1 = branch_z(&hot, h.frequency);
+                let z_2 = branch_z(&input.parallel_capacitors[0], h.frequency);
+                let jwm = cx(0.0, w(h.frequency) * mutual);
+                let i = cx(h.source_current_peak, 0.0);
+                let v = i * (jwm / z_2 - Complex::ONE) / (z_f.recip() + z_1.recip() + z_2.recip());
+                let i2 = (v - jwm * i) / z_2;
+                let model = h.branch_currents[1];
+                assert!(
+                    (model / i2.abs() - 1.0).abs() < 1e-6,
+                    "M {mutual}, harmonic {n}: model {model} A, by hand {} A",
+                    i2.abs()
+                );
+                moved = moved.max((h.dm_dbuv - level(&plain, n).dm_dbuv).abs());
+            }
+        }
+        assert!(moved > 0.05, "a coupling that moves nothing is not in the circuit ({moved} dB)");
+        // Not an inductor of the network: refused.
+        let mut bad = build_input(1e-9);
+        bad.couplings[0].first = "C9".to_owned();
+        assert!(matches!(predict(&bad), Err(ConductedError::InvalidInput(_))));
+        let mut too_much = build_input(1e-9);
+        too_much.couplings[0].mutual = 6e-9; // above sqrt(4 nH x 5 nH) = 4.47 nH
+        assert!(matches!(predict(&too_much), Err(ConductedError::InvalidInput(_))));
     }
 
     #[test]

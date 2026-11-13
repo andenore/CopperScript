@@ -3,12 +3,14 @@
 //! `measures.extract` and an `extract:` line, with an `EMI-EXTRACT:<cell>` coverage entry. Never part of the default
 //! run: it fills the board's zones and solves a dense system, which takes seconds to minutes.
 
-use copper_drc::emi::{EmiCheckReport, EmiFinding};
+use copper_drc::emi::{EmiCheckReport, EmiFinding, ExtractedConnections, emi_check_with_connections};
 use copper_drc::{Coverage, CoverageStatus};
 use copper_extract::board::{BoardModel, board_model};
 use copper_extract::hotloop::{HotLoopExtraction, HotLoopOptions, extract_hot_loop};
 use copper_fullwave::hotloop::{HotLoopInput, find_switch_pad};
 use copper_json::{Object, Value};
+use copper_lang::emi::EmiModel;
+use copper_lang::model::FlatElectricalView;
 use copper_pcb::board::PhysicalBoard;
 
 /// What the command line chose.
@@ -117,7 +119,21 @@ fn result_value(
         &mut o,
         "numerical_sensitivity_basis",
         Value::from(
-            "relative difference of the inductance on two meshes of the same window (pitch ratio 1.5), per frequency; two meshes that agree do not bound the discretisation error, and the mesh series in the documentation shows that the inductance of the board cases still moves with the pitch",
+            "relative difference of the inductance of the two finest of three meshes of the same window (pitch ratio 1.5), per frequency; two meshes that agree do not bound the discretisation error: the earlier step is in numerical_sensitivity_earlier_pct and the mesh series in the documentation shows how far the inductance of the board cases still moves with the pitch",
+        ),
+    );
+    put(
+        &mut o,
+        "numerical_sensitivity_earlier_pct",
+        if r.earlier_difference_pct.is_empty() { Value::Null } else { floats(&r.earlier_difference_pct, 2) },
+    );
+    put(&mut o, "convergence_threshold_pct", Value::from(copper_extract::hotloop::CONVERGENCE_THRESHOLD_PCT));
+    put(&mut o, "port_labels", strings(&r.port_labels));
+    put(
+        &mut o,
+        "inductance_matrix_nh",
+        Value::Array(
+            r.inductance_matrix_nh.iter().map(|f| Value::Array(f.iter().map(|row| floats(row, 4)).collect())).collect(),
         ),
     );
     put(&mut o, "parameter_assumptions", strings(&parameter_assumptions(r)));
@@ -211,7 +227,7 @@ fn result_value(
         &mut o,
         "method",
         Value::from(
-            "magneto-quasi-static partial-element (PEEC) extraction: rectangular filaments on a per-layer grid of the filled copper, Hoer-Love partial inductances, loop analysis of R + jwL; screening evidence",
+            "magneto-quasi-static partial-element (PEEC) extraction: rectangular filaments on an adaptive per-layer partition of the filled copper, Hoer-Love partial inductances, loop analysis of R + jwL; screening evidence",
         ),
     );
     Value::Object(o)
@@ -229,7 +245,7 @@ fn text_line(r: &HotLoopExtraction, closed_form_nh: Option<f64>, fullwave_nh: Op
         format!("hot-loop interconnect impedance (quasi-static extraction of the filled copper): {}", at.join("; "));
     match r.mesh_difference_pct.get(1.min(r.mesh_difference_pct.len().saturating_sub(1))) {
         Some(d) => text.push_str(&format!(
-            "; the two meshes differ by {d:.1} % at {} (a numerical sensitivity, not an accuracy)",
+            "; the two finest meshes differ by {d:.1} % at {} (a numerical sensitivity, not an accuracy)",
             freq(r.frequencies_hz[1.min(r.frequencies_hz.len() - 1)])
         )),
         None => text.push_str("; single mesh: no numerical sensitivity"),
@@ -267,7 +283,14 @@ fn attach(finding: &mut EmiFinding, result: &HotLoopExtraction, mesh: &HotLoopOp
 }
 
 /// Run the extraction for every `EMI-HOT-LOOP` finding of `report`.
-pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Options, progress: &mut dyn std::io::Write) {
+pub fn apply(
+    board: &PhysicalBoard,
+    view: &FlatElectricalView,
+    model: &EmiModel,
+    report: &mut EmiCheckReport,
+    options: &Options,
+    progress: &mut dyn std::io::Write,
+) {
     let topologies: Vec<(String, String)> = report
         .cells
         .iter()
@@ -286,7 +309,7 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
             (c.controller.clone(), nets)
         })
         .collect();
-    let mut hot = HotLoopOptions { second_mesh: !options.single_mesh, ..HotLoopOptions::default() };
+    let mut hot = HotLoopOptions { series: !options.single_mesh, ..HotLoopOptions::default() };
     if let Some(n) = options.budget_filaments {
         hot.mesh.max_filaments = n;
     }
@@ -299,7 +322,8 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
     }
     hot.board.switch_bar = !options.no_switch_bar;
     let mut new_coverage = Vec::new();
-    let mut model: Option<Result<BoardModel, String>> = None;
+    let mut extracted: Vec<ExtractedConnections> = Vec::new();
+    let mut model_fill: Option<Result<BoardModel, String>> = None;
     let mut seen = 0;
     for finding in report.findings.iter_mut().filter(|f| f.finding.code == "EMI-HOT-LOOP") {
         seen += 1;
@@ -333,7 +357,7 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
                 continue;
             }
         };
-        let model_ref = model.get_or_insert_with(|| {
+        let model_ref = model_fill.get_or_insert_with(|| {
             let _ = writeln!(progress, "extract: exporting the board and filling its zones natively");
             board_model(board)
         });
@@ -345,9 +369,33 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
             }
         };
         let _ = writeln!(progress, "extract: cell {cell}, filament budget {}", hot.mesh.max_filaments);
-        match extract_hot_loop(model_ref, board, &input, &hot) {
+        // The other capacitors of the cell's input network that hang on the hot node get a port each.
+        let others: Vec<String> = model
+            .cells
+            .iter()
+            .find(|c| c.controller == cell)
+            .map(|c| {
+                c.hot_capacitors
+                    .iter()
+                    .filter(|h| h.component != input.capacitor)
+                    .map(|h| h.component.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut hot_cell = hot.clone();
+        hot_cell.board.capacitor_ports = others;
+        match extract_hot_loop(model_ref, board, &input, &hot_cell) {
             Ok(result) => {
                 attach(finding, &result, &hot);
+                match connections_of(&cell, &result) {
+                    Some(connections) => extracted.push(connections),
+                    None => {
+                        let _ = writeln!(
+                            progress,
+                            "extract: cell {cell}: the port matrix is not positive definite or is missing; the connection inductances of EMI-CONDUCTED stay the estimates"
+                        );
+                    }
+                }
                 let closed = number(finding.measures.get("loop_inductance_nh"));
                 let fullwave = finding
                     .measures
@@ -376,6 +424,106 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
         });
     }
     report.coverage.extend(new_coverage);
+    if !extracted.is_empty() {
+        replace_conducted(board, view, model, report, &extracted);
+    }
+}
+
+/// The inductance matrix of a cell's input network from the finest mesh at the second frequency (10 MHz), when it
+/// can be the inductance matrix of coupled inductors: symmetric, positive definite.
+#[allow(clippy::needless_range_loop)]
+fn connections_of(cell: &str, result: &HotLoopExtraction) -> Option<ExtractedConnections> {
+    let at = 1.min(result.frequencies_hz.len().checked_sub(1)?);
+    let matrix_nh = result.inductance_matrix_nh.get(at)?;
+    let n = matrix_nh.len();
+    if n == 0 || result.port_labels.len() != n {
+        return None;
+    }
+    let mut h: Vec<Vec<f64>> = matrix_nh.iter().map(|row| row.iter().map(|v| v * 1e-9).collect()).collect();
+    // The matrix of a reciprocal network is symmetric; the solver's two triangles agree to rounding. Use the mean.
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let mean = 0.5 * (h[i][j] + h[j][i]);
+            h[i][j] = mean;
+            h[j][i] = mean;
+        }
+    }
+    if !positive_definite(&h) {
+        // Not realisable as coupled inductors: the connection inductances stay the estimates.
+        return None;
+    }
+    Some(ExtractedConnections {
+        controller: cell.to_owned(),
+        labels: result.port_labels.iter().map(|l| if l == "hot loop" { copper_drc::emi::HOT_LOOP_PORT.to_owned() } else { l.clone() }).collect(),
+        inductance_h: h,
+        frequency_hz: result.frequencies_hz[at],
+        status: result.status.to_owned(),
+        reasons: result.status_reasons.clone(),
+        notes: vec![
+            "capacitors on the supply side of an input filter are not ports of the extraction (the node they hang on has no copper closure in the extracted window): their connection inductance stays the estimate of section 10".to_owned(),
+        ],
+    })
+}
+
+/// Cholesky: all pivots positive.
+fn positive_definite(m: &[Vec<f64>]) -> bool {
+    let n = m.len();
+    let mut l = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let sum: f64 = (0..j).map(|k| l[i][k] * l[j][k]).sum();
+            if i == j {
+                let d = m[i][i] - sum;
+                if d.is_nan() || d <= 0.0 {
+                    return false;
+                }
+                l[i][i] = d.sqrt();
+            } else {
+                l[i][j] = (m[i][j] - sum) / l[j][j];
+            }
+        }
+    }
+    true
+}
+
+/// The frequency scenario of an `EMI-CONDUCTED` finding (a part with a frequency range has one per bound).
+fn scenario_of(finding: &EmiFinding) -> Option<&str> {
+    finding.tags.iter().map(String::as_str).find(|t| t.starts_with("frequency_scenario_"))
+}
+
+/// Recompute `EMI-CONDUCTED` with the extracted connection inductances and put the result in the place of the
+/// default findings and coverage entries of the cells that have an extraction.
+fn replace_conducted(
+    board: &PhysicalBoard,
+    view: &FlatElectricalView,
+    model: &EmiModel,
+    report: &mut EmiCheckReport,
+    extracted: &[ExtractedConnections],
+) {
+    let again = emi_check_with_connections(board, view, model, extracted);
+    let of_cell = |cell: Option<&str>| extracted.iter().any(|e| Some(e.controller.as_str()) == cell);
+    let mut replacements: Vec<EmiFinding> = again
+        .findings
+        .into_iter()
+        .filter(|f| f.finding.code == "EMI-CONDUCTED" && of_cell(f.cell.as_deref()))
+        .collect();
+    for slot in report.findings.iter_mut().filter(|f| f.finding.code == "EMI-CONDUCTED" && of_cell(f.cell.as_deref())) {
+        if let Some(position) =
+            replacements.iter().position(|r| r.cell == slot.cell && scenario_of(r) == scenario_of(slot))
+        {
+            *slot = replacements.remove(position);
+        }
+    }
+    report.findings.extend(replacements);
+    let coverage_of = |check: &str| {
+        extracted.iter().any(|e| {
+            check == format!("EMI-CONDUCTED:{}", e.controller)
+                || check.starts_with(&format!("EMI-CONDUCTED:{}@", e.controller))
+        })
+    };
+    let new: Vec<_> = again.coverage.into_iter().filter(|c| coverage_of(&c.check)).collect();
+    report.coverage.retain(|c| !coverage_of(&c.check));
+    report.coverage.extend(new);
 }
 
 #[cfg(test)]
@@ -394,6 +542,7 @@ mod tests {
             coarsen_steps: 2,
             inductance_nh: vec![l, l * 0.95, l * 0.94],
             resistance_ohm: vec![0.01, 0.012, 0.013],
+            inductance_matrix_nh: vec![vec![vec![l]], vec![vec![l * 0.95]], vec![vec![l * 0.94]]],
             seconds: 3.0,
             assemble_seconds: 2.0,
             solve_seconds: 1.0,
@@ -428,6 +577,11 @@ mod tests {
             via_currents: vec![Vec::new(), Vec::new(), Vec::new()],
             seconds: 7.0,
             port_description: "port".to_owned(),
+            port_labels: vec!["hot loop".to_owned()],
+            inductance_matrix_nh: vec![vec![vec![4.2]], vec![vec![4.0]], vec![vec![3.95]]],
+            matrix_difference_pct: 0.0,
+            connection_legs: false,
+            earlier_difference_pct: if single { Vec::new() } else { vec![3.0, 3.1, 3.1] },
         }
     }
 

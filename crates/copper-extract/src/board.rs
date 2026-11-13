@@ -120,11 +120,19 @@ pub struct BoardOptions {
     /// the gap between the pads, as the closed form and the full-wave port do; without the bar the gap is not in the
     /// extracted path (the pure pad-to-pad interconnect).
     pub switch_bar: bool,
+    /// References of further capacitors of the cell's input network (on the hot supply and return nets): each gets
+    /// a port across its pads, after the hot loop's port (port 0). The hot loop's port is then oriented so that
+    /// its current and every capacitor port's current leave the hot node along the V+ copper (positive mutual
+    /// inductance when they share it).
+    pub capacitor_ports: Vec<String>,
+    /// Join the pads of the `capacitor_ports` capacitors to the hot capacitor's pads with straight bars where no
+    /// copper does (the legs the closed form assumes), the connection of the estimate of section 10.
+    pub connection_legs: bool,
 }
 
 impl Default for BoardOptions {
     fn default() -> Self {
-        BoardOptions { margin_nm: 3_000_000, switch_bar: true }
+        BoardOptions { margin_nm: 3_000_000, switch_bar: true, capacitor_ports: Vec::new(), connection_legs: false }
     }
 }
 
@@ -147,6 +155,8 @@ pub struct BoardLayout {
     /// Zone fills with an island (a piece that joins nothing in the window) are counted by the mesher; this counts
     /// the nets the layout holds but that carry no port terminal.
     pub other_nets: Vec<String>,
+    /// The ports in layout order: `hot loop`, then the references of the options' `capacitor_ports`.
+    pub port_labels: Vec<String>,
 }
 
 fn corner_radius(pad: &Pad) -> f64 {
@@ -258,6 +268,16 @@ pub fn build_layout(
         let (x, y) = ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
         grow((x, y, x, y));
     }
+    // The capacitors that get a port are inside the window too (their pads are the terminals).
+    for reference in &options.capacitor_ports {
+        for (_, pad) in cam.pads().filter(|(f, _)| {
+            &f.reference == reference || f.reference == copper_pcb::kicad_pcb::kicad_reference(reference)
+        }) {
+            if let Some(b) = bounds_of(&pad_shape(pad, max_error)) {
+                grow(b);
+            }
+        }
+    }
     let bb = bb.ok_or("the loop has no geometry")?;
     let m = options.margin_nm;
     let window = [bb.0 - m, bb.1 - m, bb.2 + m, bb.3 + m];
@@ -290,6 +310,12 @@ pub fn build_layout(
                 area.extend(pad_shape(pad, max_error));
             }
         }
+        for reference in &options.capacitor_ports {
+            let alt = copper_pcb::kicad_pcb::kicad_reference(reference);
+            for (_, pad) in cam.pads().filter(|(f, _)| &f.reference == reference || f.reference == alt) {
+                area.extend(pad_shape(pad, max_error));
+            }
+        }
         poly::offset(&poly::union(&area), m, true, max_error)
     });
     // Conductors.
@@ -314,7 +340,7 @@ pub fn build_layout(
             continue;
         }
         counts.2 += shapes.len();
-        layout.layers[fill.layer].conductors.push(Conductor { net: net.clone(), shapes });
+        layout.layers[fill.layer].conductors.push(Conductor { net: net.clone(), shapes, on_loop: false });
     }
     if cut_fills {
         flags.push("plane_corridor".to_owned());
@@ -374,7 +400,7 @@ pub fn build_layout(
                 track_hints(track.layer, pair[0], pair[1], track.width as f64, &mut hints);
             }
         }
-        layout.layers[track.layer].conductors.push(Conductor { net: net.clone(), shapes });
+        layout.layers[track.layer].conductors.push(Conductor { net: net.clone(), shapes, on_loop: false });
     }
     let n_layers = cam.copper_count();
     for (_, pad) in cam.pads() {
@@ -388,7 +414,11 @@ pub fn build_layout(
         let mut last = 0usize;
         for layer in 0..n_layers {
             if flashes(pad, layer) {
-                layout.layers[layer].conductors.push(Conductor { net: net.clone(), shapes: shape.clone() });
+                layout.layers[layer].conductors.push(Conductor {
+                    net: net.clone(),
+                    shapes: shape.clone(),
+                    on_loop: terminal_pads.iter().flatten().any(|p| p.center == pad.center),
+                });
                 first = first.min(layer);
                 last = last.max(layer);
             }
@@ -423,7 +453,7 @@ pub fn build_layout(
         // The via's annular ring on every layer: the mesher joins the node nearest to its position.
         let ring = poly::circle(via.center, via.size as f64 / 2.0, max_error);
         for layer in 0..n_layers {
-            layout.layers[layer].conductors.push(Conductor { net: net.clone(), shapes: ring.clone() });
+            layout.layers[layer].conductors.push(Conductor { net: net.clone(), shapes: ring.clone(), on_loop: false });
         }
         layout.vias.push(ViaGeom {
             name: format!("via {net} {:.2},{:.2}", via.center.x as f64 * 1e-6, via.center.y as f64 * 1e-6),
@@ -479,9 +509,11 @@ pub fn build_layout(
         let width = bar_width(a, b);
         let net = terminal_pads[a][0].net.clone().expect("checked");
         let (ca, cb) = (centre(a), centre(b));
-        layout.layers[pad_layers[a]]
-            .conductors
-            .push(Conductor { net, shapes: poly::polyline(&[ca, cb], width, false, max_error) });
+        layout.layers[pad_layers[a]].conductors.push(Conductor {
+            net,
+            shapes: poly::polyline(&[ca, cb], width, false, max_error),
+            on_loop: true,
+        });
         track_hints(pad_layers[a], ca, cb, width, &mut leg_hints);
         notes.push(format!(
             "leg {from} to {to} has no routed copper: a straight {:.2} mm bar joins the pad centres, as in the closed form",
@@ -495,7 +527,7 @@ pub fn build_layout(
     // the bar's end face and the pad's copper next to that face are one equipotential contact (FastHenry's
     // `.equiv`), a patch the width of the bar and a fraction of a cell deep. Nothing overlaps: metal of two nets that
     // overlaps and is joined at a few nodes lets the surplus metal carry eddy loops through the merged nodes.
-    let depth = (cell_nm / 6).max(20_000);
+    let depth = 10_000;
     let mut link_hints: Vec<(usize, Hint)> = Vec::new();
     // `contact(pad, bar_net, bar)`: join the bar's end face to `pad` when the bar is of another net than the pad.
     let contact = |layout: &mut Layout, pad: usize, bar_net: &str, bar: &Shapes, label: &str| {
@@ -538,7 +570,11 @@ pub fn build_layout(
         }
         // The bar is of the net of pad a (it touches that pad, so the copper is one piece) and meets pad b at a contact.
         let net = terminal_pads[a][0].net.clone().expect("checked");
-        layout.layers[pad_layers[a]].conductors.push(Conductor { net: net.clone(), shapes: bar.clone() });
+        layout.layers[pad_layers[a]].conductors.push(Conductor {
+            net: net.clone(),
+            shapes: bar.clone(),
+            on_loop: true,
+        });
         contact(&mut layout, b, &net, &bar, label);
         track_hints(pad_layers[a], centre(a), centre(b), width, &mut link_hints);
         notes.push(format!(
@@ -585,7 +621,11 @@ pub fn build_layout(
         for (k, (half_shapes, pad)) in [(h0, pa), (h1, pb)].into_iter().enumerate() {
             // Each half is of the net of the pad it touches; the port is between their ends at the gap.
             let net = terminal_pads[pad][0].net.clone().expect("checked");
-            layout.layers[layer].conductors.push(Conductor { net: net.clone(), shapes: half_shapes.clone() });
+            layout.layers[layer].conductors.push(Conductor {
+                net: net.clone(),
+                shapes: half_shapes.clone(),
+                on_loop: true,
+            });
             let near_gap = poly::offset(&cut, depth, false, max_error);
             let region = poly::intersection(&half_shapes, &near_gap);
             layout.terminals.push(Terminal { name: format!("switch half {k} port end"), layer, net, region });
@@ -621,6 +661,90 @@ pub fn build_layout(
                 .to_owned(),
         );
     }
+    let mut port_labels = vec!["hot loop".to_owned()];
+    if !options.capacitor_ports.is_empty() {
+        // Port 0 the other way round: the current leaves the hot supply pad's copper into the switch, as the
+        // branch currents of the conducted circuit leave the hot node.
+        let p0 = layout.ports[0].clone();
+        layout.ports[0] = crate::layout::PortDef { name: p0.name, plus: p0.minus, minus: p0.plus };
+        let supply_net = terminal_pads[0][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
+        let return_net =
+            terminal_pads[ports.pads.len() - 1][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
+        let hot_supply_pad = 0;
+        let hot_return_pad = ports.pads.len() - 1;
+        for reference in &options.capacitor_ports {
+            let alt = copper_pcb::kicad_pcb::kicad_reference(reference);
+            let pads: Vec<&Pad> =
+                cam.pads().filter(|(f, _)| &f.reference == reference || f.reference == alt).map(|(_, p)| p).collect();
+            let find = |net: &str| pads.iter().copied().find(|p| p.net.as_deref() == Some(net));
+            let (Some(sp), Some(rp)) = (find(&supply_net), find(&return_net)) else {
+                return Err(format!(
+                    "capacitor {reference}: no pad on {supply_net} and on {return_net} on the exported board"
+                ));
+            };
+            let layer = (0..n_layers)
+                .find(|&l| sp.layers.has(Layer::Copper(l)) && rp.layers.has(Layer::Copper(l)))
+                .ok_or_else(|| format!("capacitor {reference}: its pads share no copper layer"))?;
+            if layer != pad_layers[hot_supply_pad] {
+                return Err(format!("capacitor {reference} is not on the layer of the hot capacitor's pads"));
+            }
+            // A port across the pads: a small patch at the middle of each pad (the body of the capacitor).
+            let mut terminals = Vec::new();
+            for pad in [rp, sp] {
+                let half = ((pad.width.min(pad.height) as f64) * 0.2).max(75_000.0) as i64;
+                let (cx0, cy0) = (pad.center.x, pad.center.y);
+                let region = poly::intersection(
+                    &pad_shape(pad, max_error),
+                    &poly::polygon(&[
+                        ((cx0 - half) as f64, (cy0 - half) as f64),
+                        ((cx0 + half) as f64, (cy0 - half) as f64),
+                        ((cx0 + half) as f64, (cy0 + half) as f64),
+                        ((cx0 - half) as f64, (cy0 + half) as f64),
+                    ]),
+                );
+                layout.terminals.push(Terminal {
+                    name: format!("{reference} pad {}", pad.number),
+                    layer,
+                    net: pad.net.clone().expect("found by net"),
+                    region,
+                });
+                terminals.push(layout.terminals.len() - 1);
+                link_hints.push((
+                    layer,
+                    Hint::square(
+                        [cx0 - 2 * half, cy0 - 2 * half, cx0 + 2 * half, cy0 + 2 * half],
+                        (cell_nm / 2).max(50_000),
+                    ),
+                ));
+            }
+            layout.add_port(reference, terminals[0], terminals[1]);
+            port_labels.push(reference.clone());
+            if options.connection_legs {
+                for (pad, hot_pad) in [(sp, hot_supply_pad), (rp, hot_return_pad)] {
+                    let width = (pad
+                        .width
+                        .min(pad.height)
+                        .min(terminal_pads[hot_pad][0].width.min(terminal_pads[hot_pad][0].height))
+                        as f64)
+                        .clamp(200_000.0, 1_000_000.0);
+                    let (a, b) = ((pad.center.x as f64, pad.center.y as f64), centre(hot_pad));
+                    let net = pad.net.clone().expect("found by net");
+                    layout.layers[layer].conductors.push(Conductor {
+                        net,
+                        shapes: poly::polyline(&[a, b], width, false, max_error),
+                        on_loop: true,
+                    });
+                    track_hints(layer, a, b, width, &mut link_hints);
+                }
+                notes.push(format!(
+                    "capacitor {reference} is joined to the hot capacitor's pads by straight bars pad centre to pad centre (the connection the estimate of section 10 assumes)"
+                ));
+            }
+            notes.push(format!(
+                "port across the pads of capacitor {reference}: the capacitor itself is not in the copper"
+            ));
+        }
+    }
     for (layer, hint) in leg_hints.into_iter().chain(link_hints) {
         layout.layers[layer].hints.push(hint);
     }
@@ -652,6 +776,7 @@ pub fn build_layout(
         fill_shapes: counts.2,
         vias: counts.3,
         other_nets,
+        port_labels,
     })
 }
 

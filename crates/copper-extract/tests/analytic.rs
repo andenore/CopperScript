@@ -70,12 +70,16 @@ fn bar_layout(l: i64, w: i64) -> Layout {
 #[test]
 fn straight_bar_matches_the_partial_self_inductance_and_dc_resistance() {
     let (l, w) = (10 * MM, MM);
-    let layout = bar_layout(l, w);
     let l_ref = self_inductance_bar(l as f64 * NM, w as f64 * NM, T);
     let r_ref = COPPER_RESISTIVITY * l as f64 * NM / (w as f64 * NM * T);
     println!("bar 10 x 1 x 0.035 mm: closed form L {:.4} nH, R {:.4} mohm", nh(l_ref), r_ref * 1e3);
     let mut last = f64::NAN;
     for (cell, coarse) in [(250.0, 2000.0), (125.0, 1000.0), (62.5, 500.0)] {
+        // A uniform mesh over the bar (a hint at the pitch): the exactness of R below is a property of a mesh that
+        // tiles the bar uniformly, which the adaptive partition does not do next to the terminals of a bar that is
+        // wide against the pitch.
+        let mut layout = bar_layout(l, w);
+        layout.layers[0].hints.push(Hint { rect: [0, 0, l, w], cell_x_nm: 0, cell_y_nm: (cell * 1000.0) as i64 });
         let x = extract(&layout, &spec(cell, coarse), &[0.0, 1e4], false).expect("extract");
         let (lx, rx) = (x.inductance(1, 0, 0), x.resistance(0, 0, 0));
         println!(
@@ -542,7 +546,7 @@ fn slot_layout(l: i64, w: i64, h: i64, plane_w: i64, slot: i64, fine: i64) -> La
             ((l / 2 - slot / 2) as f64, 1_000_000.0),
         ]);
         let shapes = poly::difference(&full, &cutter);
-        layout.layers[plane].conductors.push(Conductor { net: "GND".to_owned(), shapes });
+        layout.layers[plane].conductors.push(Conductor { net: "GND".to_owned(), shapes, on_loop: false });
         layout.layers[plane].hints.push(Hint {
             rect: [l / 2 - slot / 2 - 2 * MM, -3 * MM, l / 2 + slot / 2 + 2 * MM, 3 * MM],
             cell_x_nm: fine,

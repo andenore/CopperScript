@@ -1,20 +1,25 @@
 //! From layout to network: a rectangular filament mesh of every copper layer.
 //!
-//! **Mesh.** Each layer has its own tensor grid of lines. Nodes sit on the line crossings; an x filament joins
-//! two neighbouring nodes of a row, a y filament two neighbouring nodes of a column. The filament's cross-section
-//! is the strip between the half-way lines to the neighbouring rows (columns), so the strips tile the copper: a bar
-//! of copper whose edges lie on grid lines is exactly tiled and has exactly `rho l / (w t)` resistance. The width
-//! of a filament is the strip width times the fraction of its body (the rectangle between its two nodes and the
-//! strip) that the layer's copper of the net covers, so a trace edge between lines still carries the right amount of
-//! copper; a filament whose body is covered by less than `min_coverage` is dropped. Filaments of different nets
-//! never share a node.
+//! **Partition.** Each layer is cut into rectangles (a k-d tree: a rectangle is cut in the middle, snapped to a
+//! copper edge nearby, while it is larger than the size asked for at its place; terminal regions and vias are cut
+//! out of the leaves they reach). The size asked for at a place is the smallest of the requests round it, each
+//! `request + (growth - 1) * distance`, and at most `coarse_nm`: a narrow shape of the loop is asked to be cut into at
+//! least `across` cells over its width (a thin shape that is not along an axis by its width, about `2 area /
+//! perimeter`); other narrow copper at `cell_nm`; the layout's hints at their pitch; a terminal at a third of its
+//! longer side whatever the pitch; a via at the size of its own diameter. Only the pitches (`cell_nm`, `coarse_nm`,
+//! the hints) are scaled by `scale` and by the budget's coarsening: the resolution of terminals, vias and the
+//! narrow copper of the loop is a property of the board, not of the pitch. Fine places are not extended into rows
+//! and columns across the layer as a tensor grid would: the filaments go where the requests are.
 //!
-//! **Lines.** Lines are put on the bounding box edges of every copper shape, of every terminal and of every hint
-//! rectangle, at the position of every via, and between them at a pitch of `cell_nm` where a shape is narrow in that
-//! axis (an extent of at most `fine_extent_cells` cells), near a via or terminal, or inside a hint; the pitch grows by
-//! `growth` per unit distance to `coarse_nm` away from such places. A shape that is wide in an axis (a pour) is
-//! meshed at the coarse pitch there. The grid of a layer does not depend on the grid of any other layer: layers
-//! couple through the partial inductance matrix and are joined only by vias.
+//! **Filaments.** Nodes are the corners of the rectangles. A filament joins two neighbouring nodes along a side of
+//! a rectangle (a rectangle next to two smaller ones has their corners as hanging nodes on its side, so the
+//! filaments there follow the finer side). Its cross-section is the strip between the half-way lines to the
+//! rectangles on either side, so the strips tile the copper: a bar whose edges lie on cell edges is tiled exactly
+//! and has exactly `rho l / (w t)` resistance. The width of a filament is the strip width times the fraction of its
+//! body that the layer's copper of the net covers; a filament whose body is covered by less than `min_coverage` is
+//! dropped, and so is one whose axis is not followed by the copper along `MIN_AXIS_COVERAGE` of its length (it
+//! would bridge a gap in the copper: the end of a trace, the port gap). Filaments of different nets never share a
+//! node. Layers couple through the partial inductance matrix and are joined only by vias.
 //!
 //! **Vias** join the node nearest to the via position on every layer they pass where the net has copper within
 //! `2 coarse_nm`, in a chain of barrel segments whose length is the height difference of the layers.
@@ -37,14 +42,17 @@ pub const DEFAULT_PLATING_M: f64 = 25e-6;
 /// What the caller may choose.
 #[derive(Clone, Debug)]
 pub struct MeshSpec {
-    /// Pitch in narrow features and near vias and terminals, nm.
+    /// Largest cell in narrow features that are not on the loop, nm (the loop's own narrow copper, terminals and
+    /// vias are cut finer whatever this is).
     pub cell_nm: i64,
     /// Pitch of wide copper, nm.
     pub coarse_nm: i64,
-    /// Growth of the pitch per unit distance from a fine place.
+    /// Growth of the cell size per unit distance from a fine place, plus one (2: the size grows by the distance).
     pub growth: f64,
-    /// A shape with an extent of at most this many `cell_nm` in an axis is meshed finely in that axis.
+    /// A shape with an extent of at most this many nominal `cell_nm` in an axis is narrow in that axis.
     pub fine_extent_cells: f64,
+    /// A narrow shape is cut into at least this many cells across its width (cells no larger than `cell_nm`).
+    pub across: usize,
     /// Parallel filaments across the copper thickness (1 = uniform current over the thickness).
     pub thickness_filaments: usize,
     /// The most filaments the dense inductance matrix is allowed.
@@ -63,8 +71,9 @@ impl Default for MeshSpec {
         MeshSpec {
             cell_nm: 200_000,
             coarse_nm: 1_000_000,
-            growth: 1.4,
+            growth: 2.0,
             fine_extent_cells: 8.0,
+            across: 2,
             thickness_filaments: 1,
             max_filaments: DEFAULT_MAX_FILAMENTS,
             coarsen: true,
@@ -75,8 +84,8 @@ impl Default for MeshSpec {
 }
 
 /// The default filament budget: the dense inductance matrix is `n^2` doubles and one frequency costs a dense complex
-/// elimination of about `n/2` loops, a few seconds at 2400 filaments in an optimised build.
-pub const DEFAULT_MAX_FILAMENTS: usize = 2400;
+/// elimination of about `n/2` loops (about 25 s at 6700 filaments with the rows shared between threads, 12 cores).
+pub const DEFAULT_MAX_FILAMENTS: usize = 9000;
 
 impl MeshSpec {
     /// The same spec with all pitches (hints included) divided by `factor`: a finer mesh for a refinement series.
@@ -87,9 +96,6 @@ impl MeshSpec {
 
 /// The nodes of each `(layer, net)` as `(x_nm, y_nm, node)`.
 pub type LayerNodes = BTreeMap<(usize, String), Vec<(i64, i64, usize)>>;
-
-/// Lines requested over an interval of one axis: `(from, to, pitch)`, nm.
-type FineIntervals = Vec<(i64, i64, i64)>;
 
 /// A mesh node, for maps and reports.
 #[derive(Clone, Debug)]
@@ -104,6 +110,8 @@ pub struct MeshNode {
 #[derive(Clone, Debug, Default)]
 pub struct LayerStats {
     pub name: String,
+    /// Cells of the layer's partition.
+    pub cells: usize,
     pub lines_x: usize,
     pub lines_y: usize,
     pub bars: usize,
@@ -175,6 +183,12 @@ impl std::error::Error for MeshError {}
 
 const NM: f64 = 1e-9;
 
+/// Lines closer than this never coexist (terminal and via lines are otherwise kept whatever the pitch), nm.
+const ABS_GAP_NM: i64 = 25_000;
+
+/// The least share of a filament's length that the copper must span along its axis.
+const MIN_AXIS_COVERAGE: f64 = 0.25;
+
 fn rect_shapes(r: [i64; 4]) -> Shapes {
     poly::polygon(&[
         (r[0] as f64, r[1] as f64),
@@ -223,103 +237,196 @@ fn covered(r: [i64; 4], strip: &Shapes) -> (f64, Option<[i64; 4]>) {
     ((total / rect_area).clamp(0.0, 1.0), bbox)
 }
 
-/// Lines of one axis over `[lo, hi]`.
-fn axis_lines(
-    lo: i64,
-    hi: i64,
-    musts: &[i64],
-    fine: &[(i64, i64, i64)],
-    coarse: i64,
+/// A request for small cells: inside `rect` (and growing with the distance from it) the cell size must not exceed
+/// `sx` in x and `sy` in y (0 = no request on that axis), nm.
+#[derive(Clone, Copy, Debug)]
+struct Source {
+    rect: [i64; 4],
+    sx: i64,
+    sy: i64,
+    /// Growth of the size per unit distance, plus one (`growth` of the spec for most sources).
     growth: f64,
-    min_gap: i64,
-) -> Vec<i64> {
-    let mut m: Vec<i64> = musts.iter().copied().filter(|v| *v >= lo && *v <= hi).collect();
-    m.push(lo);
-    m.push(hi);
-    m.sort_unstable();
-    m.dedup();
-    let mut ms: Vec<i64> = vec![m[0]];
-    for &v in &m[1..] {
-        let last = *ms.last().expect("non-empty");
-        if v - last < min_gap {
-            if v == hi && ms.len() > 1 {
-                ms.pop();
-                ms.push(v);
-            } else if v == hi {
-                ms.push(v);
+}
+
+/// Distance between two rectangles (0 where they touch or overlap), nm.
+fn rect_distance(a: [i64; 4], b: [i64; 4]) -> f64 {
+    let dx = (a[0] - b[2]).max(b[0] - a[2]).max(0) as f64;
+    let dy = (a[1] - b[3]).max(b[1] - a[3]).max(0) as f64;
+    dx.hypot(dy)
+}
+
+/// What the partition of one layer is made from.
+struct Requests {
+    sources: Vec<Source>,
+    /// Rectangles (terminal regions, via points) whose edges must be cell boundaries where they cross a cell.
+    hard: Vec<[i64; 4]>,
+    /// Outline rectangles of the copper: split positions snap to their edges.
+    soft: Vec<[i64; 4]>,
+}
+
+/// Cut the window into rectangles (a k-d tree): a cell is cut in the middle (snapped to a copper edge nearby) while
+/// it is larger than the size asked for at its place, `size = request + (growth - 1) * distance` for every source and
+/// at most `coarse`; a hard edge inside a cell is always a cut. Cells never get narrower than `abs_gap`.
+fn partition(window: [i64; 4], req: &Requests, coarse: i64, abs_gap: i64) -> Vec<[i64; 4]> {
+    let mut leaves = Vec::new();
+    let mut stack = vec![window];
+    while let Some(c) = stack.pop() {
+        let (w, h) = (c[2] - c[0], c[3] - c[1]);
+        let (mut sx, mut sy) = (coarse as f64, coarse as f64);
+        for s in &req.sources {
+            let d = rect_distance(s.rect, c);
+            if s.sx > 0 {
+                sx = sx.min(s.sx as f64 + (s.growth - 1.0) * d);
             }
+            if s.sy > 0 {
+                sy = sy.min(s.sy as f64 + (s.growth - 1.0) * d);
+            }
+        }
+        let (rx, ry) = (w as f64 / sx, h as f64 / sy);
+        let can_x = w >= 2 * abs_gap && rx > 1.0;
+        let can_y = h >= 2 * abs_gap && ry > 1.0;
+        if can_x && can_y && (rx - ry).abs() <= 1e-9 * rx.max(ry) {
+            // Equally too large in both axes: cut both at once, so the result does not depend on which axis is first.
+            let (mx, my) = (c[0] + w / 2, c[1] + h / 2);
+            stack.push([c[0], c[1], mx, my]);
+            stack.push([mx, c[1], c[2], my]);
+            stack.push([c[0], my, mx, c[3]]);
+            stack.push([mx, my, c[2], c[3]]);
             continue;
         }
-        ms.push(v);
-    }
-    let mut fine: Vec<(i64, i64, i64)> = fine.to_vec();
-    fine.sort_unstable();
-    fine.dedup();
-    let size_at = |x: f64| -> f64 {
-        let mut s = coarse as f64;
-        for &(a, b, c) in &fine {
-            let d = if x < a as f64 {
-                a as f64 - x
-            } else if x > b as f64 {
-                x - b as f64
-            } else {
-                0.0
-            };
-            s = s.min(c as f64 + (growth - 1.0) * d);
-        }
-        s
-    };
-    // Sizes are quantised to micrometres so that mirrored places get identical sizes.
-    let quant = |v: f64| ((v / 1000.0).round() as i64 * 1000).max(min_gap);
-    let mut lines = vec![ms[0]];
-    for w in ms.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        // March from both ends towards the middle, each with the size of its own end, so a layout that is mirror
-        // symmetric about a span's middle gets mirror symmetric lines; the gap that is left is split evenly.
-        let mut left = vec![a];
-        let mut right = vec![b];
-        loop {
-            let (lp, rp) = (*left.last().expect("start"), *right.last().expect("end"));
-            let gap = rp - lp;
-            let sl = {
-                let s0 = size_at(lp as f64);
-                quant(s0.min(size_at((lp as f64 + s0).min(b as f64))))
-            };
-            let sr = {
-                let s0 = size_at(rp as f64);
-                quant(s0.min(size_at((rp as f64 - s0).max(a as f64))))
-            };
-            if gap as f64 <= 2.5 * sl.max(sr) as f64 {
-                let mean = (sl + sr) as f64 / 2.0;
-                let n = ((gap as f64 / mean).round() as i64).max(1);
-                for k in 1..n {
-                    left.push(lp + gap * k / n);
-                }
-                break;
+        let axis = match (can_x, can_y) {
+            (true, true) => usize::from(ry > rx),
+            (true, false) => 0,
+            (false, true) => 1,
+            (false, false) => {
+                leaves.push(c);
+                continue;
             }
-            left.push(lp + sl);
-            right.push(rp - sr);
+        };
+        let (lo, hi) = (c[axis], c[axis + 2]);
+        let span = hi - lo;
+        let mid = lo + span / 2;
+        // Snap to the nearest copper edge in the middle half of the span.
+        let mut v = mid;
+        let mut best = (span / 4) as f64;
+        let mut tie = false;
+        let other = 1 - axis;
+        for r in &req.soft {
+            if r[other] >= c[other + 2] || r[other + 2] <= c[other] {
+                continue;
+            }
+            for e in [r[axis], r[axis + 2]] {
+                let d = (e - mid).abs() as f64;
+                if e - lo < abs_gap || hi - e < abs_gap {
+                    continue;
+                }
+                if d < best {
+                    best = d;
+                    v = e;
+                    tie = false;
+                } else if d == best && e != v {
+                    // Two edges the same distance from the middle (a mirror image): cut in the middle.
+                    tie = true;
+                }
+            }
         }
-        right.reverse();
-        lines.extend(left.into_iter().skip(1));
-        lines.extend(right);
+        if tie {
+            v = mid;
+        }
+        if axis == 0 {
+            stack.push([v, c[1], c[2], c[3]]);
+            stack.push([c[0], c[1], v, c[3]]);
+        } else {
+            stack.push([c[0], v, c[2], c[3]]);
+            stack.push([c[0], c[1], c[2], v]);
+        }
     }
-    lines.dedup();
-    lines
+    // Hard edges (terminal regions, via points) cut every leaf they reach, all at once, so that the result does not
+    // depend on the order of the cuts (a mirror-symmetric layout gets a mirror-symmetric partition).
+    let mut cut: Vec<[i64; 4]> = Vec::with_capacity(leaves.len());
+    for c in leaves {
+        let lines = |axis: usize| -> Vec<i64> {
+            let (lo, hi) = (c[axis], c[axis + 2]);
+            let other = 1 - axis;
+            let mut inside: Vec<i64> = Vec::new();
+            for r in &req.hard {
+                if r[other] > c[other + 2] || r[other + 2] < c[other] || r[axis] > hi || r[axis + 2] < lo {
+                    continue;
+                }
+                for v in [r[axis], r[axis + 2]] {
+                    if v - lo >= abs_gap && hi - v >= abs_gap {
+                        inside.push(v);
+                    }
+                }
+            }
+            inside.sort_unstable();
+            let mut merged: Vec<i64> = Vec::new();
+            for v in inside {
+                if merged.last().is_none_or(|l| v - *l >= abs_gap) {
+                    merged.push(v);
+                }
+            }
+            let mut all = vec![lo];
+            all.extend(merged);
+            all.push(hi);
+            all
+        };
+        let (xs, ys) = (lines(0), lines(1));
+        for yw in ys.windows(2) {
+            for xw in xs.windows(2) {
+                cut.push([xw[0], yw[0], xw[1], yw[1]]);
+            }
+        }
+    }
+    cut.sort_unstable();
+    cut
 }
 
-struct LayerMesh {
-    xs: Vec<i64>,
-    ys: Vec<i64>,
+/// One side of a cell on a grid line: the interval along the line and the cell's size across it.
+#[derive(Clone, Copy)]
+struct Side {
+    from: i64,
+    to: i64,
+    across: i64,
 }
 
-impl LayerMesh {
-    /// The strip around line `i` of `lines`: half way to the neighbours (the end lines have half strips).
-    fn dual(lines: &[i64], i: usize) -> (i64, i64) {
-        let lo = if i == 0 { lines[0] } else { (lines[i - 1] + lines[i]) / 2 };
-        let hi = if i + 1 == lines.len() { lines[i] } else { (lines[i] + lines[i + 1]) / 2 };
-        (lo, hi)
+/// The cells' sides on every grid line of one orientation: `above` the line (the cell's lower side) and `below`.
+#[derive(Default)]
+struct LineSides {
+    above: Vec<Side>,
+    below: Vec<Side>,
+}
+
+/// Segments between consecutive nodes of every grid line: `(line, from, to, across_below, across_above)`. Nodes on a
+/// line are the corners of the cells that touch it (a cell next to two smaller ones has their corners on its side as
+/// hanging nodes), so the filaments on a boundary between cells of different sizes follow the finer side.
+fn segments(cells: &[[i64; 4]], horizontal: bool) -> Vec<(i64, i64, i64, i64, i64)> {
+    let mut lines: BTreeMap<i64, LineSides> = BTreeMap::new();
+    for c in cells {
+        let (a0, a1, b0, b1) = if horizontal { (c[0], c[2], c[1], c[3]) } else { (c[1], c[3], c[0], c[2]) };
+        lines.entry(b0).or_default().above.push(Side { from: a0, to: a1, across: b1 - b0 });
+        lines.entry(b1).or_default().below.push(Side { from: a0, to: a1, across: b1 - b0 });
     }
+    let mut out = Vec::new();
+    for (line, mut sides) in lines {
+        sides.above.sort_unstable_by_key(|s| s.from);
+        sides.below.sort_unstable_by_key(|s| s.from);
+        let mut stops: Vec<i64> = sides.above.iter().chain(sides.below.iter()).flat_map(|s| [s.from, s.to]).collect();
+        stops.sort_unstable();
+        stops.dedup();
+        let find = |list: &[Side], p: i64, q: i64| -> i64 {
+            let at = list.partition_point(|s| s.to <= p);
+            list.get(at).filter(|s| s.from <= p && s.to >= q).map_or(0, |s| s.across)
+        };
+        for w in stops.windows(2) {
+            let (p, q) = (w[0], w[1]);
+            let (ab, be) = (find(&sides.above, p, q), find(&sides.below, p, q));
+            if ab + be > 0 {
+                out.push((line, p, q, be, ab));
+            }
+        }
+    }
+    out
 }
 
 struct Attempt {
@@ -345,8 +452,8 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
         return Err(MeshError::Invalid("the window is empty".to_owned()));
     }
     let nt = spec.thickness_filaments.max(1);
-    let fine_extent = (spec.fine_extent_cells * cell as f64) as i64;
-    let min_gap = (cell / 3).max(1000);
+    // Narrow means narrow against the nominal pitch, whatever the budget did to the pitch: a pour is not made narrow by coarsening.
+    let fine_extent = (spec.fine_extent_cells * spec.cell_nm as f64) as i64;
     let mut network = Network::default();
     let mut nodes: Vec<MeshNode> = Vec::new();
     let mut stats = MeshStats { cell_nm: cell, coarse_nm: coarse, scale, ..MeshStats::default() };
@@ -368,167 +475,211 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
             stats.layers.push(layer_stats);
             continue;
         }
-        let (mut mx, mut my) = (Vec::new(), Vec::new());
-        let (mut fx, mut fy): (FineIntervals, FineIntervals) = (Vec::new(), Vec::new());
+        let mut req = Requests { sources: Vec::new(), hard: Vec::new(), soft: Vec::new() };
+        let across = spec.across.max(1) as i64;
+        let bounds_of = |contour: &poly::Contour| -> (i64, i64, i64, i64) {
+            contour.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| {
+                (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y))
+            })
+        };
+        // The conductors as the layout gives them (a track, a pad, a pour each), not their union: a trace that joins
+        // a pour is still narrow.
+        for conductor in &layer.conductors {
+            for shape in &conductor.shapes {
+                let Some(outer) = shape.first() else { continue };
+                let (x0, y0, x1, y1) = bounds_of(outer);
+                if x1 <= window[0] || x0 >= window[2] || y1 <= window[1] || y0 >= window[3] {
+                    continue;
+                }
+                req.soft.push([x0, y0, x1, y1]);
+                // A narrow shape is cut finely across its width: at least `across` cells, at most `cell` each.
+                // Only copper on the loop (under a hint, next to a terminal) is held to that; other narrow copper
+                // is cut at the pitch like any copper.
+                let on_loop = conductor.on_loop;
+                let size = |extent: i64| -> i64 {
+                    if (extent as f64) > fine_extent as f64 {
+                        0
+                    } else if on_loop {
+                        cell.min(extent / across).max(2 * ABS_GAP_NM)
+                    } else {
+                        cell
+                    }
+                };
+                let (mut sx, mut sy) = (size(x1 - x0), size(y1 - y0));
+                // A thin shape that is not along an axis (a diagonal trace) is narrow in neither bounding-box extent;
+                // its width is about 2 area / perimeter, and it is cut finely in both axes.
+                let axis_rect = shape.len() == 1
+                    && outer.len() == 4
+                    && outer.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1));
+                if sx == 0 && sy == 0 && !axis_rect {
+                    let perimeter: f64 = (0..outer.len())
+                        .map(|i| {
+                            let (a, b) = (&outer[i], &outer[(i + 1) % outer.len()]);
+                            ((a.x - b.x) as f64).hypot((a.y - b.y) as f64)
+                        })
+                        .sum();
+                    let width = if perimeter > 0.0 { 2.0 * poly::shape_area(shape) / perimeter } else { f64::MAX };
+                    if width <= fine_extent as f64 {
+                        let fine =
+                            if on_loop { cell.min((width / across as f64) as i64).max(2 * ABS_GAP_NM) } else { cell };
+                        (sx, sy) = (fine, fine);
+                    }
+                }
+                if sx > 0 || sy > 0 {
+                    req.sources.push(Source { rect: [x0, y0, x1, y1], sx, sy, growth: spec.growth });
+                }
+            }
+        }
+        // A slot or an opening that is not small against the pitch puts cell edges on its outline.
         for shapes in per_net.values() {
             for shape in shapes {
-                // The outline and every hole (a slot in a plane) put lines on their bounding box edges.
-                for (index, contour) in shape.iter().enumerate() {
-                    let (x0, y0, x1, y1) = contour.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| {
-                        (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y))
-                    });
-                    // A hole (a clearance around a pad or via) or an island that is small against the pitch is
-                    // resolved by the coverage fractions of the filaments; it asks for no lines of its own.
-                    if index > 0 && (x1 - x0).max(y1 - y0) <= 3 * cell {
-                        continue;
-                    }
-                    mx.extend([x0, x1]);
-                    my.extend([y0, y1]);
-                    if x1 - x0 <= fine_extent {
-                        fx.push((x0, x1, cell));
-                    }
-                    if y1 - y0 <= fine_extent {
-                        fy.push((y0, y1, cell));
+                for hole in shape.iter().skip(1) {
+                    let (hx0, hy0, hx1, hy1) = bounds_of(hole);
+                    if (hx1 - hx0).max(hy1 - hy0) > 3 * cell {
+                        req.soft.push([hx0, hy0, hx1, hy1]);
                     }
                 }
             }
         }
         for h in &layer.hints {
-            if h.cell_x_nm > 0 {
-                mx.extend([h.rect[0], h.rect[2]]);
-                fx.push((h.rect[0], h.rect[2], ((h.cell_x_nm as f64) * scale).round() as i64));
-            }
-            if h.cell_y_nm > 0 {
-                my.extend([h.rect[1], h.rect[3]]);
-                fy.push((h.rect[1], h.rect[3], ((h.cell_y_nm as f64) * scale).round() as i64));
-            }
+            let scaled = |v: i64| if v > 0 { (((v as f64) * scale).round() as i64).max(2 * ABS_GAP_NM) } else { 0 };
+            req.sources.push(Source {
+                rect: h.rect,
+                sx: scaled(h.cell_x_nm),
+                sy: scaled(h.cell_y_nm),
+                growth: spec.growth,
+            });
+            req.soft.push(h.rect);
         }
         for t in layout.terminals.iter().filter(|t| t.layer == li) {
             if let Some((x0, y0, x1, y1)) = region_bounds(&t.region) {
-                mx.extend([x0, x1]);
-                my.extend([y0, y1]);
-                fx.push((x0 - cell, x1 + cell, cell));
-                fy.push((y0 - cell, y1 + cell, cell));
+                req.hard.push([x0, y0, x1, y1]);
+                // A terminal is resolved whatever the pitch: at least three cells along its longer side.
+                let size = ((x1 - x0).max(y1 - y0) / 3).max(2 * ABS_GAP_NM);
+                req.sources.push(Source { rect: [x0, y0, x1, y1], sx: size, sy: size, growth: spec.growth });
             }
         }
         for v in &layout.vias {
             if v.first_layer <= li && li <= v.last_layer {
-                mx.push(v.x);
-                my.push(v.y);
-                fx.push((v.x - 2 * cell, v.x + 2 * cell, cell));
-                fy.push((v.y - 2 * cell, v.y + 2 * cell, cell));
+                req.hard.push([v.x, v.y, v.x, v.y]);
+                // The current enters the planes at the via: its cell is as small as the via's own radius.
+                let r_out = v.drill_nm / 2 + v.plating_nm;
+                let size = (2 * r_out).max(2 * ABS_GAP_NM);
+                req.sources.push(Source { rect: [v.x, v.y, v.x, v.y], sx: size, sy: size, growth: spec.growth });
             }
         }
-        let xs = axis_lines(window[0], window[2], &mx, &fx, coarse, spec.growth, min_gap);
-        let ys = axis_lines(window[1], window[3], &my, &fy, coarse, spec.growth, min_gap);
-        let mesh = LayerMesh { xs, ys };
-        layer_stats.lines_x = mesh.xs.len();
-        layer_stats.lines_y = mesh.ys.len();
-        let spacing: Vec<i64> =
-            mesh.xs.windows(2).map(|w| w[1] - w[0]).chain(mesh.ys.windows(2).map(|w| w[1] - w[0])).collect();
-        layer_stats.smallest_cell_nm = spacing.iter().copied().min().unwrap_or(0);
-        layer_stats.largest_cell_nm = spacing.iter().copied().max().unwrap_or(0);
+        let cells = partition(window, &req, coarse, ABS_GAP_NM);
+        layer_stats.cells = cells.len();
+        layer_stats.smallest_cell_nm = cells.iter().map(|c| (c[2] - c[0]).min(c[3] - c[1])).min().unwrap_or(0);
+        layer_stats.largest_cell_nm = cells.iter().map(|c| (c[2] - c[0]).max(c[3] - c[1])).max().unwrap_or(0);
+        let hseg = segments(&cells, true);
+        let vseg = segments(&cells, false);
+        layer_stats.lines_x = vseg.iter().map(|s| s.0).collect::<std::collections::BTreeSet<_>>().len();
+        layer_stats.lines_y = hseg.iter().map(|s| s.0).collect::<std::collections::BTreeSet<_>>().len();
         let thickness = layer.thickness_m;
         let t_sub = thickness / nt as f64;
-        let mut ids: BTreeMap<(usize, usize, String), usize> = BTreeMap::new();
-        let mut make_node =
-            |i: usize, j: usize, net: &str, network: &mut Network, nodes: &mut Vec<MeshNode>| -> usize {
-                let key = (i, j, net.to_owned());
-                if let Some(&id) = ids.get(&key) {
-                    return id;
-                }
-                let id = network.node_count;
-                network.node_count += 1;
-                nodes.push(MeshNode {
-                    layer: li,
-                    net: net.to_owned(),
-                    position: [mesh.xs[i] as f64 * NM, mesh.ys[j] as f64 * NM],
-                });
-                by_layer_net.entry((li, net.to_owned())).or_default().push((mesh.xs[i], mesh.ys[j], id));
-                ids.insert(key, id);
-                id
-            };
-        for (&net, shapes) in &per_net {
-            // x filaments: row j, strip between the half-way lines.
-            for j in 0..mesh.ys.len() {
-                let (ylo, yhi) = LayerMesh::dual(&mesh.ys, j);
-                if yhi <= ylo {
-                    continue;
-                }
-                let strip = poly::intersection(shapes, &rect_shapes([window[0], ylo, window[2], yhi]));
-                if strip.is_empty() {
-                    continue;
-                }
-                for i in 0..mesh.xs.len() - 1 {
-                    let rect = [mesh.xs[i], ylo, mesh.xs[i + 1], yhi];
-                    let (f, bbox) = covered(rect, &strip);
-                    let Some(bbox) = bbox.filter(|_| f >= spec.min_coverage) else {
-                        if f > 0.0 {
-                            stats.dropped_bars += 1;
-                        }
-                        continue;
-                    };
-                    let a = make_node(i, j, net, &mut network, &mut nodes);
-                    let b = make_node(i + 1, j, net, &mut network, &mut nodes);
-                    let length = (rect[2] - rect[0]) as f64 * NM;
-                    let width = (yhi - ylo) as f64 * NM * f;
-                    let cx = (rect[0] + rect[2]) as f64 / 2.0 * NM;
-                    let cy = (bbox[1] + bbox[3]) as f64 / 2.0 * NM;
-                    for k in 0..nt {
-                        let z = layer.z_m - thickness / 2.0 + (k as f64 + 0.5) * t_sub;
-                        let bar = Bar::planar(Axis::X, [cx, cy, z], length, width, t_sub);
-                        network.branches.push(Branch {
-                            a,
-                            b,
-                            bar,
-                            resistance: partial::resistance(&bar, layout.resistivity, 0.0),
-                            kind: BranchKind::Plane { layer: li },
-                            group: bar_count,
-                        });
-                    }
-                    bar_count += 1;
-                    layer_stats.bars += 1;
-                }
+        let mut ids: BTreeMap<(i64, i64, String), usize> = BTreeMap::new();
+        let mut make_node = |x: i64, y: i64, net: &str, network: &mut Network, nodes: &mut Vec<MeshNode>| -> usize {
+            let key = (x, y, net.to_owned());
+            if let Some(&id) = ids.get(&key) {
+                return id;
             }
-            // y filaments: column i.
-            for i in 0..mesh.xs.len() {
-                let (xlo, xhi) = LayerMesh::dual(&mesh.xs, i);
-                if xhi <= xlo {
-                    continue;
-                }
-                let strip = poly::intersection(shapes, &rect_shapes([xlo, window[1], xhi, window[3]]));
-                if strip.is_empty() {
-                    continue;
-                }
-                for j in 0..mesh.ys.len() - 1 {
-                    let rect = [xlo, mesh.ys[j], xhi, mesh.ys[j + 1]];
-                    let (f, bbox) = covered(rect, &strip);
-                    let Some(bbox) = bbox.filter(|_| f >= spec.min_coverage) else {
-                        if f > 0.0 {
-                            stats.dropped_bars += 1;
-                        }
-                        continue;
-                    };
-                    let a = make_node(i, j, net, &mut network, &mut nodes);
-                    let b = make_node(i, j + 1, net, &mut network, &mut nodes);
-                    let length = (rect[3] - rect[1]) as f64 * NM;
-                    let width = (xhi - xlo) as f64 * NM * f;
-                    let cx = (bbox[0] + bbox[2]) as f64 / 2.0 * NM;
-                    let cy = (rect[1] + rect[3]) as f64 / 2.0 * NM;
-                    for k in 0..nt {
-                        let z = layer.z_m - thickness / 2.0 + (k as f64 + 0.5) * t_sub;
-                        let bar = Bar::planar(Axis::Y, [cx, cy, z], length, width, t_sub);
-                        network.branches.push(Branch {
-                            a,
-                            b,
-                            bar,
-                            resistance: partial::resistance(&bar, layout.resistivity, 0.0),
-                            kind: BranchKind::Plane { layer: li },
-                            group: bar_count,
-                        });
+            let id = network.node_count;
+            network.node_count += 1;
+            nodes.push(MeshNode { layer: li, net: net.to_owned(), position: [x as f64 * NM, y as f64 * NM] });
+            by_layer_net.entry((li, net.to_owned())).or_default().push((x, y, id));
+            ids.insert(key, id);
+            id
+        };
+        for (&net, shapes) in &per_net {
+            for horizontal in [true, false] {
+                let segs = if horizontal { &hseg } else { &vseg };
+                let mut i = 0;
+                while i < segs.len() {
+                    // All segments of one line share one strip of the net's copper.
+                    let line = segs[i].0;
+                    let mut j = i;
+                    let (mut from, mut to, mut max_lo, mut max_hi) = (i64::MAX, i64::MIN, 0, 0);
+                    while j < segs.len() && segs[j].0 == line {
+                        from = from.min(segs[j].1);
+                        to = to.max(segs[j].2);
+                        max_lo = max_lo.max(segs[j].3);
+                        max_hi = max_hi.max(segs[j].4);
+                        j += 1;
                     }
-                    bar_count += 1;
-                    layer_stats.bars += 1;
+                    let strip_rect = if horizontal {
+                        [from, line - max_lo / 2, to, line + max_hi / 2]
+                    } else {
+                        [line - max_lo / 2, from, line + max_hi / 2, to]
+                    };
+                    let strip = poly::intersection(shapes, &rect_shapes(strip_rect));
+                    if !strip.is_empty() {
+                        for &(_, p, q, lo, hi) in &segs[i..j] {
+                            let rect = if horizontal {
+                                [p, line - lo / 2, q, line + hi / 2]
+                            } else {
+                                [line - lo / 2, p, line + hi / 2, q]
+                            };
+                            let (f, bbox) = covered(rect, &strip);
+                            let Some(bbox) = bbox.filter(|_| f >= spec.min_coverage) else {
+                                if f > 0.0 {
+                                    stats.dropped_bars += 1;
+                                }
+                                continue;
+                            };
+                            // The copper has to run along the filament, not only stand beside it: within a band of
+                            // `ABS_GAP_NM` round the filament's axis it has to span `MIN_AXIS_COVERAGE` of the length.
+                            // A filament that would bridge a gap in the copper (the end of a trace, the port gap) is
+                            // not made.
+                            let band = if horizontal {
+                                [p, line - ABS_GAP_NM, q, line + ABS_GAP_NM]
+                            } else {
+                                [line - ABS_GAP_NM, p, line + ABS_GAP_NM, q]
+                            };
+                            let spans = covered(band, &strip)
+                                .1
+                                .map_or(0, |b| if horizontal { b[2] - b[0] } else { b[3] - b[1] });
+                            if (spans as f64) < MIN_AXIS_COVERAGE * (q - p) as f64 {
+                                stats.dropped_bars += 1;
+                                continue;
+                            }
+                            let (a, b) = if horizontal {
+                                (
+                                    make_node(p, line, net, &mut network, &mut nodes),
+                                    make_node(q, line, net, &mut network, &mut nodes),
+                                )
+                            } else {
+                                (
+                                    make_node(line, p, net, &mut network, &mut nodes),
+                                    make_node(line, q, net, &mut network, &mut nodes),
+                                )
+                            };
+                            let length = (q - p) as f64 * NM;
+                            let across_w =
+                                if horizontal { (rect[3] - rect[1]) as f64 } else { (rect[2] - rect[0]) as f64 };
+                            let width = across_w * NM * f;
+                            let (axis, cx, cy) = if horizontal {
+                                (Axis::X, (p + q) as f64 / 2.0 * NM, (bbox[1] + bbox[3]) as f64 / 2.0 * NM)
+                            } else {
+                                (Axis::Y, (bbox[0] + bbox[2]) as f64 / 2.0 * NM, (p + q) as f64 / 2.0 * NM)
+                            };
+                            for k in 0..nt {
+                                let z = layer.z_m - thickness / 2.0 + (k as f64 + 0.5) * t_sub;
+                                let bar = Bar::planar(axis, [cx, cy, z], length, width, t_sub);
+                                network.branches.push(Branch {
+                                    a,
+                                    b,
+                                    bar,
+                                    resistance: partial::resistance(&bar, layout.resistivity, 0.0),
+                                    kind: BranchKind::Plane { layer: li },
+                                    group: bar_count,
+                                });
+                            }
+                            bar_count += 1;
+                            layer_stats.bars += 1;
+                        }
+                    }
+                    i = j;
                 }
             }
         }
@@ -547,7 +698,7 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
                 layout.layers.get(t.layer).map_or("?", |l| l.name.as_str())
             )));
         };
-        let grown = poly::offset(&t.region, (cell / 100).max(500), false, 1000.0);
+        let grown = poly::offset(&t.region, ABS_GAP_NM, false, 1000.0);
         let mut inside: Vec<usize> = candidates
             .iter()
             .filter(|&&(x, y, _)| poly::shapes_contain(&grown, (x as f64, y as f64)))

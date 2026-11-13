@@ -2270,16 +2270,26 @@ window are meshed layer by layer into rectangular filaments, and the loop equati
 1, 10 and 100 MHz. The finding gains an `extract:` line and `measures.extract`
 (`inductance_nh`, `resistance_mohm`, `frequencies_mhz`, `closed_form_nh`, `ratio_to_closed_form`, `fullwave_nh`
 and `ratio_to_fullwave` where `--fullwave` ran, `status`, `status_reasons`, `numerical_sensitivity_pct`
-(the difference of two meshes per frequency; `null` with `numerical_sensitivity_unavailable` for a single mesh),
+(the difference of the two finest meshes of a series of three, per frequency; `null` with
+`numerical_sensitivity_unavailable` for a single mesh) and `numerical_sensitivity_earlier_pct` (the step before),
+`convergence_threshold_pct`, `port_labels`, `inductance_matrix_nh`,
 `numerical_sensitivity_basis`, `parameter_assumptions` (inputs the board does not fix), `not_modelled`
 (the omissions), `flags`, `notes`, `meshes`, `via_currents` (vias that carry at least 1 % of the port current,
 with their share of the net's via current), `nets`, `window_mm`, `layers`, `copper`, `seconds`, `method`), and
 the coverage entry `EMI-EXTRACT:<cell>` says `executed`, `not_applicable` (other topologies) or `failed` with
-the reason. The capacitor and the catch diode are copper bars between their pads, the switch is the port in a
+the reason. The status is `indicative` when a terminal had to be joined by its nearest node, when a via joins fewer
+than two layers, when the two finest meshes differ by more than 3 % at 10 MHz or when only one mesh was run. The
+capacitor and the catch diode are copper bars between their pads, the switch is the port in a
 gap in a bar between its pads (`--extract-no-switch-bar` puts the port between facing pad sides instead), and
-no lumped element is modelled. The dense inductance matrix bounds the mesh: `--extract-budget` (default 2400
-filaments) is the most filaments, and a larger mesh is coarsened by 1.3 until it fits (flag `coarsened`, status
-`indicative`); `--extract-margin` (default 3 mm) sets the window margin and the corridor the zone fills are cut
+no lumped element is modelled. The other capacitors of the cell that hang on the hot node get a port across
+their pads in the same extraction; the resulting inductance matrix (the hot loop and those capacitors, at 10 MHz)
+replaces the estimated connection inductances of `EMI-CONDUCTED` and becomes mutual inductances between them (tag
+`extracted_connection_inductance`, `measures.extracted_connections`, the estimate kept in
+`connection_inductance_estimate_nh`; tag `extraction_indicative` when the extraction is only indicative);
+capacitors on the supply side of an input filter keep the estimate. The dense inductance matrix bounds the mesh:
+`--extract-budget` (default 9000 filaments, at most 20000) is the most filaments of the finest mesh, and a larger
+mesh is coarsened by 1.3 until it fits (flag `coarsened`); the two other meshes of the series have pitches 1.5 and 2.25
+times larger. `--extract-margin` (default 3 mm) sets the window margin and the corridor the zone fills are cut
 to, `--extract-cell` the fine pitch (default 0.2 mm), `--extract-single-mesh` runs one mesh. Screening
 evidence, never part of the default run; see
 [the EMI specification](emi-noise-analysis.md#13-quasi-static-network-extraction-phase-5).

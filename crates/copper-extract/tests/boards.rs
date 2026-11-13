@@ -54,6 +54,13 @@ fn report_of(name: &str, board: &PhysicalBoard) -> EmiCheckReport {
     emi_check(board, &view, &model)
 }
 
+/// The default options with a smaller filament budget, so the tests run in a minute (the default is 9000).
+fn test_options() -> HotLoopOptions {
+    let mut options = HotLoopOptions::default();
+    options.mesh.max_filaments = 3000;
+    options
+}
+
 fn number(v: Option<&Value>) -> f64 {
     match v {
         Some(Value::Float(f)) => *f,
@@ -105,7 +112,7 @@ fn describe(label: &str, case: &Case) {
 
 #[test]
 fn emi_buck_placed_and_routed() {
-    let options = HotLoopOptions::default();
+    let options = test_options();
     let placed_board = placed("emi_buck");
     let a = run("emi_buck", &placed_board, &options);
     describe("emi_buck placed", &a);
@@ -141,7 +148,7 @@ fn emi_buck_placed_and_routed() {
 #[test]
 fn the_extraction_of_a_board_is_repeatable() {
     let board = placed("emi_buck");
-    let options = HotLoopOptions { second_mesh: false, ..HotLoopOptions::default() };
+    let options = HotLoopOptions { series: false, ..test_options() };
     let a = run("emi_buck", &board, &options);
     let b = run("emi_buck", &board, &options);
     for (x, y) in a.extraction.inductance_nh.iter().zip(&b.extraction.inductance_nh) {
@@ -153,7 +160,7 @@ fn the_extraction_of_a_board_is_repeatable() {
 #[test]
 fn emi_buck_filter_hot_loop() {
     let board = placed("emi_buck_filter");
-    let a = run("emi_buck_filter", &board, &HotLoopOptions::default());
+    let a = run("emi_buck_filter", &board, &test_options());
     describe("emi_buck_filter placed", &a);
     let x = &a.extraction;
     assert!(
@@ -168,15 +175,15 @@ fn emi_buck_filter_hot_loop() {
 /// The mesh series of the two board cases (recorded in `docs/emi-noise-analysis.md`): the budget is lifted so that the
 /// pitch can be halved, which takes several minutes.
 #[test]
-#[ignore = "several minutes: mesh series of emi_buck placed and routed with a large filament budget"]
+#[ignore = "several minutes: mesh series of emi_buck placed and routed with a large filament budget (scale = pitch multiplier)"]
 fn study_emi_buck_mesh_series() {
     for routed in [false, true] {
         let mut board = placed("emi_buck");
         if routed {
             route_emi_buck(&mut board);
         }
-        for (scale, budget) in [(2.0, 2400), (1.5, 4000), (1.0, 7000), (0.75, 10000)] {
-            let mut options = HotLoopOptions { second_mesh: false, ..HotLoopOptions::default() };
+        for (scale, budget) in [(6.0, 12000), (4.0, 12000), (3.0, 12000), (2.0, 12000)] {
+            let mut options = HotLoopOptions { series: false, ..HotLoopOptions::default() };
             options.mesh.scale = scale;
             options.mesh.max_filaments = budget;
             options.mesh.coarsen = false;

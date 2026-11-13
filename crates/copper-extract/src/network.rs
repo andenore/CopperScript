@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 
 use copper_emi::spectrum::Complex;
 
-use crate::linalg::{CMatrix, Singular};
+use crate::linalg::{CMatrix, Singular, parallel_rows, parallelism};
 use crate::partial::{self, Bar};
 
 /// What a branch stands for, for the reports.
@@ -168,6 +168,44 @@ impl Dsu {
     }
 }
 
+/// The dense partial inductance matrix of the branches, symmetric, row major. Rows are shared between threads
+/// (interleaved, the upper triangle's rows differ in length); every entry is computed by the same code whatever the
+/// number of threads.
+fn assemble_inductance(branches: &[Branch]) -> Vec<f64> {
+    let nb = branches.len();
+    let row = |i: usize| -> Vec<f64> {
+        let mut out = Vec::with_capacity(nb - i);
+        out.push(partial::self_inductance(&branches[i].bar));
+        for j in (i + 1)..nb {
+            out.push(partial::mutual(&branches[i].bar, &branches[j].bar));
+        }
+        out
+    };
+    let threads = if nb >= 200 { parallelism().min(nb) } else { 1 };
+    let mut rows: Vec<(usize, Vec<f64>)> = if threads <= 1 {
+        (0..nb).map(|i| (i, row(i))).collect()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let row = &row;
+                    scope.spawn(move || (t..nb).step_by(threads).map(|i| (i, row(i))).collect::<Vec<_>>())
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().expect("assembly thread")).collect()
+        })
+    };
+    rows.sort_unstable_by_key(|r| r.0);
+    let mut m = vec![0.0; nb * nb];
+    for (i, values) in rows {
+        for (d, v) in values.into_iter().enumerate() {
+            m[i * nb + i + d] = v;
+            m[(i + d) * nb + i] = v;
+        }
+    }
+    m
+}
+
 impl Solver {
     /// Build the loop system. `limit` bounds the number of filaments (the inductance matrix is dense).
     pub fn new(network: &Network, limit: usize) -> Result<Solver, SolveError> {
@@ -292,39 +330,30 @@ impl Solver {
         path_rows.sort_unstable();
         path_rows.dedup();
         // Partial inductance matrix.
-        let mut inductance = vec![0.0; nb * nb];
-        for i in 0..nb {
-            inductance[i * nb + i] = partial::self_inductance(&network.branches[i].bar);
-            for j in (i + 1)..nb {
-                let m = partial::mutual(&network.branches[i].bar, &network.branches[j].bar);
-                inductance[i * nb + j] = m;
-                inductance[j * nb + i] = m;
-            }
-        }
+        let inductance = assemble_inductance(&network.branches);
         let resistance: Vec<f64> = network.branches.iter().map(|b| b.resistance).collect();
         // B L B^T = (B L) B^T.
         let mut bl_rows = vec![0.0; nl * nb];
-        for (l, lp) in loops.iter().enumerate() {
-            let row = &mut bl_rows[l * nb..(l + 1) * nb];
-            for &(k, s) in lp {
+        parallel_rows(&mut bl_rows, nb, |l, row| {
+            for &(k, s) in &loops[l] {
                 let src = &inductance[k * nb..(k + 1) * nb];
                 for (dst, v) in row.iter_mut().zip(src) {
                     *dst += s * v;
                 }
             }
-        }
+        });
         let mut bl = vec![0.0; nl * nl];
         let mut br = vec![0.0; nl * nl];
-        for (l2, lp2) in loops.iter().enumerate() {
-            for l1 in 0..nl {
-                let row = &bl_rows[l1 * nb..(l1 + 1) * nb];
+        parallel_rows(&mut bl, nl, |l1, out| {
+            let row = &bl_rows[l1 * nb..(l1 + 1) * nb];
+            for (l2, lp2) in loops.iter().enumerate() {
                 let mut acc = 0.0;
                 for &(k, s) in lp2 {
                     acc += s * row[k];
                 }
-                bl[l1 * nl + l2] = acc;
+                out[l2] = acc;
             }
-        }
+        });
         // B R B^T: loops share a branch only through it.
         let mut users: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nb];
         for (l, lp) in loops.iter().enumerate() {

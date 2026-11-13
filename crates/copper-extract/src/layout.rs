@@ -14,6 +14,10 @@ pub const COPPER_RESISTIVITY: f64 = copper_emi::inductance::COPPER_RESISTIVITY;
 pub struct Conductor {
     pub net: String,
     pub shapes: Shapes,
+    /// Copper of the loop being extracted (a loop track, a loop pad, a bar that stands for a component): a narrow
+    /// shape of it is cut into at least `MeshSpec::across` cells across its width whatever the pitch. Other narrow
+    /// copper is cut at the pitch.
+    pub on_loop: bool,
 }
 
 /// A request for a finer mesh in a rectangle `[x0, y0, x1, y1]` (nm) of one layer: lines at `cell_x_nm` pitch over
@@ -121,9 +125,11 @@ impl Layout {
 
     /// Add a polygon (nm, counter-clockwise or not) of `net` on `layer`.
     pub fn add_polygon(&mut self, layer: usize, net: &str, points: &[(f64, f64)]) {
-        self.layers[layer]
-            .conductors
-            .push(Conductor { net: net.to_owned(), shapes: copper_cam::poly::polygon(points) });
+        self.layers[layer].conductors.push(Conductor {
+            net: net.to_owned(),
+            shapes: copper_cam::poly::polygon(points),
+            on_loop: true,
+        });
     }
 
     /// Add an axis-aligned rectangle `[x0, y0, x1, y1]` (nm).

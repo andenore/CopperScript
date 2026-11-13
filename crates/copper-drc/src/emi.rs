@@ -1245,6 +1245,8 @@ struct Context<'a> {
     trace_copper_seen: bool,
     /// The standard hot loop chosen for each cell (by controller), for `EMI-CONDUCTED`.
     loops: BTreeMap<String, LoopSummary>,
+    /// Connection inductances from an extraction of the board's copper, by cell (empty: the estimates of section 10).
+    extracted: &'a [ExtractedConnections],
 }
 
 /// What `EMI-CONDUCTED` needs from the hot-loop analysis of a cell.
@@ -3883,7 +3885,51 @@ fn radiated_ranking_notes(findings: &[EmiFinding]) -> Vec<String> {
 /// flat electrical view the model was derived from (it carries the pin to pad
 /// numbers, supplies, the `emission` and `emi_accept` constraints and the part
 /// facts); `model` is `copper_lang::emi::analyze(view)`.
+/// The label of the hot-loop port in [`ExtractedConnections::labels`].
+pub const HOT_LOOP_PORT: &str = copper_emi::conducted::LOOP_LABEL;
+
+/// The inductance matrix of one cell's input network from an extraction of the board's copper
+/// (`copper-extract`): the hot loop and each capacitor of the cell's input network that hangs on the hot node as
+/// ports, every port current leaving the hot node along the copper they share. `EMI-CONDUCTED` takes the diagonal as
+/// the hot-loop and connection inductances and the off-diagonal terms as mutual inductances between them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExtractedConnections {
+    /// The cell's controller reference.
+    pub controller: String,
+    /// The ports: [`copper_emi::conducted::LOOP_LABEL`] first, then capacitor references.
+    pub labels: Vec<String>,
+    /// Symmetric positive definite matrix, henries, rows and columns in the order of `labels`.
+    pub inductance_h: Vec<Vec<f64>>,
+    /// The frequency the matrix was read at, Hz.
+    pub frequency_hz: f64,
+    /// The extraction's own status (`ok` or `indicative`) and its reasons, carried into the finding.
+    pub status: String,
+    pub reasons: Vec<String>,
+    /// What the matrix leaves out, for the finding (capacitors that are not ports, and why).
+    pub notes: Vec<String>,
+}
+
+/// [`emi_check`] with the connection inductances of the input networks from an extraction (see
+/// [`ExtractedConnections`]). With an empty list it is [`emi_check`], bit for bit.
+pub fn emi_check_with_connections(
+    board: &PhysicalBoard,
+    view: &FlatElectricalView,
+    model: &EmiModel,
+    extracted: &[ExtractedConnections],
+) -> EmiCheckReport {
+    emi_check_inner(board, view, model, extracted)
+}
+
 pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiModel) -> EmiCheckReport {
+    emi_check_inner(board, view, model, &[])
+}
+
+fn emi_check_inner(
+    board: &PhysicalBoard,
+    view: &FlatElectricalView,
+    model: &EmiModel,
+    extracted: &[ExtractedConnections],
+) -> EmiCheckReport {
     let standard = standard_of(view);
     let connectors = cable_connectors(view, &standard);
     let mut cx = Context {
@@ -3900,6 +3946,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         trace_legs_unrouted: 0,
         trace_copper_seen: false,
         loops: BTreeMap::new(),
+        extracted,
     };
     let mut cells = Vec::new();
     if model.cells.is_empty() {

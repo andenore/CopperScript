@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use copper_drc::emi::{EmiCheckReport, EmiFinding, emi_check};
+use copper_drc::emi::{EmiCheckReport, EmiFinding, ExtractedConnections, emi_check, emi_check_with_connections};
 use copper_drc::{CoverageStatus, Severity};
 use copper_json::Value;
 use copper_lang::compiler::compile_design_file;
@@ -2944,4 +2944,103 @@ fn the_filter_example_with_its_operating_point_matches_the_hand_calculation() {
     let Some(Value::Object(second)) = finding.measures.get("secondary_scenario") else { panic!("secondary") };
     let Some(Value::Object(f1)) = second.get("fundamental") else { panic!("fundamental") };
     assert!(number(f1.get("high_dbuv").unwrap()) > band_of(rows[0]).1 + 3.0);
+}
+
+/// [`run`] through [`emi_check_with_connections`].
+fn run_with_connections(name: &str, edits: &[(&str, &str)], extracted: &[ExtractedConnections]) -> EmiCheckReport {
+    let dir = project_of("emi_buck", name, edits);
+    let design = compile_design_file(&dir.join("board.copper"), false, false).unwrap_or_else(|e| panic!("{e}"));
+    let options = copper_pcb::configuration::physical_options(&design, (100.0, 80.0), None, "generic", false, false)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let board = physicalize(&design, Footprints::Proxy, &options, false, false).unwrap_or_else(|e| panic!("{e:?}"));
+    let view = elaborate(&design.electrical).expect("elaborates");
+    let model = emi::analyze(&view);
+    let report = emi_check_with_connections(&board, &view, &model, extracted);
+    let _ = fs::remove_dir_all(&dir);
+    report
+}
+
+fn known_matrix(status: &str) -> ExtractedConnections {
+    // Hot loop 5.0 nH, the second capacitor's connection 6.0 nH, mutual 2.0 nH (|M| < sqrt(5 x 6) = 5.48 nH).
+    ExtractedConnections {
+        controller: "U1".to_owned(),
+        labels: vec!["hot loop".to_owned(), "CIN2".to_owned()],
+        inductance_h: vec![vec![5.0e-9, 2.0e-9], vec![2.0e-9, 6.0e-9]],
+        frequency_hz: 10e6,
+        status: status.to_owned(),
+        reasons: if status == "ok" { Vec::new() } else { vec!["the two finest meshes differ by 4 %".to_owned()] },
+        notes: Vec::new(),
+    }
+}
+
+#[test]
+fn without_extracted_connections_the_report_is_the_default_one_bit_for_bit() {
+    for edits in [Vec::new(), with_second_capacitor()] {
+        let default = run("default-path", &edits);
+        let through_the_entry = run_with_connections("default-path-entry", &edits, &[]);
+        assert_eq!(default.json(), through_the_entry.json());
+        // A matrix for another cell changes nothing either.
+        let mut other = known_matrix("ok");
+        other.controller = "U9".to_owned();
+        assert_eq!(default.json(), run_with_connections("default-path-other", &edits, &[other]).json());
+    }
+}
+
+#[test]
+fn extracted_connection_inductances_replace_the_estimate_and_the_conducted_result_follows_a_hand_solution() {
+    let edits = with_second_capacitor();
+    let estimated = run("extract-estimate", &edits);
+    let report = run_with_connections("extract-known", &edits, &[known_matrix("ok")]);
+    let finding = conducted(&report);
+    let was = number(branch_of(conducted(&estimated), "CIN2").get("connection_inductance_nh").unwrap());
+    // The finding says which value came from the extraction, keeps the estimate beside it and names the coupling.
+    assert!(finding.tags.contains(&"extracted_connection_inductance".to_owned()), "{:?}", finding.tags);
+    assert!(!finding.tags.contains(&"estimated_connection_inductance".to_owned()), "{:?}", finding.tags);
+    assert!(!finding.tags.contains(&"extraction_indicative".to_owned()));
+    let cin2 = branch_of(finding, "CIN2");
+    assert_eq!(cin2.get("connection_source").and_then(Value::as_str), Some("extracted"));
+    assert!((number(cin2.get("connection_inductance_nh").unwrap()) - 6.0).abs() < 1e-9);
+    assert!((number(cin2.get("connection_inductance_estimate_nh").unwrap()) - was).abs() < 1e-3);
+    assert!(cin2.get("connection_basis").and_then(Value::as_str).unwrap().starts_with("extracted:"));
+    let Some(Value::Object(block)) = finding.measures.get("extracted_connections") else { panic!("no block") };
+    assert_eq!(block.get("status").and_then(Value::as_str), Some("ok"));
+    let mutuals = block.get("mutual_inductances").and_then(Value::as_array).unwrap();
+    assert_eq!(mutuals.len(), 1);
+    assert!(
+        (number(&match &mutuals[0] {
+            Value::Object(o) => o.get("mutual_nh").unwrap().clone(),
+            other => panic!("{other:?}"),
+        }) - 2.0)
+            .abs()
+            < 1e-9
+    );
+    assert!((number(block.get("hot_loop_inductance_used_nh").unwrap()) - 5.0).abs() < 1e-9);
+    // By hand at the fundamental (500 kHz, the example's switching frequency), the LISN path neglected as in the
+    // estimate test above: V = i (jwM / Z2 - 1) / (1/Z1 + 1/Z2), I2 = (V - jwM i) / Z2, with Z2 the whole branch.
+    let w = 2.0 * std::f64::consts::PI * 500e3;
+    let (c, esr, esl) = (5e-6, 5e-3, 0.6e-9);
+    let (z1, z2) = (rlc(w, esr, esl, c), rlc(w, esr, esl + 6e-9, c));
+    let jwm = Z(0.0, w * 2e-9);
+    let one = Z(1.0, 0.0);
+    let sub = |a: Z, b: Z| Z(a.0 - b.0, a.1 - b.1);
+    let v = sub(jwm / z2, one) / (one / z1 + one / z2);
+    let i2 = sub(v, jwm) / z2;
+    let i1 = v / z1;
+    let share = |branch: &copper_json::Object| number(branch.get("current_share_fundamental").unwrap());
+    assert!((share(cin2) - i2.abs()).abs() < 0.02 * i2.abs(), "{} against {}", share(cin2), i2.abs());
+    assert!((share(branch_of(finding, "CIN")) - i1.abs()).abs() < 0.02 * i1.abs());
+    // The coupling is in the result: the same inductances without the mutual term give other levels.
+    let mut uncoupled = known_matrix("ok");
+    uncoupled.inductance_h[0][1] = 0.0;
+    uncoupled.inductance_h[1][0] = 0.0;
+    let without = run_with_connections("extract-uncoupled", &edits, &[uncoupled]);
+    assert!(
+        (number(branch_of(conducted(&without), "CIN2").get("current_share_fundamental").unwrap()) - share(cin2)).abs()
+            > 0.005
+    );
+    // An indicative extraction says so in the conducted finding.
+    let indicative = run_with_connections("extract-indicative", &edits, &[known_matrix("indicative")]);
+    assert!(conducted(&indicative).tags.contains(&"extraction_indicative".to_owned()));
+    let Some(Value::Object(block)) = conducted(&indicative).measures.get("extracted_connections") else { panic!() };
+    assert_eq!(block.get("status").and_then(Value::as_str), Some("indicative"));
 }
