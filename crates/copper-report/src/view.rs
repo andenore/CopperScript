@@ -23,6 +23,50 @@ pub const SVG_NOTE: &str = "SVG view: saved fills are translucent; unfilled zone
 
 pub type Window = [f64; 4];
 
+/// The traced path of an EMI hot loop (`loop_path_3d_mm`, mm) and the loop's pads, drawn over the copper in place of a
+/// filled pad-centre outline: solid on the component layer, dashed on another layer, a circle at each via.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EmiLoop {
+    pub path: Vec<[f64; 3]>,
+    /// `REF.PAD` of each pad of the loop and where it is.
+    pub labels: Vec<(String, Point)>,
+}
+
+impl EmiLoop {
+    /// The loop of an `EMI-HOT-LOOP` finding, or `None` when the finding stores no path (a report from before it did).
+    pub fn from_finding(finding: &Value, scene: &Scene) -> Option<EmiLoop> {
+        let measures = finding.get("measures")?;
+        let number = |v: &Value| match v {
+            Value::Float(x) => Some(*x),
+            Value::Int(x) => x.to_string().parse().ok(),
+            _ => None,
+        };
+        let path: Vec<[f64; 3]> = measures
+            .get("loop_path_3d_mm")?
+            .as_array()?
+            .iter()
+            .filter_map(|v| {
+                let v = v.as_array()?;
+                Some([number(v.first()?)?, number(v.get(1)?)?, number(v.get(2)?)?])
+            })
+            .collect();
+        if path.len() < 3 {
+            return None;
+        }
+        let mut labels: Vec<(String, Point)> = Vec::new();
+        for entry in measures.get("pad_sequence").and_then(Value::as_array).unwrap_or_default() {
+            let Some(name) = entry.as_str().and_then(|text| text.rsplit(' ').next()) else { continue };
+            let Some((reference, pad)) = name.rsplit_once('.') else { continue };
+            if let Some(found) =
+                scene.pad(reference, pad).first().filter(|_| !labels.iter().any(|(label, _)| label == name))
+            {
+                labels.push((name.to_owned(), found.center));
+            }
+        }
+        Some(EmiLoop { path, labels })
+    }
+}
+
 pub struct ViewRequest {
     pub window: Window,
     pub layers: Vec<String>,
@@ -486,6 +530,17 @@ pub fn svg(
     colors: &[(Value, &'static str)],
     reference: Option<(&Scene, &Alignment)>,
 ) -> String {
+    svg_with_loop(scene, request, colors, reference, None)
+}
+
+/// [`svg`] with the traced path of an EMI hot loop over every panel.
+pub fn svg_with_loop(
+    scene: &Scene,
+    request: &ViewRequest,
+    colors: &[(Value, &'static str)],
+    reference: Option<(&Scene, &Alignment)>,
+    emi_loop: Option<&EmiLoop>,
+) -> String {
     let [x0, y0, x1, y1] = request.window;
     let window = &request.window;
     let reference = reference.map(|(scene, alignment)| alignment.scene(scene));
@@ -620,6 +675,9 @@ pub fn svg(
                 ));
             }
         }
+        if let Some(found) = emi_loop {
+            emi_loop_parts(found, window, &mut parts);
+        }
         for (x, y) in &request.markers {
             parts.push(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"0.35\" fill=\"none\" stroke=\"{MARKER}\" stroke-width=\"0.08\"/>",
@@ -648,6 +706,84 @@ pub fn svg(
         r(height),
         parts.concat()
     )
+}
+
+/// The traced hot loop of an issue: legs on the component layer solid, legs on another layer dashed, a circle at each
+/// via, and the reference of each loop pad nudged clear of the others.
+fn emi_loop_parts(found: &EmiLoop, window: &Window, parts: &mut Vec<String>) {
+    use crate::emi_field::{LOOP, LOOP_OTHER, Placer, loop_runs};
+    let (runs, vias) = loop_runs(&found.path);
+    parts.push("<g class=\"emi_loop\" fill=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\">".to_owned());
+    for casing in [true, false] {
+        for run in &runs {
+            let d: Vec<String> = run
+                .points
+                .iter()
+                .enumerate()
+                .map(|(k, p)| format!("{}{} {}", if k == 0 { "M" } else { "L" }, r(p.0), r(p.1)))
+                .collect();
+            let d = d.join(" ");
+            if casing {
+                parts
+                    .push(format!("<path d=\"{d}\" stroke=\"#ffffff\" stroke-opacity=\"0.85\" stroke-width=\"0.4\"/>"));
+            } else if run.component_layer {
+                parts
+                    .push(format!("<path class=\"loop-component\" d=\"{d}\" stroke=\"{LOOP}\" stroke-width=\"0.2\"/>"));
+            } else {
+                parts.push(format!(
+                    "<path class=\"loop-other\" d=\"{d}\" stroke=\"{LOOP_OTHER}\" stroke-width=\"0.2\" stroke-dasharray=\"0.5 0.32\"/>"
+                ));
+            }
+        }
+    }
+    for via in &vias {
+        parts.push(format!(
+            "<circle class=\"loop-via\" cx=\"{}\" cy=\"{}\" r=\"0.34\" fill=\"#ffffff\" stroke=\"{LOOP}\" stroke-width=\"0.14\"/>",
+            r(via.0),
+            r(via.1)
+        ));
+    }
+    parts.push("</g>".to_owned());
+    // Reference labels, 0.62 mm high; the loop's own vias and pad centres are kept clear.
+    let mut placer = Placer { taken: Vec::new(), bounds: *window, pad: 0.1 };
+    for (_, centre) in &found.labels {
+        placer.taken.push([centre.0 - 0.3, centre.1 - 0.3, centre.0 + 0.3, centre.1 + 0.3]);
+    }
+    for via in &vias {
+        placer.taken.push([via.0 - 0.4, via.1 - 0.4, via.0 + 0.4, via.1 + 0.4]);
+    }
+    for run in &runs {
+        for pair in run.points.windows(2) {
+            placer.reserve_line(pair[0], pair[1], 0.25, 0.2);
+        }
+    }
+    for (label, centre) in &found.labels {
+        if !inside(*centre, window) {
+            continue;
+        }
+        let w = label.chars().count() as f64 * 0.36;
+        let (x, y) = placer.place(
+            *centre,
+            w,
+            0.62,
+            &[
+                (0.4, -0.4),
+                (0.4, 0.95),
+                (-w - 0.4, -0.4),
+                (-w - 0.4, 0.95),
+                (-w / 2.0, -0.7),
+                (-w / 2.0, 1.3),
+                (0.4, 1.9),
+                (-w - 0.4, 1.9),
+            ],
+        );
+        parts.push(format!(
+            "<text class=\"loop-label\" x=\"{}\" y=\"{}\" font-family=\"sans-serif\" font-size=\"0.62\" fill=\"#1f2933\" stroke=\"#ffffff\" stroke-width=\"0.16\" stroke-linejoin=\"round\" paint-order=\"stroke\">{}</text>",
+            r(x),
+            r(y),
+            label.replace('&', "&amp;").replace('<', "&lt;")
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -854,6 +990,35 @@ mod tests {
             "transformed via land and drill only on F.Cu"
         );
         assert!(!drawing.contains("cx=\"8.0\""));
+    }
+
+    #[test]
+    fn a_traced_hot_loop_is_drawn_solid_per_layer_dashed_with_vias_and_labels() {
+        let scene = Scene { pads: vec![pad("1", (2.0, 2.0)), pad("2", (6.0, 2.0))], ..Scene::default() };
+        let finding = copper_json::parse(
+            r#"{"code":"EMI-HOT-LOOP","measures":{"pad_sequence":["input capacitor U1.1","hot supply U1.2"],
+               "loop_path_3d_mm":[[2,2,0],[6,2,0],[6,6,0],[6,6,-0.2],[2,6,-0.2],[2,6,0]]}}"#,
+        )
+        .unwrap();
+        let found = EmiLoop::from_finding(&finding, &scene).expect("a loop with a path");
+        assert_eq!(found.labels.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["U1.1", "U1.2"]);
+        let request = ViewRequest {
+            window: [0.0, 0.0, 10.0, 10.0],
+            layers: vec!["F.Cu".into()],
+            highlight: vec![],
+            markers: vec![],
+        };
+        let drawn = svg_with_loop(&scene, &request, &[], None, Some(&found));
+        assert!(drawn.contains("class=\"emi_loop\"") && drawn.contains("class=\"loop-component\""), "{drawn}");
+        assert_eq!(drawn.matches("class=\"loop-other\"").count(), 1, "{drawn}");
+        assert_eq!(drawn.matches("class=\"loop-via\"").count(), 2, "{drawn}");
+        assert_eq!(drawn.matches("class=\"loop-label\"").count(), 2, "{drawn}");
+        assert!(!drawn.contains("fill-opacity=\"0.12\""), "no filled pad-centre polygon");
+        assert_eq!(drawn, svg_with_loop(&scene, &request, &[], None, Some(&found)));
+        // The plain view has none of it, and a finding without a path gives no loop (the caller keeps the outline).
+        assert!(!svg(&scene, &request, &[], None).contains("emi_loop"));
+        let old = copper_json::parse(r#"{"code":"EMI-HOT-LOOP","measures":{}}"#).unwrap();
+        assert_eq!(EmiLoop::from_finding(&old, &scene), None);
     }
 
     #[test]

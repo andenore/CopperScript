@@ -653,11 +653,11 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--plot-spectrum PLOT_SPECTRUM",
-                help: "write the conducted-emission spectrum as a self-contained SVG: one panel per cell with an EMI-CONDUCTED finding, harmonic stems 150 kHz to 30 MHz, quasi-peak and average limit lines when an emission standard is declared and the levels are detector readings (a panel whose isolated-line assumption fails, or a declared switching-frequency range, shows line amplitudes only, no limit); the common-mode score is a ranking and is never plotted; a screening estimate",
+                help: "write the conducted-emission spectrum as a self-contained SVG: one panel per cell with an EMI-CONDUCTED finding, harmonic markers and envelope 150 kHz to 30 MHz (stems for the first ten), the worst harmonic marked with its margin to each limit, quasi-peak and average limit lines across the whole band when an emission standard is declared and the levels are detector readings (a panel whose isolated-line assumption fails, or a declared switching-frequency range, shows line amplitudes only, no limit); the common-mode score is a ranking and is never plotted; a screening estimate",
             },
             Opt {
                 flag: "--plot-field PLOT_FIELD",
-                help: "write the quasi-static magnetic near-field map of each hot loop (|H| in dB(uA/m) in a plane above the board, with the level at sensitive pads and connectors) as an SVG; the hot-loop current path only, the inductor's own field is not included; a screening estimate",
+                help: "write the quasi-static magnetic near-field map of each hot loop (|H| in dB relative to the map maximum, with 10 dB contours, in a plane above the board; the loop drawn from its traced path, solid on the component layer and dashed on another; the level below the peak at sensitive pads and connectors) as an SVG; the hot-loop current path only, the inductor's own field is not included; a screening estimate",
             },
             Opt {
                 flag: "--field-height FIELD_HEIGHT",

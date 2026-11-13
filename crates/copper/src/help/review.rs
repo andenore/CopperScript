@@ -52,7 +52,7 @@ pub const COMMANDS: &[Command] = &[
             Opt { flag: "--filled", help: "draw the run's saved native (refilled) board; does not refill" },
             Opt {
                 flag: "--emi-field",
-                help: "with --issue of an EMI-HOT-LOOP finding: draw the quasi-static magnetic near-field map of the loop (|H| in dB(uA/m) in a plane above the board, level at sensitive pads) instead of the layer panels; a screening estimate, the inductor's own field is not included",
+                help: "with --issue of an EMI-HOT-LOOP finding: draw the quasi-static magnetic near-field map of the loop (|H| in dB relative to the map maximum, 10 dB contours, in a plane above the board, level below the peak at sensitive pads) instead of the layer panels; without --emi-field an EMI-HOT-LOOP issue draws the traced loop (solid on the component layer, dashed on another, circles at vias) over the layer panels; a screening estimate, the inductor's own field is not included",
             },
             Opt {
                 flag: "--field-height FIELD_HEIGHT",

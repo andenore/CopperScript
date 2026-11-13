@@ -634,32 +634,51 @@ stays the single file of a run (there is no sidecar):
   finding: every pad of the net). `--stage emi` filters; an `error` section or
   an empty one lists nothing.
 - *`copper view RUN --issue M2`* frames the window, highlights the issue's nets
-  and draws the hot loop as a red outline over the copper (`SceneArea` of kind
-  `emi_loop`, SVG class `emi_loop`, on the layers of the finding); the legend
-  names it as a screening estimate. Other emi issues are marked at their pad
+  and draws the hot loop over the copper from the finding's traced path
+  `loop_path_3d_mm` (SVG group `emi_loop`): legs on the layer of the path's first
+  vertex (the component layer) as a solid red line, legs on another layer (a
+  different z) as a dashed blue line, a circle at each via (a z step at one
+  place), and the `REF.PAD` of every loop pad, nudged clear of the path and of
+  each other. The path is drawn in every layer panel, since the view has no
+  z-to-layer table. A section written before the path was stored (no
+  `loop_path_3d_mm`) keeps the earlier filled pad-centre outline (`SceneArea` of
+  kind `emi_loop`, SVG class `emi_loop`, on the layers of the finding); the
+  legend names the loop as a screening estimate. Other emi issues are marked at their pad
   centres like the other stages. `view` has no stage filter of its own.
 
 ### Visualization
 
 Two hand-written, deterministic SVGs (no dependencies, explicit white
-background, fixed palette), both labelled as screening estimates and both
-ending in "screening estimate, not EMC qualification" or "not a field
-prediction".
+background, fixed palette), both labelled as screening estimates in one short
+line ("Screening estimate, not a compliance measurement" under the spectrum, a
+neutral note that also says the inductor's own field is not included on the
+map); the assumptions and the limits of the model are stated once, in plain
+sentences, not as repeated warnings.
 
 **Conducted spectrum.** `copper emi-check BOARD [--run RUN] --plot-spectrum OUT.svg`
 writes one panel per cell with an `EMI-CONDUCTED` finding (renderer:
 `copper_report::emi_plot`, data read from `measures.harmonics`): a log
 frequency axis from 150 kHz to 30 MHz (decade and 2/5 gridlines), dBuV with a
-gridline every 10 dB, one stem and dot per harmonic at the high end of its band (its total level
+gridline every 10 dB, a marker per harmonic at the high end of its band (its total level
 when it has none; the differential-mode series is the total while common mode
-is not modelled; with common mode present DM and CM are added as markers), a
-translucent whisker from the low to the high end behind each stem for a banded
+is not modelled; with common mode present DM and CM are added as markers) joined
+by a thin envelope line, with a stem from the axis floor for the first ten
+harmonics only (above that the stems would merge into a fence; a harmonic below
+the axis floor breaks the line and is counted under the plot), a
+translucent whisker from the low to the high end behind each marker for a banded
 harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
-lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
+limit lines drawn across the whole band from the limit table of `copper_emi`
+(`estimate::limits::cispr32_conducted`, class from `measures.limit_class`:
+its segment ends, so the 150-500 kHz slope, linear in dB against log frequency,
+is one straight line and the step at 5 MHz is vertical; not through the
+per-harmonic values) when an
 `emission` standard with a conducted table is declared **and the finding's levels are detector
 readings** (`measures.detector_applicability = isolated_lines`; for `receiver_emulation` the lines run through the harmonics the receiver model read, which are marked by diamonds at their high-end quasi-peak reading, in the warning colour above a limit, while the stems stay line amplitudes and the panel is headed "NOT detector readings; receiver emulation at the diamonds"), harmonics above the
-average line in the warning colour, and the finding's tags (`scenario_declared_operating_point` or `scenario_current_limit` with
-`worst_case_current`, `rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A panel whose detector
+average line in the warning colour, and the worst harmonic ringed on its point with a label giving its frequency, level and
+its margin to each limit line ("12.3 dB over the average limit", "4.1 dB under the quasi-peak limit"; `limit - level`, from
+the harmonic's own `limit_avg`/`limit_qp`). The legend lists exactly the styles present in the plot, both limit lines included.
+The finding's tags are shown as plain sentences (a table in `copper_report::emi_plot`, most consequential first, at most four,
+then "+N more in the report"; an unknown tag is shown as its words) under the title. A panel whose detector
 assumption fails (harmonic spacing inside the IF bandwidth, or a declared frequency range) is headed
 "conducted line amplitudes, NOT a detector reading", draws no limit line, no warning colour and no
 margin, and prints the reason; the panels of a frequency range are one per fixed-frequency
@@ -672,15 +691,21 @@ without an `EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
 [--field-height 1mm]` and `copper view RUN --issue M<n> --emi-field
 [--field-height 1mm]` (an `EMI-HOT-LOOP` issue) draw `|H|` in a plane
 `--field-height` above the top copper (default 1 mm) as a heat map in
-dB(uA/m) over the loop window, with the loop outline, the pads of the cell's
-loop components, the top-layer copper of the board scene under the map, a colour
-bar and, for every pad of a `sensitive` net outside the cell and of every cable
-connector, a marker with the field level at the pad centre (the useful number:
-the field at the victim), also listed beside the map with the distance from the
-loop. The colour scale is a fixed 16-step viridis-like table over 40 dB below
-the map maximum; cells below it are transparent. Grid cells are 0.25 mm, with a
-larger step when the window would exceed 200 cells a side; runs of equal colour
-in a row are one rect.
+dB relative to the map maximum (0 to -40 dB, a 40-step viridis scale of one dB
+a step, so only the true maximum is in the last step; cells below it are
+transparent) with contour lines every 10 dB, over the loop window, with the loop drawn from
+`loop_path_3d_mm` (solid on the component layer, dashed on another layer, a circle
+at each via; legend entries only for the styles present), the pads of the cell's
+loop components with their names, the top-layer copper of the board scene under the map and as thin outlines above it,
+the board outline where it reaches the window, a colour bar and, for every pad of a `sensitive` net outside the cell and of every cable
+connector, a marker with its level below the peak at the pad centre (the useful
+number: the field at the victim), also listed beside the map ("x dB below peak,
+y mm from the loop"). The absolute maximum is stated once, in small text under the colour bar with its
+amplitude and scenario (a ranking aid). The window holds the loop's box plus 3 mm on every side and every cell within 40 dB of the maximum
+(it may reach past the board outline; the field is first computed 20 mm round the box and cropped), and the right-hand column is
+sized from its text, with long rows wrapped, so nothing is clipped. Labels have a white halo and are nudged
+deterministically clear of the rings, the contour levels, the loop and each other. Grid cells are 0.25 mm, with a
+larger step when the window would exceed 200 cells a side; the heat map is one compound path per colour step.
 
 The field is computed by `copper_emi::field` from data the finding carries:
 

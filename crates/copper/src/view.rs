@@ -15,7 +15,7 @@ use copper_report::py::{self, Py, PyErr};
 use copper_report::scene::{Point, Scene, SceneArea, python_float};
 use copper_report::view::{
     EMI_LOOP, SVG_NOTE, ViewRequest, Window, align_reference, inside, layers_in_window, legend, net_colors,
-    segment_hits, svg, window_around,
+    segment_hits, svg_with_loop, window_around,
 };
 
 use crate::issues::report_failure;
@@ -260,6 +260,7 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
     let mut issue_layers: Vec<Value> = Vec::new();
     let window: Window;
     let label: String;
+    let mut emi_loop: Option<copper_report::view::EmiLoop> = None;
     if let Some(issue_id) = &options.issue {
         let Some(run) = run.as_mut() else {
             return Err(PyErr::value_error("--issue needs a run directory or report"));
@@ -325,7 +326,19 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
             .filter(|layer| scene.copper_layers.iter().any(|c| py::eq_str(layer, c)))
             .cloned()
             .collect();
-        if !issue.outline.is_empty() {
+        // The traced path of an EMI hot loop is drawn solid or dashed per layer; a run whose section predates the
+        // stored path keeps the filled pad-centre outline.
+        if !issue.outline.is_empty() && issue.stage == "emi" {
+            emi_loop = run
+                .report()
+                .ok()
+                .and_then(|report| copper_report::issues::emi_finding(report, &issue.id))
+                .and_then(|finding| copper_report::view::EmiLoop::from_finding(finding, &scene));
+            if emi_loop.is_some() {
+                notes.push("emi hot loop (screening estimate of the traced loop, not EMC qualification): solid on the component layer, dashed on another layer, circles are vias".to_owned());
+            }
+        }
+        if !issue.outline.is_empty() && emi_loop.is_none() {
             let drawn: Vec<&String> = if issue.layers.is_empty() {
                 scene.copper_layers.iter().collect()
             } else {
@@ -441,7 +454,13 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
     let output = with_svg_suffix(&output)?;
     copper_json::text::write_text(
         std::path::Path::new(&output),
-        &svg(&scene, &request, &colors, reference_overlay.as_ref().map(|(scene, alignment)| (scene, alignment))),
+        &svg_with_loop(
+            &scene,
+            &request,
+            &colors,
+            reference_overlay.as_ref().map(|(scene, alignment)| (scene, alignment)),
+            emi_loop.as_ref(),
+        ),
     )
     .map_err(|error| paths::os_error(&error, &output))?;
     lines.push(SVG_NOTE.to_owned());

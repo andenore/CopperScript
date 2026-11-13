@@ -2560,16 +2560,17 @@ directory holding it) instead of the placed prototype; a run that holds only a
 marked `provisional_placement`.
 
 `--plot-spectrum OUT.svg` writes the conducted spectrum of every cell with an
-`EMI-CONDUCTED` finding as an SVG (harmonic stems 150 kHz to 30 MHz in dBuV, the
-quasi-peak and average limit lines when a conducted `emission` standard is
-declared and the levels are detector readings, and the assumption tags; a `receiver_emulation` panel marks the harmonics
+`EMI-CONDUCTED` finding as an SVG (harmonic markers and envelope 150 kHz to 30 MHz in dBuV, stems for the first ten, the worst harmonic ringed with its margin to each limit, the
+quasi-peak and average limit lines across the whole band when a conducted `emission` standard is
+declared and the levels are detector readings, and the assumptions as plain sentences; a `receiver_emulation` panel marks the harmonics
 the receiver model read with diamonds and draws the limits through them only; a panel whose levels are only line
 amplitudes is headed "NOT a detector reading" and draws no limit line or margin). The common-mode score is
 a ranking and is never plotted.
 `--plot-field OUT.svg [--field-height 1mm]` (and `copper view RUN --issue ID
 --emi-field` for an `EMI-HOT-LOOP` issue of a run) draws the quasi-static
 magnetic near field `|H|` of the hot-loop current path, in dB(uA/m) in a plane
-above the top copper, over the layout, with the level at the pads of `sensitive`
+above the top copper, over the layout, in dB relative to the map maximum with 10 dB contours, the loop drawn from its traced
+path (solid on the component layer, dashed on another layer, circles at vias), and the level below the peak at the pads of `sensitive`
 nets and cable connectors. Both are screening estimates: the field uses the amplitude and scenario of the hot-loop
 finding (`I_out + dI/2` at a declared operating point, else the loop's `current_peak`, per ampere without one; the map
 names which) with an ideal ground plane by images, and does not include the power inductor's own field (coverage

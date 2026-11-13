@@ -78,13 +78,20 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
     for frequency in ["500000", "1000000", "1500000", "5000000"] {
         assert!(svg.contains(&format!("data-frequency-hz=\"{frequency}\"")), "{frequency}");
     }
-    // cispr32_class_b is declared: both limit lines, drawn through the harmonics' limits.
-    assert_eq!(svg.matches("<polyline class=\"limit-qp\"").count(), 1);
-    assert_eq!(svg.matches("<polyline class=\"limit-avg\"").count(), 1);
-    assert!(svg.contains("screening estimate, not EMC qualification"));
+    // cispr32_class_b is declared: both limit lines, drawn across the whole band from the limit table (the first
+    // point of each is the 150 kHz edge of the axis, x = 70).
+    assert_eq!(svg.matches("<polyline class=\"limit-qp\" points=\"70,").count(), 1, "{svg}");
+    assert_eq!(svg.matches("<polyline class=\"limit-avg\" points=\"70,").count(), 1, "{svg}");
+    assert!(svg.contains(">quasi-peak limit<") && svg.contains(">average limit<"), "the legend names both lines");
+    assert!(svg.contains("Screening estimate, not a compliance measurement"));
     // The example declares load_current: the panel is the declared operating point, not the current-limit worst case.
-    assert!(svg.contains("scenario_declared_operating_point") && svg.contains("differential_mode_only"));
-    assert!(!svg.contains("worst_case_current"));
+    // The assumptions are plain sentences, not tags.
+    assert!(
+        svg.contains("The current is the declared operating point.") && svg.contains("Differential mode only"),
+        "{svg}"
+    );
+    assert!(!svg.contains("scenario_declared_operating_point") && !svg.contains("differential_mode_only"));
+    assert!(!svg.contains("worst case"));
     assert!(svg.contains(">150 kHz</text>") && svg.contains(">30 MHz</text>") && svg.contains("dBuV"));
     assert!(svg.contains("fill=\"#ffffff\""));
     // No accuracy figure, no uncertainty whisker; the common-mode ranking score of the switch node is not drawn.
@@ -105,7 +112,7 @@ fn the_field_map_of_a_declared_operating_point_is_drawn_at_the_peak_switch_curre
     let (result, svg) = plot_field(FILTER, &path, &[]);
     assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
     // 12 V to 5 V at 500 kHz, 4.7 uH, 2 A: dI = 7 x (5 / 12) / (4.7 uH x 500 kHz) = 1.241 A, so I_out + dI/2 = 2.62 A.
-    assert!(svg.contains("amplitude 2.62 A, scenario declared_operating_point"), "{svg}");
+    assert!(svg.contains("Amplitude 2.62 A, scenario declared_operating_point"), "{svg}");
     assert!(!svg.contains("4.5 A"), "the 4.5 A limit is not the amplitude of the map");
     // The finding carries the same amplitude and scenario.
     let json = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--json"]);
@@ -136,10 +143,13 @@ fn the_field_map_has_a_colour_bar_the_loop_outline_and_a_level_at_the_feedback_p
     assert!(stdout(&result).contains("near-field map of 1 hot loop(s) at 1 mm"), "{}", stdout(&result));
     assert!(svg.contains("<g class=\"colorbar\">") && svg.contains("dB(uA/m)"));
     assert_eq!(svg.matches("class=\"emi_loop\"").count(), 1, "the loop outline");
-    assert!(svg.contains("screening estimate, not a field prediction"));
+    assert!(svg.contains("Screening estimate, a ranking and placement aid"));
     assert!(svg.contains("EMI-FIELD:inductor") && svg.contains("NOT included"));
+    // Levels are dB relative to the map maximum, with the absolute maximum stated once.
+    assert!(svg.contains("dB relative to the map maximum") && svg.contains("dB below peak"), "{svg}");
+    assert_eq!(svg.matches("0 dB = ").count(), 1, "the absolute maximum is stated once");
     assert!(
-        svg.contains("amplitude 4.5 A, scenario current_limit"),
+        svg.contains("Amplitude 4.5 A, scenario current_limit"),
         "no operating point is declared: the cell's current_peak is the amplitude, named as the current limit"
     );
     assert!(svg.contains("data-net=\"FB\""), "{svg}");
@@ -314,8 +324,8 @@ fn a_frequency_range_plots_line_amplitudes_without_limit_lines_for_both_ends() {
     assert_eq!(svg.matches("<g class=\"panel\"").count(), 2, "one panel per frequency scenario");
     assert!(svg.contains("(range lower bound)") && svg.contains("(range upper bound)"), "{svg}");
     assert!(svg.matches("NOT a detector reading").count() >= 2);
-    assert!(!svg.contains("<polyline"), "no limit line for line amplitudes");
-    assert!(!svg.contains("over-average") && !svg.contains("dB to the average line"));
+    assert!(!svg.contains("<polyline class=\"limit"), "no limit line for line amplitudes");
+    assert!(!svg.contains("over-average") && !svg.contains("dB over the average limit"));
     assert!(svg.contains("no limit lines and no margin"), "{svg}");
     // The text report states the same: no margin on the conducted findings.
     let text = stdout(&copper(&["emi-check", board.to_str().unwrap(), "--allow-proxy-footprints"]));

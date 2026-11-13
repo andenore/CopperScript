@@ -129,33 +129,15 @@ fn route_board_embeds_the_section_and_issues_and_view_read_it() {
     }
     assert!(!all.contains("about 15 dB"), "{all}");
 
-    // The hot loop's polygon is drawn.
+    // The hot loop is drawn from its traced path (the run's section stores it): solid on the component layer.
     let svg_path = run.join("hot-loop.svg");
     let view = copper(&["view", run_text, "--issue", id, "-o", svg_path.to_str().unwrap()]);
     assert_eq!(view.status.code(), Some(0), "{}{}", stdout(&view), String::from_utf8_lossy(&view.stderr));
     let svg = std::fs::read_to_string(&svg_path).expect("the SVG");
-    assert!(svg.contains("class=\"emi_loop\""), "the loop outline in the SVG");
-    let polygon = section
-        .get("findings")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
-        .and_then(|f| f.get("measures")?.get("loop_polygon_mm")?.as_array())
-        .unwrap();
-    let Some(Value::Array(first)) = polygon.first() else { panic!("a vertex") };
-    let number = |v: &Value| match v {
-        Value::Float(x) => *x,
-        Value::Int(x) => x.to_string().parse().unwrap(),
-        _ => panic!("a number"),
-    };
-    let vertex = format!(
-        "M {} {}",
-        copper_json::python_float_repr(number(&first[0])),
-        copper_json::python_float_repr(number(&first[1]))
-    );
-    assert!(svg.contains(&vertex), "{vertex} starts the outline path");
-    assert!(stdout(&view).contains("emi hot-loop outline"), "{}", stdout(&view));
+    assert!(svg.contains("class=\"emi_loop\""), "the loop in the SVG");
+    assert!(svg.contains("class=\"loop-component\"") && svg.contains("class=\"loop-label\""), "{svg}");
+    assert!(!svg.contains("fill-opacity=\"0.12\""), "the traced path replaces the filled pad-centre outline");
+    assert!(stdout(&view).contains("emi hot loop (screening estimate of the traced loop"), "{}", stdout(&view));
     // A proximity issue has no outline but frames its pads.
     let proximity = issues.iter().find(|i| i.get("code").and_then(Value::as_str) == Some("EMI-PROXIMITY")).unwrap();
     let pid = proximity.get("id").and_then(Value::as_str).unwrap();
