@@ -15,7 +15,7 @@ pub struct Parsed {
     pub errors: Vec<CopperScriptError>,
 }
 
-const STARTERS: [&str; 37] = [
+const STARTERS: [&str; 38] = [
     "component",
     "module",
     "net",
@@ -42,6 +42,7 @@ const STARTERS: [&str; 37] = [
     "mechanical",
     "silkscreen",
     "physical_macro",
+    "build",
     "pin",
     "pad",
     "peripheral",

@@ -7,6 +7,7 @@
 //! strings do.
 
 pub mod antenna;
+pub mod build_settings;
 pub mod compiler;
 pub mod diagnostics;
 pub mod elaborate;

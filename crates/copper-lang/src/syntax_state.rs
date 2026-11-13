@@ -403,6 +403,31 @@ pub fn declaration(declaration: &Declaration) -> StateValue {
                 ),
             ],
         ),
+        Declaration::Build(item) => syntax(
+            "BuildDecl",
+            vec![
+                ("location", location(&item.location)),
+                (
+                    "settings",
+                    StateValue::Tuple(
+                        item.settings
+                            .iter()
+                            .map(|entry| {
+                                syntax(
+                                    "BuildSettingDecl",
+                                    vec![
+                                        ("location", location(&entry.location)),
+                                        ("group", text(&entry.group)),
+                                        ("key", text(&entry.key)),
+                                        ("value", scalar(&entry.value)),
+                                    ],
+                                )
+                            })
+                            .collect(),
+                    ),
+                ),
+            ],
+        ),
         Declaration::MechanicalItem(item) => mechanical_item(item),
     }
 }

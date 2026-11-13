@@ -677,6 +677,9 @@ pub fn design_value(design: &Design) -> Value {
     if let Some(mechanical) = &design.mechanical {
         result.insert("mechanical".to_owned(), crate::mechanical::mechanical_document(mechanical));
     }
+    if let Some(build) = &design.build {
+        result.insert("build".to_owned(), build.document());
+    }
     Value::Object(result)
 }
 

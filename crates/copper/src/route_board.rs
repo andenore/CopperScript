@@ -288,7 +288,7 @@ const VALUED: [&str; 43] = [
     "--reuse-placement",
 ];
 
-fn specs() -> Vec<Spec> {
+pub(crate) fn specs() -> Vec<Spec> {
     let mut specs: Vec<Spec> = FLAGS.iter().chain(MORE_FLAGS.iter()).map(|name| flag(name)).collect();
     specs.push(short_value("--output", "-o"));
     for name in VALUED {
@@ -529,7 +529,7 @@ const LENGTHS: [(&str, &str, bool); 8] = [
     ("--plane-stitch-step-mm", "0.5", true),
     ("--plane-stitch-radius-mm", "3", true),
     ("--plane-maze-step-mm", "0.1", true),
-    ("--plane-contact-radius-mm", "0", false),
+    ("--plane-contact-radius-mm", "5", false),
     ("--plane-stitch-detour-mm", "0", false),
 ];
 
@@ -764,7 +764,20 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         let _ = writeln!(err, "copper route-board: error: {message}");
         return 2;
     }
-    let parsed = match option_parser::parse_exact(argv, &specs()) {
+    // The board's `build` block supplies defaults: its options go in front of
+    // the command line, so an option given there overrides the source.
+    let specs = specs();
+    let merged = match crate::source_build::merged(argv, &specs, |arguments, specs| {
+        option_parser::parse_exact(arguments, specs).ok()
+    }) {
+        Ok(merged) => merged,
+        Err(failure) => {
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
+            return 2;
+        }
+    };
+    let argv = merged.arguments.as_slice();
+    let parsed = match option_parser::parse_exact(argv, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
     };
@@ -790,6 +803,9 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         Err(Checked::Pending(what)) => return not_implemented(err, &what),
     };
     apply_routing_profile(&mut arguments, argv);
+    if !merged.source.is_empty() {
+        let _ = text::print(out, &crate::source_build::notice(&arguments.board, &merged.source));
+    }
     let debug = false;
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
     let board_path = pypath::display(&arguments.board);

@@ -40,6 +40,8 @@ pub struct Design {
     pub electrical: Board,
     pub mechanical: Option<crate::mechanical::MechanicalDesign>,
     pub silkscreen: crate::silkscreen::SilkscreenDesign,
+    /// The board's `build` block: defaults for the physical commands' options.
+    pub build: Option<crate::build_settings::BuildSettings>,
 }
 
 /// `is_macro_import`: a `.json` data import.
@@ -1172,6 +1174,7 @@ pub fn compile_design_source_with(
     let imported = resolve_board_imports_with(&document, locked, offline, resolver)?;
     let mechanical = crate::mechanical::lower_mechanical(&document, &imported.profiles)?;
     let silkscreen = crate::silkscreen::lower_silkscreen(&document)?;
+    let build = crate::build_settings::lower_build(&document)?;
     let electrical = compile_board(&document, &imported)?;
     let has_macros = !electrical.physical_macros.is_empty()
         || electrical.module_definitions.values().any(|module| !module.physical_macros.is_empty());
@@ -1194,7 +1197,7 @@ pub fn compile_design_source_with(
             }
         }
     }
-    Ok(Design { electrical, mechanical, silkscreen })
+    Ok(Design { electrical, mechanical, silkscreen, build })
 }
 
 /// `compile_design_file`: read the resolved path and compile it.

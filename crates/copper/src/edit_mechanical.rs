@@ -52,6 +52,8 @@ options:
   --layers {2,4,6}      explicit copper-layer count; default derives it from
                         source stackup and layer requirements
   --fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}
+                        fabrication-rule profile; default is fab_profile of the
+                        board's build block, else generic
   --placement-templates PLACEMENT_TEMPLATES
   --hard-macro HARD_MACRO
   --allow-proxy-footprints
@@ -89,6 +91,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         option_parser::value("--scene-output"),
         option_parser::value("--overlay"),
     ];
+    // The board's `build` block supplies the fabrication preset unless one is given here.
+    let arguments = &crate::source_build::with_source_options(arguments, &options, |arguments, specs| {
+        option_parser::parse_report(arguments, specs).ok().flatten()
+    });
     let parsed = match option_parser::parse_report(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {

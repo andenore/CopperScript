@@ -227,12 +227,16 @@ const FAMILIES: &[(&str, &str)] = &[
     ("MEC", "Mechanical declaration error."),
     ("SLK", "Silkscreen declaration error."),
     ("MAC", "Physical macro definition or binding error."),
+    (
+        "BLD",
+        "Board `build` block error: a setting has the wrong type, unit or range, or names an unknown router field.",
+    ),
 ];
 
 const FAMILY_FIX: &str = "Use the message and hint; `copper check --json` gives the exact location.";
 
 /// The family prefixes in the order `--list --json` reports them.
-pub const FAMILY_NAMES: [&str; 6] = ["CMP", "LEX", "MAC", "MEC", "PAR", "SLK"];
+pub const FAMILY_NAMES: [&str; 7] = ["BLD", "CMP", "LEX", "MAC", "MEC", "PAR", "SLK"];
 
 /// Python's `code.strip().upper()`.
 fn normalize(code: &str) -> String {

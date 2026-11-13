@@ -11,7 +11,8 @@ OUT ?= $(PROJECT_ROOT)/build/$(BOARD_NAME)
 # Empty uses the source stackup/layer requirements. An explicit count remains
 # available for diagnostics and must agree with a declared physical stackup.
 LAYERS ?=
-FAB_PROFILE ?= generic
+# Empty uses the board's `build { fab_profile = ...; }`, else generic.
+FAB_PROFILE ?=
 RESOLVE_ARGS ?= --locked
 # Empty (the default): `route` refills zones and checks the board with
 # CopperScript itself and needs no KiCad. Set it to a kicad-cli path to refill
@@ -25,8 +26,7 @@ PLACEMENT_TEMPLATES ?=
 HARD_MACRO ?=
 HARD_MACROS ?=
 ROUTE_CANDIDATES ?= 1
-ROUTE_ARGS ?= --candidates $(ROUTE_CANDIDATES) --feedback-iterations 1 \
- --router-iterations 5 --progress --fanout --plane-contact-radius-mm 5
+ROUTE_ARGS ?= --candidates $(ROUTE_CANDIDATES)
 EXTRA_ROUTE_ARGS ?=
 BUILD_ARGS ?=
 EDITOR_ARGS ?=
@@ -34,7 +34,7 @@ KICAD_PYTHON ?= /usr/bin/python3
 
 _paths = $(if $(strip $(KICAD_CLI)),--verify kicad --kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
 _layer_args = $(if $(strip $(LAYERS)),--layers $(LAYERS))
-_physical_common = $(_layer_args) --fab-profile $(FAB_PROFILE) \
+_physical_common = $(_layer_args) $(if $(strip $(FAB_PROFILE)),--fab-profile $(FAB_PROFILE)) \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
  $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)") \
  $(foreach macro,$(HARD_MACROS),--hard-macro "$(macro)")

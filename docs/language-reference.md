@@ -57,6 +57,117 @@ placement/routing space without acquiring an electrical net. Copper text,
 filled artwork feature widths and exposed-mask qualification currently keep
 physical signoff incomplete; see the same reference for the exact limits.
 
+## Board build settings
+
+A board may hold one `build` block. It sets defaults for options of the
+physical commands, so a project keeps them in its source instead of in a
+Makefile. The block is board-only: a module, part, device or macro file with a
+`build` block is an error, and so is a second block.
+
+```copper
+board Example {
+    build {
+        fab_profile = "jlcpcb-six-layer";
+        placement { candidates = 2; candidate = "candidate-01"; grid = 0.25mm; }
+        routing { effort = balanced; fanout_maze = true; time_budget = 600s; }
+        planes { contact_radius = 3mm; stitch_step = 0.1mm; early_stitch = false; }
+        router { fine_regions = dense; maximum_expansions = 2000000; }
+    }
+}
+```
+
+Each setting stands for one command line option. Precedence is: command line,
+then the board's `build` block, then the compiler default. A command reads the
+block from the board file it is given, keeps the settings whose option it
+accepts, and evaluates them before its own arguments. A conflict is not an
+error: the command line overrides the source. A setting given explicitly, in
+the source or on the command line, also outranks what an effort preset implies.
+
+| Command | Settings it reads |
+|---|---|
+| `route-board`, and so `copper build` | all |
+| `plan-layout` | `fab_profile`, and `placement` except `candidate` and `feedback_trials` |
+| `si-check`, `synthesize-antenna`, `edit-mechanical` | `fab_profile` |
+
+`route-board` prints one line naming the options it took from the source.
+`copper build` shows them in its plan and records them in `run.json` as
+`source_build_options`. `copper check` validates the block. The compiled JSON
+holds the settings under `build`, with lengths in nanometres (`grid_nm`) and
+durations in seconds (`time_budget_s`).
+
+Value types: an integer is a whole number, not negative unless a minimum is
+given. A boolean is `true` or `false`. A length needs a unit (`mm`, `um`, `m`)
+and must be a whole number of nanometres. A duration needs a unit and must be
+a positive whole number of seconds (`600s`). A name may be written bare or as
+a string.
+
+Top level:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `fab_profile` | `generic`, `jlcpcb-four-layer` or `jlcpcb-six-layer` | `generic` | `--fab-profile` |
+
+`placement`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `candidates` | integer, at least 1 | 1 (`plan-layout`: 3) | `--candidates` |
+| `candidate` | string | the planner's choice | `--placement-candidate` |
+| `grid` | length, positive | 1 mm | `--placement-grid-mm` |
+| `decoupling_trials` | integer | 64 | `--decoupling-placement-trials` |
+| `refinement_passes` | integer | 2 | `--placement-refinement-passes` |
+| `escape_spacing_passes` | integer | 2 | `--escape-spacing-passes` |
+| `feedback_trials` | integer | 24 | `--placement-feedback-trials` |
+
+`routing`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `effort` | `quick`, `balanced` or `thorough` | none | `--routing-profile` |
+| `feedback_iterations` | integer, at least 1 | 1 | `--feedback-iterations` |
+| `router_iterations` | integer, at least 1 | 5 | `--router-iterations` |
+| `fanout` | boolean | `true` | `--fanout` / `--no-fanout` |
+| `fanout_maze` | boolean | `false` | `--fanout-maze` when `true` |
+| `array_flow` | boolean | `false` | `--array-flow` / `--no-array-flow` |
+| `via_lattice` | boolean | `false` | `--via-lattice` / `--no-via-lattice` |
+| `congestion_feedback_trials` | integer | 4 | `--congestion-feedback-trials` |
+| `filled_copper_trials` | integer | 8 | `--filled-copper-trials` |
+| `pair_states` | integer | 6000 | `--package-initial-pair-states` |
+| `pitch` | length; 0 selects the default | 0.25 mm | `--unified-pitch-mm` |
+| `time_budget` | duration | no limit | `--unified-time-budget-s` |
+
+`effort` sets `filled_copper_trials` and `decoupling_trials` unless they are
+given: quick 2 and 4, balanced 8 and 16, thorough 16 and 64.
+
+`planes`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `early_stitch` | boolean | `true` | `--early-plane-stitch` / `--no-early-plane-stitch` |
+| `surface_zones` | boolean | `true` | `--stitch-surface-zones` / `--no-stitch-surface-zones` |
+| `stitch_step` | length, positive | 0.5 mm | `--plane-stitch-step-mm` |
+| `stitch_radius` | length, positive | 3 mm | `--plane-stitch-radius-mm` |
+| `stitch_detour` | length | 0 mm | `--plane-stitch-detour-mm` |
+| `contact_radius` | length; 0 disables it | 5 mm | `--plane-contact-radius-mm` |
+| `maze_step` | length, positive | 0.1 mm | `--plane-maze-step-mm` |
+| `maze_budget` | integer, at least 1 | 12000 | `--plane-maze-budget` |
+
+`router` is the expert group. Each `key = value;` stands for
+`--unified-set key=value`. The key must be a field of the unified router;
+`copper route-board --list-unified-options` lists them with their types and
+defaults. The value is a number without a unit, `true`, `false`, a name or a
+string. `copper check`, `copper build` and `copper route-board` reject an
+unknown key at its source location.
+
+Diagnostics: `PAR018` (block outside a board), `PAR019` (second block),
+`PAR020` (unknown group), `PAR021` (unknown setting), `PAR004` (duplicate
+setting), `BLD001` (wrong type, unit or name), `BLD002` (value out of range)
+and `BLD003` (unknown router setting). Each points at the group or key.
+
+Settings that describe the board itself do not belong here: the stackup and
+design rules are `mechanical` declarations, and net widths, layers and lengths
+are constraints. See [board configuration](board-configuration.md).
+
 ## Mechanical geometry status
 
 A board may declare a separate `mechanical` section containing a circular,
@@ -2258,6 +2369,7 @@ engineering values use a space and the shared fixed-point quantity formatter.
 | Length | `m`, `mm`, `um` |
 | Current | `A`, `mA`, `uA` |
 | Frequency | `Hz`, `kHz`, `MHz`, `GHz` |
+| Time | `s`, `ms`, `us`, `ns` |
 
 Values are normalized to SI base units in the IR while retaining their source
 display unit.
@@ -2275,7 +2387,10 @@ item           = library | package_import | port | pin | pad | power_domain
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint | mechanical | silkscreen
-               | physical_macro | no_connect ;
+               | physical_macro | no_connect | build ;
+build          = "build", "{", (build_setting | build_group)*, "}" ;   (* board only, at most one *)
+build_group    = ("placement" | "routing" | "planes" | "router"), "{", build_setting*, "}" ;
+build_setting  = name, "=", scalar, ";" ;
 silkscreen     = "silkscreen", "{", silk_item*, "}" ;
 silk_item      = "branding", geometry_properties
                | ("text" | "logo" | "line" | "rectangle" | "circle" | "arc" | "polygon"), name, geometry_properties ;

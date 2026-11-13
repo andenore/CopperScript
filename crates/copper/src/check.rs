@@ -96,6 +96,19 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
+    // The `router` group of a `build` block names unified router fields,
+    // which only this crate knows: an unknown one is a compile error here.
+    if let Some(failure) = design.build.as_ref().and_then(crate::source_build::router_key_error) {
+        if json {
+            let source = read_source(path).ok();
+            let document =
+                compile_error_document(&failure, &paths::display(&paths::resolve(path)), source.as_deref(), &display);
+            print(out, &Dumps::compact().sort_keys(true).dumps(&check_document(None, &display, vec![document])));
+        } else {
+            print(err, &format!("COMPILE ERROR: {failure}"));
+        }
+        return 2;
+    }
     let board = &design.electrical;
     let mut diagnostics = match check(board, pins != "off") {
         Ok(diagnostics) => diagnostics,

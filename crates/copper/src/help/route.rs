@@ -16,7 +16,8 @@ const EDIT_MECHANICAL: &[Opt] = &[
     },
     Opt {
         flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
-        help: "fabrication-rule profile of the physical build (default: generic)",
+        help: "fabrication-rule profile of the physical build (default: fab_profile of the board's build \
+               block, else generic)",
     },
     Opt { flag: "--placement-templates PLACEMENT_TEMPLATES", help: "apply a placement-template JSON scene" },
     Opt { flag: "--hard-macro HARD_MACRO", help: "apply a legacy hard-macro scene JSON; may repeat" },
@@ -33,7 +34,8 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Layout,
         summary: "attempt complete physical routing and run native DRC",
         options: &[
-            // Inputs and project.
+            // Inputs and project. The board's `build` block supplies defaults for
+            // the options below; an option given here overrides the source.
             Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
             Opt { flag: "--offline", help: "reject remote package cache misses" },
             Opt { flag: "--no-check", help: "route even when ERC reports errors" },
@@ -67,7 +69,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
-                help: "fabrication-rule profile (default: generic)",
+                help: "fabrication-rule profile (default: fab_profile of the board's build block, else generic)",
             },
             Opt {
                 flag: "--width-mm MM",
@@ -172,7 +174,8 @@ pub const COMMANDS: &[Command] = &[
             Opt {
                 flag: "--unified-set KEY=VALUE",
                 help: "override one unified router option (a JSON value, else text); may repeat; see \
-                       --list-unified-options for the keys",
+                       --list-unified-options for the keys; the router group of the board's build block sets \
+                       the same keys",
             },
             Opt {
                 flag: "--list-unified-options",
@@ -226,7 +229,7 @@ pub const COMMANDS: &[Command] = &[
             Opt {
                 flag: "--plane-contact-radius-mm MM",
                 help: "radius within which a blocked land may reach the plane through an escaped same-net land; \
-                       0 disables it (default: 0)",
+                       0 disables it (default: 5)",
             },
             Opt {
                 flag: "--plane-stitch-detour-mm MM",
@@ -259,7 +262,10 @@ pub const COMMANDS: &[Command] = &[
                 help: "route report JSON, with a .summary.json beside it (default: BOARD.route-report.json)",
             },
             Opt { flag: "--require-verified-intent", help: "also fail unless every hard source requirement passes" },
-            Opt { flag: "--progress", help: "print flushed phase, group and trial progress events" },
+            Opt {
+                flag: "--progress",
+                help: "print flushed phase, group and trial progress events; copper build always passes it",
+            },
             Opt {
                 flag: "--stop-after {placement}",
                 help: "stop after this stage and write a partial report and draft; such a run never passes",
@@ -351,7 +357,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
-                help: "fabrication-rule profile (default: generic)",
+                help: "fabrication-rule profile (default: fab_profile of the board's build block, else generic)",
             },
             Opt { flag: "--candidates CANDIDATES", help: "placement candidates to generate (default: 3)" },
             Opt {
@@ -574,7 +580,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
-                help: "fabrication-rule profile (default: generic)",
+                help: "fabrication-rule profile (default: fab_profile of the board's build block, else generic)",
             },
             Opt {
                 flag: "--footprint-root FOOTPRINT_ROOT",
@@ -600,7 +606,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
-                help: "fabrication-rule profile (default: generic)",
+                help: "fabrication-rule profile (default: fab_profile of the board's build block, else generic)",
             },
             Opt {
                 flag: "--footprint-root FOOTPRINT_ROOT",
