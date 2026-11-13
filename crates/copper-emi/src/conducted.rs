@@ -627,9 +627,11 @@ struct Network {
     cm_source: Option<ElementId>,
     port_p: Node,
     port_n: Node,
-    /// The node of the hot capacitor and the feed (`K`) and the return node (`Y`).
+    /// The node of the hot capacitor and the feed (`K`), the return node (`Y`) and the terminal of the converter's
+    /// current source (`S`: `K` behind the hot-loop inductance).
     k: Node,
     y: Node,
+    s: Node,
     /// Each capacitor branch and the element that carries its current.
     branches: Vec<(BranchInfo, ElementId)>,
 }
@@ -837,7 +839,7 @@ fn build(input: &ConductedInput) -> Network {
         c.capacitor(node, k, cpar);
         src
     });
-    Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port, k, y, branches }
+    Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port, k, y, s, branches }
 }
 
 /// The smallest `|Z|` of a single capacitor branch on `K` at `frequency`: `R + j (w (L_connection + ESL) - 1/(w C))`
@@ -939,6 +941,76 @@ fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64, harmonics: &[(u32, f64)]
         peak.significant = peak.harmonic_rise_db.is_some_and(|rise| rise >= ANTI_RESONANCE_SIGNIFICANT_DB - 1e-9);
     }
     out
+}
+
+/// The impedance of one capacitor branch on its own, `R + j (w (L_connection + ESL) - 1 / (w C))` in ohm: the
+/// connection inductance, the ESL and the ESR in series with the capacitance, nothing else of the network.
+pub fn branch_impedance(branch: &BranchInfo, frequency: f64) -> Complex {
+    let w = 2.0 * std::f64::consts::PI * frequency;
+    Complex::new(
+        branch.capacitor.esr,
+        w * (branch.connection_inductance + branch.capacitor.esl) - 1.0 / (w * branch.capacitor.capacitance),
+    )
+}
+
+/// The self-resonance of a branch on its own, Hz: `1 / (2 pi sqrt((L_connection + ESL) C))`; `None` without an
+/// inductance (no resonance: the branch stays capacitive).
+pub fn branch_self_resonance(branch: &BranchInfo) -> Option<f64> {
+    let l = branch.connection_inductance + branch.capacitor.esl;
+    (l > 0.0 && branch.capacitor.capacitance > 0.0)
+        .then(|| 1.0 / (2.0 * std::f64::consts::PI * (l * branch.capacitor.capacitance).sqrt()))
+}
+
+/// The input network of [`predict`] solved at one frequency with a unit current drawn by the converter's source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputNetworkPoint {
+    pub frequency: f64,
+    /// The driving-point impedance at `K` (every source off), the one [`ConductedReport::anti_resonances`] scans.
+    pub z_node: Complex,
+    /// The voltage across the converter's current source per ampere it draws: `Z_K` behind the hot-loop inductance
+    /// (and the couplings of the extraction, which the unit current in that inductor drives into the other branches).
+    pub z_source: Complex,
+    /// The current of each capacitor branch (in the order of [`ConductedReport::branches`]) per ampere drawn by the
+    /// source, positive when the branch supplies the source.
+    pub branch_current: Vec<Complex>,
+    /// What the branches leave of that ampere: the current that goes on to the V-networks (and, with a filter, the
+    /// supply side).
+    pub to_supply: Complex,
+}
+
+/// [`input_network`]: the capacitor branches and the solved points.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputNetwork {
+    pub branches: Vec<BranchInfo>,
+    pub points: Vec<InputNetworkPoint>,
+}
+
+/// Solve the differential-mode input network of `input` (the circuit [`predict`] solves, with the same elements and
+/// couplings) at each of `frequencies`, with a unit current drawn by the converter's source. At a harmonic the
+/// branch currents of [`HarmonicLevel::branch_currents`] are these times the source current of that harmonic, to
+/// rounding.
+pub fn input_network(input: &ConductedInput, frequencies: &[f64]) -> Result<InputNetwork, ConductedError> {
+    validate(input)?;
+    let net = build(input);
+    let mut driven = net.circuit.clone();
+    driven.zero_sources();
+    driven.set_source(net.dm_source, Complex::ONE);
+    let mut points = Vec::with_capacity(frequencies.len());
+    for &frequency in frequencies {
+        let solution = driven.solve(frequency)?;
+        let z_node = net.circuit.impedance(net.k, net.y, frequency)?;
+        let branch_current: Vec<Complex> = net.branches.iter().map(|(_, id)| -solution.current(*id)).collect();
+        let supplied = branch_current.iter().fold(Complex::ZERO, |a, c| a + *c);
+        points.push(InputNetworkPoint {
+            frequency,
+            z_node,
+            // The source draws its current from `S` and returns it into `Y`: the network carries it from `Y` to `S`.
+            z_source: solution.voltage_between(net.y, net.s),
+            branch_current,
+            to_supply: Complex::ONE - supplied,
+        });
+    }
+    Ok(InputNetwork { branches: net.branches.iter().map(|(info, _)| info.clone()).collect(), points })
 }
 
 /// Highest and lowest harmonic number in the reported band.
@@ -2227,6 +2299,94 @@ mod tests {
         let series = |l_loop: f64| z_cap(&cap(10e-6, 5e-3, 0.6e-9 + l_loop), f).abs();
         let old_rise = 20.0 * (series(50e-9) / series(0.0)).log10();
         assert!(old_rise > 30.0, "the series placement would have raised 30 MHz by {old_rise:.1} dB");
+    }
+
+    /// A network with unlike capacitors with their own connection inductances, the hot-loop inductance, a mutual
+    /// coupling and an input filter with a supply-side capacitor: every kind of element of `build`.
+    fn rich_network() -> ConductedInput {
+        let mut input = buck(cap(5e-6, 5e-3, 0.6e-9));
+        input.hot_capacitor_label = "C1".to_owned();
+        input.parallel_capacitors = vec![
+            CapacitorBranch::new("C2", cap(100e-6, 20e-3, 5e-9)).with_connection(2e-9),
+            CapacitorBranch::new("C3", cap(0.1e-6, 30e-3, 0.4e-9)).with_connection(1.5e-9),
+        ];
+        input.hot_loop_inductance = 4e-9;
+        input.couplings = vec![Coupling { first: "C2".to_owned(), second: LOOP_LABEL.to_owned(), mutual: 0.8e-9 }];
+        input.filter = Some(InputFilter {
+            inductance: 2.2e-6,
+            dcr: 20e-3,
+            parallel_capacitance: 5e-12,
+            supply_capacitors: vec![CapacitorBranch::new("C4", cap(22e-6, 10e-3, 2e-9)).with_connection(3e-9)],
+        });
+        input
+    }
+
+    #[test]
+    fn the_input_network_gives_the_prediction_s_branch_currents_and_node_impedance_at_the_harmonics() {
+        let mut input = rich_network();
+        input.switching_frequency = 500e3;
+        let report = predict(&input).unwrap();
+        let harmonics: Vec<f64> = report.harmonics.iter().map(|h| h.frequency).collect();
+        assert!(harmonics.len() > 20);
+        let network = input_network(&input, &harmonics).unwrap();
+        assert_eq!(network.branches, report.branches);
+        for (h, point) in report.harmonics.iter().zip(&network.points) {
+            assert_eq!(point.frequency, h.frequency);
+            for (b, (current, solved)) in h.branch_currents.iter().zip(&point.branch_current).enumerate() {
+                let from_unit_current = solved.abs() * h.source_current_peak;
+                assert!(
+                    (from_unit_current - current).abs() <= 1e-9 * current.abs().max(1e-12),
+                    "harmonic {} branch {b}: {from_unit_current} against {current}",
+                    h.harmonic
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_node_impedance_of_the_input_network_is_the_one_the_anti_resonance_scan_reports() {
+        let input = rich_network();
+        let report = predict(&input).unwrap();
+        assert!(!report.anti_resonances.is_empty());
+        let peak = report.anti_resonances[0];
+        let network = input_network(&input, &[peak.frequency]).unwrap();
+        assert!((network.points[0].z_node.abs() - peak.impedance).abs() <= 1e-9 * peak.impedance);
+    }
+
+    #[test]
+    fn the_branch_currents_and_the_rest_add_up_to_the_ampere_and_the_signs_are_those_of_a_supplying_capacitor() {
+        // One 10 uF capacitor at 1 MHz: 16 mohm against the 50 uH V-network's hundreds of ohms: it carries the ampere.
+        let input = buck(cap(10e-6, 0.0, 0.0));
+        let point = &input_network(&input, &[1e6]).unwrap().points[0];
+        let c = point.branch_current[0];
+        assert!(c.re > 0.999 && c.im.abs() < 1e-3, "{c:?}");
+        let total = c + point.to_supply;
+        assert!((total - Complex::ONE).abs() < 1e-12);
+        // The small remainder is the divider Z_C / Z_lisn: far below one.
+        assert!(point.to_supply.abs() < 1e-3, "{:?}", point.to_supply);
+        // Without a loop inductance the node and the source see the same impedance, with one they differ by j w L.
+        assert!((point.z_source - point.z_node).abs() < 1e-9 * point.z_node.abs());
+        let mut with_loop = input.clone();
+        with_loop.hot_loop_inductance = 5e-9;
+        let p = &input_network(&with_loop, &[1e6]).unwrap().points[0];
+        let extra = p.z_source - p.z_node;
+        assert!((extra.im - w(1e6) * 5e-9).abs() < 1e-9 && extra.re.abs() < 1e-9, "{extra:?}");
+    }
+
+    #[test]
+    fn a_branch_alone_has_its_minimum_at_the_series_resonance() {
+        let info = BranchInfo {
+            label: "C".to_owned(),
+            kind: BranchKind::Parallel,
+            capacitor: cap(10e-6, 5e-3, 0.6e-9),
+            connection_inductance: 2.4e-9,
+        };
+        let f = branch_self_resonance(&info).unwrap();
+        assert!((f - 1.0 / (2.0 * PI * (3e-9_f64 * 10e-6).sqrt())).abs() < 1e-6 * f);
+        assert!((branch_impedance(&info, f).abs() - 5e-3).abs() < 1e-9);
+        assert!(branch_impedance(&info, f * 0.9).abs() > 5e-3 && branch_impedance(&info, f * 1.1).abs() > 5e-3);
+        let none = BranchInfo { capacitor: cap(10e-6, 5e-3, 0.0), connection_inductance: 0.0, ..info };
+        assert_eq!(branch_self_resonance(&none), None);
     }
 
     #[test]

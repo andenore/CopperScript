@@ -209,7 +209,7 @@ pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn frequency_text(hertz: f64) -> String {
+pub(crate) fn frequency_text(hertz: f64) -> String {
     if hertz >= 1e6 { format!("{} MHz", n(hertz / 1e6)) } else { format!("{} kHz", n(hertz / 1e3)) }
 }
 
@@ -264,7 +264,7 @@ fn worst(harmonics: &[Harmonic], limits_shown: bool) -> Option<usize> {
 }
 
 /// Wrap `text` into lines of at most `width` characters at spaces.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split(' ') {
         match lines.last_mut() {
@@ -309,7 +309,7 @@ const ASSUMPTIONS: &[(&str, &str)] = &[
 ];
 
 /// The assumption sentences of `tags` (at most [`MAX_ASSUMPTIONS`], then "+N more in the report").
-fn assumption_lines(tags: &[String]) -> Vec<String> {
+pub(crate) fn assumption_lines(tags: &[String]) -> Vec<String> {
     let rank = |tag: &str| ASSUMPTIONS.iter().position(|(known, _)| *known == tag).unwrap_or(ASSUMPTIONS.len());
     let mut ordered: Vec<&String> = tags.iter().collect();
     ordered.sort_by_key(|tag| rank(tag));
@@ -366,7 +366,7 @@ fn margin_phrase(margin: f64, limit: &str) -> String {
 }
 
 /// An SVG text with a white halo, so it reads over lines and markers.
-fn halo_text(x: f64, y: f64, size: u32, weight: &str, anchor: &str, class: &str, text: &str) -> String {
+pub(crate) fn halo_text(x: f64, y: f64, size: u32, weight: &str, anchor: &str, class: &str, text: &str) -> String {
     format!(
         "<text{} x=\"{}\" y=\"{}\" font-size=\"{size}\"{weight} text-anchor=\"{anchor}\" fill=\"{INK}\" stroke=\"{BACKGROUND}\" stroke-width=\"3.5\" stroke-linejoin=\"round\" paint-order=\"stroke\">{}</text>",
         if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") },

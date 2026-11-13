@@ -2507,6 +2507,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     finding.subjects.extend(subjects);
     dedup(&mut finding.subjects);
     finding.rank = worst.high;
+    finding.conducted_input = main.inputs.first().cloned().map(Box::new);
     let method = format!(
         "linear-network prediction (copper_emi::conducted), scenario {}: {}, through {} capacitor branch(es), each its own R-L-C with its own connection inductance, with {} hot-loop inductance between the current source and the hot capacitor's node{} into the 50 uH V-network; \
          level is the RMS dBuV of the {} harmonic at the worst LISN port ({}); differential mode only; \

@@ -664,6 +664,14 @@ pub const COMMANDS: &[Command] = &[
                 help: "with --plot-field: height of the map plane above the top copper, e.g. 1mm (default: 1mm)",
             },
             Opt {
+                flag: "--plot-impedance PLOT_IMPEDANCE",
+                help: "write the input-network impedance of each EMI-CONDUCTED finding as an SVG: |Z| (log) of the network the conducted estimate solves (every capacitor its own R-L-C with its connection inductance, the V-network, the input filter) at the node where the capacitors meet, 150 kHz to 30 MHz, as a heavy line with each capacitor branch's own impedance as a thin line, the self-resonances of the branches, the anti-resonances of the total, a tick at every switching harmonic and the harmonics within 5 % of an anti-resonance highlighted; below it the share of each harmonic's current that every branch carries; with --extract the connection inductances are the extracted ones; a screening estimate",
+            },
+            Opt {
+                flag: "--plot-current PLOT_CURRENT",
+                help: "with --extract: write the current distribution of each hot loop's quasi-static extraction as an SVG: one map per copper layer that carries loop current, the sheet current of every filament of the finest mesh at 10 MHz (else the highest solved frequency) in dB relative to a reference level, direction arrows, the vias as circles sized by their share of the layer change with the percentage, the loop's pads, the port, and beside them the loop inductance and the division between the vias; drawn from the extraction of the same run, not stored in the report; a screening estimate",
+            },
+            Opt {
                 flag: "--fullwave",
                 help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_difference_pct and mesh_sensitivity_pct; a record that rings is completed by a fit of its ring-down only when the fit predicts a withheld part of its tail and is stable and passive, else the value is indicative (measures.fullwave.ring_fit); slow (minutes per cell), never part of the default run; screening evidence",
             },

@@ -176,6 +176,10 @@ pub struct EmiFinding {
     pub subjects: Vec<String>,
     /// Geometric rank measure (larger is worse), used after the dB estimate.
     pub rank: f64,
+    /// The input of the linear network an `EMI-CONDUCTED` finding was predicted from (the nominal case of its
+    /// scenario), kept in memory for pictures of that network (`copper emi-check --plot-impedance`). Never part of
+    /// the JSON document.
+    pub conducted_input: Option<Box<copper_emi::conducted::ConductedInput>>,
 }
 
 /// One switching cell as analysed.
@@ -1290,6 +1294,7 @@ fn base_finding(
         measures: Object::new(),
         subjects: vec![cell.controller.clone()],
         rank: 0.0,
+        conducted_input: None,
     }
 }
 
@@ -3767,6 +3772,7 @@ fn apply_accepts(view: &FlatElectricalView, findings: &mut Vec<EmiFinding>) {
                 },
                 subjects: vec![target.clone()],
                 rank: 0.0,
+                conducted_input: None,
             });
         }
     }
@@ -4447,6 +4453,7 @@ mod tests {
             measures,
             subjects: Vec::new(),
             rank: area_mm2,
+            conducted_input: None,
         }
     }
 

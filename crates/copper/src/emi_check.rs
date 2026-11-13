@@ -1,6 +1,7 @@
 //! `copper emi-check BOARD [--locked] [--offline] [--layers {2,4,6}]
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
-//! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]]
+//! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]] [--plot-impedance OUT.svg]
+//! [--plot-current OUT.svg]
 //! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-zone-outline]]
 //! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
 //! [--extract-no-switch-bar]] [--json]`:
@@ -49,6 +50,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--plot-spectrum"),
         value("--plot-field"),
         value("--field-height"),
+        value("--plot-impedance"),
+        value("--plot-current"),
         flag("--fullwave"),
         value("--fullwave-fidelity"),
         value("--fullwave-budget"),
@@ -113,6 +116,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Ok(options) => options,
         Err(message) => return usage_error(err, &message),
     };
+    if parsed.value("--plot-current").is_some() && extract.is_none() {
+        return usage_error(err, "argument --plot-current: needs --extract");
+    }
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let design = match load_design(Path::new(&board), locked, offline) {
         Ok(design) => design,
@@ -196,8 +202,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if let Some(options) = &fullwave {
         crate::emi_fullwave::apply(&physical, &mut report, options, err);
     }
+    let mut extracted: Vec<(String, copper_extract::hotloop::HotLoopExtraction)> = Vec::new();
     if let Some(options) = &extract {
-        crate::emi_extract::apply(&physical, &view, &model, &mut report, options, err);
+        extracted = crate::emi_extract::apply(&physical, &view, &model, &mut report, options, err);
     }
     // `--write`: the run's report keeps one copy of the result (`emi` section) for `copper issues`.
     let written = match (parsed.flag("--write"), parsed.value("--run")) {
@@ -218,6 +225,24 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     }
     let mut plotted: Vec<String> = Vec::new();
+    if let Some(path) = parsed.value("--plot-current") {
+        match plot_current(&report.board, &extracted, &pypath::display(path)) {
+            Ok(message) => plotted.push(message),
+            Err(message) => {
+                let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
+                return 2;
+            }
+        }
+    }
+    if let Some(path) = parsed.value("--plot-impedance") {
+        match plot_impedance(&report, &pypath::display(path)) {
+            Ok(message) => plotted.push(message),
+            Err(message) => {
+                let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
+                return 2;
+            }
+        }
+    }
     if parsed.value("--plot-spectrum").is_some() || parsed.value("--plot-field").is_some() {
         let document = report.to_value();
         if let Some(path) = parsed.value("--plot-spectrum") {
@@ -351,6 +376,7 @@ fn extract_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_e
         cell_mm: positive("--extract-cell", cell)?,
         single_mesh: parsed.flag("--extract-single-mesh"),
         no_switch_bar: parsed.flag("--extract-no-switch-bar"),
+        current_map: parsed.value("--plot-current").is_some(),
     }))
 }
 
@@ -379,6 +405,70 @@ fn plot_spectrum(document: &copper_json::Value, path: &str) -> Result<String, St
     Ok(format!(
         "conducted spectrum of {} cell(s) written to {path} (screening estimate, not EMC qualification)",
         panels.len()
+    ))
+}
+
+/// `--plot-impedance`: the input-network impedance of every `EMI-CONDUCTED` finding, stacked in one SVG.
+fn plot_impedance(report: &copper_drc::emi::EmiCheckReport, path: &str) -> Result<String, String> {
+    use std::collections::BTreeMap;
+    let mut panels = Vec::new();
+    for finding in report.findings.iter().filter(|f| f.finding.code == "EMI-CONDUCTED") {
+        let (Some(input), Some(cell)) = (finding.conducted_input.as_deref(), finding.cell.as_deref()) else { continue };
+        let sources: BTreeMap<String, String> = finding
+            .measures
+            .get("capacitor_branches")
+            .and_then(copper_json::Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| {
+                let component = b.get("component").and_then(copper_json::Value::as_str)?;
+                let source = b.get("connection_source").and_then(copper_json::Value::as_str)?;
+                Some((component.to_owned(), source.to_owned()))
+            })
+            .collect();
+        let extraction = finding
+            .measures
+            .get("extracted_connections")
+            .and_then(|e| e.get("status"))
+            .and_then(copper_json::Value::as_str);
+        let scenario = finding.tags.iter().find_map(|t| t.strip_prefix("frequency_scenario_"));
+        panels.push(copper_report::emi_impedance::panel_from_input(
+            cell,
+            scenario,
+            &finding.tags,
+            input,
+            &sources,
+            extraction,
+        )?);
+    }
+    if panels.is_empty() {
+        return Err("--plot-impedance: no EMI-CONDUCTED finding with a network to plot (see the EMI-CONDUCTED:<cell> coverage entries for why a cell has none)".to_owned());
+    }
+    write_plot(path, &copper_report::emi_impedance::impedance_svg(&report.board, &panels))?;
+    Ok(format!(
+        "input-network impedance of {} written to {path} (screening estimate, not EMC qualification)",
+        copper_report::emi_impedance::counted(panels.len(), "cell", "cells")
+    ))
+}
+
+/// `--plot-current`: the current distribution of every extracted hot loop, stacked in one SVG.
+fn plot_current(
+    board: &str,
+    extracted: &[(String, copper_extract::hotloop::HotLoopExtraction)],
+    path: &str,
+) -> Result<String, String> {
+    let pictures: Vec<copper_report::emi_field::FieldPicture> = extracted
+        .iter()
+        .filter_map(|(cell, result)| crate::emi_current::panel(cell, result))
+        .map(|panel| copper_report::emi_current::current_picture(&panel))
+        .collect();
+    if pictures.is_empty() {
+        return Err("--plot-current: no hot-loop extraction produced a current distribution (see the EMI-EXTRACT:<cell> coverage entries for why a cell has none)".to_owned());
+    }
+    write_plot(path, &copper_report::emi_current::current_svg(board, &pictures))?;
+    Ok(format!(
+        "current distribution of {} written to {path} (screening estimate from the quasi-static extraction)",
+        copper_report::emi_impedance::counted(pictures.len(), "hot loop", "hot loops")
     ))
 }
 

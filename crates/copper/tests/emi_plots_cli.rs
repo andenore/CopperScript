@@ -105,6 +105,136 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// The frequency of the `<path class="self-resonance" data-branch="CIN" data-frequency-hz="...">` marker of a branch, Hz.
+fn self_resonance(svg: &str, branch: &str) -> f64 {
+    let marker = format!("class=\"self-resonance\" data-branch=\"{branch}\" data-frequency-hz=\"");
+    let start = svg.find(&marker).unwrap_or_else(|| panic!("a self-resonance marker of {branch}"));
+    svg[start + marker.len()..].split('"').next().unwrap().parse().expect("a number")
+}
+
+fn number(value: &Value) -> f64 {
+    match value {
+        Value::Float(f) => *f,
+        Value::Int(i) => i.to_string().parse().expect("a number"),
+        other => panic!("not a number: {other:?}"),
+    }
+}
+
+#[test]
+fn the_impedance_picture_shows_each_branch_its_self_resonance_and_the_harmonics() {
+    let directory = scratch("emi-plots-impedance");
+    let path = directory.join("impedance.svg");
+    let result = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--plot-impedance", path.to_str().unwrap()]);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    assert!(stdout(&result).contains("input-network impedance of 1 cell written to"), "{}", stdout(&result));
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+
+    // What the default report says about the same network.
+    let json = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--json"]);
+    let document = copper_json::parse(&stdout(&json)).expect("JSON");
+    let finding = document
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CONDUCTED"))
+        .expect("a conducted finding");
+    let measures = finding.get("measures").unwrap();
+    let branches = measures.get("capacitor_branches").and_then(Value::as_array).unwrap();
+    assert_eq!(branches.len(), 2, "the hot capacitor and the one behind the filter");
+    assert_eq!(svg.matches("class=\"branch\" data-branch=").count(), branches.len());
+    assert_eq!(svg.matches("class=\"share\" data-branch=").count(), branches.len());
+    // The share each branch carries at the fundamental is the report's own number: the picture solves the same circuit.
+    for branch in branches {
+        let component = branch.get("component").and_then(Value::as_str).unwrap();
+        let marker = format!("class=\"share\" data-branch=\"{component}\" data-fundamental-share=\"");
+        let start = svg.find(&marker).unwrap_or_else(|| panic!("a share line of {component}"));
+        let drawn: f64 = svg[start + marker.len()..].split('"').next().unwrap().parse().expect("a number");
+        let reported = number(branch.get("current_share_fundamental").expect("a share"));
+        assert!((drawn - reported).abs() < 2e-4, "{component}: {drawn} in the picture, {reported} in the report");
+    }
+    // The hot capacitor has no connection inductance of its own: its series resonance is 1 / (2 pi sqrt(ESL C)).
+    let hot = &branches[0];
+    let (c, esl) = (number(hot.get("capacitance_used_uf").unwrap()) * 1e-6, number(hot.get("esl_nh").unwrap()) * 1e-9);
+    let expected = 1.0 / (2.0 * std::f64::consts::PI * (esl * c).sqrt());
+    let drawn = self_resonance(&svg, hot.get("component").and_then(Value::as_str).unwrap());
+    assert!((drawn / expected - 1.0).abs() < 1e-4, "{drawn} Hz against {expected} Hz");
+    // The anti-resonances drawn are the ones the report lists.
+    let listed = measures.get("anti_resonances").and_then(Value::as_array).unwrap();
+    assert_eq!(svg.matches("class=\"anti-resonance\"").count(), listed.len());
+    // Both panels, the harmonics, the screening line and a white background.
+    assert!(
+        svg.contains("class=\"total\"") && svg.contains("class=\"harmonic-ticks\"") && svg.contains("class=\"rug\"")
+    );
+    assert!(svg.contains(">150 kHz</text>") && svg.contains(">30 MHz</text>"));
+    assert!(svg.contains("Screening estimate, not a compliance measurement"));
+    assert!(svg.contains("estimated from the pad distance"), "no --extract here");
+    assert!(svg.contains("fill=\"#ffffff\"") && !svg.contains("NaN"));
+    // The default report is the same with and without the picture, and the picture is repeatable.
+    let again = directory.join("again.svg");
+    let with = copper(&[
+        "emi-check",
+        FILTER,
+        "--allow-proxy-footprints",
+        "--json",
+        "--plot-impedance",
+        again.to_str().unwrap(),
+    ]);
+    assert_eq!(stdout(&with), stdout(&json), "--plot-impedance changes nothing in the report");
+    assert_eq!(std::fs::read_to_string(&again).unwrap(), svg);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A coarser extraction with one mesh: the first mesh only, seconds instead of tens of seconds.
+const QUICK_EXTRACT: [&str; 4] = ["--extract", "--extract-budget", "3000", "--extract-single-mesh"];
+
+#[test]
+fn the_current_map_shows_the_loop_pads_the_port_and_the_inductance_of_the_extraction() {
+    let directory = scratch("emi-plots-current");
+    let path = directory.join("current.svg");
+    let mut arguments = vec!["emi-check", BUCK, "--allow-proxy-footprints"];
+    arguments.extend(QUICK_EXTRACT);
+    arguments.extend(["--json", "--plot-current", path.to_str().unwrap()]);
+    let result = copper(&arguments);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    assert!(stderr(&result).contains("current distribution of 1 hot loop written to"), "{}", stderr(&result));
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    let document = copper_json::parse(&stdout(&result)).expect("JSON");
+    // The inductance the column prints is the extraction's, from the report.
+    let finding = document
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .expect("a hot-loop finding");
+    let extract = finding.get("measures").and_then(|m| m.get("extract")).expect("measures.extract");
+    let at_10_mhz = number(&extract.get("inductance_nh").and_then(Value::as_array).unwrap()[1]);
+    let printed = format!("{at_10_mhz:.2}");
+    assert!(
+        svg.contains(&format!("10 MHz: {} nH", printed.trim_end_matches('0').trim_end_matches('.'))),
+        "{at_10_mhz} nH at 10 MHz in the column"
+    );
+    // A map per layer that carries current; the loop's pads, the port and the scale are drawn.
+    assert!(svg.contains("class=\"layer\" data-layer=\"F.Cu\""));
+    for pad in ["CIN.1", "U1.1"] {
+        assert!(svg.contains(&format!("data-pad=\"{pad}\"")), "{pad}");
+    }
+    assert!(svg.contains("class=\"port\"") && svg.contains("class=\"heat\"") && svg.contains("class=\"arrows\""));
+    assert!(svg.contains("quasi-static extraction at 10 MHz") && svg.contains("Screening estimate"));
+    assert!(svg.contains("fill=\"#ffffff\"") && !svg.contains("NaN"));
+    // Nothing of the map is in the report.
+    assert!(!stdout(&result).contains("current_map") && !stdout(&result).contains("sheet current"));
+    // Repeatable to the byte.
+    let again = directory.join("again.svg");
+    let mut arguments = vec!["emi-check", BUCK, "--allow-proxy-footprints"];
+    arguments.extend(QUICK_EXTRACT);
+    arguments.extend(["--plot-current", again.to_str().unwrap()]);
+    assert_eq!(copper(&arguments).status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&again).unwrap(), svg);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn the_field_map_of_a_declared_operating_point_is_drawn_at_the_peak_switch_current_and_says_so() {
     let directory = scratch("emi-plots-field-declared");
@@ -201,7 +331,19 @@ fn plot_options_are_checked_and_documented() {
     assert_eq!(bad.status.code(), Some(2));
     assert!(stderr(&bad).contains("invalid length"));
     let help = stdout(&copper(&["emi-check", "--help"]));
-    for needle in ["--plot-spectrum", "--plot-field", "--field-height", "screening estimate"] {
+    // The current map is the extraction's: it needs the extraction.
+    let no_extract = copper(&["emi-check", BUCK, "--allow-proxy-footprints", "--plot-current", path]);
+    assert_eq!(no_extract.status.code(), Some(2));
+    assert!(stderr(&no_extract).contains("--plot-current: needs --extract"), "{}", stderr(&no_extract));
+    assert!(!Path::new(path).exists(), "nothing is written on a usage error");
+    for needle in [
+        "--plot-spectrum",
+        "--plot-field",
+        "--field-height",
+        "--plot-impedance",
+        "--plot-current",
+        "screening estimate",
+    ] {
         assert!(help.contains(needle), "{needle} in the emi-check help");
     }
     let help = stdout(&copper(&["view", "--help"]));

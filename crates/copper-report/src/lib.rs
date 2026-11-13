@@ -9,7 +9,9 @@
 //! closely, including the messages of the exceptions the CLI reports.
 
 mod decode;
+pub mod emi_current;
 pub mod emi_field;
+pub mod emi_impedance;
 pub mod emi_plot;
 pub mod explain;
 pub mod issues;

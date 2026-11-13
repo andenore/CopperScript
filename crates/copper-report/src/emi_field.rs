@@ -67,7 +67,7 @@ const VIRIDIS: [[f64; 3]; 9] = [
 ];
 
 /// The colour at `t` in 0..=1 of the scale, interpolated between the anchors.
-fn scale_color(t: f64) -> String {
+pub(crate) fn scale_color(t: f64) -> String {
     let position = t.clamp(0.0, 1.0) * (VIRIDIS.len() - 1) as f64;
     let index = (position.floor() as usize).min(VIRIDIS.len() - 2);
     let fraction = position - index as f64;
@@ -78,10 +78,10 @@ fn scale_color(t: f64) -> String {
 }
 
 const BACKGROUND: &str = "#ffffff";
-const BOARD: &str = "#eef1f4";
-const COPPER: &str = "#c4ccd4";
-const INK: &str = "#1f2933";
-const MUTED: &str = "#52606d";
+pub(crate) const BOARD: &str = "#eef1f4";
+pub(crate) const COPPER: &str = "#c4ccd4";
+pub(crate) const INK: &str = "#1f2933";
+pub(crate) const MUTED: &str = "#52606d";
 pub(crate) const LOOP: &str = "#e00000";
 pub(crate) const LOOP_OTHER: &str = "#0b4fff";
 const VICTIM: &str = "#ff2bd6";
@@ -454,12 +454,12 @@ pub struct FieldPicture {
 }
 
 /// Width of `text` at `size` px, with a margin: the sans-serif advance is about half an em.
-fn text_px(text: &str, size: f64) -> f64 {
+pub(crate) fn text_px(text: &str, size: f64) -> f64 {
     text.chars().count() as f64 * size * 0.56
 }
 
 /// Wrap `text` at spaces into lines that fit `width` px at `size` px; a word longer than that stays whole.
-fn wrap_px(text: &str, size: f64, width: f64) -> Vec<String> {
+pub(crate) fn wrap_px(text: &str, size: f64, width: f64) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split(' ') {
         match lines.last_mut() {
@@ -567,7 +567,7 @@ fn contour(values: &[f64], nx: usize, ny: usize, level: f64, at: &dyn Fn(f64, f6
     lines
 }
 
-fn path_data(points: &[Point], close: bool) -> String {
+pub(crate) fn path_data(points: &[Point], close: bool) -> String {
     let mut text = String::new();
     for (k, p) in points.iter().enumerate() {
         text.push_str(&format!("{}{} {}", if k == 0 { "M" } else { "L" }, n(p.0), n(p.1)));
@@ -605,7 +605,7 @@ impl Placer {
         }
     }
 
-    fn reserve(&mut self, r: [f64; 4]) {
+    pub(crate) fn reserve(&mut self, r: [f64; 4]) {
         self.taken.push(r);
     }
 
@@ -635,7 +635,7 @@ impl Placer {
 }
 
 /// Text with a white halo (a stroke painted first), so it reads on the heat map and over copper.
-fn halo(x: f64, y: f64, size: f64, weight: &str, anchor: &str, class: &str, text: &str) -> String {
+pub(crate) fn halo(x: f64, y: f64, size: f64, weight: &str, anchor: &str, class: &str, text: &str) -> String {
     format!(
         "<text{} x=\"{}\" y=\"{}\" font-size=\"{}\" font-weight=\"{weight}\" text-anchor=\"{anchor}\" fill=\"{INK}\" stroke=\"#ffffff\" stroke-width=\"3\" stroke-linejoin=\"round\" paint-order=\"stroke\">{}</text>",
         if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") },
@@ -1210,18 +1210,23 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
     FieldPicture { content: out.join("\n"), width, height: foot + 8.0 }
 }
 
-fn points(polygon: &[Point], px: &dyn Fn(f64) -> f64, py: &dyn Fn(f64) -> f64) -> String {
+pub(crate) fn points(polygon: &[Point], px: &dyn Fn(f64) -> f64, py: &dyn Fn(f64) -> f64) -> String {
     polygon.iter().map(|p| format!("{},{}", n(px(p.0)), n(py(p.1)))).collect::<Vec<_>>().join(" ")
 }
 
-fn centroid(polygon: &[Point]) -> Point {
+pub(crate) fn centroid(polygon: &[Point]) -> Point {
     let count = polygon.len().max(1) as f64;
     (polygon.iter().map(|p| p.0).sum::<f64>() / count, polygon.iter().map(|p| p.1).sum::<f64>() / count)
 }
 
 /// The SVG document of one or more maps, stacked.
 pub fn field_svg(title: &str, pictures: &[FieldPicture]) -> String {
-    let width = pictures.iter().map(|p| p.width).fold(560.0, f64::max);
+    stacked_svg(&format!("{} magnetic near field of the hot loop (screening estimate)", escape(title)), pictures, 560.0)
+}
+
+/// One SVG document of pictures stacked from the top; `title` is the (already escaped) document title.
+pub(crate) fn stacked_svg(title: &str, pictures: &[FieldPicture], min_width: f64) -> String {
+    let width = pictures.iter().map(|p| p.width).fold(min_width, f64::max);
     let height: f64 = pictures.iter().map(|p| p.height).sum::<f64>().max(1.0);
     let mut out = vec![format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" font-family=\"Helvetica, Arial, sans-serif\">",
@@ -1230,15 +1235,28 @@ pub fn field_svg(title: &str, pictures: &[FieldPicture]) -> String {
         n(width),
         n(height)
     )];
-    out.push(format!("<title>{} magnetic near field of the hot loop (screening estimate)</title>", escape(title)));
+    out.push(format!("<title>{title}</title>"));
     out.push(format!("<rect width=\"{}\" height=\"{}\" fill=\"{BACKGROUND}\"/>", n(width), n(height)));
     let mut top = 0.0;
     for picture in pictures {
-        out.push(format!("<g transform=\"translate(0,{})\">\n{}\n</g>", n(top), picture.content));
+        out.push(format!(
+            "<g transform=\"translate(0,{})\">
+{}
+</g>",
+            n(top),
+            picture.content
+        ));
         top += picture.height;
     }
-    out.push("</svg>\n".to_owned());
-    out.join("\n")
+    out.push(
+        "</svg>
+"
+        .to_owned(),
+    );
+    out.join(
+        "
+",
+    )
 }
 
 #[cfg(test)]

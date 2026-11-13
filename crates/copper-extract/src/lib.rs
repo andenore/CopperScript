@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod board;
+pub mod current;
 pub mod extract;
 pub mod fasthenry;
 pub mod hotloop;

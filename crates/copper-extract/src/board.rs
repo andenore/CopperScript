@@ -113,6 +113,18 @@ impl Default for BoardOptions {
     }
 }
 
+/// A pad of the loop (or of a capacitor with a port), for pictures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoopPad {
+    /// `U1.2`, the component and pad number.
+    pub label: String,
+    /// Layer index into the layout's layers.
+    pub layer: usize,
+    pub net: String,
+    /// Bounding box of the pad, mm: `[x0, y0, x1, y1]`.
+    pub bounds_mm: [f64; 4],
+}
+
 /// The layout of a hot loop window and its bookkeeping.
 pub struct BoardLayout {
     pub layout: Layout,
@@ -134,6 +146,8 @@ pub struct BoardLayout {
     pub other_nets: Vec<String>,
     /// The ports in layout order: `hot loop`, then the references of the options' `capacitor_ports`.
     pub port_labels: Vec<String>,
+    /// The pads of the loop and of the capacitors that have a port.
+    pub loop_pads: Vec<LoopPad>,
 }
 
 fn corner_radius(pad: &Pad) -> f64 {
@@ -466,6 +480,19 @@ pub fn build_layout(
         pad_regions.push(poly::union(&region));
         pad_layers.push(layer);
     }
+    let mm_bounds = |shapes: &Shapes| -> [f64; 4] {
+        bounds_of(shapes)
+            .map_or([0.0; 4], |b| [b.0 as f64 * 1e-6, b.1 as f64 * 1e-6, b.2 as f64 * 1e-6, b.3 as f64 * 1e-6])
+    };
+    let mut loop_pads: Vec<LoopPad> = Vec::new();
+    for (k, (component, number)) in ports.pads.iter().enumerate() {
+        loop_pads.push(LoopPad {
+            label: format!("{component}.{number}"),
+            layer: pad_layers[k],
+            net: terminal_pads[k][0].net.clone().unwrap_or_default(),
+            bounds_mm: mm_bounds(&pad_regions[k]),
+        });
+    }
     let centre = |k: usize| (terminal_pads[k][0].center.x as f64, terminal_pads[k][0].center.y as f64);
     let bar_width = |a: usize, b: usize| {
         let (pa, pb) = (terminal_pads[a][0], terminal_pads[b][0]);
@@ -679,6 +706,12 @@ pub fn build_layout(
                         ((cx0 - half) as f64, (cy0 + half) as f64),
                     ]),
                 );
+                loop_pads.push(LoopPad {
+                    label: format!("{reference}.{}", pad.number),
+                    layer,
+                    net: pad.net.clone().unwrap_or_default(),
+                    bounds_mm: mm_bounds(&pad_shape(pad, max_error)),
+                });
                 layout.terminals.push(Terminal {
                     name: format!("{reference} pad {}", pad.number),
                     layer,
@@ -754,6 +787,7 @@ pub fn build_layout(
         vias: counts.3,
         other_nets,
         port_labels,
+        loop_pads,
     })
 }
 

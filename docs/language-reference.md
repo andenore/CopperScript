@@ -2368,7 +2368,8 @@ fabricator's calculator or a field solver and record it in
 
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
-[--plot-field OUT.svg [--field-height MM]] [--fullwave [--fullwave-fidelity coarse|fine]
+[--plot-field OUT.svg [--field-height MM]] [--plot-impedance OUT.svg] [--plot-current OUT.svg (needs --extract)]
+[--fullwave [--fullwave-fidelity coarse|fine]
 [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline]]
 [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM]
 [--extract-single-mesh] [--extract-no-switch-bar]] [--json]`
@@ -2575,6 +2576,16 @@ nets and cable connectors. Both are screening estimates: the field uses the ampl
 finding (`I_out + dI/2` at a declared operating point, else the loop's `current_peak`, per ampere without one; the map
 names which) with an ideal ground plane by images, and does not include the power inductor's own field (coverage
 `unsupported EMI-FIELD:inductor`). See [the EMI specification](emi-noise-analysis.md).
+`--plot-impedance OUT.svg` draws, per `EMI-CONDUCTED` finding, the impedance of the input network the conducted
+estimate solves (`|Z|` at the node where the capacitors meet, each capacitor branch's own impedance, the
+self-resonances of the branches, the anti-resonances of the total, a tick at every switching harmonic with the ones
+within 5 % of an anti-resonance highlighted) and, below it, the share of each harmonic's current that every branch
+carries; with `--extract` the connection inductances are the extracted ones. `--plot-current OUT.svg` (needs
+`--extract`) draws the current distribution of the extraction's hot-loop port at 10 MHz: the sheet current in the
+copper of each layer that carries loop current, direction arrows, the vias sized by their share of the layer change,
+the loop's pads and the port, with the loop inductance and the division between the vias beside it; it is made from
+the extraction of the same run and is not stored in the report. Both are screening estimates; see
+[the EMI specification](emi-noise-analysis.md).
 
 ### Native copper connectivity and package escape
 

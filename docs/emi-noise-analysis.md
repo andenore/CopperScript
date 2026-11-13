@@ -741,6 +741,75 @@ a rigid cluster moves are drawn at their placement, not at the cluster pose the
 check used. A report written before `loop_path_3d_mm` existed gives an error
 telling to rerun `copper emi-check BOARD --run RUN --write`.
 
+**Input-network impedance.** `copper emi-check BOARD [--run RUN] [--extract] --plot-impedance OUT.svg` writes one
+picture per `EMI-CONDUCTED` finding (renderer `copper_report::emi_impedance`; data
+`copper_emi::conducted::input_network`) that shows why the harmonics are as high as they are: the impedance the
+switch current meets and where each capacitor takes it. It is evaluated on the circuit the conducted estimate solves
+(section 10), not on a copy: the nominal case of the finding's scenario is kept in memory on the finding
+(`EmiFinding::conducted_input`, never in the JSON) and `input_network` solves the same modified-nodal-analysis
+circuit at any frequency with a unit current drawn by the converter's source. At a harmonic its branch currents are
+the model's (`HarmonicLevel::branch_currents`, to rounding; unit tests
+`the_input_network_gives_the_prediction_s_branch_currents_and_node_impedance_at_the_harmonics` with the hot-loop
+inductance, a coupling, a filter and a supply-side capacitor, and
+`the_node_impedance_of_the_input_network_is_the_one_the_anti_resonance_scan_reports`). The default report is
+unchanged: the function is only called by the picture.
+
+* **Top panel**, `|Z|` in ohm on a log axis against frequency on the log axis of the spectrum (150 kHz to 30 MHz, down
+  to the fundamental when that is lower): the heavy line is `|Z|` at the node `K` where the capacitors meet (every
+  source off; what the anti-resonance scan of the report reads, and what the level at the V-network is proportional
+  to); thin lines in the branch's colour are each capacitor branch's own series impedance
+  `R + j (w (L_connection + ESL) - 1 / (w C))` with the capacitance at bias, labelled with the reference and value at the
+  right-hand end; a hollow downward triangle on a branch line is its self-resonance
+  `1 / (2 pi sqrt((L_connection + ESL) C))` with its frequency; a hollow upward triangle on the heavy line is an
+  anti-resonance of the total (a local maximum with a prominence of 0.5 dB, as in `measures.anti_resonances`) with
+  its frequency and impedance; a tick on the heavy line is every switching harmonic; a harmonic within
+  `copper_report::emi_impedance::TOLERANCE` (5 %) in frequency of an anti-resonance is a red dot, ringed when the
+  report finds it raised by 6 dB or more over the best single branch, and the 5 % band is shaded in both panels. When
+  the hot-loop inductance changes the impedance across the converter's source by more than 5 % a dashed line is `|Z|`
+  across the source (`K` behind the loop inductance, and the couplings of an extraction): the source sees the loop
+  inductance, the level at the V-network does not, unless it is coupled.
+* **Bottom panel**, the current each branch carries per ampere the converter draws, in dB (0 dB is all of it; a branch
+  can exceed it where two branches circulate current), one line per branch in the colour of the top panel, and the
+  part that goes on to the V-network (dashed black). A line below the axis is labelled "(off scale)".
+* **Assumptions** are sentences under the title, as in the spectrum, limited to the ones that bear on the impedance
+  (capacitor derating, default ESR and ESL, ...); the line below them says where the connection inductances come from:
+  with `--extract` those of the hot loop and of the capacitors on the hot net are the extracted ones, with their
+  mutual inductances, at 10 MHz and with the extraction's status, the others estimated from the pad distance.
+
+**Extraction current map.** `copper emi-check BOARD --extract --plot-current OUT.svg` (an error without `--extract`)
+draws where the hot loop's current flows in the copper, from the extraction of the same invocation; nothing of it is
+stored in `route-report.json` and the `emi` JSON is unchanged (`HotLoopOptions::current_map` only arranges the branch
+currents the loop analysis already solves; `copper_extract::current`, renderer `copper_report::emi_current`). The
+solution is one frequency of the finest mesh, 10 MHz when it was solved (else the highest), named in the title,
+for a unit current into the port across the switch.
+
+* One map per copper layer whose peak is within 20 dB of the 0 dB level (layers below it are named, with their level, in
+  the column), over the window of the cells within the scale plus 1.5 mm. The copper of the layer is drawn white with a
+  faint outline, one path per conductor shape.
+* **Heat**: the sheet current `|K| = |I| / w` of every filament (`w` the cross-section width of the filament:
+  the strip it stands for times the part of it that copper covers; the filaments across the thickness are summed),
+  rasterised at 0.05 mm (coarser above about 90 000 cells), the x- and y-filaments of a cell combined as
+  `sqrt(|K_x|^2 + |K_y|^2)`, in dB below the 0 dB level on a 30-step viridis scale (one dB a step, one compound path
+  per colour). The 0 dB level is the 99th percentile of the cells of the layer with the largest peak: a few cells at a
+  terminal or a corner, where the filament mesh crowds the current, would otherwise set the scale; the cells above it
+  are drawn in the top colour and the true peak is stated in the column. Copper more than 30 dB below is white.
+* **Arrows**: on a grid of about a twentieth of the width, the strongest cell of each block, where it is above 15 % of
+  the layer's 0 dB level and the real part of the current is at least half its magnitude: the direction at the
+  instant the port current (the real unit current) peaks. In quadrature the direction at that instant is not the
+  direction of the flow, so there is no arrow.
+* **Vias** are circles whose area is the via's share of the current that changes layer there, with the percentage
+  (labelled from 2 %). The share is `|I| / sum |I|` over the vias of the same net that join the same two layers (a
+  via through several layers has a share per transition; the circle shows its strongest). The column lists each
+  transition, how many vias, the magnitude of the complex sum of their currents in ampere per ampere into the port
+  (about 1 where the whole loop current changes layer there) and the shares of the strongest.
+* The loop's **pads** are labelled and the **port** is ringed; the column lists the loop inductance and resistance at
+  every solved frequency, from the same solution (the numbers of `measures.extract`).
+* The per-capacitor current shares are not in this solution: the hot capacitor closes the loop as a copper bar and the
+  other capacitors of the hot net are open ports of the multi-port matrix; their currents are the impedance picture's
+  bottom panel.
+
+Both pictures are screening estimates and say so in one line; neither is a pass or a fail.
+
 ## 9. Quasi-static extraction (phase 2)
 
 Module `copper_emi::inductance`: partial inductance of rectangular bars

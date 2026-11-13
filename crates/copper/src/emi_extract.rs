@@ -26,6 +26,8 @@ pub struct Options {
     pub single_mesh: bool,
     /// Between the pad centres, without the bar across the switch.
     pub no_switch_bar: bool,
+    /// Keep the current distribution of each hot loop (for `--plot-current`); it is not part of the report.
+    pub current_map: bool,
 }
 
 fn put(object: &mut Object, key: &str, value: Value) {
@@ -365,7 +367,8 @@ pub fn apply(
     report: &mut EmiCheckReport,
     options: &Options,
     progress: &mut dyn std::io::Write,
-) {
+) -> Vec<(String, HotLoopExtraction)> {
+    let mut maps: Vec<(String, HotLoopExtraction)> = Vec::new();
     let topologies: Vec<(String, String)> = report
         .cells
         .iter()
@@ -396,6 +399,7 @@ pub fn apply(
         hot.mesh.coarse_nm = hot.mesh.cell_nm * 5;
     }
     hot.board.switch_bar = !options.no_switch_bar;
+    hot.current_map = options.current_map;
     let mut new_coverage = Vec::new();
     let mut extracted: Vec<ExtractedConnections> = Vec::new();
     let mut model_fill: Option<Result<BoardModel, String>> = None;
@@ -488,6 +492,9 @@ pub fn apply(
                         result.not_modelled.join("; ")
                     ),
                 ));
+                if result.currents.is_some() {
+                    maps.push((cell.clone(), result));
+                }
             }
             Err(error) => new_coverage.push(key(CoverageStatus::Failed, error)),
         }
@@ -504,6 +511,7 @@ pub fn apply(
     if !extracted.is_empty() {
         replace_conducted(board, view, model, report, &extracted);
     }
+    maps
 }
 
 /// The inductance matrix of a cell's input network from the finest mesh at the second frequency (10 MHz), when it
@@ -658,6 +666,7 @@ mod tests {
             inductance_matrix_nh: vec![vec![vec![4.2]], vec![vec![4.0]], vec![vec![3.95]]],
             matrix_difference_pct: 0.0,
             connection_legs: false,
+            currents: None,
             earlier_difference_pct: if single { Vec::new() } else { vec![3.0, 3.1, 3.1] },
         }
     }

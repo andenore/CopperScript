@@ -10,7 +10,8 @@ use std::time::Instant;
 use copper_fullwave::hotloop::HotLoopInput;
 use copper_pcb::board::PhysicalBoard;
 
-use crate::board::{BoardModel, BoardOptions, build_layout, loop_ports};
+use crate::board::{BoardModel, BoardOptions, LoopPad, build_layout, loop_ports};
+use crate::current::CurrentMap;
 use crate::extract::{Extraction, extract};
 use crate::layout::Layout;
 use crate::mesh::MeshSpec;
@@ -31,6 +32,10 @@ pub struct HotLoopOptions {
     pub frequencies_hz: Vec<f64>,
     /// Run a series of three meshes (the finest and two coarser) for the numerical sensitivity (default on).
     pub series: bool,
+    /// Keep the current distribution of the hot loop's port at one frequency (10 MHz when it is among the
+    /// frequencies, else the highest) in [`HotLoopExtraction::currents`] (default off: the branch currents of the
+    /// finest mesh are solved anyway, so this only arranges them).
+    pub current_map: bool,
 }
 
 impl Default for HotLoopOptions {
@@ -40,6 +45,7 @@ impl Default for HotLoopOptions {
             board: BoardOptions::default(),
             frequencies_hz: DEFAULT_FREQUENCIES_HZ.to_vec(),
             series: true,
+            current_map: false,
         }
     }
 }
@@ -119,7 +125,21 @@ pub struct HotLoopExtraction {
     pub matrix_difference_pct: f64,
     /// The capacitor ports were joined to the hot capacitor by straight bars because no copper did.
     pub connection_legs: bool,
+    /// The current distribution of the hot loop's port (`HotLoopOptions::current_map`).
+    pub currents: Option<Box<HotLoopCurrents>>,
 }
+
+/// The current distribution of the finest mesh at one frequency, with the loop's pads.
+#[derive(Clone, Debug)]
+pub struct HotLoopCurrents {
+    pub map: CurrentMap,
+    /// Index into [`HotLoopExtraction::frequencies_hz`] of the frequency the map is for.
+    pub frequency_index: usize,
+    pub pads: Vec<LoopPad>,
+}
+
+/// Preferred frequency of the current map, Hz.
+pub const CURRENT_MAP_HZ: f64 = 1e7;
 
 fn mesh_with(layout: &Layout, spec: &MeshSpec, frequencies: &[f64], currents: bool) -> Result<Extraction, String> {
     extract(layout, spec, frequencies, currents).map_err(|e| e.to_string())
@@ -283,6 +303,14 @@ pub fn extract_hot_loop(
         list.sort_by(|a, b| b.current_a.total_cmp(&a.current_a).then(a.name.cmp(&b.name)));
         via_currents.push(list);
     }
+    let currents = if options.current_map {
+        let index = freqs.iter().position(|f| (f - CURRENT_MAP_HZ).abs() < 1.0).unwrap_or(freqs.len() - 1);
+        first
+            .current_map(&layout.layout, index, 0)
+            .map(|map| Box::new(HotLoopCurrents { map, frequency_index: index, pads: layout.loop_pads.clone() }))
+    } else {
+        None
+    };
     let status = if reasons.is_empty() { "ok" } else { "indicative" };
     let port_description = format!(
         "{} to {}; {}",
@@ -321,5 +349,6 @@ pub fn extract_hot_loop(
         inductance_matrix_nh: chosen.inductance_matrix_nh.clone(),
         matrix_difference_pct,
         connection_legs,
+        currents,
     })
 }
