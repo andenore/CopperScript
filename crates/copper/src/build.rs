@@ -69,7 +69,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn sha256_file(path: &Path) -> io::Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
@@ -259,9 +259,11 @@ fn parse(arguments: &[String], out: &mut dyn Write) -> Result<Option<Settings>, 
              Runs copper check, copper route-board, a saved refill with a design-rule check, and a completion\n\
              gate, in order, into a new directory below the project's build/. Everything after -- goes to\n\
              route-board; the output, report, verification and resolution options are set by the build and\n\
-             rejected there. The plan is printed first. run.json records the inputs and their hashes, the\n\
-             commands, the verification mode, the status and the exit code. make route runs this\n\
-             command.\n\n\
+             rejected there. route-board takes its other defaults from the board's build block; an option\n\
+             after -- overrides the source. The build always passes --progress. The plan is printed first,\n\
+             with the options taken from the source. run.json records the inputs and their hashes, the\n\
+             commands, the source build options, the verification mode, the status and the exit code.\n\
+             make route runs this command.\n\n\
              exit status: 0 passed, 1 unmet completion gates, 2 setup or runner error, 3 unsupported"
         );
         crate::help::options(out, "build");
@@ -357,6 +359,10 @@ fn parse(arguments: &[String], out: &mut dyn Write) -> Result<Option<Settings>, 
 /// except for `kicad-cli`).
 struct Plan {
     route: Vec<String>,
+    /// The route-board options the board's `build` block supplies. They are
+    /// not in `route`: route-board reads them from the source itself, before
+    /// the options given here.
+    source_options: Vec<String>,
     /// Native: `copper fill`. KiCad: the combined refill and DRC.
     fill: Vec<String>,
     /// Native only: `copper drc`.
@@ -364,7 +370,7 @@ struct Plan {
     drc_report: PathBuf,
 }
 
-fn plan(settings: &Settings) -> Plan {
+fn plan(settings: &Settings, source_options: Vec<String>) -> Plan {
     let output = &settings.output;
     let board = shown(&output.join("board.kicad_pcb"));
     let mut route = vec!["route-board".to_owned(), shown(&settings.source)];
@@ -374,6 +380,10 @@ fn plan(settings: &Settings) -> Plan {
     route.push("--offline".to_owned());
     if let Some(footprints) = &settings.kicad_footprints {
         route.extend(["--footprint-root".to_owned(), shown(footprints)]);
+    }
+    // Progress lines only affect the output, so every build shows them.
+    if !settings.options.iter().any(|option| option == "--progress") {
+        route.push("--progress".to_owned());
     }
     route.extend(settings.options.iter().cloned());
     let checker = match (settings.verify, &settings.kicad_cli) {
@@ -401,13 +411,14 @@ fn plan(settings: &Settings) -> Plan {
             // The program is carried as the first argument.
             let mut with_program = vec![cli];
             with_program.extend(fill);
-            Plan { route, fill: with_program, drc: None, drc_report: report }
+            Plan { route, source_options, fill: with_program, drc: None, drc_report: report }
         }
         Verify::Native => {
             let filled = shown(&output.join("board.filled.kicad_pcb"));
             let report = output.join("native-drc.json");
             Plan {
                 route,
+                source_options,
                 fill: vec!["fill".to_owned(), board.clone(), "-o".to_owned(), filled],
                 drc: Some(vec!["drc".to_owned(), board, "--report".to_owned(), shown(&report)]),
                 drc_report: report,
@@ -453,6 +464,12 @@ fn plan_lines(settings: &Settings, plan: &Plan) -> Vec<String> {
     lines.push("Steps:".to_owned());
     for (index, (name, what)) in steps.iter().enumerate() {
         lines.push(format!("  {}. {name:<8} {what}", index + 1));
+    }
+    if !plan.source_options.is_empty() {
+        lines.push(format!(
+            "{} (route-board applies them before the options above)",
+            crate::source_build::notice(&shown(&settings.source), &plan.source_options)
+        ));
     }
     if settings.verify == Verify::Native {
         lines.push(match &settings.kicad_cli {
@@ -737,7 +754,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
 
 fn build(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<i32, Setup> {
     let Some(settings) = parse(arguments, out)? else { return Ok(0) };
-    let plan = plan(&settings);
+    // An unknown `router` key in the board's `build` block stops the build here.
+    let source_options = crate::source_build::source_options(&settings.source, &crate::route_board::specs())
+        .map_err(|failure| Setup(failure.to_string()))?;
+    let plan = plan(&settings, source_options);
     for line in plan_lines(&settings, &plan) {
         let _ = text::print(out, &line);
     }
@@ -760,6 +780,10 @@ fn build(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resu
     manifest.insert("status".to_owned(), Value::from("running"));
     manifest.insert("verify".to_owned(), Value::from(settings.verify.name()));
     manifest.insert("routing_command".to_owned(), Value::from(command_line("copper", &plan.route)));
+    manifest.insert(
+        "source_build_options".to_owned(),
+        Value::Array(plan.source_options.iter().map(|option| Value::from(option.as_str())).collect()),
+    );
     let fill_command = match &plan.drc {
         Some(_) => command_line("copper", &plan.fill),
         None => command_line(&plan.fill[0], &plan.fill[1..]),

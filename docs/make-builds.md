@@ -113,9 +113,18 @@ the same refusal of an existing non-empty directory and the same exit status
 binary.
 
 ```sh
+copper build board.copper --locked
 copper build board.copper --locked -- --layers 4 --routing-profile balanced
 copper build board.copper --verify kicad --kicad-cli /path/to/kicad-cli -- --layers 4
 ```
+
+`route-board` takes its defaults from the board's
+[`build` block](language-reference.md#board-build-settings): fabrication
+preset, placement candidates, routing effort and the other settings listed
+there. An option after `--` overrides the source. The plan shows the options
+taken from the source, and `run.json` records them as `source_build_options`
+next to `routing_command`. The build always passes `--progress` to
+`route-board`.
 
 `--verify native` (the default) refills the routed board with CopperScript's
 filler and checks it with its DRC, writing `native-drc.json`.
@@ -160,6 +169,10 @@ make EXAMPLE=full-vertical route EXTRA_ROUTE_ARGS="--routing-profile thorough"
 runs setup/command validation against cached dependencies without writing output.
 `PHYSICAL_ARGS`, `ROUTE_ARGS` and `EXTRA_ROUTE_ARGS` accept normal CLI options;
 the shared runner controls output paths, report paths and final fill verification.
+`ROUTE_ARGS` defaults to `--candidates $(ROUTE_CANDIDATES)`; the other route
+options use the compiler defaults or the board's `build` block. `FAB_PROFILE`
+is empty by default, which uses `fab_profile` of the `build` block, else
+`generic`. A Make variable is a command line option, so it overrides the source.
 Profiles are preferences, never hardcoded geometry or weakened DRC rules.
 
 ## Another source or project
@@ -172,16 +185,39 @@ make SOURCE=path/to/my_board.copper route FAB_PROFILE=jlcpcb-four-layer
 ```
 
 Use the default `EXAMPLE=valid` when overriding `SOURCE` to avoid carrying
-another example's optional physical scenes. For an independent repository,
-include or copy the shared `make/board.mk`, install
-`copper` and use a
-settings-only Makefile such as:
+another example's optional physical scenes.
+
+An independent project does not include or copy `make/board.mk`. It keeps one
+Makefile of its own in which every target is a plain `copper` call, so the
+command a target runs can be read, copied and run by hand. The build settings
+are in the board source, not in the Makefile:
+
+```copper
+build {
+    fab_profile = "jlcpcb-four-layer";
+    placement { candidates = 1; }
+}
+```
 
 ```make
-SOURCE := board.copper
-FAB_PROFILE := jlcpcb-four-layer
-include make/board.mk
+COPPER ?= copper
+# Every route is a new build/board/<UTC time>-<pid>/ with a run.json; RUN is the newest.
+RUN = $(patsubst %/run.json,%,$(lastword $(sort $(wildcard build/board/*/run.json))))
+
+check:
+	$(COPPER) check board.copper --locked
+route:
+	$(COPPER) build board.copper --locked
+bom:
+	$(COPPER) assembly check board.copper --locked --offline --lock assembly.lock
+	$(COPPER) assembly bom board.copper --locked --offline --lock assembly.lock -o build/order/bom.csv
+order: bom
+	$(COPPER) export-manufacturing $(RUN)/board.kicad_pcb --run $(RUN)/run.json --skip-independent-cam --bom build/order/bom.csv --replace -o build/order/jlcpcb
 ```
+
+`--run` makes the export refuse a route that did not pass or that predates a
+source change, so the Makefile needs no checks of its own. The rest of this
+page describes the recipes this repository uses for its own examples.
 
 Layer selection comes from the board's declared stackup and layer requirements,
 with fabrication presets supplying a compatible count when needed. The shared

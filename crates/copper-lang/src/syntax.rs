@@ -147,6 +147,7 @@ pub enum Declaration {
     Constraint(ConstraintDecl),
     Mechanical(MechanicalDecl),
     Silkscreen(SilkscreenDecl),
+    Build(BuildDecl),
     /// A `board_profile` item at the top level.
     MechanicalItem(MechanicalItem),
 }
@@ -397,4 +398,22 @@ pub struct SilkscreenItemDecl {
 pub struct SilkscreenDecl {
     pub location: Location,
     pub items: Vec<SilkscreenItemDecl>,
+}
+
+/// One `key = value;` of a board `build` block. `group` is the sub-block
+/// (`placement`, `routing`, `planes`, `router`), empty at the top level.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildSettingDecl {
+    /// The key token.
+    pub location: Location,
+    pub group: String,
+    pub key: String,
+    pub value: Scalar,
+}
+
+/// A board `build { ... }` block: settings in source order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildDecl {
+    pub location: Location,
+    pub settings: Vec<BuildSettingDecl>,
 }

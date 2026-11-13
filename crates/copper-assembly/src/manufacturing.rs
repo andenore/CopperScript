@@ -367,6 +367,10 @@ pub struct Export<'a> {
     pub replace_existing: bool,
     pub plotter: Plotter,
     pub checker: Checker,
+    /// Track ends open by design, as `(x_nm, y_nm, net, layer)`; the native
+    /// DRC excuses a dangling track end at exactly these. Only with
+    /// [`Checker::Native`].
+    pub expected_open_ends: &'a [(f64, f64, String, String)],
 }
 
 /// Plot the refilled staged board with `copper-cam` into the same places
@@ -394,8 +398,13 @@ fn plot_natively(board: &Path, gerbers: &Path, drills: &Path, netlist: &Path, po
 }
 
 /// Refill the staged board natively, write it back, and check it with the
-/// native DRC (report in `drc.json`). Returns the filled board.
-fn fill_and_check_natively(board: &Path, stage: &Path) -> Result<copper_cam::board::Board> {
+/// native DRC (report in `drc.json`, without the dangling ends `open_ends`
+/// excuses). Returns the filled board and how many ends were excused.
+fn fill_and_check_natively(
+    board: &Path,
+    stage: &Path,
+    open_ends: &[(f64, f64, String, String)],
+) -> Result<(copper_cam::board::Board, usize)> {
     let shown = paths::display(board);
     let text = files::universal_newlines(&read_text(board, &shown, false)?);
     let unfilled = copper_cam::board::parse_board(&text, &shown).map_err(Error::Files)?;
@@ -409,7 +418,8 @@ fn fill_and_check_natively(board: &Path, stage: &Path) -> Result<copper_cam::boa
     let filled_text = copper_cam::pcb_write::write_fills(&text, &unfilled, &fills).map_err(Error::Files)?;
     std::fs::write(board, filled_text.as_bytes()).map_err(|failure| Error::Os(open_error(&failure, &shown)))?;
     let filled = copper_cam::board::parse_board(&filled_text, &shown).map_err(Error::Files)?;
-    let report = copper_cam::drc::check(&filled, &rules).map_err(Error::Files)?;
+    let mut report = copper_cam::drc::check(&filled, &rules).map_err(Error::Files)?;
+    let excused = report.excuse_open_ends(open_ends);
     let name = |path: &Path| path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let mut rule_files = vec![name(&project)];
     if custom_text.is_some() {
@@ -435,7 +445,7 @@ fn fill_and_check_natively(board: &Path, stage: &Path) -> Result<copper_cam::boa
             findings.join("; ")
         ));
     }
-    Ok(filled)
+    Ok((filled, excused))
 }
 
 /// Read back the plotted copper and drills against the board's netlist.
@@ -598,8 +608,10 @@ fn stage_and_publish(
     };
     let (native_text, drc) = (shown(&native), stage.join("drc.json"));
     let mut checked_board = None;
+    let mut excused_open_ends = 0;
     if request.checker == Checker::Native {
-        checked_board = Some(fill_and_check_natively(&native, stage)?);
+        let (board, excused) = fill_and_check_natively(&native, stage, request.expected_open_ends)?;
+        (checked_board, excused_open_ends) = (Some(board), excused);
     } else {
         require(
             &command(&[
@@ -776,6 +788,9 @@ fn stage_and_publish(
         ("assembly_preview_review", Value::from("required; verify centroid, pin 1, polarity and supplier rotation")),
     ] {
         document.insert(key.to_owned(), value);
+    }
+    if excused_open_ends > 0 {
+        document.insert("expected_open_ends_excused".to_owned(), Value::from(excused_open_ends as u64));
     }
     let manifest = Dumps::new().indent(2).sort_keys(true).dumps(&Value::Object(document)) + "\n";
     let manifest_path = stage.join("manifest.json");

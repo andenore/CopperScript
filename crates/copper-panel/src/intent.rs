@@ -752,6 +752,78 @@ fn bites_hit(shape: &poly::Shapes, spec: &PanelSpec, tabs: &[BuiltTab], poses: &
 
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
+/// A declared overhang's body envelope on the panel: the strip beyond the
+/// board's side that the body occupies.
+fn overhang_envelope(b: [i64; 4], pose: Pose, overhang: &Overhang) -> poly::Shapes {
+    let (start, along, normal) = match overhang.side {
+        Side::Top => ((b[0], b[1]), (1, 0), (0, -1)),
+        Side::Bottom => ((b[0], b[3]), (1, 0), (0, 1)),
+        Side::Left => ((b[0], b[1]), (0, 1), (-1, 0)),
+        Side::Right => ((b[2], b[1]), (0, 1), (1, 0)),
+    };
+    let at = |t: i64, d: i64| pose.apply((start.0 + along.0 * t + normal.0 * d, start.1 + along.1 * t + normal.1 * d));
+    rect_shapes([
+        at(overhang.start, 1_000),
+        at(overhang.end, 1_000),
+        at(overhang.end, overhang.distance),
+        at(overhang.start, overhang.distance),
+    ])
+}
+
+/// A routed courtyard's real shape on the panel.
+fn courtyard_shape(pose: Pose, courtyard: &Courtyard) -> poly::Shapes {
+    let place = |ring: &Vec<Point>| -> Vec<(f64, f64)> {
+        ring.iter().map(|p| pose.apply(*p)).map(|(x, y)| (x as f64, y as f64)).collect()
+    };
+    // A courtyard has no holes: its outlines fill by union, so overlapping
+    // outlines never cancel (an even-odd fill would).
+    let areas: poly::Shapes = courtyard.areas.iter().flat_map(|ring| poly::polygon(&place(ring))).collect();
+    let mut shape = poly::union(&areas);
+    for line in &courtyard.lines {
+        shape.extend(poly::polyline(&place(line), 2_000.0, false, 250.0));
+    }
+    shape
+}
+
+/// Each board's stretches of sides where no tab may go, `(side, start,
+/// end)` in its own frame: the stretches kept clear and every body overhang.
+pub fn tab_free_stretches(intents: &IndexMap<String, BoardIntent>) -> IndexMap<String, Vec<(Side, i64, i64)>> {
+    intents
+        .iter()
+        .map(|(board, intent)| {
+            let mut stretches: Vec<(Side, i64, i64)> =
+                intent.keep_clear.iter().map(|k| (k.side, k.start, k.end)).collect();
+            stretches.extend(intent.overhangs.iter().map(|o| (o.side, o.start, o.end)));
+            (board.clone(), stretches)
+        })
+        .collect()
+}
+
+/// The bodies placed with the panel, on the panel: declared overhang
+/// envelopes and routed courtyards of every part not fitted after
+/// depanelization. The frame fill keeps the milled gap from them.
+pub fn placed_bodies(
+    spec: &PanelSpec,
+    intents: &IndexMap<String, BoardIntent>,
+    local: &IndexMap<String, Vec<Vec<Point>>>,
+    poses: &IndexMap<String, Pose>,
+) -> poly::Shapes {
+    let later =
+        |board: &str, reference: &str| spec.assemble_after_depanel.iter().any(|e| *e == format!("{board}.{reference}"));
+    let mut shapes = poly::Shapes::new();
+    for (board, intent) in intents {
+        let pose = poses[board];
+        let b = bounds(&local[board]);
+        for overhang in intent.declared_overhangs.iter().filter(|o| !later(board, &o.reference)) {
+            shapes.extend(overhang_envelope(b, pose, overhang));
+        }
+        for courtyard in intent.courtyards.iter().filter(|c| !later(board, &c.reference)) {
+            shapes.extend(courtyard_shape(pose, courtyard));
+        }
+    }
+    shapes
+}
+
 pub fn check(
     spec: &PanelSpec,
     intents: &IndexMap<String, BoardIntent>,
@@ -813,21 +885,7 @@ pub fn check(
             if spec.assemble_after_depanel.iter().any(|e| *e == format!("{board}.{}", overhang.reference)) {
                 continue;
             }
-            let (start, along, normal) = match overhang.side {
-                Side::Top => ((b[0], b[1]), (1, 0), (0, -1)),
-                Side::Bottom => ((b[0], b[3]), (1, 0), (0, 1)),
-                Side::Left => ((b[0], b[1]), (0, 1), (-1, 0)),
-                Side::Right => ((b[2], b[1]), (0, 1), (1, 0)),
-            };
-            let at = |t: i64, d: i64| {
-                pose.apply((start.0 + along.0 * t + normal.0 * d, start.1 + along.1 * t + normal.1 * d))
-            };
-            let envelope = rect_shapes([
-                at(overhang.start, 1_000),
-                at(overhang.end, 1_000),
-                at(overhang.end, overhang.distance),
-                at(overhang.start, overhang.distance),
-            ]);
+            let envelope = overhang_envelope(b, pose, overhang);
             let mut blockers: Vec<String> = Vec::new();
             for rail in rails {
                 let r = rect_shapes([(rail[0], rail[1]), (rail[2], rail[1]), (rail[2], rail[3]), (rail[0], rail[3])]);
@@ -866,16 +924,7 @@ pub fn check(
             if spec.assemble_after_depanel.iter().any(|e| *e == format!("{board}.{}", courtyard.reference)) {
                 continue;
             }
-            let place = |ring: &Vec<Point>| -> Vec<(f64, f64)> {
-                ring.iter().map(|p| pose.apply(*p)).map(|(x, y)| (x as f64, y as f64)).collect()
-            };
-            // A courtyard has no holes: its outlines fill by union, so
-            // overlapping outlines never cancel (an even-odd fill would).
-            let areas: poly::Shapes = courtyard.areas.iter().flat_map(|ring| poly::polygon(&place(ring))).collect();
-            let mut shape = poly::union(&areas);
-            for line in &courtyard.lines {
-                shape.extend(poly::polyline(&place(line), 2_000.0, false, 250.0));
-            }
+            let shape = courtyard_shape(pose, courtyard);
             let mut blockers: Vec<String> = Vec::new();
             if rails.iter().any(|rail| {
                 let r = rect_shapes([(rail[0], rail[1]), (rail[2], rail[1]), (rail[2], rail[3]), (rail[0], rail[3])]);

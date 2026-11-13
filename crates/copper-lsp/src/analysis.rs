@@ -27,7 +27,7 @@ use crate::text::{PathKey, Text, as_uri, int, object, path_from_uri, strip};
 
 pub const MAX_TEXT: usize = 8 * 1024 * 1024;
 const MAX_IMPORT_DEPTH: usize = 64;
-const KEYWORDS: [&str; 16] = [
+const KEYWORDS: [&str; 17] = [
     "component",
     "module",
     "net",
@@ -43,6 +43,7 @@ const KEYWORDS: [&str; 16] = [
     "mechanical",
     "silkscreen",
     "physical_macro",
+    "build",
     "macro",
 ];
 const SILKSCREEN_ITEMS: [&str; 8] = ["branding", "text", "logo", "line", "rectangle", "circle", "arc", "polygon"];
@@ -69,6 +70,15 @@ fn properties(kind: &str) -> &'static [&'static str] {
             "current_peak",
             "current_rise_time",
             "current_fall_time",
+            "absolute_min",
+            "absolute_max",
+            "io_supply",
+            "vih",
+            "vil",
+            "voh",
+            "vol",
+            "requires_pull",
+            "internal_pull",
             "bond",
             "connection",
             "traits",
@@ -81,6 +91,41 @@ fn properties(kind: &str) -> &'static [&'static str] {
         "circle" => &["center", "radius", "thickness", "filled", "side", "material", "exposed"],
         "arc" => &["start", "mid", "end", "thickness", "side", "material", "exposed"],
         "polygon" => &["vertices", "thickness", "filled", "side", "material", "exposed"],
+        // The board `build` block and its groups (`copper_lang::build_settings::KEYS`).
+        "build" => &["fab_profile", "placement", "routing", "planes", "router"],
+        "placement" => &[
+            "candidates",
+            "candidate",
+            "grid",
+            "decoupling_trials",
+            "refinement_passes",
+            "escape_spacing_passes",
+            "feedback_trials",
+        ],
+        "routing" => &[
+            "effort",
+            "feedback_iterations",
+            "router_iterations",
+            "fanout",
+            "fanout_maze",
+            "array_flow",
+            "via_lattice",
+            "congestion_feedback_trials",
+            "filled_copper_trials",
+            "pair_states",
+            "pitch",
+            "time_budget",
+        ],
+        "planes" => &[
+            "early_stitch",
+            "surface_zones",
+            "stitch_step",
+            "stitch_radius",
+            "stitch_detour",
+            "contact_radius",
+            "maze_step",
+            "maze_budget",
+        ],
         _ => &[],
     }
 }
@@ -307,6 +352,7 @@ fn node(declaration: &Declaration) -> Node<'_> {
         },
         Declaration::Mechanical(item) => base("MechanicalDecl", "", &item.location),
         Declaration::Silkscreen(item) => base("SilkscreenDecl", "", &item.location),
+        Declaration::Build(item) => base("BuildDecl", "", &item.location),
         Declaration::MechanicalItem(MechanicalItem::Feature(item)) => Node {
             labels: vec![("kind", item.kind.clone())],
             fields: parameters(&item.parameters),
@@ -1679,6 +1725,18 @@ pub fn analyse_path(path: &Path, sources: Sources, uris: IndexMap<PathKey, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_block_completions_match_the_language() {
+        use copper_lang::build_settings::{GROUPS, ROUTER_GROUP, keys};
+        let mut top = keys("");
+        top.extend(GROUPS);
+        assert_eq!(properties("build"), top.as_slice());
+        for group in GROUPS.into_iter().filter(|group| *group != ROUTER_GROUP) {
+            assert_eq!(properties(group), keys(group).as_slice(), "{group}");
+        }
+        assert!(KEYWORDS.contains(&"build"));
+    }
 
     #[test]
     fn splitlines_follows_python() {

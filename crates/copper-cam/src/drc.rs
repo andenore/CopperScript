@@ -89,6 +89,26 @@ impl Report {
         self.violations.is_empty() && self.unconnected.is_empty()
     }
 
+    /// Drop the `track_dangling` violations at track ends that are open by
+    /// design, each given as `(x_nm, y_nm, net, layer)`: only a track of that
+    /// net on that layer ending within a micrometre of the point is excused.
+    /// Returns how many were dropped.
+    pub fn excuse_open_ends(&mut self, ends: &[(f64, f64, String, String)]) -> usize {
+        let before = self.violations.len();
+        self.violations.retain(|v| {
+            !(v.kind == "track_dangling"
+                && ends.iter().any(|(x, y, net, layer)| {
+                    (v.at.0 - x).hypot(v.at.1 - y) <= 1_000.0
+                        && v.items.iter().any(|i| {
+                            i.starts_with("track ")
+                                && i.contains(&format!("[{net}]"))
+                                && i.ends_with(&format!(" on {layer}"))
+                        })
+                }))
+        });
+        before - self.violations.len()
+    }
+
     /// The report as JSON, shaped like KiCad's DRC report (positions in
     /// millimetres, Y down), plus what was not checked.
     pub fn to_json(&self, source: &str, rule_files: &[String]) -> copper_json::Value {

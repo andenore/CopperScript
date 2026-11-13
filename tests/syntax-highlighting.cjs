@@ -79,6 +79,15 @@ test("macro definitions and bindings highlight named geometry and angle units", 
   expectScope("rotation = 45 deg;", "deg", "storage.type.unit.copper");
 });
 
+test("build blocks highlight the block, its groups and duration units", () => {
+  for (const kind of ["build", "placement", "routing", "planes", "router"]) {
+    expectScope(`${kind} {`, kind, "storage.type.copper");
+  }
+  expectScope("routing = 1;", "routing", "variable.other.property.copper");
+  expectScope("x = 600s;", "600", "constant.numeric.copper");
+  expectScope("x = 600s;", "s", "storage.type.unit.copper");
+});
+
 test("keywords and units do not split longer or hyphenated identifiers", () => {
   for (const word of ["component-height", "true_value", "false-state", "mm_route", "VDD", "board2", "R123", "α_component"]) {
     expectScope(word, word, "variable.other.copper");

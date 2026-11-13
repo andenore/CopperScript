@@ -105,6 +105,7 @@ fn not_options(name: &str) -> &'static [&'static str] {
             "--hard-macro",
             "--placement-templates",
             "--expected-open-ends",
+            "--progress",
             "--refill-zones",
             "--save-board",
             "--severity-all",

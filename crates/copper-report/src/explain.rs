@@ -184,6 +184,41 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
         "Coverage entry of `copper emi-check`: the copper path length from each decoupling capacitor to its pin and return via needs routed copper and is not implemented.",
         "Check the decoupling paths after routing.",
     ),
+    (
+        "LOGIC_HIGH_OVERVOLTAGE",
+        "A push-pull output, or a pull-up resistor, takes a signal net above the voltage limit of a pin on it.",
+        "Use a level shifter, a lower I/O rail, or a part whose input is rated for the driver's rail. Above an absolute maximum is an error; above only the operating maximum is a warning when an absolute maximum is declared.",
+    ),
+    (
+        "LOGIC_HIGH_TOO_LOW",
+        "A driver's output-high level is below the receiver's declared input-high threshold (vih).",
+        "Use a level shifter or a driver on a higher I/O rail, or check the thresholds against the datasheet.",
+    ),
+    (
+        "LOGIC_LOW_TOO_HIGH",
+        "A driver's declared output-low level (vol) is above the receiver's declared input-low threshold (vil).",
+        "Use a driver with a lower output-low level or a receiver with a higher vil.",
+    ),
+    (
+        "LOGIC_LEVEL_UNRESOLVED",
+        "A pin's explicit io_supply or rail-relative logic threshold could not be evaluated.",
+        "Declare a supply on the net of the named reference pin, or fix the reference. Until then the levels of those pins are not checked.",
+    ),
+    (
+        "MISSING_PULL",
+        "A pin declares requires_pull, but its net has no resistor to a declared supply (pull-up) or 0 V net (pull-down) and is not tied to one directly. The resistor value is not checked.",
+        "Add the pull resistor the datasheet demands, or tie the net to the rail if that is allowed.",
+    ),
+    (
+        "UNDRIVEN_INPUT",
+        "Every pin on the net is a digital or clock input, and nothing drives it: no declared supply, no pull resistor to a supply or ground, and no pin with an internal_pull. Passive, bidirectional, output, power and unmodeled pins count as drivers.",
+        "Connect an output, add a pull resistor, or declare internal_pull on the pin if firmware enables it.",
+    ),
+    (
+        "OPEN_DRAIN_NO_PULLUP",
+        "Every pin that can drive the net is open-drain, but the net has no pull-up resistor to a declared supply and no pin declares an internal pull-up. I2C nets are covered by I2C_MISSING_PULLUP.",
+        "Add a pull-up resistor, or declare internal_pull on a pin that has a pull-up you will enable in firmware.",
+    ),
     ("I2C_MISSING_SIGNAL", "An I2C interface does not map SDA or SCL.", "Add `sda = NET; scl = NET;`."),
     ("I2C_TOO_FEW_PARTICIPANTS", "An I2C interface binds fewer than two components.", "Bind the host and each target."),
     ("I2C_MISSING_BINDING", "A bound component has no SDA or SCL pin binding.", "Add the pin to its `bind` block."),
@@ -267,12 +302,16 @@ const FAMILIES: &[(&str, &str)] = &[
     ("MEC", "Mechanical declaration error."),
     ("SLK", "Silkscreen declaration error."),
     ("MAC", "Physical macro definition or binding error."),
+    (
+        "BLD",
+        "Board `build` block error: a setting has the wrong type, unit or range, or names an unknown router field.",
+    ),
 ];
 
 const FAMILY_FIX: &str = "Use the message and hint; `copper check --json` gives the exact location.";
 
 /// The family prefixes in the order `--list --json` reports them.
-pub const FAMILY_NAMES: [&str; 6] = ["CMP", "LEX", "MAC", "MEC", "PAR", "SLK"];
+pub const FAMILY_NAMES: [&str; 7] = ["BLD", "CMP", "LEX", "MAC", "MEC", "PAR", "SLK"];
 
 /// Python's `code.strip().upper()`.
 fn normalize(code: &str) -> String {

@@ -11,6 +11,7 @@ use copper_units::Dimension;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 
+use crate::build_settings;
 use crate::error::CopperScriptError;
 use crate::lexer::{Token, TokenKind, tokenize};
 use crate::suggest::close_match;
@@ -18,7 +19,7 @@ use crate::syntax::*;
 
 type Result<T> = std::result::Result<T, CopperScriptError>;
 
-const BOARD_KEYWORDS: [&str; 15] = [
+const BOARD_KEYWORDS: [&str; 16] = [
     "component",
     "port",
     "module",
@@ -34,6 +35,7 @@ const BOARD_KEYWORDS: [&str; 15] = [
     "mechanical",
     "silkscreen",
     "physical_macro",
+    "build",
 ];
 
 const SILKSCREEN_KINDS: [&str; 8] = ["branding", "text", "logo", "line", "rectangle", "circle", "arc", "polygon"];
@@ -191,6 +193,17 @@ impl Parser {
                 let path = self.expect(TokenKind::String, "package import path")?.text;
                 imports.push(ImportDecl { location: keyword_location, alias, path });
                 self.expect_symbol(";")?;
+            } else if keyword == "build"
+                && (matches!(kind, DocumentKind::Board | DocumentKind::Module) || self.at_symbol("{"))
+            {
+                // Elsewhere `build = ...;` stays an ordinary property name.
+                if kind != DocumentKind::Board {
+                    return Err(self.error_at("PAR018", "build blocks are board-only", self.previous(1)));
+                }
+                if declarations.iter().any(|declaration| matches!(declaration, Declaration::Build(_))) {
+                    return Err(self.error_at("PAR019", "a board has at most one build block", self.previous(1)));
+                }
+                declarations.push(Declaration::Build(self.build(keyword_location)?));
             } else if matches!(kind, DocumentKind::Macro | DocumentKind::Panel) {
                 // Panels use the macro grammar: root properties and `KIND NAME { ... }`.
                 declarations.push(self.macro_declaration(&keyword, keyword_location)?);
@@ -673,6 +686,89 @@ impl Parser {
         Ok(PhysicalMacroDecl { location, name, asset_alias, scope, mappings })
     }
 
+    /// `build { key = value; GROUP { key = value; ... } ... }`. Groups and
+    /// keys are checked here, at their tokens; value types are checked when
+    /// the block is lowered (`build_settings`).
+    fn build(&mut self, location: Location) -> Result<BuildDecl> {
+        self.expect_symbol("{")?;
+        let mut settings = Vec::new();
+        while !self.at_symbol("}") {
+            let token = self.current().clone();
+            let name = self.name("build setting or group")?;
+            if self.at_symbol("{") {
+                if !build_settings::GROUPS.contains(&name.as_str()) {
+                    return Err(self.suggesting(
+                        "PAR020",
+                        format!("unknown build group {}", repr(&name)),
+                        &token,
+                        &name,
+                        &build_settings::GROUPS,
+                    ));
+                }
+                self.advance();
+                while !self.at_symbol("}") {
+                    let key_token = self.current().clone();
+                    let key = self.name("build setting")?;
+                    self.build_setting(&mut settings, &name, key, &key_token)?;
+                }
+                self.expect_symbol("}")?;
+            } else {
+                self.build_setting(&mut settings, "", name, &token)?;
+            }
+        }
+        self.expect_symbol("}")?;
+        Ok(BuildDecl { location, settings })
+    }
+
+    /// One `= value;` after the key `key` of `group` (empty at the top level).
+    fn build_setting(
+        &mut self,
+        settings: &mut Vec<BuildSettingDecl>,
+        group: &str,
+        key: String,
+        token: &Token,
+    ) -> Result<()> {
+        let shown = build_settings::dotted(group, &key);
+        // The `router` group takes the unified router's own field names,
+        // which this crate does not know; the command line tools check them.
+        if group != build_settings::ROUTER_GROUP {
+            let known = build_settings::keys(group);
+            if !known.contains(&key.as_str()) {
+                return Err(self.suggesting(
+                    "PAR021",
+                    format!("unknown build setting {}", repr(&shown)),
+                    token,
+                    &key,
+                    &known,
+                ));
+            }
+        }
+        if settings.iter().any(|setting| setting.group == group && setting.key == key) {
+            return Err(self.error_at("PAR004", format!("duplicate property {}", repr(&shown)), token));
+        }
+        self.expect_symbol("=")?;
+        let value = self.scalar()?;
+        self.expect_symbol(";")?;
+        settings.push(BuildSettingDecl { location: token.location.clone(), group: group.to_owned(), key, value });
+        Ok(())
+    }
+
+    /// An error at `token` with a "did you mean" hint when `word` is close to a candidate.
+    fn suggesting(
+        &self,
+        code: &str,
+        message: String,
+        token: &Token,
+        word: &str,
+        candidates: &[&str],
+    ) -> CopperScriptError {
+        let suggestion = close_match(word, candidates);
+        let mut error = self.error_at(code, message, token);
+        error.hint = suggestion.as_ref().map(|candidate| format!("did you mean {}?", repr(candidate)));
+        error.replacement = suggestion;
+        error
+    }
+
     fn macro_name(&mut self) -> Result<String> {
         if self.current().kind == TokenKind::String { Ok(self.advance().text) } else { self.name("macro name") }
     }
@@ -899,5 +995,63 @@ mod tests {
         let error = parse("board B { componnet R1: X; }", "b").unwrap_err();
         assert_eq!(error.to_string(), "b:1:11: PAR002: unknown declaration 'componnet' (did you mean 'component'?)");
         assert_eq!(error.replacement.as_deref(), Some("component"));
+    }
+
+    #[test]
+    fn a_board_accepts_one_build_block() {
+        let source = "board B {\n build {\n  fab_profile = \"generic\";\n  placement { candidates = 2; grid = 0.25mm; }\n  \
+                      router { fine_regions = dense; }\n }\n}";
+        let document = parse(source, "b.copper").unwrap();
+        let Declaration::Build(block) = &document.declarations[0] else { panic!() };
+        let named: Vec<(&str, &str, usize)> = block
+            .settings
+            .iter()
+            .map(|setting| (setting.group.as_str(), setting.key.as_str(), setting.location.line))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("", "fab_profile", 3),
+                ("placement", "candidates", 4),
+                ("placement", "grid", 4),
+                ("router", "fine_regions", 5)
+            ]
+        );
+        assert_eq!(block.settings[2].value, Scalar::Quantity { value: "0.25".into(), unit: "mm".into() });
+        assert_eq!((block.location.line, block.location.column), (2, 2));
+    }
+
+    #[test]
+    fn build_blocks_are_board_only_and_single() {
+        let error = parse("module M {\n build { }\n}", "m.copper").unwrap_err();
+        assert_eq!(error.to_string(), "m.copper:2:2: PAR018: build blocks are board-only");
+        for kind in ["part", "device", "macro", "board_profile"] {
+            let error = parse(&format!("{kind} X {{\n build {{ }}\n}}"), "x.copper").unwrap_err();
+            assert_eq!(error.to_string(), "x.copper:2:2: PAR018: build blocks are board-only", "{kind}");
+        }
+        let error = parse("board B {\n build { }\n build { }\n}", "b.copper").unwrap_err();
+        assert_eq!(error.to_string(), "b.copper:3:2: PAR019: a board has at most one build block");
+        // Outside boards and modules `build` stays an ordinary property name.
+        assert!(parse("part P { build = 3; }", "p.copper").is_ok());
+    }
+
+    #[test]
+    fn unknown_build_groups_and_settings_are_located() {
+        let error = parse("board B {\n build {\n  placment { candidates = 2; }\n }\n}", "b.copper").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "b.copper:3:3: PAR020: unknown build group 'placment' (did you mean 'placement'?)"
+        );
+        let error = parse("board B {\n build {\n  placement {\n   candidats = 2;\n  }\n }\n}", "b.copper").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "b.copper:4:4: PAR021: unknown build setting 'placement.candidats' (did you mean 'candidates'?)"
+        );
+        assert_eq!(error.replacement.as_deref(), Some("candidates"));
+        let error = parse("board B {\n build { layers = 4; }\n}", "b.copper").unwrap_err();
+        assert_eq!(error.to_string(), "b.copper:2:10: PAR021: unknown build setting 'layers'");
+        let error =
+            parse("board B {\n build { routing { effort = quick;\n effort = thorough; } }\n}", "b.copper").unwrap_err();
+        assert_eq!(error.to_string(), "b.copper:3:2: PAR004: duplicate property 'routing.effort'");
     }
 }

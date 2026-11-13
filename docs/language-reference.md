@@ -57,6 +57,117 @@ placement/routing space without acquiring an electrical net. Copper text,
 filled artwork feature widths and exposed-mask qualification currently keep
 physical signoff incomplete; see the same reference for the exact limits.
 
+## Board build settings
+
+A board may hold one `build` block. It sets defaults for options of the
+physical commands, so a project keeps them in its source instead of in a
+Makefile. The block is board-only: a module, part, device or macro file with a
+`build` block is an error, and so is a second block.
+
+```copper
+board Example {
+    build {
+        fab_profile = "jlcpcb-six-layer";
+        placement { candidates = 2; candidate = "candidate-01"; grid = 0.25mm; }
+        routing { effort = balanced; fanout_maze = true; time_budget = 600s; }
+        planes { contact_radius = 3mm; stitch_step = 0.1mm; early_stitch = false; }
+        router { fine_regions = dense; maximum_expansions = 2000000; }
+    }
+}
+```
+
+Each setting stands for one command line option. Precedence is: command line,
+then the board's `build` block, then the compiler default. A command reads the
+block from the board file it is given, keeps the settings whose option it
+accepts, and evaluates them before its own arguments. A conflict is not an
+error: the command line overrides the source. A setting given explicitly, in
+the source or on the command line, also outranks what an effort preset implies.
+
+| Command | Settings it reads |
+|---|---|
+| `route-board`, and so `copper build` | all |
+| `plan-layout` | `fab_profile`, and `placement` except `candidate` and `feedback_trials` |
+| `si-check`, `synthesize-antenna`, `edit-mechanical` | `fab_profile` |
+
+`route-board` prints one line naming the options it took from the source.
+`copper build` shows them in its plan and records them in `run.json` as
+`source_build_options`. `copper check` validates the block. The compiled JSON
+holds the settings under `build`, with lengths in nanometres (`grid_nm`) and
+durations in seconds (`time_budget_s`).
+
+Value types: an integer is a whole number, not negative unless a minimum is
+given. A boolean is `true` or `false`. A length needs a unit (`mm`, `um`, `m`)
+and must be a whole number of nanometres. A duration needs a unit and must be
+a positive whole number of seconds (`600s`). A name may be written bare or as
+a string.
+
+Top level:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `fab_profile` | `generic`, `jlcpcb-four-layer` or `jlcpcb-six-layer` | `generic` | `--fab-profile` |
+
+`placement`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `candidates` | integer, at least 1 | 1 (`plan-layout`: 3) | `--candidates` |
+| `candidate` | string | the planner's choice | `--placement-candidate` |
+| `grid` | length, positive | 1 mm | `--placement-grid-mm` |
+| `decoupling_trials` | integer | 64 | `--decoupling-placement-trials` |
+| `refinement_passes` | integer | 2 | `--placement-refinement-passes` |
+| `escape_spacing_passes` | integer | 2 | `--escape-spacing-passes` |
+| `feedback_trials` | integer | 24 | `--placement-feedback-trials` |
+
+`routing`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `effort` | `quick`, `balanced` or `thorough` | none | `--routing-profile` |
+| `feedback_iterations` | integer, at least 1 | 1 | `--feedback-iterations` |
+| `router_iterations` | integer, at least 1 | 5 | `--router-iterations` |
+| `fanout` | boolean | `true` | `--fanout` / `--no-fanout` |
+| `fanout_maze` | boolean | `false` | `--fanout-maze` when `true` |
+| `array_flow` | boolean | `false` | `--array-flow` / `--no-array-flow` |
+| `via_lattice` | boolean | `false` | `--via-lattice` / `--no-via-lattice` |
+| `congestion_feedback_trials` | integer | 4 | `--congestion-feedback-trials` |
+| `filled_copper_trials` | integer | 8 | `--filled-copper-trials` |
+| `pair_states` | integer | 6000 | `--package-initial-pair-states` |
+| `pitch` | length; 0 selects the default | 0.25 mm | `--unified-pitch-mm` |
+| `time_budget` | duration | no limit | `--unified-time-budget-s` |
+
+`effort` sets `filled_copper_trials` and `decoupling_trials` unless they are
+given: quick 2 and 4, balanced 8 and 16, thorough 16 and 64.
+
+`planes`:
+
+| Key | Type | Default | Option |
+|---|---|---|---|
+| `early_stitch` | boolean | `true` | `--early-plane-stitch` / `--no-early-plane-stitch` |
+| `surface_zones` | boolean | `true` | `--stitch-surface-zones` / `--no-stitch-surface-zones` |
+| `stitch_step` | length, positive | 0.5 mm | `--plane-stitch-step-mm` |
+| `stitch_radius` | length, positive | 3 mm | `--plane-stitch-radius-mm` |
+| `stitch_detour` | length | 0 mm | `--plane-stitch-detour-mm` |
+| `contact_radius` | length; 0 disables it | 5 mm | `--plane-contact-radius-mm` |
+| `maze_step` | length, positive | 0.1 mm | `--plane-maze-step-mm` |
+| `maze_budget` | integer, at least 1 | 12000 | `--plane-maze-budget` |
+
+`router` is the expert group. Each `key = value;` stands for
+`--unified-set key=value`. The key must be a field of the unified router;
+`copper route-board --list-unified-options` lists them with their types and
+defaults. The value is a number without a unit, `true`, `false`, a name or a
+string. `copper check`, `copper build` and `copper route-board` reject an
+unknown key at its source location.
+
+Diagnostics: `PAR018` (block outside a board), `PAR019` (second block),
+`PAR020` (unknown group), `PAR021` (unknown setting), `PAR004` (duplicate
+setting), `BLD001` (wrong type, unit or name), `BLD002` (value out of range)
+and `BLD003` (unknown router setting). Each points at the group or key.
+
+Settings that describe the board itself do not belong here: the stackup and
+design rules are `mechanical` declarations, and net widths, layers and lengths
+are constraints. See [board configuration](board-configuration.md).
+
 ## Mechanical geometry status
 
 A board may declare a separate `mechanical` section containing a circular,
@@ -296,8 +407,9 @@ resolved, because the reference is not on a declared supply, is connected to
 supplies with different voltages, or names no pin or active pad, ERC reports
 the error `VOLTAGE_LIMIT_UNRESOLVED`, a fixed cap still applies on its own, and
 the operating bound on that side stays a hard limit. Limits are only evaluated
-for pins on nets with a declared supply; signal nets carry no voltage in the
-IR. When several active profiles of one package pin declare a range, the
+for pins on nets with a declared supply by the supply checks above; the logic
+levels of signal nets are checked as described in
+[Logic levels](#logic-levels). When several active profiles of one package pin declare a range, the
 package pin's own range wins, then the first bonded device pad's.
 Power-domain `voltage_min`/`voltage_max` remain operating limits checked as
 errors. The serialized IR carries the absolute range as
@@ -364,6 +476,142 @@ cells only: `EMI_HOT_LOOP_NO_CAPACITOR`, `EMI_HOT_CAPACITOR_UNDECLARED`,
 carries `profile.emi` and `part.emi` only when declared, and the component properties
 `load_current` and `capacitance_at_bias` only when declared. All of this is screening input, never EMC
 evidence; see [EMI noise-source analysis](emi-noise-analysis.md).
+
+### Logic levels
+
+Signal nets carry no voltage in the IR, so the supply checks above never see
+them. A pin or pad can instead name its I/O rail and declare logic thresholds,
+and ERC then compares the drivers and receivers of every net that has no
+declared supply:
+
+```copper
+pin IO1 {
+    number = "5";
+    domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull";
+    io_supply = VDDIO;            // the pin or pad whose supply is the I/O rail
+    vih = "0.7*VDDIO";            // input-high minimum
+    vil = "0.3*VDDIO";            // input-low maximum
+    voh = "VDDIO-0.4V";           // output-high minimum
+    vol = 0.4V;                   // output-low maximum
+    absolute_max = "VDDIO+0.3V";
+}
+```
+
+`io_supply` on a pin names another pin of the same part or, for a device-backed
+part, a pad of its device; on a device pad it names a pad of the same device. Each threshold is either a voltage
+(`2.0V`) or a quoted rail-relative level `"[SCALE*]PAD[+|-]OFFSET"`, for example
+`"0.7*VDD"`, `"VDD-0.4V"`, `"VDD"` or `"0.3*VDD+0.1V"`. `PAD` is named like the
+reference of a relative absolute limit and is evaluated per component. Unknown
+references are rejected at compile time (`CMP127`), malformed values with
+`CMP120`, and a fixed `vil` above a fixed `vih` with `CMP121`. The thresholds
+are optional and appear in the IR as `profile.io_supply` and
+`profile.logic_levels` only when declared.
+
+ERC resolves the I/O rail of a pin in this order: its `io_supply`, then, for a
+device-backed pin, the `power_domain` of its active bonded pads through that
+domain's `supply_pads` (when they all resolve to one voltage). The rail voltage
+is the declared supply voltage on the net of the named pin or pad. A pin whose
+rail cannot be resolved takes no part in rail-based checks and gets no
+diagnostic. If a pin declares `io_supply` or a rail-relative threshold and it
+cannot be evaluated, ERC reports the warning `LOGIC_LEVEL_UNRESOLVED`: the levels are not checked,
+usually because the rail net has no declared `supply`.
+
+A driver is a pin with direction `output` or `bidirectional`, a `digital` or
+`clock` domain and the `push_pull` drive mode. A pin that declares no drive mode
+is not assumed to be push-pull. Every other pin on the net is a receiver, except
+pins that are only `power` or `ground`; a bidirectional pin is both. A pin is
+never compared with itself, and two pins of one component on identical rails are
+skipped.
+
+| Condition | Diagnostic |
+| --- | --- |
+| driver rail voltage above the receiver's absolute maximum | error `LOGIC_HIGH_OVERVOLTAGE` |
+| above the operating maximum, inside a declared and resolved absolute maximum | warning `LOGIC_HIGH_OVERVOLTAGE` |
+| above the operating maximum, no absolute bound | error `LOGIC_HIGH_OVERVOLTAGE` |
+| driver output-high below the receiver's `vih` | error `LOGIC_HIGH_TOO_LOW` |
+| driver `vol` above the receiver's `vil` | error `LOGIC_LOW_TOO_HIGH` |
+
+The overvoltage severities follow the supply checks. The driver's output-high
+level is its `voh` when declared, otherwise its rail voltage; `LOGIC_HIGH_TOO_LOW`
+and `LOGIC_LOW_TOO_HIGH` need the receiver's threshold and, for `vol`, the
+driver's, and both sides must resolve. There is one diagnostic per driver,
+receiver and code. Messages name both pins, the net and the numbers with their
+derivation.
+
+ERC cannot know which way a bidirectional pin is used. When a driver that may
+also be an input (`bidirectional`) exceeds the limit of a pin that can itself
+drive the net (`output` or `bidirectional`), `LOGIC_HIGH_OVERVOLTAGE` is a
+warning that says the excess exists only if the first pin is configured as an
+output. Against an input-only pin the severities in the table apply.
+`LOGIC_LEVEL_UNRESOLVED` is reported once per component and reference, not
+once per pin.
+
+A resistor from a signal net to a net with a declared non-zero supply is a
+pull-up. Its supply voltage is a high level on the net and is checked against
+the limits of every pin on it with `LOGIC_HIGH_OVERVOLTAGE`, and against every
+declared `vih` with `LOGIC_HIGH_TOO_LOW`, so an open-drain
+pin gets a high level only through such a resistor. A net with resistors to
+supplies of different voltages (a divider or bias network, including one to
+ground) has no single high level and is not checked this way.
+
+Limits of the check: it compares logic levels, not analog voltages, and it does
+not model timing, hysteresis, current or the signal's rise time. Pins without
+`io_supply`, power domain or thresholds are not checked, so unannotated
+libraries stay quiet.
+
+### Pull resistors and undriven inputs
+
+A pin or pad can record what its datasheet says about pulls:
+
+```copper
+pin NRST {
+    number = "7";
+    domains = "digital"; directions = "input";
+    requires_pull = up;           // the datasheet demands an external pull-up
+    internal_pull = "up,down";    // a built-in or firmware-selectable pull
+}
+```
+
+`requires_pull` is `up` or `down`; any other value is `CMP120`. `internal_pull`
+is a comma-separated list of `up` and `down`, parsed like `drive_modes`; an
+unknown name is `CMP120`. Both are optional and appear in the IR as
+`profile.requires_pull` and `profile.internal_pull` only when declared.
+
+| Condition | Diagnostic |
+| --- | --- |
+| a pin with `requires_pull` is on a net with neither that pull nor a direct tie | error `MISSING_PULL` |
+| every pin on a net is a digital or clock input and nothing drives or pulls it | error `UNDRIVEN_INPUT` (warning when the net has a single pin) |
+| every pin that can drive a net is open-drain and the net has no pull-up | warning `OPEN_DRAIN_NO_PULLUP` |
+
+A net has a pull-up when a resistor joins it to a net with a declared non-zero
+supply, and a pull-down when a resistor joins it to a net with a declared 0 V
+supply. A net that itself carries a declared supply counts as tied high or low.
+`MISSING_PULL` is satisfied only by a resistor or a tie of the required
+direction; `internal_pull` does not satisfy it, because the datasheet asks for
+an external part. A pin that is on no net is left to the unconnected-pin checks.
+
+`UNDRIVEN_INPUT` looks only at nets without a declared supply. Every resolved
+pin must be input-only (direction exactly `input`) in a `digital` or `clock`
+domain. Any output, bidirectional, passive, power or analog pin, or a pin the
+library does not model, counts as a driver, as it does in KiCad, so a connector
+or switch contact keeps a net clean. A pull resistor to a supply or ground, or
+an `internal_pull` on any pin of the net, also satisfies it. A net with a
+single input pin is reported as a warning, like an unmarked pin. A net with an
+endpoint that does not resolve gets no `OPEN_DRAIN_NO_PULLUP`. There is one
+diagnostic per net.
+
+`OPEN_DRAIN_NO_PULLUP` looks only at nets without a declared supply. A driver
+is a pin with direction `output` or `bidirectional` in a `digital` or `clock`
+domain; the check applies when every driver has exactly the `open_drain` drive
+mode. A pull-up resistor, or any pin with `internal_pull` containing `up`,
+satisfies it. The `sda` and `scl` nets of an `i2c` interface are skipped
+because `I2C_MISSING_PULLUP` covers them, and a net with a `requires_pull = up`
+pin gets only `MISSING_PULL`.
+
+Limits: the resistor value is not checked, and an `internal_pull` is a
+firmware obligation that ERC does not verify. `UNDRIVEN_INPUT` and
+`OPEN_DRAIN_NO_PULLUP` need only `domains`, `directions` and `drive_modes`, so
+they also apply to libraries that declare no pull properties.
 
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
@@ -616,7 +864,7 @@ digests. See [the full syntax reference](macro-definitions.md) and
 `panel NAME { ... }` places already-routed boards on a fabrication panel,
 using the macro grammar: root properties (`preset`, `spacing`, `rails`,
 `tab_width`, `mouse_bite`, `fiducials`, `fiducial_offset`, `tooling_hole`,
-`assemble_after_depanel`) and
+`cutter`, `frame_fill`, `assemble_after_depanel`) and
 `board NAME { source; pcb; at; rotation; }` and
 `tab NAME { board; side; at; width; }` blocks. A panel is not compiled as a
 board: `copper panelize` composes it into one `.kicad_pcb` and refuses tabs
@@ -2393,6 +2641,7 @@ engineering values use a space and the shared fixed-point quantity formatter.
 | Length | `m`, `mm`, `um` |
 | Current | `A`, `mA`, `uA` |
 | Frequency | `Hz`, `kHz`, `MHz`, `GHz` |
+| Time | `s`, `ms`, `us`, `ns` |
 
 Values are normalized to SI base units in the IR while retaining their source
 display unit.
@@ -2410,7 +2659,10 @@ item           = library | package_import | port | pin | pad | power_domain
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint | mechanical | silkscreen
-               | physical_macro | no_connect ;
+               | physical_macro | no_connect | build ;
+build          = "build", "{", (build_setting | build_group)*, "}" ;   (* board only, at most one *)
+build_group    = ("placement" | "routing" | "planes" | "router"), "{", build_setting*, "}" ;
+build_setting  = name, "=", scalar, ";" ;
 silkscreen     = "silkscreen", "{", silk_item*, "}" ;
 silk_item      = "branding", geometry_properties
                | ("text" | "logo" | "line" | "rectangle" | "circle" | "arc" | "polygon"), name, geometry_properties ;

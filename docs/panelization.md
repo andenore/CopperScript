@@ -34,6 +34,16 @@ panel ExamplePanel {
 - `fiducial_offset` puts the fiducial centres that far from the panel's
   outer edge (default: the middle of their rail); the 2 mm mask opening must
   stay on the rail.
+- `cutter` is the router bit's diameter (default 2 mm; the presets give
+  their own). Every inside corner of the milled outline and every slot end
+  comes out rounded to its radius, as the router cuts them, and a cutter
+  wider than `spacing` is an error: it could not mill the gaps.
+- `frame_fill` (default `true`) keeps the area farther than `spacing` from
+  every board, and from every body fitted with the panel, as solid frame
+  joined to the rails: only a `spacing` channel is milled round each board,
+  and a tab bridges that channel to the frame. `frame_fill = false` cuts that
+  area away as before; each piece of it drops out of the router as a loose
+  slug, and the report lists it under `milling.pockets`.
 - `source` is the board's `.copper` and `pcb` its routed `.kicad_pcb` (the
   `.kicad_pro` and `.kicad_dru` beside it are read too), relative to the
   panel file.
@@ -42,15 +52,15 @@ panel ExamplePanel {
   the panel marks them out of its position files and BOM.
 - Board names use letters, digits and underscores, and differ ignoring
   case: the panel prefixes their nets (`NAME/`) and references (`NAME-`).
-  `rail` and `tab` are reserved (the report names a tab's far end `rail`;
-  the frame's mouse bites are footprints `TAB-NAME`).
+  `rail`, `frame` and `tab` are reserved (the report names a tab's far end
+  `rail` or `frame`; the frame's mouse bites are footprints `TAB-NAME`).
 - `at` puts the corner of the board's outline bounding box; `rotation` is a
   multiple of 90 deg, counter-clockwise as seen in KiCad.
 - A tab names its board, a `side` of the board's rectangular outline in the
   board's own frame (`left`, `right`, `top`, `bottom`), the distance `at` of
   its centre along that side (from the left or top end), and optionally its
-  `width`. It bridges the gap to the nearest rail or board across it; a tab
-  with nothing across within 20 mm is an error.
+  `width`. It bridges the gap to the nearest frame (rail or frame fill) or
+  board across it; a tab with nothing across within 20 mm is an error.
 
 ## What panelize does
 
@@ -92,15 +102,22 @@ panel ExamplePanel {
    Copper on no net (tracks, vias, zones, copper graphics and copper text)
    on any board is refused when the panel has conditional rules, since that
    copper carries neither prefix.
-3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
-   a tab touches (both ends when it joins two boards), fiducials and tooling
-   holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
+3. Builds the frame: rails and the frame fill, tabs, mouse-bite holes
+   `inset` into every board a tab touches (both ends when it joins two
+   boards), fiducials and tooling holes, and the outline on `Edge.Cuts`:
+   what remains of the panel rectangle once a round `cutter` has milled the
+   space between boards, tabs and frame. The cutter cannot reach into the
+   corners where a tab meets a board or the frame, so it leaves a fillet of
+   its radius in each; a tab's row of mouse bites, centred across it, goes
+   on at its pitch up to a cutter radius past both tab ends to break through
+   those fillets, where the extra holes stay on the board and off the
+   stretches kept clear of tabs (elsewhere the fillet stays as a small nub).
    Where a tab joins a board its edge leaves `Edge.Cuts`, and after breaking
    the mouse-bite walls are the board edge, so a keep-out inside the board
    along the landing holds pours, tracks, vias and pads back as the edge
    did: as deep as the bites cut (`inset` plus half the drill) plus the
    largest copper-to-edge clearance the rules ask for, and that clearance
-   past both tab ends, clipped to the board. The mouse-bite holes are cut
+   plus the cutter's radius past both tab ends, clipped to the board. The mouse-bite holes are cut
    out of it (10 um wider than drilled): they are the panel's own, and
    KiCad would otherwise report each as an item the keep-out forbids.
 4. Refuses, naming the board, side and interval:
@@ -127,12 +144,16 @@ panel ExamplePanel {
      rail on either side;
    - two boards' courtyards (or declared bodies) on the same side that
      meet between the boards, unless one is fitted after depanelization;
-   - a panel that falls apart: boards, tabs and rails must be one piece.
+   - a panel that falls apart: boards, tabs and frame must be one piece;
+   - mouse bites of two tabs closer than their pitch (each row runs a cutter
+     radius past its tab), and two boards the cutter cannot mill apart.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),
    keep-clear intervals, overhangs and the radiators' open ends, the
-   effective configuration with each value's origin (`config`) and the
-   preset's fab checks (`checks`).
+   effective configuration with each value's origin (`config`), the
+   preset's fab checks (`checks`) and `milling`: the cutter, whether the
+   frame is filled, the area milled away (`cut_area_mm2`) and the pockets cut
+   out as slugs.
 
 ## Workflow
 

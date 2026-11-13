@@ -87,6 +87,7 @@
     ],
     "guidance": [
      "A .copper file declares one board, module, part, device, board_profile or macro. A board composes components/modules, nets, supplies, interfaces and physical constraints.",
+     "A board may hold one build { ... } block with defaults for the physical commands: fab_profile, and the groups placement, routing, planes and router (for example build { fab_profile = \"jlcpcb-four-layer\"; placement { candidates = 2; } routing { effort = balanced; } }). A command line option overrides the block. See the language reference for every key.",
      "Board silkscreen blocks declare text, logo and shapes. The Cu logo and compiler version are included by default; opt out with silkscreen { branding { enabled = false; } }. Review final artwork placement and native DRC.",
      "Artwork can opt into material = copper on its front/back side; exposed = true adds a matching mask opening. Branding layout = stacked puts compact name/version labels below the logo. Floating artwork reserves placement/routing space and has no electrical net. Copper glyph, filled-feature and exposed-mask qualification remain unsupported signoff checks.",
      "Import with: import sensor \"PROVIDER/PACKAGE\"; component U1: sensor.Part; module SUPPORT: sensor.Support;. Use the actual exported kind and names returned by library inspection.",
@@ -201,7 +202,7 @@
      ]
     ],
     "guidance": [
-     "copper build runs check, route-board, a saved native refill with DRC and a completion gate into a fresh directory below build/, and writes run.json binding the outputs by SHA-256; it prints its step plan first, and --dry-run stops there. Options after -- go to route-board; output, report, verification and resolution options are set by the build. --verify kicad uses kicad-cli instead of the native refill and DRC.",
+     "copper build runs check, route-board, a saved native refill with DRC and a completion gate into a fresh directory below build/, and writes run.json binding the outputs by SHA-256; it prints its step plan first, and --dry-run stops there. Options after -- go to route-board and override the board's build block, which supplies route-board's other defaults; output, report, verification and resolution options are set by the build. --verify kicad uses kicad-cli instead of the native refill and DRC.",
      "Use the project's documented build/review target: it carries layer count, fabrication profile, footprints, placement intent, macros and native tool settings. Retain locked inputs. A generic command below needs those project options before use.",
      "Run check for ERC and audit-footprints for selected footprint geometry before routing. Use the shared route-board pipeline and a bounded routing profile for solver work. Save reports and candidates in a fresh build directory.",
      "route-board emits a compact summary and a source-bound requirement ledger. Default success means its routing gates passed; --require-verified-intent additionally requires hard declaration coverage. Inspect blocked, failed, assumed, external and not-run results explicitly.",

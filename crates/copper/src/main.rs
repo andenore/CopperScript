@@ -47,6 +47,7 @@ mod replay_unified;
 mod route_board;
 mod route_global;
 mod si_check;
+mod source_build;
 mod state;
 mod summarize;
 mod synthesize_antenna;

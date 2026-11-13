@@ -59,6 +59,21 @@ fn bound_value(bound: &Option<Bound>) -> Value {
     }
 }
 
+fn logic_level_value(level: &LogicLevel) -> Value {
+    match level {
+        LogicLevel::Fixed(quantity) => quantity_value(quantity),
+        LogicLevel::Rail(rail) => object(vec![
+            ("reference", text(&rail.reference)),
+            ("scale", text(&rail.scale.decimal_text())),
+            ("offset", quantity_value(&rail.offset)),
+        ]),
+    }
+}
+
+fn logic_levels_value(levels: &LogicLevels) -> Value {
+    object(levels.declared().map(|(name, level)| (name, logic_level_value(level))).collect())
+}
+
 fn condition_value(condition: &Option<Condition>) -> Value {
     condition.as_ref().map(|condition| string_map(&condition.selections)).unwrap_or(Value::Null)
 }
@@ -86,6 +101,18 @@ fn profile_value(profile: Option<&ElectricalProfile>) -> Value {
     ];
     if profile.absolute_voltage.is_some() {
         result.push(("absolute_voltage", range_value(&profile.absolute_voltage)));
+    }
+    if let Some(io_supply) = &profile.io_supply {
+        result.push(("io_supply", text(io_supply)));
+    }
+    if let Some(levels) = &profile.logic_levels {
+        result.push(("logic_levels", logic_levels_value(levels)));
+    }
+    if let Some(pull) = profile.requires_pull {
+        result.push(("requires_pull", text(pull.value())));
+    }
+    if !profile.internal_pull.is_empty() {
+        result.push(("internal_pull", sorted_texts(profile.internal_pull.iter().map(|item| item.value()))));
     }
     if let Some(emi) = &profile.emi {
         result.push(("emi", emi_profile_value(emi)));
@@ -712,6 +739,9 @@ pub fn design_value(design: &Design) -> Value {
     result.insert("silkscreen".to_owned(), crate::silkscreen::design_document(&design.silkscreen));
     if let Some(mechanical) = &design.mechanical {
         result.insert("mechanical".to_owned(), crate::mechanical::mechanical_document(mechanical));
+    }
+    if let Some(build) = &design.build {
+        result.insert("build".to_owned(), build.document());
     }
     Value::Object(result)
 }

@@ -202,9 +202,11 @@ pub fn panelize(
             min_gap = min_gap.min(gap);
         }
     }
-    let frame = frame::build(spec, &local, &composition.outlines, &composition.poses)?;
     let intent_map: IndexMap<String, BoardIntent> =
         spec.boards.iter().zip(&intents).map(|(b, i)| (b.name.clone(), i.clone())).collect();
+    let bodies = intent::placed_bodies(spec, &intent_map, &local, &composition.poses);
+    let clear = intent::tab_free_stretches(&intent_map);
+    let frame = frame::build(spec, &local, &composition.outlines, &composition.poses, &bodies, &clear)?;
     let open_ends =
         intent::check(spec, &intent_map, &local, &composition.outlines, &composition.poses, &frame.tabs, &frame.rails)?;
     let named = |f: fn(&BoardFiles) -> &String| -> Vec<(String, String)> {
@@ -228,7 +230,8 @@ pub fn panelize(
         &composition.poses,
         &composition.outlines,
         depth,
-        edge_clearance,
+        // The fillets the cutter leaves become edge too, out to the bites' ends.
+        edge_clearance + spec.cutter / 2,
         spec.mouse_bite.drill / 2,
         &copper_layers,
     );
@@ -289,7 +292,7 @@ pub fn panelize(
                             ("side", Json::from(t.side.as_str())),
                             ("at_mm", Json::from(mm(t.at).as_str())),
                             ("width_mm", Json::from(mm(t.width).as_str())),
-                            ("across", Json::from(t.across.as_deref().unwrap_or("rail"))),
+                            ("across", Json::from(t.across.as_deref().unwrap_or(t.lands_on))),
                             ("length_mm", Json::from(mm(t.length).as_str())),
                             ("mouse_bites", Json::from(t.mouse_bites as i64)),
                         ])
@@ -298,6 +301,30 @@ pub fn panelize(
             ),
         ),
         ("rails", Json::from(frame.rails.len() as i64)),
+        (
+            "milling",
+            object(vec![
+                ("cutter_mm", Json::from(mm(spec.cutter).as_str())),
+                ("frame_fill", Json::Bool(spec.frame_fill)),
+                ("cut_area_mm2", Json::from(format!("{:.1}", frame.cut_area / 1e12).as_str())),
+                (
+                    "pockets",
+                    Json::Array(
+                        frame
+                            .pockets
+                            .iter()
+                            .map(|(r, area)| {
+                                object(vec![
+                                    ("at_mm", json_point((r[0], r[1]))),
+                                    ("size_mm", json_point((r[2] - r[0], r[3] - r[1]))),
+                                    ("area_mm2", Json::from(format!("{:.1}", area / 1e12).as_str())),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
+        ),
         ("fiducials", Json::from(i64::from(spec.fiducials))),
         ("tooling_holes", Json::from(if spec.tooling_hole.is_some() { 4_i64 } else { 0 })),
         ("keep_clear", keep_clear_json(&intent_map)),
@@ -375,18 +402,76 @@ mod tests {
         let refs: Vec<&str> = board.footprints.iter().map(|f| f.reference.as_str()).collect();
         assert!(refs.contains(&"FID3") && refs.contains(&"TH4") && refs.contains(&"TAB-a_right"), "{refs:?}");
         // a_right bridges to board B, so it has bites on both ends; the others end on a rail.
+        // Each row runs through the cutter's fillets past the tab ends: a 3 mm
+        // tab takes 4 holes across it and one more beyond each end.
         let tabs = match &panel.report {
             Json::Object(o) => o["tabs"].clone(),
             _ => unreachable!(),
         };
         let text = copper_json::Dumps::compact().dumps(&tabs);
-        assert!(text.contains(r#""name":"a_right","board":"A","side":"right","at_mm":"3","width_mm":"2","across":"B","length_mm":"2","mouse_bites":4"#), "{text}");
-        assert!(text.contains(r#""name":"a_top","board":"A","side":"top","at_mm":"5","width_mm":"3","across":"rail","length_mm":"2","mouse_bites":4"#), "{text}");
+        assert!(text.contains(r#""name":"a_right","board":"A","side":"right","at_mm":"3","width_mm":"2","across":"B","length_mm":"2","mouse_bites":8"#), "{text}");
+        assert!(text.contains(r#""name":"a_top","board":"A","side":"top","at_mm":"5","width_mm":"3","across":"rail","length_mm":"2","mouse_bites":6"#), "{text}");
         // The outline is one panel contour with the milled gaps as holes.
         let outline: Vec<_> = board.drawings.iter().filter(|d| d.layer == copper_cam::board::Layer::EdgeCuts).collect();
         assert!(outline.len() >= 2, "{}", outline.len());
         // Size: 22 mm of boards and gap wide; 6 mm board + 2 x (2 mm gap + 5 mm rail) tall.
         assert!(copper_json::Dumps::compact().dumps(&panel.report).contains(r#""size_mm":["22","20"]"#));
+        // A 2 mm cutter cannot make the slot ends square: where a_top meets
+        // board A (x 3.5 and 6.5 mm, y 0) and the top rail (y -2 mm) the
+        // outline rounds off instead of turning a corner.
+        for corner in ["(xy 3.5 0)", "(xy 6.5 0)", "(xy 3.5 -2)", "(xy 6.5 -2)"] {
+            assert!(!panel.pcb.contains(corner), "a square slot end at {corner}");
+        }
+        // The board's own corners stay sharp.
+        assert!(panel.pcb.contains("(xy 10 6)"), "board A's corner");
+        let milling = copper_json::Dumps::compact().dumps(&panel.report);
+        assert!(milling.contains(r#""milling":{"cutter_mm":"2","frame_fill":true,"#), "{milling}");
+        assert!(milling.contains(r#""pockets":[]"#), "{milling}");
+    }
+
+    /// Board B 14 mm tall beside A's 6 mm: below A lies 6 mm the gaps do not need.
+    fn tall_b() -> Vec<BoardFiles> {
+        let mut both = files();
+        both[1].pcb = BOARD
+            .replace("(start 10 6) (end 0 6)", "(start 10 14) (end 0 14)")
+            .replace("(end 10 6)", "(end 10 14)")
+            .replace("(start 0 6)", "(start 0 14)");
+        both
+    }
+
+    fn report_text(panel: &Panel) -> String {
+        copper_json::Dumps::compact().dumps(&panel.report)
+    }
+
+    #[test]
+    fn the_frame_fills_what_the_gaps_do_not_need() {
+        // Kept as frame, the space below A is no pocket: a_bottom lands on
+        // the fill 2 mm below A instead of crossing to the bottom rail.
+        let filled = panelize(&spec(""), &tall_b(), &none(), "demo").expect("a filled panel");
+        let text = report_text(&filled);
+        assert!(text.contains(r#""name":"a_bottom","board":"A","side":"bottom","at_mm":"5","width_mm":"3","across":"frame","length_mm":"2""#), "{text}");
+        assert!(text.contains(r#""pockets":[]"#), "{text}");
+        // Cut away as before, it drops out as one slug, and the router mills more.
+        let mut cut = spec("");
+        cut.frame_fill = false;
+        let open = panelize(&cut, &tall_b(), &none(), "demo").expect("a cut-out panel");
+        let open_text = report_text(&open);
+        assert!(open_text.contains(r#""across":"rail","length_mm":"10""#), "{open_text}");
+        let area = |text: &str| -> f64 {
+            let at = text.find(r#""cut_area_mm2":""#).expect("a cut area") + 16;
+            text[at..].split('"').next().expect("a number").parse().expect("mm2")
+        };
+        assert!(area(&open_text) > area(&text) + 30.0, "{} vs {}", area(&open_text), area(&text));
+        assert!(open_text.contains(r#""pockets":[{"at_mm":"#), "{open_text}");
+    }
+
+    #[test]
+    fn a_cutter_wider_than_the_spacing_cannot_mill_the_panel() {
+        let mut wide = spec("");
+        wide.cutter = 2_500_000;
+        // The spec checks this when lowered; the frame still holds the boards apart.
+        let error = panelize(&wide, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("cannot mill"), "{error}");
     }
 
     #[test]
@@ -905,6 +990,8 @@ mod tests {
         // a_bottom runs from A down to the bottom rail along B's left side.
         for (at, gap) in [("8.5", "0"), ("8", "0.5")] {
             let mut passing = spec("");
+            // Without the frame fill the tab crosses to the bottom rail.
+            passing.frame_fill = false;
             passing.boards[1].at = [10_000_000, 8_000_000];
             passing.tabs.retain(|t| t.name != "a_right" && t.name != "b_top");
             for tab in &mut passing.tabs {
@@ -1029,8 +1116,9 @@ mod tests {
     fn tab_landings_keep_the_edge_clearance() {
         // With a 1 mm copper-to-edge clearance, every tab landing gets a
         // keep-out inside its board from the deepest mouse-bite wall (0.25 mm
-        // inset + 0.25 mm radius) 1 mm on, and 1 mm past both tab ends (the
-        // outer bites reach almost to them): a_top's from x 2.5 to 7.5, y 0 to 1.5.
+        // inset + 0.25 mm radius) 1 mm on, and 1 mm past both tab ends and the
+        // cutter's 1 mm fillets beyond them (the bites run through those):
+        // a_top's from x 1.5 to 8.5, y 0 to 1.5.
         let pro = PRO.replace(
             r#""design_settings": {}"#,
             r#""design_settings": {"rules": {"min_copper_edge_clearance": 1.0, "min_hole_clearance": 0.25}}"#,
@@ -1049,11 +1137,11 @@ mod tests {
         let points: Vec<(i64, i64)> = top.outline[0].edges.iter().map(|e| (e.end().x, e.end().y)).collect();
         let (x0, x1) = (points.iter().map(|p| p.0).min().unwrap(), points.iter().map(|p| p.0).max().unwrap());
         let (y0, y1) = (points.iter().map(|p| p.1).min().unwrap(), points.iter().map(|p| p.1).max().unwrap());
-        assert_eq!((x0, x1, y0, y1), (2_500_000, 7_500_000, 0, 1_500_000));
-        // Clipped to the board: a_right's landing on A (y 2-4) reaches y 1-5.
+        assert_eq!((x0, x1, y0, y1), (1_500_000, 8_500_000, 0, 1_500_000));
+        // a_right's landing on A (y 2-4) reaches 2 mm past both ends: the whole 6 mm side.
         let right = keepouts.iter().find(|z| z.name == "panel/tab-edge/a_right/near").expect("a_right's");
         let ys: Vec<i64> = right.outline[0].edges.iter().map(|e| e.end().y).collect();
-        assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(1_000_000), Some(5_000_000)));
+        assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(0), Some(6_000_000)));
         assert!(top.not_allowed.iter().any(|k| k == "copperpour") && top.keepout == Some(true));
         // Without an edge clearance there are none.
         let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");
@@ -1111,15 +1199,15 @@ mod tests {
                     );
                 }
             }
-            // a_top's landing (x 2.5-7.5 mm, 1 + inset + 0.25 mm deep) less its
-            // own five holes, at most: nothing else is cut away.
+            // a_top's landing (x 1.5-8.5 mm, 1 + inset + 0.25 mm deep) less its
+            // own six holes, at most: nothing else is cut away.
             let top = board.zones.iter().find(|z| z.name == "panel/tab-edge/a_top/near").expect("a_top's");
             let pts: Vec<(f64, f64)> =
                 top.outline[0].edges.iter().map(|e| (e.end().x as f64, e.end().y as f64)).collect();
             let area: f64 = copper_cam::poly::polygon(&pts).iter().map(|s| copper_cam::poly::shape_area(s)).sum();
-            let strip = 5.0e6 * (1.25e6 + inset as f64);
+            let strip = 7.0e6 * (1.25e6 + inset as f64);
             let r = 250_000.0 + frame::BITE_CUT_MARGIN as f64;
-            assert!(area > strip - 5.0 * std::f64::consts::PI * r * r - 1e6 && area < strip, "inset {inset}: {area}");
+            assert!(area > strip - 6.0 * std::f64::consts::PI * r * r - 1e10 && area < strip, "inset {inset}: {area}");
         }
     }
 

@@ -28,6 +28,12 @@ use crate::syntax::{Declaration, Document, DocumentKind, Location, MacroItemDecl
 
 pub type Result<T> = std::result::Result<T, CopperScriptError>;
 
+/// Nanometres as millimetre text without trailing zeros: `1.6`, `2`.
+fn millimetres(nm: i64) -> String {
+    let text = format!("{}.{:06}", nm / 1_000_000, (nm % 1_000_000).abs());
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
 fn fail<T>(message: impl Into<String>, location: &Location) -> Result<T> {
     Err(CopperScriptError::new("PNL001", message, location.clone()))
 }
@@ -127,6 +133,13 @@ pub struct PanelSpec {
     /// Fiducial centres' distance from the panel's outer edge; `None` centres
     /// them on their rail.
     pub fiducial_offset: Option<i64>,
+    /// The router bit's diameter: every inside corner and slot end is cut
+    /// to its radius, and no gap may be narrower.
+    pub cutter: i64,
+    /// Whether the area farther than `spacing` from every board stays solid
+    /// frame (only a `spacing` channel is milled round each board), or is
+    /// cut away as it was before (pockets that drop out as loose slugs).
+    pub frame_fill: bool,
     /// The fab preset named by the panel, if any.
     pub preset: Option<String>,
     /// Where each panel value came from: `explicit`, `preset NAME` or
@@ -148,6 +161,7 @@ const BUILTIN: Defaults = Defaults {
     fiducials: 0,
     fiducial_offset: None,
     tooling_hole: None,
+    cutter: 2_000_000,
 };
 
 fn length(value: &Value, location: &Location, positive: bool) -> Result<i64> {
@@ -225,9 +239,9 @@ fn board(item: &MacroItemDecl) -> Result<PanelBoard> {
     if item.name.is_empty() || !item.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return fail(format!("board name {:?} must use letters, digits and underscores only", item.name), location);
     }
-    // The report names a tab's far end "rail"; the frame's mouse bites are
-    // footprints TAB-NAME, which board TAB's references would look like.
-    if item.name.eq_ignore_ascii_case("rail") || item.name.eq_ignore_ascii_case("tab") {
+    // The report names a tab's far end "rail" or "frame"; the frame's mouse
+    // bites are footprints TAB-NAME, which board TAB's references would look like.
+    if ["rail", "frame", "tab"].iter().any(|reserved| item.name.eq_ignore_ascii_case(reserved)) {
         return fail(format!("{:?} is reserved for the panel's frame; name the board otherwise", item.name), location);
     }
     check_keys(&item.parameters, &["source", "pcb", "at", "rotation"], "board", location)?;
@@ -309,6 +323,8 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
         "fiducials",
         "fiducial_offset",
         "tooling_hole",
+        "cutter",
+        "frame_fill",
         "assemble_after_depanel",
     ];
     for (name, (_, location)) in &properties {
@@ -397,6 +413,28 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
         None => base.tooling_hole,
     };
     origin("tooling_hole", get("tooling_hole").is_some());
+    let cutter = match get("cutter") {
+        Some((value, location)) => length(value, location, true)?,
+        None => base.cutter,
+    };
+    origin("cutter", get("cutter").is_some());
+    if cutter > spacing {
+        let location = get("cutter").or(get("spacing")).map_or(&document.location, |(_, location)| location);
+        return fail(
+            format!(
+                "a {} mm cutter cannot mill the {} mm gaps between boards; widen spacing or give a smaller cutter",
+                millimetres(cutter),
+                millimetres(spacing)
+            ),
+            location,
+        );
+    }
+    let frame_fill = match get("frame_fill") {
+        Some((Value::Scalar(Scalar::Bool(flag)), _)) => *flag,
+        Some((_, location)) => return fail("frame_fill is true or false", location),
+        None => true,
+    };
+    origin("frame_fill", get("frame_fill").is_some());
     let assemble_after_depanel = match get("assemble_after_depanel") {
         Some((Value::List(values), location)) => {
             values.iter().map(|v| text(v, location).map(str::to_owned)).collect::<Result<Vec<_>>>()?
@@ -450,6 +488,8 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
         fiducials,
         tooling_hole,
         fiducial_offset,
+        cutter,
+        frame_fill,
         preset: preset.map(|p| p.name.to_owned()),
         origins,
         assemble_after_depanel,
@@ -505,6 +545,13 @@ mod tests {
         assert_eq!((spec.tabs[0].at, spec.tabs[0].width), (10_000_000, 4_000_000));
         assert_eq!(spec.tabs[1].edge, TabEdge::Named("LEFT".to_owned()));
         assert_eq!(spec.tabs[1].width, 3_000_000);
+        assert_eq!((spec.cutter, spec.frame_fill), (2_000_000, true));
+        assert_eq!(spec.origins["cutter"], "default");
+        let spec =
+            lowered(&PANEL.replacen("spacing = 2 mm;", "spacing = 3 mm; cutter = 2.4 mm; frame_fill = false;", 1))
+                .expect("a valid panel");
+        assert_eq!((spec.cutter, spec.frame_fill), (2_400_000, false));
+        assert_eq!((spec.origins["cutter"].as_str(), spec.origins["frame_fill"].as_str()), ("explicit", "explicit"));
     }
 
     #[test]
@@ -520,6 +567,10 @@ mod tests {
             (("board A2 {", "board A-B {"), "letters, digits and underscores only"),
             (("board A2 {", "board Rail {"), "reserved for the panel's frame"),
             (("board A2 {", "board TAB {"), "reserved for the panel's frame"),
+            (("board A2 {", "board Frame {"), "reserved for the panel's frame"),
+            (("spacing = 2 mm;", "spacing = 1.6 mm;"), "a 2 mm cutter cannot mill the 1.6 mm gaps"),
+            (("spacing = 2 mm;", "spacing = 2 mm; cutter = 2.4 mm;"), "a 2.4 mm cutter cannot mill the 2 mm gaps"),
+            (("spacing = 2 mm;", "spacing = 2 mm; frame_fill = 1;"), "frame_fill is true or false"),
             (
                 ("spacing = 2 mm;", "spacing = 2 mm; preset = \"acme\";"),
                 "unknown panel preset \"acme\"; expected one of jlcpcb",

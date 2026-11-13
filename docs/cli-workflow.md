@@ -365,9 +365,13 @@ parts retain 0/90/180/270-degree candidates.
 
 The command exits nonzero when routing or DRC is incomplete. Even a successful
 native check does not qualify proxy footprints or replace KiCad and CAM review.
-Use `--progress` for flushed phase/group/trial events during long runs; the
-shared Make routing workflow enables this automatically and saves them in
-`routing.log`. Full ground-feedback trials can each rebuild the routing.
+Use `--progress` for flushed phase/group/trial events during long runs;
+`copper build` always passes it and saves the events in `routing.log`.
+A board's [`build` block](language-reference.md#board-build-settings) supplies
+defaults for the `route-board` options (fabrication preset, placement
+candidates, routing effort, plane stitching, unified router fields). An option
+on the command line overrides the source, and `route-board` prints the options
+it took from the source. Full ground-feedback trials can each rebuild the routing.
 Progress is not completion or signoff evidence; see [routing progress](routing-progress.md).
 `--unified-set maximum_expansions=N` and `--unified-time-budget-s` bound ordinary routing
 work; an exhausted budget is reported per net rather than silently accepting an

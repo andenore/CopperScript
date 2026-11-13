@@ -91,6 +91,13 @@ fn direct_cli_keeps_direct_work_limits_and_reports_missing_verifier() {
             .expect("the copper binary runs");
         // A missing verifier remains a failure, never a routing success.
         assert_ne!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stdout));
+        // The console names the missing checker, not just the open zone nets.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().find(|line| line.starts_with("PLANE CHECK NOT RUN:")).unwrap_or_else(|| {
+            panic!("no checker failure line in:\n{stdout}");
+        });
+        assert!(line.contains("kicad-cli missing-kicad.exe failed"), "{line}");
+        assert!(line.contains("leave the option out"), "{line}");
         let data = copper_json::parse(&read(&directory.join("route.json"))).expect("report");
         assert_eq!(at(&data, &["work_limits", "router"]).as_str(), Some("unified"));
         assert_eq!(at(&data, &["work_limits", "unified_direct"]), &Value::Bool(true));

@@ -42,6 +42,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         flag("--allow-proxy-footprints"),
         flag("--json"),
     ];
+    // The board's `build` block supplies the fabrication preset unless one is given here.
+    let arguments = &crate::source_build::with_source_options(arguments, &specs, |arguments, specs| {
+        option_parser::parse(arguments, specs).ok()
+    });
     let parsed = match option_parser::parse(arguments, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),

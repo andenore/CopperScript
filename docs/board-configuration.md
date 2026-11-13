@@ -1,8 +1,8 @@
 # Board configuration and build settings
 
-Status: first implementation slice, 2026-11-10. The source-driven layer
-selection described below is implemented. New fabrication and build blocks
-are proposals, not accepted syntax yet.
+Status: second implementation slice, 2026-11-13. The source-driven layer
+selection and the board `build` block described below are implemented. The
+fabrication preset is selected in source as `build { fab_profile = ...; }`.
 
 ## What belongs where
 
@@ -14,8 +14,9 @@ are proposals, not accepted syntax yet.
 | Planes, split regions and keepouts | Existing source copper-zone and mechanical declarations |
 | Fixed poses, allowed orientations, placement regions, rigid macros | Existing constraints and source-bound macros |
 | Library parts, reusable circuits, package exits and manufacturer layout structure | Versioned dependencies; source selects and binds them; `copper.lock` pins their inputs |
-| Placement candidate count, routing effort, iteration/search limits | Proposed optional board `build` settings, overridable per invocation |
-| Congestion penalties, lattice experiments, individual recovery/search switches | Expert CLI overrides until there is a measured, stable user contract |
+| Fabrication preset selection | Board `build { fab_profile = ...; }`, overridable per invocation |
+| Placement candidate count, routing effort, iteration/search limits | Optional board `build` settings, overridable per invocation |
+| Congestion penalties, lattice experiments, individual recovery/search switches | Expert overrides: `--unified-set` or the `router` group of the `build` block, until there is a measured, stable user contract |
 | Output/report paths, progress, checkpoint destinations, executable paths, threads | Invocation or machine configuration |
 | Locked/offline dependency policy, proxy footprints, skipped checks, verification backend | Invocation/build workflow; never silently enabled by an imported circuit |
 
@@ -107,36 +108,68 @@ boards were not part of this bounded comparison. Local ladder results are in
 `build/bench/source-configuration-before-offline/results.json` and
 `build/bench/source-configuration-after/results.json`.
 
-## Next slices
+## Implemented: the board `build` block
 
-1. Add board-owned fabrication preset selection, with a located error if an
-   explicit CLI preset disagrees. Keep it separate from the physical stackup
-   and serialize it into compiled IR. Reusable definitions must not change
-   the consumer board's fabrication selection.
-2. Add a small typed `build` block, initially placement candidates and routing
-   effort. Scope it to the top-level board. Reject unknown keys and units at
-   their source locations; never pass arbitrary strings through as CLI args.
-3. Define precedence: explicit CLI build settings, board build settings,
-   compiler defaults. Expand an effort preset before applying explicit field
-   overrides. Requirements remain authoritative regardless of precedence.
-4. Expose effective configuration and origins without running the solver.
-   Persist resolved configuration with compiler identity in reports and
-   checkpoint compatibility checks. Changing physical requirements must
-   invalidate incompatible checkpoints; changed search budgets should be
-   recorded without pretending to change the board's requirements.
-5. Migrate consumer Make settings only after equivalent explicit and
-   source-configured builds have matched on the benchmark ladder. Preserve
-   CopperAssetTracker, CopperLedRing and the examples throughout.
-
-Proposed future syntax inside a board (not currently supported):
+A board may hold one `build` block. The
+[language reference](language-reference.md#board-build-settings) lists every
+key, its type, its default and the option it stands for.
 
 ```copper
 build {
+    fab_profile = "jlcpcb-six-layer";
     placement { candidates = 3; }
     routing { effort = balanced; }
 }
 ```
 
-The first slice deliberately reuses existing source syntax. It provides a
-shared place to resolve later board settings without adding another CLI-only
-or editor-only interpretation.
+- The block is scoped to the top-level board file. A module, part, device or
+  macro file cannot hold one, so a reusable definition cannot change the
+  consumer board's settings.
+- Every key is typed. An unknown group, key, unit or value is an error at its
+  source location. Nothing is passed through as free command line text. The
+  `router` group takes unified router fields only, and an unknown field is an
+  error.
+- Precedence: command line, then the board's `build` block, then the compiler
+  default. A command puts the options of the block before its own arguments,
+  so an option given on the command line overrides the source. A conflict is
+  not an error. An explicit setting, from either place, outranks what an
+  effort preset implies.
+- `route-board` reads every setting. `plan-layout` reads `fab_profile` and the
+  placement settings it has options for. `si-check`, `synthesize-antenna` and
+  `edit-mechanical` read `fab_profile`.
+- `route-board` prints the options it took from the source. `copper build`
+  shows them in its plan and records them in `run.json` as
+  `source_build_options`. The compiled JSON holds the block under `build`.
+- The fabrication preset stays separate from the physical stackup. Source
+  rules still override preset defaults, and a preset still certifies nothing.
+
+Two defaults changed with this slice, so that a plain `copper build
+board.copper` matches what the shared Make recipe used to pass:
+`copper build` always passes `--progress` to `route-board`, and
+`--plane-contact-radius-mm` defaults to 5 instead of 0 (`0` still disables it).
+
+### Verification
+
+Unit tests cover the parser (accepted block, board-only, single block, unknown
+group and key), the value checks (type, unit, name and range, each with its
+code and location) and the option mapping. `crates/copper/tests/build_block.rs`
+runs the binary: the compiled JSON, `copper check` errors, the `copper build`
+plan and `run.json`, a `route-board` run whose report shows source values and a
+command line override, and the fabrication preset in `si-check`, `plan-layout`,
+`edit-mechanical` and `synthesize-antenna`. The benchmark ladder was not run
+for this slice.
+
+## Next slices
+
+1. Read `fab_profile` from the source in `route-global` and
+   `export-kicad-pcb` too. They still default to `generic`.
+2. Expose effective configuration and origins without running the solver.
+   Persist resolved configuration with compiler identity in reports and
+   checkpoint compatibility checks. Changing physical requirements must
+   invalidate incompatible checkpoints; changed search budgets should be
+   recorded without pretending to change the board's requirements.
+3. Migrate consumer Make settings only after equivalent explicit and
+   source-configured builds have matched on the benchmark ladder. Preserve
+   CopperAssetTracker, CopperLedRing and the examples throughout.
+4. Check `router` values against the field types at compile time. Today only
+   the key is checked there; `route-board` checks the value when it runs.

@@ -66,17 +66,22 @@ fn parse(arguments: &[String]) -> Result<Arguments, String> {
     parse_options(arguments, &FLAGS, &VALUED)
 }
 
+/// The option specs of a command with these flags and valued options (`-o` is `--output`).
+fn option_specs(flag_options: &[&'static str], valued_options: &[&'static str]) -> Vec<Spec> {
+    let mut specs: Vec<Spec> = flag_options.iter().map(|name| flag(name)).collect();
+    for name in valued_options {
+        specs.push(if *name == "--output" { short_value(name, "-o") } else { value(name) });
+    }
+    specs
+}
+
 /// Parse a command with these flags and valued options (`-o` is `--output`).
 pub(crate) fn parse_options(
     arguments: &[String],
     flag_options: &[&'static str],
     valued_options: &[&'static str],
 ) -> Result<Arguments, String> {
-    let mut specs: Vec<Spec> = flag_options.iter().map(|name| flag(name)).collect();
-    for name in valued_options {
-        specs.push(if *name == "--output" { short_value(name, "-o") } else { value(name) });
-    }
-    option_parser::parse(arguments, &specs)
+    option_parser::parse(arguments, &option_specs(flag_options, valued_options))
 }
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
@@ -212,6 +217,11 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper plan-layout: error: {message}");
         2
     };
+    // The board's `build` block supplies defaults for the options given here.
+    let arguments =
+        &crate::source_build::with_source_options(arguments, &option_specs(&FLAGS, &VALUED), |arguments, specs| {
+            option_parser::parse(arguments, specs).ok()
+        });
     let parsed = match parse(arguments) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),

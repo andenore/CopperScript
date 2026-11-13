@@ -172,9 +172,20 @@ pub const COMMANDS: &[Command] = &[
                 help: "required acknowledgement that the files are not independently CAM-qualified",
             },
             Opt {
-                flag: "--drc {kicad,native}",
-                help: "refill and check with kicad-cli, or with copper fill and copper drc plus a read-back of the \
-                       plotted files (default: kicad)",
+                flag: "--drc {native,kicad}",
+                help: "refill and check with copper fill and copper drc plus a read-back of the plotted files, or \
+                       with kicad-cli (default: native)",
+            },
+            Opt {
+                flag: "--expected-open-ends REPORT",
+                help: "excuse the dangling track ends a route report (synthesized antennas) or a copper panelize \
+                       report lists, at that exact point on that net and layer only; native DRC only",
+            },
+            Opt {
+                flag: "--run RUN_JSON",
+                help: "the run.json copper build wrote beside the board: refuse unless that run passed, the \
+                       board is the one it recorded, and the .copper sources, copper.mod and copper.lock it \
+                       hashed (below the current directory) are unchanged",
             },
             Opt {
                 flag: "--plotter {native,kicad}",
