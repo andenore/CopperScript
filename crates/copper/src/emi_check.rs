@@ -1,7 +1,7 @@
 //! `copper emi-check BOARD [--locked] [--offline] [--layers {2,4,6}]
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
 //! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]]
-//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM]]
+//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-zone-outline]]
 //! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
 //! [--extract-no-switch-bar]] [--json]`:
 //! screen the placed switching cells for noise sources (hot loop, switch node,
@@ -25,7 +25,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -54,6 +54,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--fullwave-budget"),
         value("--fullwave-margin"),
         flag("--fullwave-single-mesh"),
+        flag("--fullwave-zone-outline"),
         flag("--extract"),
         value("--extract-budget"),
         value("--extract-margin"),
@@ -70,7 +71,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar)"
+             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar)"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -268,6 +269,7 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
             ("--fullwave-budget", budget),
             ("--fullwave-margin", margin),
             ("--fullwave-single-mesh", parsed.flag("--fullwave-single-mesh").then_some("")),
+            ("--fullwave-zone-outline", parsed.flag("--fullwave-zone-outline").then_some("")),
         ] {
             if given.is_some() {
                 return Err(format!("argument {name}: needs --fullwave"));
@@ -298,6 +300,7 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
         budget_seconds: positive("--fullwave-budget", budget)?,
         margin_mm: positive("--fullwave-margin", margin)?,
         single_mesh: parsed.flag("--fullwave-single-mesh"),
+        zone_outline: parsed.flag("--fullwave-zone-outline"),
     }))
 }
 

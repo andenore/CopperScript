@@ -2121,7 +2121,7 @@ fabricator's calculator or a field solver and record it in
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
 [--plot-field OUT.svg [--field-height MM]] [--fullwave [--fullwave-fidelity coarse|fine]
-[--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh]]
+[--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline]]
 [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM]
 [--extract-single-mesh] [--extract-no-switch-bar]] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
@@ -2248,8 +2248,11 @@ two meshes cannot see (the placed example reads 4.62 to 4.90 nH over eleven mesh
 refined meshes differ by 0.5 %); it is a sensitivity, not an accuracy, and it leaves out the model's
 omissions, which `not_modelled` names (components, copper loss, zone fills, via barrels, the window's cut nets,
 the assumed stack-up and the strap bias where they apply). When the record did not decay and the ring-down
-fit did not stabilise (`energy_not_converged` without `ring_fitted`), `status` is `indicative`,
-`mesh_sensitivity_pct` is `null` and `mesh_sensitivity_unavailable` gives the reason. `--fullwave-single-mesh`,
+fit did not pass its checks (`energy_not_converged` without `ring_fitted`; `ring_fit_rejected` when a fit was tried), `status` is `indicative`,
+`mesh_sensitivity_pct` is `null`, `mesh_sensitivity_unavailable` and `status_reasons` give the reasons, and `inductance_nh` is the plain transform of the truncated record, a marked number. A fit is accepted only when it predicts
+the withheld last 30 % of its tail to 10 %, its model orders agree to 5 %, none of its poles grows over the tail and the completed response is passive; `measures.fullwave.ring_fit` states each figure and its limit.
+The pours are the native zone fill of the exported board (`zone_fill_used`) unless `--fullwave-zone-outline` asks for the zone outlines minus clearances or the export fails (a board with an unmaterialised hard macro, for one);
+`inductance_lowest_nh` and `lowest_frequency_mhz` give L at the lowest analysis frequency, which the extraction's cross-check reads. `--fullwave-single-mesh`,
 or a budget that fits one mesh only, gives one mesh: `mesh_difference_pct` is `null`, the sensitivity is the
 floor and the flag `single_mesh` is set. A loop whose record has not decayed (it rings) is completed by a fit of its
 ring-down, ends when the fit is stable instead of at the 3x time cap, and gets the flag `ring_fitted` (and a
@@ -2272,7 +2275,8 @@ window are meshed layer by layer into rectangular filaments, and the loop equati
 and `ratio_to_fullwave` where `--fullwave` ran, `status`, `status_reasons`, `numerical_sensitivity_pct`
 (the difference of the two finest meshes of a series of three, per frequency; `null` with
 `numerical_sensitivity_unavailable` for a single mesh) and `numerical_sensitivity_earlier_pct` (the step before),
-`convergence_threshold_pct`, `port_labels`, `inductance_matrix_nh`,
+`convergence_threshold_pct`, `cross_check` (with `--fullwave`: the extraction's 100 MHz value beside the full wave's at its lowest frequency with both numerical
+sensitivities and a plain statement of agreement within them, disagreement beyond them, or none; never a pass or fail), `port_labels`, `inductance_matrix_nh`,
 `numerical_sensitivity_basis`, `parameter_assumptions` (inputs the board does not fix), `not_modelled`
 (the omissions), `flags`, `notes`, `meshes`, `via_currents` (vias that carry at least 1 % of the port current,
 with their share of the net's via current), `nets`, `window_mm`, `layers`, `copper`, `seconds`, `method`), and

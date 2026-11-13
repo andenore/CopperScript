@@ -164,6 +164,10 @@ pub struct PortColumn {
     pub record: Record,
     /// The ring-down fit that completed `z_in` (the record had not decayed), if one was used.
     pub fit: Option<crate::fit::FitInfo>,
+    /// The evidence for the fit (withheld-tail prediction, stability, passivity) when a fit was tried on an
+    /// undecayed record: `Some` with violations when it was rejected (then `fit` is `None` and `z_in` is the
+    /// plain transform of the truncated record).
+    pub fit_check: Option<crate::fit::FitCheck>,
     /// Ports whose spectra are the plain transform of the truncated record although `fit` completed the
     /// excited port's (their tail was not described by its poles); empty without a fit or when every port
     /// was completed. Also stated in `stats.warnings`.
@@ -429,10 +433,13 @@ impl RegionModel {
             if self.spec.ring_fit && t >= next_fit && db_now > decay_db + 3.0 {
                 next_fit = t + fit_every;
                 let record = self.record_of(&sim.results(), &ports, excited)?;
-                if let Some((_, info)) = record.z_fitted(&fit_freqs, None, tail_start, band) {
+                if let Some((_, info, check)) = record.checked_fit(&fit_freqs, tail_start, band) {
                     let ring_ok = info.ring_hz.is_some_and(|(f, _)| info.tail_s >= (2.0 / f).max(2.0e-9));
                     let close = previous.is_some_and(|p| ((info.inductance - p) / info.inductance).abs() < 0.003);
-                    agreeing = if ring_ok && info.spread < 0.01 && close { agreeing + 1 } else { 0 };
+                    // The run is not ended by a fit that the withheld-tail test, the stability or the passivity
+                    // check would reject at the end.
+                    agreeing =
+                        if ring_ok && info.spread < 0.01 && close && check.accepted() { agreeing + 1 } else { 0 };
                     previous = Some(info.inductance);
                     if agreeing >= 2 {
                         stopped_by_fit = true;
@@ -465,13 +472,19 @@ impl RegionModel {
         let completion = (!converged && self.spec.ring_fit).then_some((tail_start, band));
         let responses = port_responses(&records, &z_refs, excited, &freqs, completion)?;
         let mut warnings = warnings;
+        if let Some(check) = responses.fit_check.as_ref().filter(|c| !c.accepted()) {
+            warnings.push(format!(
+                "ring-down fit rejected, the record is the plain transform of the truncated record: {}",
+                check.violations.join("; ")
+            ));
+        }
         if !responses.uncorrected.is_empty() {
             warnings.push(format!(
                 "ring-down completion: the tail of port(s) {} is not described by the poles fitted to port {excited}; their spectra are the uncorrected transform of the truncated record",
                 responses.uncorrected.iter().map(|k| self.ports[*k].spec.name.clone()).collect::<Vec<_>>().join(", ")
             ));
         }
-        let Responses { z_in, s, fit, uncorrected } = responses;
+        let Responses { z_in, s, fit, fit_check, uncorrected } = responses;
         let record = records.swap_remove(excited);
         let keep = (trace.len() / 400).max(1);
         let trace: Vec<(f64, f64)> = trace.into_iter().step_by(keep).collect();
@@ -497,6 +510,7 @@ impl RegionModel {
             },
             record,
             fit,
+            fit_check,
             uncorrected_ports: uncorrected,
         })
     }
@@ -545,6 +559,7 @@ pub(crate) struct Responses {
     /// `s[i][f]` = `S_{i,excited}`.
     pub s: Vec<Vec<Complex64>>,
     pub fit: Option<crate::fit::FitInfo>,
+    pub fit_check: Option<crate::fit::FitCheck>,
     /// Ports whose spectra stayed the plain transform of the truncated record.
     pub uncorrected: Vec<usize>,
 }
@@ -568,21 +583,25 @@ pub(crate) fn port_responses(
     };
     let mut spectra: Vec<(Vec<Complex64>, Vec<Complex64>)> = (0..records.len()).map(plain).collect();
     let mut fit = None;
+    let mut fit_check = None;
     let mut uncorrected = Vec::new();
     if let Some((tail_start, band)) = completion
-        && let Some((done, info)) = records[excited].completed(freqs, None, tail_start, band)
-        && info.spread < 0.05
+        && let Some((done, info, check)) = records[excited].checked_fit(freqs, tail_start, band)
     {
-        for (k, record) in records.iter().enumerate() {
-            if k == excited {
-                spectra[k] = (done.v.clone(), done.i.clone());
-            } else if let Some(pair) = record.complete_with(freqs, tail_start, &done.poles, done.decimation) {
-                spectra[k] = pair;
-            } else {
-                uncorrected.push(k);
+        let accepted = check.accepted();
+        fit_check = Some(check);
+        if accepted {
+            for (k, record) in records.iter().enumerate() {
+                if k == excited {
+                    spectra[k] = (done.v.clone(), done.i.clone());
+                } else if let Some(pair) = record.complete_with(freqs, tail_start, &done.poles, done.decimation) {
+                    spectra[k] = pair;
+                } else {
+                    uncorrected.push(k);
+                }
             }
+            fit = Some(info);
         }
-        fit = Some(info);
     }
     let analysed: Vec<ems::post::port::PortResult> = spectra
         .into_iter()
@@ -596,6 +615,7 @@ pub(crate) fn port_responses(
         z_in: analysed[excited].z_in(),
         s: analysed.iter().map(|out| ems::post::port::s_param(out, &analysed[excited])).collect(),
         fit,
+        fit_check,
         uncorrected,
     })
 }

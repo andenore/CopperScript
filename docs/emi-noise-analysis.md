@@ -1033,13 +1033,19 @@ to ngspice as an optional external process.
 
 ## 11. Region-of-interest full wave (phase 4)
 
-Status: fourth iteration implemented in `crates/copper-fullwave`. Screening
-evidence only: nothing here qualifies a design. Iteration 3 found where the cell dependence of the
+Status: fifth iteration implemented in `crates/copper-fullwave`. Screening
+evidence only: nothing here qualifies a design. The tier stays optional (`--fullwave`, minutes per cell). Iteration 3 found where the cell dependence of the
 loop inductance came from (the rule that moves copper edges, not the port), replaced the rule, completes
 the records of loops that ring instead of waiting for them to decay, and states a mesh sensitivity next to
 the inductance. Iteration 4 puts a floor under the cells that dense copper forces on the time step
 (a third fewer steps and half the run time on the TPS62130A), runs the validation models on the default edge
-rule, and found that the strap bias is not what its validation test measures (below).
+rule, and found that the strap bias is not what its validation test measures (below). Iteration 5 answers an external
+review of the tier: the ring-down fit is accepted only on evidence (a withheld part of its tail is predicted, its poles
+decay, the completed response is passive; below, "Acceptance of the ring-down fit"), the edge rule is measured on
+geometries it was not fitted on against the quasi-static extraction of section 13 ("The edge rule on other geometries"),
+the pours are the native zone fill instead of the outline minus clearances ("Zone fills"), the strap bias is measured
+("The strap bias, measured"), and the report sets the extraction's 100 MHz value beside the full wave's with both numerical
+sensitivities ("Cross-check against the extraction").
 
 **What it is.** `RegionModel::build(board, &RegionSpec)` translates the part of a
 `PhysicalBoard` inside an axis-aligned window into a model for the pinned
@@ -1062,12 +1068,14 @@ reference).
 - Copper as zero-thickness PEC sheets on mesh planes (optionally the solver's
   `ConductingSheet` per net, default PEC): placed pads (a rounded pad is the hull
   of 12-gons of equal area), tracks at any angle (a rectangle with square
-  ends), arcs (chord chains), copper polygons, zones and the copper of hard macros. A zone is its
+  ends), arcs (chord chains), copper polygons, zones and the copper of hard macros. A zone is, by default
+  since iteration 5, its native fill (`crate::fill`, `RegionSpec::zone_fills`, flag `zone_fill_used`: section "Zone fills"
+  below); where no fill is available (`--fullwave-zone-outline`, or the export of the board failed) it is its
   outline minus its declared holes, an octagonal antipad where a via or plated hole of another net
   crosses it and, new in iteration 2, the zone clearance around the copper of other nets on the same
   layer (pads, tracks, bridges, legs: a polygon difference with `copper_cam::poly`, one keyhole sheet
-  per piece that remains; flag `zone_cut_around_foreign_copper`). Fills are unknown (flag
-  `zone_outline_used`): thermal reliefs, minimum widths and islands are not applied. Without the cut, a
+  per piece that remains; flags `zone_outline_used`, `zone_cut_around_foreign_copper`): thermal reliefs, minimum widths and
+  islands are then not applied. Without the cut, a
   pour on the layer of the loop's pads shorted the switch node to ground in the CopperOrgan model
   (flag `zone_overlaps_foreign_copper` now means a pour is still over foreign copper).
 - Vias and plated holes as one-cell vertical PEC wires between the layers they span,
@@ -1141,7 +1149,9 @@ dielectric; cells grow by 1.3 outside the fine zone, at most 1 mm in the window 
   of the dielectric above and below the layer plane; at the top layer the cell below with the air cell above it grown
   by 1.3), because a PEC edge on a mesh line behaves as if the metal reached further: its singular field fills the
   dual cell. The lateral cell is that of the edge's normal axis at the edge, so a pad inside a refinement box is
-  moved by the refined cell. The rule before iteration 3 was a third of the lateral cell and nothing vertical, fitted on
+  moved by the refined cell. **The rule is applied to the sheets of pads, tracks, arcs, polygons, bridges, added traces and
+  the terminals of ports, and not to zones** (pours, planes and native fills keep the edges they have; measured in iteration 5
+  on a slotted plane, below). The rule before iteration 3 was a third of the lateral cell and nothing vertical, fitted on
   one w/h = 2 microstrip at a 0.5 mm cell; the new one is fitted on the inductance of shorted lines (below), and the
   change is the answer to the open question of iteration 2. `describe()` states the rule.
 - *Smooth meshes* (`RegionSpec::smooth_mesh`, always on for the hot loop and with refinement
@@ -1278,7 +1288,7 @@ was changed (this is an interpretation: the cause was not isolated by a controll
 coarse 0.5 mm cell reads 12 % low with every rule. The unsmoothed meshes of 3b change a lot with a small move of the edges (564 k to
 1.31 M cells for the plane case: the grading cascade of the original cutting, which the smooth mesher avoids).
 
-Always run in `cargo test -p copper-fullwave` (59 s for `validation`, 13 s for `shorted_line`, debug build with the optimised solver): 3a at the coarse cell (Z0 within 5 %,
+Always run in `cargo test -p copper-fullwave` (58 s for `validation`, 14 s for `shorted_line`, 47 s for `ring_fit_acceptance`, under 1 s for the unit tests, `hotloop_spec` and `zone_fill`; `copper-extract`'s `edge_rule` 40 s; debug build with the optimised solver): 3a at the coarse cell (Z0 within 5 %,
 measured +4.1 %), 3a at 0.25 mm (within 1.5 %, measured -0.02 %; it reads -11.7 % without the rule), the terminated line, 3e,
 and `default_edge_rule_keeps_a_short_shorted_line_at_the_closed_form` (a 10 mm shorted line at 0.25 mm: +0.126 nH over the closed form,
 allowed between +0.03 and +0.25 nH and 6 %; the edges as drawn read -0.187 nH, a third +0.101 nH). 3b-3d stay `#[ignore]` (35 to 190 s each) and were re-run on the final
@@ -1516,16 +1526,189 @@ validation ring is one dominant mode; a loop with several close modes
 (CopperOrgan has a resonance at 348 MHz and its overtones) gets the orders' spread as the only warning, and a
 ring far below the reading band's lowest frequency is not tested.
 
+**The edge rule on other geometries (iteration 5).** The rule (0.23 of the lateral cell and 0.11 of the vertical cell) was fitted on two microstrip lines and checked on three; the review asked for a
+validation on geometries not used to fit it, with a reference that does not come from the same solver. `crates/copper-extract/tests/edge_rule.rs` runs the default rule, without refitting, against
+`copper-extract` (quasi-static, copper of 5 um read at 100 MHz, the full wave's copper being zero-thickness PEC; on the 12 mm shorted line below it is within 0.4 % of Hammerstad-Jensen at both pitches: 2.9996 and 2.9762 nH against 2.9873) and, where one exists, a closed form. Every case is a line of h 0.3 mm and w 0.8 mm (w/h 2.7: not one of the fitted pairs), driven by a vertical port at one end
+and shorted by a wall of wires at the other, as the validation lines are; the straight line of the same run is the control, which carries what the port and the wall add. L is the mean of `Im Z / omega` over 50-150 MHz;
+the extraction is read at two pitches of its fine mesh to show its own mesh dependence.
+
+| Case | Reference | Full wave, cell 0.25 / 0.167 mm | Extraction, pitch 0.25 / 0.167 mm | Full wave against the extraction (finest) | Against the closed form |
+| --- | --- | --- | --- | --- | --- |
+| Straight 12 mm (control) | Hammerstad-Jensen, zero thickness: 2.987 nH | 3.0230 / 3.0435 nH (314 k / 581 k cells, 17 / 77 s) | 2.9996 / 2.9762 nH | +1.57 / +2.26 % | +1.2 % at 0.25 mm |
+| Right-angle bend, 6 + 6 mm, corner filled | extraction | 2.8814 / 2.8986 nH (337 k / 629 k cells, 20 / 86 s) | 2.8541 / 2.8353 nH | +1.63 / +2.23 % | none |
+| Corner excess (bend minus control) | extraction | -0.1416 / -0.1449 nH | -0.1455 / -0.1409 nH | within 0.004 nH | none |
+| Loop 8 x 5 mm, trace 0.6 mm, 0.3 mm over a plane, 1 mm gap, in-plane port | loop over the image plane: 7.0705 nH | 7.0675 / 7.1090 nH (305 k / 603 k cells, 13 / 52 s) | 6.9891 / 6.9628 nH | +1.5 / +2.1 % | -0.04 / +0.54 % |
+| Straight 12 mm with a 4 mm x 2 mm slot under its middle (plane 12 mm wide) | extraction | 3.9338 / 3.9312 nH (307 k / 579 k cells) | 4.0617 / 4.0617 nH | -3.15 / -3.21 % | none |
+| Slot excess (slotted minus control) | extraction | +0.9108 / +0.8877 nH | +1.0621 nH | **-14.2 / -16.4 %** (-0.15 / -0.17 nH) | none |
+| Via transition: F.Cu line over In1 (0.2 mm) to B.Cu through a via past two planes (0.4 mm between), B.Cu line over In2 (0.2 mm), four GND vias joining the planes, wall to In2 | extraction, the via tube at 0.23 of the cell outer radius | 2.9548 / 2.9154 nH (416 k / 707 k cells, 29 / 84 s) | 2.8302 / 2.9015 nH at pitch 250 um, 2.8142 / 2.8855 nH at 167 um (the tube follows the cell) | +5.0 / +1.0 % against the 167 um pitch (+4.4 / +0.5 % against 250 um) | none |
+
+What these say, separately. **Bend and loop: the rule holds as well as it does on the straight line.** The full wave stands 1.6 to 2.3 % above the extraction on the straight control, 1.6 to 2.2 % on the bend and
+1.5 to 2.1 % on the loop, so what a corner or a loop adds is as the extraction has it to within a few thousandths of a nanohenry (the corner excess, -0.14 nH in both, is the notch of the outer corner of a path drawn square);
+the loop is within 0.6 % of its closed form at both cells, whose full-wave values rise 0.6 % over the cell step (the extraction falls 0.4 %: the two references move in opposite directions by about the offset). The offset of 1.6 to 2.3 % between the tools is
+already there on the control; it is of the size of the end effect of the port and the wall (0.05 to 0.2 nH, above), of the extraction's thin copper, and of the cell dependence of the full wave (+0.02 nH from the 0.25 to the 0.167 mm cell on the straight line, +0.017 on the bend). **Slotted plane: the rule fails here, in the way it was not meant to cover.**
+The slot's excess inductance is 14 % (0.25 mm) and 16 % (0.167 mm) below the extraction's, and the gap widens as the cell shrinks. The rule is not applied to zone edges (`push_zone_sheet` does not move rings; the slot is a hole in the plane's pour), so the slot reads narrower than drawn
+and diverts the return current less: the direction (low) is the one the rule's own reading predicts for an edge that is not moved. This was **not refitted and the rule was not extended to zones**: whether moving plane edges by the same
+fractions closes the gap was not tried, and it would be a fit to this case. The omission is stated in the result's `not_modelled` ("the edge rule is not applied to plane and pour edges") whenever a pour is in the model.
+**Via transition: not conclusive.** The full wave stands 4.4 to 5.0 % above the extraction at the 0.25 mm cell and 0.5 to 1.0 % at 0.167 mm, but a via is a one-cell wire in the full wave and a tube in the extraction, so the reference has a
+parameter that the board does not fix: the tube's outer radius was set to 0.23 of the cell by reasoning (the effective radius of a one-cell PEC wire on a Yee mesh), not measured, and it moves with the cell, which is why the extraction's value rises from 2.83 to 2.90 nH as the cell
+shrinks. A via-only control, or a measurement of how L depends on the tube radius at fixed copper, would be needed to say how much of the 4.4 % is the vertical edge rule and how much the radius equivalence; it was attempted in the study (`study_via_transition` prints radius variants) but the variants did not print and were not run. The case therefore
+does not validate or invalidate the rule: it shows the full wave and the extraction within 5 % on a transition at one cell and within about 1 % at the next.
+
+Limits of this validation: one geometry per case, two cells, a reference with its own 1 to 2 % offset and mesh dependence (0.8 to 0.9 % from pitch 0.25 to 0.167 mm on the lines), no curved or slanted edges, no cell below 0.167 mm, no loop on a dielectric
+other than er 4.3, and the straight control itself carries +1.6 to +2.3 % over the extraction, so a rule error below that is not resolved. Tests: `the_default_edge_rule_keeps_a_right_angle_bend_at_the_extraction_in_excess_of_the_straight_line` (default, 40 s: control and bend at 0.25 mm,
+asserts each within 3 % of the extraction, the control within 3 % of the closed form and the two corner excesses within 0.05 nH), and the ignored `study_bend_and_slot_series` (7 min), `study_loop_over_a_plane` (1.6 min) and `study_via_transition` (2.5 min), run from `cargo test -p copper-extract --test edge_rule -- --ignored NAME --nocapture`.
+
+**The strap bias, measured (iteration 5).** `tests/strap_bias.rs` (ignored, 3 min). A shorted microstrip line (12 mm, 1.0 mm wide over 0.5 mm, and 0.6 mm over 0.3 mm; wall of wires at its far end) has a pad `A` at its start and a grounded pad `B` (wall of wires to the plane) at a distance `d`
+on its axis; the port is across `A` and `B` and carries a strap port (`with_strap`: bars 0.42 to 0.45 mm wide from the pad edges to a gap of two cells in the middle). The loop is the line, the strap and `B`'s wall, so `L(d)` is the same
+line plus the strap that a strap port adds: the increase with `d` is the strap's own inductance, measured, and the extrapolation to `d = 0` is the same structure without a strap. Against it, `port_strap_nh`, the closed form of the strap bars over the plane
+(or in the air at 0.3 mm over a foreign pad, on posts), at the same `d` (cell 0.25 mm; L in nH):
+
+| Strap | d, mm | L | Closed-form strap | L(d) fit: `L(0)` + slope x d | Closed form: slope | Slope measured / closed form | Strap increase over L(0) at the largest d / closed form |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| In-plane, line h 0.5 / w 1.0 | 1.5, 2.5, 3.5 | 4.628, 5.084, 5.541 | 0.517, 0.949, 1.395 | 3.944 + 0.456 d | 0.439 nH/mm | 1.039 | 1.597 / 1.395 nH (+14 %) |
+| In-plane, line h 0.3 / w 0.6 | 1.5, 2.5, 3.5 | 4.528, 4.897, 5.267 | 0.425, 0.765, 1.110 | 3.973 + 0.370 d | 0.343 nH/mm | 1.079 | 1.294 / 1.110 nH (+17 %) |
+| In the air on posts, line h 0.5 / w 1.0, foreign pad between | 2.5, 3.5, 4.5 | 5.671, 6.198, 6.723 | 1.081, 1.608, 2.145 | 4.355 + 0.526 d | 0.532 nH/mm | 0.990 | 2.368 / 2.145 nH (+10 %) |
+
+(The line alone is 3.580 nH by Hammerstad-Jensen for both in-plane lines, which have the same w/h; the extrapolated `L(0)` is 0.36, 0.39 and 0.77 nH above it, the end effects of the port, `B`'s wall and, in the air, the posts. Three points per series and a straight line through them: a
+sketch of a slope, not a fit with an error bar.) **What was measured:** the closed form has the right growth with the strap's length, within 4 %, 8 % and 1 % of the measured slope on three geometries including the in-air construction that the TPS62130A and CopperOrgan loops use, and it
+understates the strap's contribution at the lengths of a real strap (1.5 to 4.5 mm) by 0.2 nH (10 to 17 %), a constant that is the strap port's own junction and port gap rather than a bar's length. `strap_port_against_direct_port` of iteration 2 (+0.316 nH at a 3 mm gap against 0.834 nH) did not measure the strap
+and this does. **What was decided: no correction is subtracted.** The 0.2 nH offset would be a correction derived from these three series, and the instruction was that none stands without a validation case that was not used to derive it; no fourth geometry (a strap that turns a corner, the TPS62130A's own, a strap of another width over another height) was
+measured, and three series that differ by 0.18 to 0.22 nH are too few to tell a constant from a dependence on the geometry (the closed form's intercept is -0.14 to -0.25 nH where a bar of zero length would have none). The strap bias stays **uncorrected and named**: `port_strap_nh` is reported beside the inductance, as before, and its meaning is now stated by measurement: it is the strap's
+growth with length to within about 10 %, and the strap contribution it names understates the measured one by 0.2 nH on three geometries. It was measured on 1 mm lines at a 0.25 mm cell, 12 mm long, not on the 0.2 to 0.45 mm
+straps of the TPS62130A at its 0.15 mm cell, and the real package's current path through the die and bond wires is not what any strap represents.
+
+**Acceptance of the ring-down fit (iteration 5).** Until iteration 4 a fit was accepted when its model orders agreed to
+5 %: that says the orders are consistent with each other and nothing about the part of the record that the fit did not see.
+A fit is now used only when all four checks below pass (`fit::check_fit`, `FitCheck`; the evidence is
+`measures.fullwave.ring_fit`):
+
+1. *Withheld tail.* The fit is made on the first 70 % of the tail and predicts the voltage and the current of the last
+   30 % (`HOLDOUT_FRACTION`); the relative rms error of each over the withheld samples (`|predicted - recorded| / |recorded|`)
+   must not exceed `HOLDOUT_ERROR_LIMIT` = 10 %, and the withheld part must cover at least one period of the lowest ring pole of
+   the first-part fit (1 ns where it has none): a prediction over less says little about a ring.
+2. *The orders agree* to 5 % (`SPREAD_LIMIT`, as before).
+3. *The poles decay.* `poles_of` reflects every root outside the unit circle into it, which turns a growing fit into a
+   decaying one without a word. The growth of each pole that carries amplitude (at least 1e-3 of the largest) over the fitted tail is now
+   computed before the reflection, and a pole that would have grown by more than 5 % (`GROWTH_LIMIT`) is an unstable pole
+   (`ring_fit.unstable_poles`, `max_pole_growth`).
+4. *Passive at the port.* `Re Z / |Z|` of the completed response over the whole analysis grid (30 MHz to 1 GHz, 181 points) must not
+   fall below -0.05 (`PASSIVITY_LIMIT`). The model is lossless PEC, so `Re Z` is small and of either sign by numerical noise
+   (it reads -0.000 of `|Z|` on every FDTD record below) and only a clearly negative resistance is a violation.
+
+A fit that fails is not used: the spectra are the plain transform of the truncated record, `status` is `indicative`,
+`mesh_sensitivity_pct` is `null`, the flags are `energy_not_converged` and `ring_fit_rejected`, and `status_reasons`, the
+notes and `ring_fit.violations` give every failed check with its numbers. The inductance stays in `inductance_nh` as a
+marked number (status `indicative`); it is not withheld, because the report's ratios and the cross-check below read it. The run
+no longer ends on a fit the checks would reject: the early stop (orders within 1 %, L moving by less than 0.3 % over two checks, a
+tail of two ring periods) also needs the checks to pass, so a run that ends by the fit has a tail of at least 3.3 ring
+periods, and a run whose fit is never acceptable goes on to the 3x time cap and is then declared indicative.
+
+*What the limit rests on.* Two measurements, both in the tests. (a) Records whose exact response is known
+(`fit::tests::the_withheld_tail_error_bounds_the_error_of_the_completion`: a passive 5 nH + 50 ohm port, a ring of 400 MHz with Q 25, cut at
+10 ns, and a second ring of 233 MHz that starts at 7.5 ns, inside the withheld part, with growing amplitude; L over 50-150 MHz and
+the largest relative error of the complex response over 25 MHz to 1 GHz of the completed fit against the exact one):
+
+| Second ring, A (against 1 mA of the first) | Withheld-tail error | Completion: L error | Completion: response, largest | Orders' spread | Check |
+| --- | --- | --- | --- | --- | --- |
+| 1e-6 | 0.14 % | +0.12 % | 0.50 % | 0.11 % | accepted |
+| 1e-5 | 1.39 % | +0.09 % | 0.57 % | 0.14 % | accepted |
+| 1e-4 | 13.3 % | +0.00 % | 1.74 % | 0.09 % | rejected |
+| 3e-4 | 35.2 % | +3.67 % | 4.22 % | 6.8 % | rejected |
+| 1e-3 | 72.3 % | +23.7 % | 33.0 % | 36.5 % | rejected |
+| 3e-3 | 91.7 % | +53.4 % | 77.3 % | 7.2 % | rejected |
+
+The completion's response error is 0.5 to 0.6 % (the floor of this setup) up to a withheld-tail error of 1.4 %, then about an eighth of it (1.7 % at 13 %, 4.2 % at 35 %), until a mode that the fit
+cannot see dominates (33 % at 72 %); L is wrong by more than 3 % first at a withheld-tail error of 35 %. A limit of 10 % sits between the last accepted row (1.4 %, response within 0.6 %) and the first rejected
+one (13 %, response within 1.7 %). It is stricter than L needs (the 13 % row has an exact L), because the withheld error is the only warning of a mode that the fit did not see: the orders' spread stays under 0.15 % up to
+that row and reaches 6.8 % only at 35 %. (b) FDTD
+records (`tests/ring_fit_acceptance.rs`, a ringing loop of two 10 x 20 mm pads on both sides of a 1 mm gap in a 10 x 6 mm loop of 0.5 mm trace 0.2 mm over a plane,
+the port across the gap; the port's resistance sets the Q of the ring): on every record cut at 5 to 40 ns
+the withheld-tail error is 0.00 to 0.02 %, the orders agree to 0.03 % or better, no pole grows and `Re Z / |Z|` is -0.000, so the FDTD cases do not exercise the
+limit; they are one dominant mode. **No FDTD record in the validation set has a withheld-tail error between 0.02 % and 10 %.** The limit
+is therefore justified by (a) alone, on one family of perturbations (a late second mode), and by nothing measured on a real loop with several close modes.
+
+*Agreement with a longer run.* `an_accepted_fit_agrees_with_the_long_run_over_the_whole_band` (default test, 47 s): the loop above on a
+1.2 mm mesh (121 k cells, an unresolved geometry: the test is of the fit and says nothing of the loop's inductance), port 50 ohm (Q about 2.7), run to -70 dB of field energy (35.6 ns,
+112,151 steps) as the long run, and the same record cut at 5 to 16 ns. The agreement is the complex response over the whole band
+(50 MHz to 1 GHz, 181 points), `|Z_fit - Z_long| / |Z_long|` per frequency, its largest value and its rms:
+
+| Cut | Held out | Plain transform: L against the long run | Plain: response, largest / rms | Fitted: L | Fitted: response, largest / rms | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5 ns | 0.3 ns | +39.6 % | 2.96 / 0.97 | +0.01 % | < 0.1 % / < 0.05 % | rejected (tail shorter than a ring period) |
+| 6 ns | 0.6 ns | -18.2 % | 2.22 / 0.62 | +0.01 % | < 0.1 % / < 0.05 % | rejected (same) |
+| 8 ns | 1.2 ns | +2.1 % | 0.92 / 0.27 | 0.00 % | < 0.1 % / < 0.05 % | rejected (same) |
+| 10 ns | 1.8 ns | +2.0 % | 0.74 / 0.13 | 0.00 % | < 0.1 % / < 0.05 % | rejected (same) |
+| 12 ns | 2.4 ns | +0.6 % | 0.45 / 0.064 | 0.00 % | < 0.1 % / < 0.05 % | accepted |
+| 14 ns | 3.0 ns | +0.4 % | 0.23 / 0.031 | 0.00 % | < 0.1 % / < 0.05 % | accepted |
+| 16 ns | 3.6 ns | +0.2 % | 0.11 / 0.015 | 0.00 % | < 0.1 % / < 0.05 % | accepted |
+
+(The fitted response column is printed to three decimals by the test: 0.001 at most.) The test asserts, for every accepted cut, a largest response difference
+under 3 % and an rms under 1 % and an L within 1 %; the assertion bounds are loose against what was measured. The same on the finer 0.8 mm mesh with port 150 ohm (Q about 8), run to -70 dB (58.8 ns, 188,051 steps, 98 s;
+`study_reference_quality_and_where_the_response_disagrees`, ignored): the fit of the record cut at 10, 16 and 24 ns agrees with the long run to
+0.59 / 0.59 / 0.58 % at the worst frequency (always the top of the band, 1 GHz) and 0.15 % rms. **The same run read at the `-35 dB` criterion of `solve_port` (30.1 ns) differs from the
+-70 dB record by 26.7 % at the worst frequency and 7.2 % rms**: the criterion that decides that a record has decayed leaves an error of that size in the complex
+response of a resonant loop (the effect on L over 50-150 MHz was not measured separately: the fits of `study_cuts_of_decayed_runs_against_the_decayed_run` read within 0.2 % of the
+-35 dB record's L at port 50, 150 and 300 ohm, and that record is the reference of every earlier measurement of this section). A response read from a record that stopped at -35 dB is
+not shown to be good to better than that, which the S-parameters of the Touchstone output inherit.
+
+Tests: `fit::tests::{a_clean_ring_is_accepted_with_a_small_withheld_tail_error_and_a_passive_response,
+a_mode_that_the_fitted_part_does_not_contain_fails_the_withheld_tail_test, a_growing_pole_is_counted_and_rejected,
+a_negative_resistance_is_a_passivity_violation, a_tail_too_short_to_withhold_part_of_it_is_rejected_not_accepted_unchecked,
+a_rejected_fit_leaves_the_plain_transform_and_says_why, the_withheld_tail_error_bounds_the_error_of_the_completion}`
+(synthetic records with a known exact response: 1 s in all), `ring_fit_acceptance::an_accepted_fit_agrees_with_the_long_run_over_the_whole_band` (47 s), the
+ignored studies `study_cuts_of_decayed_runs_against_the_decayed_run` (3 min) and `study_reference_quality_and_where_the_response_disagrees` (1.6 min), and
+`emi_fullwave::tests::a_rejected_ring_down_fit_is_reported_with_its_evidence_and_its_violations` for the report. Weak spots: the
+validated records have one dominant ring; a loop with several close modes (the CopperOrgan loop) is exactly the case that was not measured, and the
+limit was set from a synthetic family of perturbations, not from FDTD records that fail; the early stop of a live run
+now needs a longer tail, which was not re-measured on the 536 s case of iteration 3 (the ignored `ring_fit_against_decayed_run` and `a_fit_completed_run...` of `shorted_line.rs` were not re-run).
+
+**Zone fills (iteration 5).** `copper_fullwave::fill` holds the code that `copper-extract` used alone: the board is exported in memory
+(`copper_pcb::kicad_pcb::generate`), parsed with `copper_cam::board::parse_board`, and its zones are filled by `copper_cam::fill::fill_zones` under the rules
+of the exported project (clearances, thermal reliefs, openings for the vias and pads of other nets, minimum width, removal of islands as each zone asks);
+`copper-extract::board::board_model` now calls it (`BoardModel` is `FilledBoard`), so the two tiers see the same pours.
+`RegionSpec::zone_fills` carries the result (`ZoneFillSet`: net, layer, nanometre polygons): where a net has a fill on a layer, the fill replaces the zone's outline
+there (clipped to the window, and cut with the zone clearance around the copper that only the model has, the hull of a capacitor or diode and the legs of an
+unrouted loop; flag `zone_fill_used`); a zone with no fill on a layer keeps the outline minus clearances (`zone_outline_used`). `extract_hot_loop` makes the fill once for both meshes
+(`HotLoopOptions::native_fills`, default on; `--fullwave-zone-outline` switches it off) and falls back to outlines with a note when the export fails. The fill is cut to the model's copper but is not
+re-made around it. Like every pour in the model, its edges are not moved by the edge rule.
+
+*What it changed on the examples.* Nothing on the shipped examples, as measured: `examples/emi_buck` placed (standard mesh, `--fullwave-single-mesh`) reads 4.841 nH with the fill (flag
+`zone_fill_used`) and 4.841 nH with the outlines, with the same 320,160 cells and 12,801 steps; the routed example (the three 0.4 mm legs of the CLI test, 720,000 cells, 15,101 steps)
+reads 6.067 nH both ways. The only pour of the example is a floating ground on In1.Cu that nothing crosses, so the fill is the outline, which is what the identical meshes say.
+`examples/tps62130a_macro` (the board whose pours are cut by 11 vias and a package): the native fill **cannot be made** there, the export refuses a hard macro without its
+immutable copper (`cannot export a hard macro without its immutable copper`), so the run falls back to outlines minus clearances (note and flag `zone_outline_used`) and reproduces 2.823 nH, 28,601 steps,
+as before. `--extract` calls the same export, so by the code it meets the same refusal on such a board (not run here). The difference that a fill makes is shown by the synthetic board of `tests/zone_fill.rs`
+(`the_native_fill_replaces_the_outline_and_drops_the_island_the_outline_keeps`): a 20 x 10 mm pour on F.Cu that a foreign 0.4 mm track divides in two, a GND pad in the left piece. The outline minus
+clearances is two pieces (x 40 to 49.75 and 50.25 to 60 mm: the cut is 0.2 mm clearance round the track as the model drew it, whose edges the edge rule had moved in); the native fill
+is one (40 to 49.60 mm, the clearance taken from the track as drawn), because the right piece touches no pad of its net and the fill removes it as an island. `a_zone_without_a_fill_keeps_its_outline_and_says_so`
+covers the fallback per layer. *What the fill does to the loop (a board that is not the shipped example).* `write_the_example_run_with_a_top_pour_for_manual_inspection` (ignored) writes the routed example with a
+17 x 16 mm GND pour on F.Cu round the loop added (not part of `examples/emi_buck`; `--fullwave-single-mesh`, one run each). With the native fill (2 fill pieces, 998,325 cells, 19,351 steps, 121 s): 3.63 nH, flat to 0.04 %, status `ok`, closed form 5.10 nH.
+With the outlines minus clearances (`--fullwave-zone-outline`; 1,231,200 cells, 69,961 steps, 367 s): the record did not decay, the ring-down fit was **rejected** (the first 70 % of the tail predicts the withheld
+2.6 ns to 100 % in current and voltage, although the orders agree to 0.00 %, no pole grows and `Re Z / |Z|` stays above 0.60), status `indicative`, 6.93 nH as the plain transform of the truncated record, flat to 0.94 %. This is the first live
+rejection by the new checks, and it is a case the old acceptance (orders within 5 %) would have taken by the code. The two numbers are not a comparison of two converged results, so the 3.2 nH between them cannot be attributed to the fill alone, and why the outline model rings
+and the fill model does not was not diagnosed.
+
+
+**Cross-check against the extraction (iteration 5).** When `--fullwave` and `--extract` both ran, `measures.extract.cross_check` and the `extract:` line state
+the extraction's value at 100 MHz, the full wave's `Im Z / omega` at its lowest analysis frequency (30 MHz: `measures.fullwave.inductance_lowest_nh`, `lowest_frequency_mhz`),
+the two numerical sensitivities (the extraction's difference of its two finest meshes at 100 MHz, the full wave's `mesh_sensitivity_pct`) and the difference of the extraction from the full
+wave in percent of the full-wave value, then one of three statements: the values agree within the two sensitivities together, they disagree by more
+than the two sensitivities together ("so the difference is not mesh noise; the models also omit different things"), or no statement is made (the full-wave value is indicative, or either side has one mesh and no sensitivity).
+The words pass and fail do not occur (`a comparison of two screening numbers, not a pass or a fail`). It is `emi_extract::cross_check`; tests
+`the_cross_check_states_agreement_or_disagreement_against_the_two_numerical_sensitivities` and `the_cross_check_makes_no_statement_without_a_sensitivity_on_either_side`.
+The two values are at different frequencies (30 and 100 MHz); on the placed and routed examples and the TPS62130A L(f) is flat to 0.1 % between them, but a resonant loop's is not, which is a reason the full-wave value
+of such a loop is usually indicative and gets no statement.
+
 **Limitations.** Components are not modelled (the capacitor and diode are
 copper; the switch is a port; their ESL, ESR, package and the controller's
-bond wires are absent), copper is lossless, zone fills are unknown (the
-outline minus clearances, no thermal reliefs or minimum widths), vias are wires without radius, the window
+bond wires are absent), copper is lossless, zone fills are the native filler's
+where the board can be exported (otherwise the outline minus clearances), cut but not re-made around the model's own bridges and legs, vias are wires without radius, the window
 cuts every net, there is no enclosure or cable, and no near-field export or radiated estimate. A
 placed board's straight legs may cross foreign pads (the closed form has the
 same blind spot); overlapping lines of different nets within 0.075 mm (a tenth of the cell without
 smoothing) merge (flag `nets_merged_below_floor`). Round pads are chamfered. A strap port adds
 a strap that the real loop does not have (`port_strap_nh`, the closed-form inductance of the strap bar alone over its plane; 0.95 nH of the
-TPS62130A's 2.83 nH and 1.78 nH of the CopperOrgan loop). That closed form was not made trustworthy in iteration 4 (next steps). A package's exposed pad is bridged in the air at an assumed height of 0.3 mm. The hull
+TPS62130A's 2.83 nH and 1.78 nH of the CopperOrgan loop). Iteration 5 measured it: the closed form has the strap's growth with length within 10 % and understates its contribution by 0.2 nH on three geometries ("The strap bias, measured"); no correction is subtracted. A package's exposed pad is bridged in the air at an assumed height of 0.3 mm. The hull
 bridge of a low-side switch covers whatever lies between two distant pads. The stack-up of a board
 that declares none is assumed. **Accuracy:** the edge rule is a fit on two geometries (0.2 and 0.5 mm of dielectric,
 0.5 and 1.0 mm strips) checked on three others and on the 20 mm lines of the table above; it is not derived, it
@@ -1544,8 +1727,7 @@ minutes on the CopperOrgan board, which is single-mesh and did not decay; the tw
 
 **Next steps.** (1) Components as lumped R/L/C and a switch with an on-resistance and a
 gate edge, to simulate the ringing the 143 MHz estimate predicts (the CopperOrgan loop rings at
-348 MHz with the capacitor and diode shorted). (2) Zone fills from the CAM fill (`copper_cam::fill`)
-instead of the outline minus clearances, and per-layer antipads, so planes carry their real slots.
+348 MHz with the capacitor and diode shorted). (2) Zone fills: done in iteration 5 for boards the exporter can handle (not boards with an unmaterialised hard macro, which the TPS62130A example is); the edge rule for plane and pour edges, which the slot case of iteration 5 shows is missing.
 (3) Near-field export and radiated estimates by per-port superposition. (4) The mesh decisions on small geometry:
 a merge that does not move copper edges by up to 0.4 of the cell
 (0.5 of the cell moved the TPS62130A by -2.4 % and 0.6 the placed emi_buck by +5 %: the merge distance is where the remaining
@@ -1555,9 +1737,7 @@ and it was not made trustworthy: `strap_port_against_direct_port` does not measu
 a continuous top bar (the strap fills the gap) and a port of 0.4 to 0.5 mm in its middle, so its inductance does not depend on the gap
 (8.635 nH at gaps of 2 and 3 mm), while the direct port spans the gap and carries the inductance of the gap's own field; the measured
 difference (+0.338 nH at 2 mm, +0.316 nH at 3 mm, against closed forms of 0.526 and 0.834 nH) is the strap bar, 0.36 mm wide, against the
-0.5 mm track it replaces, plus the direct port's gap, not the inductance of a strap that the real loop lacks. A bias that can be
-validated needs the reference of the real loop (a die path of known inductance, or a bridge shortened by moving its posts: the
-inductance extrapolated to a bridge of zero length, two more solves), and was not done. A package
+0.5 mm track it replaces, plus the direct port's gap, not the inductance of a strap that the real loop lacks. The strap-length series with extrapolation to zero length was done in iteration 5 (above); a correction would need a geometry that is not one of the three series, and none was measured. A package
 model for the switch (die, bond wires and lead frame, so that the strap port stops carrying a
 bias of 1-2 nH) and a check of the hull bridge against foreign copper. (6) The edge rule for
 curved and slanted edges, cells below 0.1 mm and the S-parameter impedance of coarse meshes, and the

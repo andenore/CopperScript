@@ -25,6 +25,8 @@ pub struct Options {
     pub margin_mm: Option<f64>,
     /// Run one mesh only (no convergence estimate).
     pub single_mesh: bool,
+    /// Pours from the zone outlines minus clearances instead of the native fill.
+    pub zone_outline: bool,
 }
 
 fn put(object: &mut Object, key: &str, value: Value) {
@@ -38,6 +40,31 @@ fn strings(items: &[String]) -> Value {
 fn round(value: f64, digits: i32) -> f64 {
     let k = 10f64.powi(digits);
     (value * k).round() / k
+}
+
+/// `measures.fullwave.ring_fit`: the evidence for the ring-down fit of an undecayed record, and the limits
+/// it was held to. `null` when the record decayed (no fit was needed).
+fn ring_fit_value(check: Option<&copper_fullwave::fit::FitCheck>) -> Value {
+    use copper_fullwave::fit::{GROWTH_LIMIT, HOLDOUT_ERROR_LIMIT, HOLDOUT_FRACTION, PASSIVITY_LIMIT, SPREAD_LIMIT};
+    let Some(c) = check else { return Value::Null };
+    let mut o = Object::new();
+    put(&mut o, "accepted", Value::Bool(c.accepted()));
+    put(&mut o, "withheld_fraction", Value::from(HOLDOUT_FRACTION));
+    let hold = c.holdout.as_ref();
+    put(&mut o, "withheld_ns", hold.map_or(Value::Null, |h| Value::from(round(h.held_s * 1e9, 3))));
+    put(&mut o, "withheld_error_pct", hold.map_or(Value::Null, |h| Value::from(round(100.0 * h.error(), 3))));
+    put(&mut o, "withheld_error_current_pct", hold.map_or(Value::Null, |h| Value::from(round(100.0 * h.error_i, 3))));
+    put(&mut o, "withheld_error_voltage_pct", hold.map_or(Value::Null, |h| Value::from(round(100.0 * h.error_v, 3))));
+    put(&mut o, "orders_spread_pct", Value::from(round(100.0 * c.spread, 3)));
+    put(&mut o, "unstable_poles", Value::from(c.unstable_poles as i64));
+    put(&mut o, "max_pole_growth", Value::from(round(c.max_growth, 4)));
+    put(&mut o, "min_re_z_over_abs_z", Value::from(round(c.min_re_z_ratio, 4)));
+    put(&mut o, "limit_withheld_error_pct", Value::from(100.0 * HOLDOUT_ERROR_LIMIT));
+    put(&mut o, "limit_orders_spread_pct", Value::from(100.0 * SPREAD_LIMIT));
+    put(&mut o, "limit_pole_growth", Value::from(GROWTH_LIMIT));
+    put(&mut o, "limit_re_z_over_abs_z", Value::from(-PASSIVITY_LIMIT));
+    put(&mut o, "violations", strings(&c.violations));
+    Value::Object(o)
 }
 
 /// `measures.fullwave` of a finding.
@@ -67,6 +94,10 @@ fn result_value(r: &HotLoopResult) -> Value {
     // built from it and the observed scatter floor. The sensitivity is null, with the reason, for a record that did
     // not decay and was not completed by a stable fit. The model's own omissions are `not_modelled`.
     put(&mut o, "status", Value::from(r.status.name()));
+    put(&mut o, "status_reasons", strings(&r.status_reasons));
+    put(&mut o, "inductance_lowest_nh", r.inductance_lowest_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
+    put(&mut o, "lowest_frequency_mhz", Value::from(round(r.lowest_frequency_mhz, 3)));
+    put(&mut o, "ring_fit", ring_fit_value(r.fit_check.as_ref()));
     put(&mut o, "mesh_difference_pct", r.mesh_difference_pct.map_or(Value::Null, |v| Value::from(round(v, 2))));
     put(&mut o, "mesh_sensitivity_pct", r.mesh_sensitivity_pct.map_or(Value::Null, |v| Value::from(round(v, 1))));
     put(
@@ -235,6 +266,7 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
         let mut hot = HotLoopOptions {
             fidelity: options.fidelity,
             convergence: !options.single_mesh,
+            native_fills: !options.zone_outline,
             ..HotLoopOptions::default()
         };
         if let Some(seconds) = options.budget_seconds {
@@ -330,6 +362,10 @@ mod tests {
             mesh_sensitivity_unavailable: unavailable,
             status: if record_failed { HotLoopStatus::Indicative } else { HotLoopStatus::Ok },
             not_modelled: copper_fullwave::hotloop::not_modelled(&["assumed_stackup".to_owned()], Some(1.78)),
+            fit_check: None,
+            status_reasons: if record_failed { vec!["the record did not decay".to_owned()] } else { Vec::new() },
+            inductance_lowest_nh: Some(7.1),
+            lowest_frequency_mhz: 30.0,
         }
     }
 
@@ -349,6 +385,42 @@ mod tests {
             text.contains("mesh sensitivity 4 %") && text.contains("not an accuracy") && !text.contains("+-"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_rejected_ring_down_fit_is_reported_with_its_evidence_and_its_violations() {
+        use copper_fullwave::fit::{FitCheck, TailPrediction};
+        let check = FitCheck {
+            holdout: Some(TailPrediction {
+                fraction: 0.3,
+                held_s: 2.4e-9,
+                error_i: 0.31,
+                error_v: 0.12,
+                head_spread: 0.01,
+                ring_hz: Some(4.0e8),
+            }),
+            spread: 0.012,
+            unstable_poles: 1,
+            max_growth: 1.4,
+            min_re_z_ratio: -0.2,
+            violations: vec!["the fit of the first 70 % of the tail predicts the withheld 2.4 ns to 31.0 %".to_owned()],
+        };
+        let mut r = result(true, Some(0.4));
+        r.fit_check = Some(check);
+        r.status_reasons
+            .push("the fit of the first 70 % of the tail predicts the withheld 2.4 ns to 31.0 %".to_owned());
+        let value = result_value(&r);
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("indicative"));
+        let fit = value.get("ring_fit").and_then(Value::as_object).expect("ring_fit");
+        assert_eq!(fit.get("accepted"), Some(&Value::Bool(false)));
+        assert_eq!(fit.get("withheld_error_pct"), Some(&Value::Float(31.0)));
+        assert_eq!(fit.get("unstable_poles"), Some(&Value::from(1_i64)));
+        assert_eq!(fit.get("limit_withheld_error_pct"), Some(&Value::Float(10.0)));
+        assert_eq!(fit.get("violations").and_then(Value::as_array).map(<[Value]>::len), Some(1));
+        let reasons = value.get("status_reasons").and_then(Value::as_array).expect("status_reasons");
+        assert!(reasons.len() >= 2, "{reasons:?}");
+        // A record that decayed has no fit to report.
+        assert_eq!(result_value(&result(false, Some(0.6))).get("ring_fit"), Some(&Value::Null));
     }
 
     #[test]

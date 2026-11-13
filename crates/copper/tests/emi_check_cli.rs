@@ -276,6 +276,22 @@ fn write_the_example_run_for_manual_inspection() {
     let _ = write_routed_run("manual");
 }
 
+/// The routed run of `examples/emi_buck` with a GND pour on F.Cu round the loop (the example's own pour is a floating
+/// ground on In1.Cu that nothing crosses, so the native fill and the outline minus clearances are the same copper there):
+/// the pour is cut by the loop's other nets and has thermal reliefs and islands, to compare `--fullwave` with and
+/// without `--fullwave-zone-outline` by hand (`study_zone_fill` of the documentation).
+#[test]
+#[ignore = "writes the routed run with a top pour to $EMI_RUN_DIR for `copper emi-check --run --fullwave` by hand"]
+fn write_the_example_run_with_a_top_pour_for_manual_inspection() {
+    let _ = write_routed_run_with("manual", |board| {
+        board.zones.push(copper_fullwave::testing::zone(
+            "GND",
+            &[copper_physical::CopperLayer::Front],
+            [19_000_000, 24_000_000, 36_000_000, 40_000_000],
+        ));
+    });
+}
+
 /// `examples/emi_buck_filter` copied to a scratch directory, with the switch pin's current transition times and the
 /// input capacitor's `capacitance_at_bias` added.
 fn declared_operating_inputs(name: &str) -> PathBuf {

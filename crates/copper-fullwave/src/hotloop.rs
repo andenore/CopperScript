@@ -162,6 +162,11 @@ pub struct HotLoopOptions {
     pub convergence: bool,
     /// Scale of the excitation pulse's bandwidth (see `RegionSpec::pulse_scale`).
     pub pulse_scale: f64,
+    /// Take the pours from the native zone fill of the exported board (default) instead of the zone outlines minus
+    /// clearances (`copper emi-check --fullwave-zone-outline`). `extract_hot_loop` makes the fill once for both meshes.
+    pub native_fills: bool,
+    /// Fills already made (by a caller that shares them with another tier); `None` with `native_fills` makes them.
+    pub zone_fills: Option<std::sync::Arc<crate::fill::ZoneFillSet>>,
 }
 
 impl Default for HotLoopOptions {
@@ -177,6 +182,8 @@ impl Default for HotLoopOptions {
             refine_scale: 1.0,
             convergence: true,
             pulse_scale: 1.0,
+            native_fills: true,
+            zone_fills: None,
         }
     }
 }
@@ -235,6 +242,17 @@ pub struct HotLoopResult {
     pub status: HotLoopStatus,
     /// Named omissions of the model that no mesh refinement can remove.
     pub not_modelled: Vec<String>,
+    /// The evidence for the ring-down fit of the reported mesh when its record had not decayed: the
+    /// withheld-tail prediction, the stability of the poles and the passivity of the completed response, and the
+    /// violations when it was rejected (the value is then the plain transform of the truncated record,
+    /// `status` is `indicative`).
+    pub fit_check: Option<crate::fit::FitCheck>,
+    /// Why `status` is `indicative`; empty for `ok`.
+    pub status_reasons: Vec<String>,
+    /// `Im Z / omega` at the lowest analysis frequency, nH, and that frequency, MHz: the full-wave value the
+    /// report sets beside the quasi-static extraction's 100 MHz value.
+    pub inductance_lowest_nh: Option<f64>,
+    pub lowest_frequency_mhz: f64,
 }
 
 /// How far a hot-loop inductance can be taken as a result of the model.
@@ -283,10 +301,27 @@ pub fn not_modelled(flags: &[String], strap_nh: Option<f64>) -> Vec<String> {
     let mut list = vec![
         "components: the capacitor and diode are copper bridges (no ESL, ESR or package) and the switch is a port (no die, bond wires or lead frame)".to_owned(),
         "copper and dielectric loss (the copper is lossless PEC)".to_owned(),
-        "zone fills (the pour is its outline minus clearances: no thermal reliefs, minimum widths or islands)".to_owned(),
         "via barrels and annular rings (vias are wires without radius)".to_owned(),
         "everything outside the window (the window cuts every net; no enclosure, cable or other board)".to_owned(),
     ];
+    if flags.iter().any(|f| f == "zone_outline_used") || !flags.iter().any(|f| f == "zone_fill_used") {
+        list.push(
+            "zone fills (a pour without a native fill is its outline minus clearances: no thermal reliefs, minimum widths or islands)"
+                .to_owned(),
+        );
+    }
+    if flags.iter().any(|f| f == "zone_fill_used") {
+        list.push(
+            "the fill is the native filler's of the exported board, cut to the window and around the model's bridges and added legs; it is not re-made for the model's copper, and copper thickness and fill resolution are not modelled"
+                .to_owned(),
+        );
+    }
+    if flags.iter().any(|f| f == "zone_fill_used" || f == "zone_outline_used") {
+        list.push(
+            "the edge rule is not applied to plane and pour edges (slots, antipads, outlines): on a 4 mm slot under a 0.8 mm line over a plane the model's excess inductance was 14 % below the quasi-static extraction's (section 11, 'The edge rule on other geometries')"
+                .to_owned(),
+        );
+    }
     if flags.iter().any(|f| f == "assumed_stackup") {
         list.push(
             "the real stack-up (the board declares none: copper layers spread over the board thickness with FR-4)"
@@ -389,6 +424,7 @@ pub fn hot_loop_spec(
     spec.refine_scale = options.refine_scale;
     spec.smooth_mesh = true;
     spec.pulse_scale = options.pulse_scale;
+    spec.zone_fills = options.zone_fills.clone();
     if options.refine {
         // A quarter of the narrowest loop pad, 0.2 to 0.25 mm: four cells across the pad, two across the finest leg.
         let narrowest = placed.iter().map(|p| p.min_dimension_mm).fold(f64::INFINITY, f64::min);
@@ -557,7 +593,28 @@ pub fn extract_hot_loop(
     options: &HotLoopOptions,
 ) -> Result<HotLoopResult> {
     let started = Instant::now();
+    let mut options = options.clone();
+    let mut fill_note: Option<String> = None;
+    if options.native_fills && options.zone_fills.is_none() {
+        match crate::fill::export_and_fill(board) {
+            Ok(filled) => {
+                let set = filled.fill_set();
+                fill_note = Some(format!(
+                    "zone pours are the native fill of the exported board ({} fill(s), {} island(s) removed, {:.1} s): the model's copper is cut around the real fill, not the zone outlines",
+                    filled.zone_fills, set.islands_removed, set.seconds
+                ));
+                options.zone_fills = Some(std::sync::Arc::new(set));
+            }
+            Err(error) => {
+                fill_note = Some(format!(
+                    "the native zone fill failed ({error}): the pours are zone outlines minus clearances (zone_outline_used)"
+                ));
+            }
+        }
+    }
+    let options = &options;
     let (spec, mut notes) = hot_loop_spec(board, input, options)?;
+    notes.extend(fill_note);
     let margin_mm = nm_to_mm(spec.margin_nm);
     let model = RegionModel::build(board, &spec)?;
     let (column, l1, spread1) = run_model(&model)?;
@@ -631,14 +688,23 @@ pub fn extract_hot_loop(
         flags.push("ring_fitted".to_owned());
         let ring = fit.ring_hz.map_or(String::new(), |(f, q)| format!(", ring at {:.0} MHz with Q {:.0}", f * 1e-6, q));
         notes.push(format!(
-            "the record had not decayed ({} steps{}): L is read from the transform of the record completed by a fit of its ring-down ({:.1} ns of tail{ring}); the fitted orders agree to {:.2} %",
+            "the record had not decayed ({} steps{}): L is read from the transform of the record completed by a fit of its ring-down ({:.1} ns of tail{ring}); the fitted orders agree to {:.2} %; the fit passed its checks ({})",
             column.stats.steps,
             if column.stats.stopped_by_fit { ", ended by the fit" } else { ", at the time cap" },
             fit.tail_s * 1e9,
-            100.0 * fit.spread
+            100.0 * fit.spread,
+            column.fit_check.as_ref().map_or(String::new(), |c| c.summary())
         ));
     } else if !column.stats.converged {
         flags.push("energy_not_converged".to_owned());
+        if let Some(check) = column.fit_check.as_ref().filter(|c| !c.accepted()) {
+            flags.push("ring_fit_rejected".to_owned());
+            notes.push(format!(
+                "the record had not decayed and the ring-down fit was rejected ({}): the value is the plain transform of the truncated record and is indicative only. {}",
+                check.violations.join("; "),
+                check.summary()
+            ));
+        }
     }
     if spread > 0.05 {
         flags.push("inductance_not_flat".to_owned());
@@ -673,8 +739,18 @@ pub fn extract_hot_loop(
     let record_failed = column.fit.is_none() && !column.stats.converged;
     let sensitivity = mesh_sensitivity(error_pct, record_failed);
     let omissions = not_modelled(&flags, port_strap_nh);
+    let mut status_reasons = Vec::new();
     if record_failed {
-        notes.push("indicative only: the record did not decay and the ring-down fit did not stabilise, so no mesh sensitivity is stated".to_owned());
+        status_reasons.push(
+            "the record did not decay and no ring-down fit passed its checks (energy_not_converged without ring_fitted)"
+                .to_owned(),
+        );
+        if let Some(check) = column.fit_check.as_ref() {
+            status_reasons.extend(check.violations.iter().cloned());
+        }
+    }
+    if record_failed {
+        notes.push("indicative only: the record did not decay and no ring-down fit passed its checks, so no mesh sensitivity is stated".to_owned());
     }
     if let Some(l) = port_strap_nh {
         notes.push(format!(
@@ -717,6 +793,14 @@ pub fn extract_hot_loop(
         not_modelled: omissions,
         inductance_static_nh: static_l.map(|v| v.0 * 1e9),
         flatness_static: static_l.map(|v| v.1),
+        fit_check: column.fit_check.clone(),
+        status_reasons,
+        inductance_lowest_nh: column
+            .freqs
+            .first()
+            .zip(column.z_in.first())
+            .map(|(f, z)| z.im / (2.0 * std::f64::consts::PI * f) * 1e9),
+        lowest_frequency_mhz: column.freqs.first().map_or(0.0, |f| f * 1e-6),
     })
 }
 
@@ -778,8 +862,10 @@ mod tests {
         let plain = not_modelled(&[], None);
         assert!(plain.iter().any(|m| m.contains("components")) && plain.iter().any(|m| m.contains("zone fills")));
         assert!(!plain.iter().any(|m| m.contains("stack-up")) && !plain.iter().any(|m| m.contains("strap")));
-        let full = not_modelled(&["assumed_stackup".to_owned()], Some(0.95));
+        let full = not_modelled(&["assumed_stackup".to_owned(), "zone_fill_used".to_owned()], Some(0.95));
         assert!(full.iter().any(|m| m.contains("stack-up")), "{full:?}");
+        assert!(full.iter().any(|m| m.contains("edge rule is not applied to plane")), "{full:?}");
+        assert!(!plain.iter().any(|m| m.contains("edge rule")), "{plain:?}");
         assert!(full.iter().any(|m| m.contains("0.95 nH")), "{full:?}");
     }
 }

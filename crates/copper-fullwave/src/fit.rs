@@ -28,6 +28,11 @@ pub struct FitInfo {
     pub ring_hz: Option<(f64, f64)>,
     /// Seconds of tail the fit used.
     pub tail_s: f64,
+    /// Poles of the chosen order that carry amplitude and grow over the fitted tail by more than
+    /// [`GROWTH_LIMIT`] (the fit reflects them into the unit circle; they are counted before that).
+    pub unstable_poles: usize,
+    /// Largest growth factor over the fitted tail among the poles that carry amplitude (1 when none grows).
+    pub max_growth: f64,
 }
 
 /// Linear least squares `min |A x - b|` by Householder QR with a small ridge; `a` is row-major.
@@ -151,7 +156,8 @@ fn roots(c: &[f64]) -> Vec<Complex64> {
 
 /// Poles `z_k` (per decimated sample) of order `p` fitted to `y` by forward linear prediction; those outside
 /// the unit circle are reflected in it, those that are real-negative or too close to zero are kept as they come.
-fn poles_of(y: &[f64], p: usize) -> Option<Vec<Complex64>> {
+/// The second vector holds `ln |z_k|` of each pole before the reflection (positive: the fit found it growing).
+fn poles_of(y: &[f64], p: usize) -> Option<(Vec<Complex64>, Vec<f64>)> {
     let l = y.len();
     if l < 3 * p + 2 {
         return None;
@@ -161,6 +167,7 @@ fn poles_of(y: &[f64], p: usize) -> Option<Vec<Complex64>> {
     let b: Vec<f64> = (p..l).map(|m| -y[m]).collect();
     let coef = lstsq(&a, &b, 1e-10)?;
     let mut z = roots(&coef);
+    let growth: Vec<f64> = z.iter().map(|r| r.norm().max(1e-300).ln()).collect();
     for r in &mut z {
         if r.norm() > 1.0 {
             *r = 1.0 / r.conj();
@@ -169,7 +176,7 @@ fn poles_of(y: &[f64], p: usize) -> Option<Vec<Complex64>> {
             *r *= 1.0 - 1e-9 / r.norm().max(1e-300);
         }
     }
-    Some(z)
+    Some((z, growth))
 }
 
 /// Amplitudes `A_k` with `y[m] ~ sum_k A_k z_k^m` (complex least squares through the normal equations).
@@ -330,6 +337,45 @@ impl Record {
     }
 }
 
+/// A pole whose amplitude over the fitted tail grows by more than this factor counts as unstable.
+pub const GROWTH_LIMIT: f64 = 1.05;
+
+/// Everything one model order gave.
+struct OrderFit {
+    inductance: f64,
+    done: Completed,
+    ring: Vec<Complex64>,
+    mi: Model,
+    mv: Model,
+    unstable: usize,
+    max_growth: f64,
+}
+
+/// The fits of all orders to one (possibly cut) record and the choice among them.
+struct Fits {
+    orders: Vec<(usize, Option<f64>)>,
+    fits: Vec<OrderFit>,
+    chosen: usize,
+    median: f64,
+    spread: f64,
+    tail_s: f64,
+}
+
+impl Fits {
+    fn info(&self) -> FitInfo {
+        let c = &self.fits[self.chosen];
+        FitInfo {
+            orders: self.orders.clone(),
+            inductance: self.median,
+            spread: self.spread,
+            ring_hz: c.ring.first().map(|c| (c.re, c.im)),
+            tail_s: self.tail_s,
+            unstable_poles: c.unstable,
+            max_growth: c.max_growth,
+        }
+    }
+}
+
 impl Record {
     /// `Z(f)` from the recorded samples before `t_cut` (all if `None`) completed by the exponentials
     /// fitted to the tail from `tail_start` seconds on; `band` is the range over which the orders are
@@ -353,6 +399,13 @@ impl Record {
         tail_start: f64,
         band: (f64, f64),
     ) -> Option<(Completed, FitInfo)> {
+        let fits = self.fit_orders(freqs, t_cut, tail_start, band)?;
+        let info = fits.info();
+        let chosen = fits.fits.into_iter().nth(fits.chosen)?;
+        Some((chosen.done, info))
+    }
+
+    fn fit_orders(&self, freqs: &[f64], t_cut: Option<f64>, tail_start: f64, band: (f64, f64)) -> Option<Fits> {
         let t_cut = t_cut.unwrap_or(f64::INFINITY);
         let n_i = self.i.iter().enumerate().take_while(|(k, _)| self.t0_i + *k as f64 * self.dt <= t_cut).count();
         let n_v = self.v.iter().enumerate().take_while(|(k, _)| self.t0_v + *k as f64 * self.dt <= t_cut).count();
@@ -372,11 +425,11 @@ impl Record {
         let t_last_i = self.t0_i + (ii.len() - 1) as f64 * self.dt;
         let block_dt = d as f64 * self.dt;
         let mut orders = Vec::new();
-        let mut best: Vec<(usize, f64, Completed, Vec<Complex64>)> = Vec::new();
+        let mut fits: Vec<OrderFit> = Vec::new();
         let max_order = (yi.len() / 4).min(16);
         for p in (2..=max_order).step_by(2) {
             let result = (|| {
-                let z = poles_of(&yi, p)?;
+                let (z, growth) = poles_of(&yi, p)?;
                 let s: Vec<Complex64> = z.iter().map(|zk| zk.ln() / block_dt).collect();
                 let mi = model_on_poles(ii, first_i, self.t0_i, self.dt, d, &s)?.0;
                 let mv = model_on_poles(vi, first_v, self.t0_v, self.dt, d, &s)?.0;
@@ -389,27 +442,232 @@ impl Record {
                     decimation: d,
                 };
                 let (l, _) = crate::solve::inductance_of(freqs, &done.z(), band.0, band.1)?;
-                Some((l, done, s, mi.c))
+                // Growth of the poles that carry amplitude, over the blocks of the fitted tail.
+                let big = mi.c.iter().map(|c| c.norm()).fold(0.0_f64, f64::max);
+                let blocks_in_tail = yi.len() as f64;
+                let growths: Vec<f64> = growth
+                    .iter()
+                    .zip(&mi.c)
+                    .filter(|(_, c)| c.norm() >= 1e-3 * big)
+                    .map(|(g, _)| (g.max(0.0) * blocks_in_tail).exp())
+                    .collect();
+                let max_growth = growths.iter().copied().fold(1.0_f64, f64::max);
+                let unstable = growths.iter().filter(|g| **g > GROWTH_LIMIT).count();
+                let ring = ring_of(&s, &mi.c, 1e-3);
+                Some(OrderFit { inductance: l, done, ring, mi, mv, unstable, max_growth })
             })();
             match result {
-                Some((l, done, s, c)) if l.is_finite() => {
-                    orders.push((p, Some(l)));
-                    best.push((p, l, done, ring_of(&s, &c, 1e-3)));
+                Some(fit) if fit.inductance.is_finite() => {
+                    orders.push((p, Some(fit.inductance)));
+                    fits.push(fit);
                 }
                 _ => orders.push((p, None)),
             }
         }
-        if best.is_empty() {
+        if fits.is_empty() {
             return None;
         }
-        let mut sorted: Vec<f64> = best.iter().map(|b| b.1).collect();
+        let mut sorted: Vec<f64> = fits.iter().map(|b| b.inductance).collect();
         sorted.sort_by(f64::total_cmp);
         let median = sorted[sorted.len() / 2];
         let spread = (sorted[sorted.len() - 1] - sorted[0]) / median;
         // The order whose inductance is the median; its lowest pole of significant amplitude is the ring.
-        let chosen = best.iter().min_by(|a, b| (a.1 - median).abs().total_cmp(&(b.1 - median).abs()))?;
-        let ring = chosen.3.first().map(|c| (c.re, c.im));
-        Some((chosen.2.clone(), FitInfo { orders, inductance: median, spread, ring_hz: ring, tail_s: tail }))
+        let chosen = (0..fits.len())
+            .min_by(|a, b| (fits[*a].inductance - median).abs().total_cmp(&(fits[*b].inductance - median).abs()))?;
+        Some(Fits { orders, fits, chosen, median, spread, tail_s: tail })
+    }
+}
+
+/// What the withheld-tail test saw.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TailPrediction {
+    /// Fraction of the fitted tail that was withheld, and its length in seconds.
+    pub fraction: f64,
+    pub held_s: f64,
+    /// Relative rms error of the current and of the voltage predicted over the withheld tail by the fit of the
+    /// first part (`|predicted - recorded| / |recorded|`, both rms over the withheld samples).
+    pub error_i: f64,
+    pub error_v: f64,
+    /// Spread of the orders on the head alone.
+    pub head_spread: f64,
+    /// Frequency of the lowest ring pole of the head fit that carries amplitude, hertz.
+    pub ring_hz: Option<f64>,
+}
+
+impl TailPrediction {
+    /// The larger of the two errors.
+    pub fn error(&self) -> f64 {
+        self.error_i.max(self.error_v)
+    }
+}
+
+/// The signal of `model` at time `t`.
+fn evaluate(model: &Model, t: f64) -> f64 {
+    model.s.iter().zip(&model.c).map(|(s, c)| (*c * (*s * (t - model.t_first)).exp()).re).sum()
+}
+
+impl Record {
+    /// Fit the first `1 - fraction` of the tail (from `tail_start` to the last sample) and predict the rest: the
+    /// relative error of the predicted voltage and current over the withheld samples. `None` when the head is too
+    /// short to fit or there is nothing to withhold.
+    pub fn tail_prediction(
+        &self,
+        freqs: &[f64],
+        tail_start: f64,
+        band: (f64, f64),
+        fraction: f64,
+    ) -> Option<TailPrediction> {
+        let t_end = (self.t0_i + (self.i.len().checked_sub(1)?) as f64 * self.dt)
+            .min(self.t0_v + (self.v.len().checked_sub(1)?) as f64 * self.dt);
+        let split = tail_start + (1.0 - fraction) * (t_end - tail_start);
+        if t_end <= tail_start || split <= tail_start {
+            return None;
+        }
+        let fits = self.fit_orders(freqs, Some(split), tail_start, band)?;
+        let chosen = &fits.fits[fits.chosen];
+        let error = |x: &[f64], t0: f64, model: &Model| -> Option<f64> {
+            let (mut err, mut norm) = (0.0_f64, 0.0_f64);
+            for (k, v) in x.iter().enumerate() {
+                let t = t0 + k as f64 * self.dt;
+                if t > split {
+                    let d = evaluate(model, t) - v;
+                    err += d * d;
+                    norm += v * v;
+                }
+            }
+            (norm > 0.0).then(|| (err / norm).sqrt())
+        };
+        Some(TailPrediction {
+            fraction,
+            held_s: t_end - split,
+            error_i: error(&self.i, self.t0_i, &chosen.mi)?,
+            error_v: error(&self.v, self.t0_v, &chosen.mv)?,
+            head_spread: fits.spread,
+            ring_hz: fits.info().ring_hz.map(|(f, _)| f),
+        })
+    }
+}
+
+/// Largest relative rms error of the withheld tail for which a fit is accepted. Chosen from the validation
+/// cases (`docs/emi-noise-analysis.md`, section 11, "Acceptance of the ring-down fit").
+pub const HOLDOUT_ERROR_LIMIT: f64 = 0.10;
+/// Fraction of the fitted tail withheld from the fit and predicted.
+pub const HOLDOUT_FRACTION: f64 = 0.3;
+/// Largest spread of the model orders (`(max - min) / median` of the inductance) for which a fit is accepted.
+pub const SPREAD_LIMIT: f64 = 0.05;
+/// How far below zero `Re Z / |Z|` of the completed response may go anywhere in the band: the loop is lossless
+/// in the model, so `Re Z` is small and of either sign by numerical noise, and only a clearly negative resistance
+/// is a violation.
+pub const PASSIVITY_LIMIT: f64 = 0.05;
+
+/// The evidence for or against a ring-down fit, and the violations found. A fit is used only when `violations`
+/// is empty; otherwise the plain transform of the truncated record stays and the result is indicative.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FitCheck {
+    pub holdout: Option<TailPrediction>,
+    pub spread: f64,
+    pub unstable_poles: usize,
+    pub max_growth: f64,
+    /// Smallest `Re Z / |Z|` of the completed response over the whole analysis band.
+    pub min_re_z_ratio: f64,
+    pub violations: Vec<String>,
+}
+
+impl FitCheck {
+    /// Whether the fit passed every check.
+    pub fn accepted(&self) -> bool {
+        self.violations.is_empty()
+    }
+
+    /// One line for the report.
+    pub fn summary(&self) -> String {
+        let hold = self.holdout.as_ref().map_or("no withheld-tail test".to_owned(), |h| {
+            format!(
+                "withheld {:.0} % of the tail ({:.1} ns) predicted to {:.1} % (current) and {:.1} % (voltage)",
+                100.0 * h.fraction,
+                h.held_s * 1e9,
+                100.0 * h.error_i,
+                100.0 * h.error_v
+            )
+        });
+        format!(
+            "{hold}; orders agree to {:.2} %; {} unstable pole(s) (largest growth {:.3}); min Re Z / |Z| {:.3}",
+            100.0 * self.spread,
+            self.unstable_poles,
+            self.max_growth,
+            self.min_re_z_ratio
+        )
+    }
+}
+
+/// Check a completed fit: the withheld-tail prediction, the spread of the orders, the stability of the poles
+/// and the passivity of the completed port response (`Re Z >= 0` up to [`PASSIVITY_LIMIT`]).
+pub fn check_fit(info: &FitInfo, holdout: Option<TailPrediction>, z: &[Complex64]) -> FitCheck {
+    let min_re_z_ratio = z.iter().map(|v| v.re / v.norm().max(1e-300)).fold(f64::INFINITY, f64::min);
+    let mut violations = Vec::new();
+    match &holdout {
+        None => violations
+            .push("no withheld-tail test could be made (the tail is too short to fit and predict)".to_owned()),
+        Some(h) if h.error() > HOLDOUT_ERROR_LIMIT => violations.push(format!(
+            "the fit of the first {:.0} % of the tail predicts the withheld {:.1} ns to {:.1} %, above the {:.0} % limit",
+            100.0 * (1.0 - h.fraction),
+            h.held_s * 1e9,
+            100.0 * h.error(),
+            100.0 * HOLDOUT_ERROR_LIMIT
+        )),
+        Some(h) => {
+            // A prediction over less than one period of the ring says little about the ring.
+            let needed = h.ring_hz.map_or(1.0e-9, |f| 1.0 / f);
+            if h.held_s < needed {
+                violations.push(format!(
+                    "the withheld tail ({:.2} ns) is shorter than one period of the ring ({:.2} ns): too short to test the fit",
+                    h.held_s * 1e9,
+                    needed * 1e9
+                ));
+            }
+        }
+    }
+    if info.spread >= SPREAD_LIMIT {
+        violations.push(format!(
+            "the model orders disagree by {:.1} %, above the {:.0} % limit",
+            100.0 * info.spread,
+            100.0 * SPREAD_LIMIT
+        ));
+    }
+    if info.unstable_poles > 0 {
+        violations.push(format!(
+            "{} fitted pole(s) grow over the tail (largest factor {:.3}, limit {GROWTH_LIMIT}): the fit reflected them into the unit circle",
+            info.unstable_poles, info.max_growth
+        ));
+    }
+    if min_re_z_ratio.is_nan() || min_re_z_ratio < -PASSIVITY_LIMIT {
+        violations.push(format!(
+            "the completed port response is not passive: Re Z / |Z| reaches {min_re_z_ratio:.3} (limit -{PASSIVITY_LIMIT})"
+        ));
+    }
+    FitCheck {
+        holdout,
+        spread: info.spread,
+        unstable_poles: info.unstable_poles,
+        max_growth: info.max_growth,
+        min_re_z_ratio,
+        violations,
+    }
+}
+
+impl Record {
+    /// The fit of this record's tail and the evidence for it: the completed spectra, the fit and the
+    /// [`FitCheck`] (also when the check fails: the caller decides what to do with a rejected fit).
+    pub fn checked_fit(
+        &self,
+        freqs: &[f64],
+        tail_start: f64,
+        band: (f64, f64),
+    ) -> Option<(Completed, FitInfo, FitCheck)> {
+        let (done, info) = self.completed(freqs, None, tail_start, band)?;
+        let holdout = self.tail_prediction(freqs, tail_start, band, HOLDOUT_FRACTION);
+        let check = check_fit(&info, holdout, &done.z());
+        Some((done, info, check))
     }
 }
 
@@ -475,6 +733,47 @@ mod tests {
         assert!((f / f0 - 1.0).abs() < 0.01 && (qq / q - 1.0).abs() < 0.1, "{f} {qq}");
     }
 
+    /// A passive one-port: `V = R I + L dI/dt` for a current that is a decaying start and a ring of `f0` and `q`
+    /// (`n` samples of 2 ps): `Z = R + j w L` exactly, so a transform of the truncated record is wrong and the
+    /// completed one can be compared with the exact response. `late` adds a mode `(frequency, start time, amplitude)`
+    /// that the first part of a record does not contain.
+    fn passive_record(n: usize, r: f64, l: f64, late: Option<(f64, f64, f64)>, growth: f64) -> Record {
+        let dt = 2e-12;
+        let (f0, q) = (400e6, 25.0);
+        let alpha = std::f64::consts::PI * f0 / q;
+        let w = 2.0 * std::f64::consts::PI * f0;
+        let (t1, t2) = (0.4e-9, 0.1e-9);
+        let current = |t: f64| {
+            // Zero at t = 0, so that V = R I + L dI/dt has no impulse there and Z = R + j w L exactly.
+            let mut i = 1e-3 * (-alpha * t).exp() * (w * t).sin() + 4e-4 * ((-t / t1).exp() - (-t / t2).exp());
+            let mut di = 1e-3 * (-alpha * t).exp() * (w * (w * t).cos() - alpha * (w * t).sin())
+                + 4e-4 * (-(-t / t1).exp() / t1 + (-t / t2).exp() / t2);
+            if let Some((f, t0, amp)) = late
+                && t >= t0
+            {
+                let wl = 2.0 * std::f64::consts::PI * f;
+                i += amp * (wl * (t - t0)).sin() * (-(t - t0) / 30e-9).exp();
+                di += amp * (wl * (wl * (t - t0)).cos() - (wl * (t - t0)).sin() / 30e-9) * (-(t - t0) / 30e-9).exp();
+            }
+            if growth > 0.0 {
+                i += 2e-4 * ((t * growth).exp() - (-t / 0.2e-9).exp());
+                di += 2e-4 * (growth * (t * growth).exp() + (-t / 0.2e-9).exp() / 0.2e-9);
+            }
+            (i, di)
+        };
+        let (mut i, mut v) = (Vec::new(), Vec::new());
+        for k in 0..n {
+            let (x, dx) = current(k as f64 * dt);
+            i.push(x);
+            v.push(r * x + l * dx);
+        }
+        Record { dt, t0_v: 0.0, t0_i: 0.0, v, i }
+    }
+
+    fn cut(r: &Record, n: usize) -> Record {
+        Record { v: r.v[..n].to_vec(), i: r.i[..n].to_vec(), ..r.clone() }
+    }
+
     /// Three ports of one run: the excited one rings, the second rings on the same poles (a transfer
     /// term), the third carries a tail the poles do not describe. Cut at 10 ns out of 400 ns.
     fn three_port_records(n: usize) -> Vec<Record> {
@@ -482,17 +781,133 @@ mod tests {
         let (f0, q) = (400e6, 25.0);
         let alpha = std::f64::consts::PI * f0 / q;
         let w = 2.0 * std::f64::consts::PI * f0;
-        let record = |i_of: &dyn Fn(f64) -> f64, v_extra: &dyn Fn(f64) -> f64| {
+        let record = |i_of: &dyn Fn(f64) -> f64| {
             let i: Vec<f64> = (0..n).map(|k| i_of(k as f64 * dt)).collect();
-            let v: Vec<f64> = i.iter().enumerate().map(|(k, x)| -50.0 * x + v_extra(k as f64 * dt)).collect();
+            let v: Vec<f64> = i.iter().map(|x| -50.0 * x).collect();
             Record { dt, t0_v: 0.0, t0_i: 0.0, v, i }
         };
-        let pulse = |t: f64| 0.1 * (-((t - 0.4e-9) / 0.1e-9).powi(2)).exp();
         vec![
-            record(&|t| 1e-3 * (-alpha * t).exp() * (w * t).cos() + 4e-4 * (-t / 0.4e-9).exp(), &pulse),
-            record(&|t| 5e-4 * (-alpha * t).exp() * (w * t + 0.7).cos() + 1e-4 * (-t / 0.5e-9).exp(), &|_| 0.0),
-            record(&|t| 1e-3 * (-t / 60e-9).exp() * (2.0 * std::f64::consts::PI * 233e6 * t).cos(), &|_| 0.0),
+            passive_record(n, 50.0, 5e-9, None, 0.0),
+            record(&|t| 5e-4 * (-alpha * t).exp() * (w * t + 0.7).cos() + 1e-4 * (-t / 0.5e-9).exp()),
+            record(&|t| 1e-3 * (-t / 60e-9).exp() * (2.0 * std::f64::consts::PI * 233e6 * t).cos()),
         ]
+    }
+
+    const BAND: (f64, f64) = (50e6, 150e6);
+
+    fn grid() -> Vec<f64> {
+        (1..=40).map(|k| k as f64 * 25e6).collect()
+    }
+
+    #[test]
+    fn a_clean_ring_is_accepted_with_a_small_withheld_tail_error_and_a_passive_response() {
+        let full = passive_record(200_000, 50.0, 5e-9, None, 0.0);
+        let rec = cut(&full, 5000);
+        let (done, _, check) = rec.checked_fit(&grid(), 1.0e-9, BAND).expect("fit");
+        let hold = check.holdout.as_ref().expect("withheld-tail test");
+        assert!(check.accepted(), "{:?}", check.violations);
+        assert!(hold.error() < 0.01, "withheld-tail error {:.4}", hold.error());
+        assert!(check.unstable_poles == 0 && check.min_re_z_ratio > 0.5, "{}", check.summary());
+        // The completed response is the exact one, R + j w L, over the whole band.
+        for (f, z) in grid().iter().zip(done.z()) {
+            let want = Complex64::new(50.0, 2.0 * std::f64::consts::PI * f * 5e-9);
+            assert!((z - want).norm() / want.norm() < 0.01, "{f}: {z} vs {want}");
+        }
+    }
+
+    #[test]
+    fn a_mode_that_the_fitted_part_does_not_contain_fails_the_withheld_tail_test() {
+        // A second ring starts at 7.5 ns, inside the last 30 % of the tail of a record cut at 10 ns.
+        let rec = cut(&passive_record(200_000, 50.0, 5e-9, Some((233e6, 7.5e-9, 1e-3)), 0.0), 5000);
+        let (_, _, check) = rec.checked_fit(&grid(), 1.0e-9, BAND).expect("fit");
+        let hold = check.holdout.as_ref().expect("withheld-tail test");
+        assert!(hold.error() > HOLDOUT_ERROR_LIMIT, "withheld-tail error {:.3}", hold.error());
+        assert!(!check.accepted() && check.violations.iter().any(|v| v.contains("withheld")), "{:?}", check.violations);
+    }
+
+    /// How the withheld-tail error maps to the error of the completion, on records whose exact response is known:
+    /// a second ring of growing amplitude starts inside the withheld part of the tail. The table is the basis of
+    /// [`HOLDOUT_ERROR_LIMIT`] (docs section 11): the limit sits where the completion's inductance, read over the
+    /// band, is still within a few percent of the exact one.
+    #[test]
+    fn the_withheld_tail_error_bounds_the_error_of_the_completion() {
+        let l_exact = 5e-9;
+        let mut rows = Vec::new();
+        for amp in [1e-6, 1e-5, 1e-4, 3e-4, 1e-3, 3e-3] {
+            let rec = cut(&passive_record(200_000, 50.0, l_exact, Some((233e6, 7.5e-9, amp)), 0.0), 5000);
+            let Some((done, info, check)) = rec.checked_fit(&grid(), 1.0e-9, BAND) else { continue };
+            let z = done.z();
+            let (l, _) = crate::solve::inductance_of(&grid(), &z, BAND.0, BAND.1).expect("band");
+            let max = grid()
+                .iter()
+                .zip(&z)
+                .map(|(f, z)| (*z - Complex64::new(50.0, 2.0 * std::f64::consts::PI * f * l_exact)).norm() / z.norm())
+                .fold(0.0_f64, f64::max);
+            let hold = check.holdout.as_ref().map_or(f64::NAN, |h| h.error());
+            println!(
+                "late mode {amp:.0e} A: withheld error {:6.2} %, completion L {:+7.2} %, response max {:6.2} %, spread {:.2} %, {}",
+                100.0 * hold,
+                100.0 * (l / l_exact - 1.0),
+                100.0 * max,
+                100.0 * info.spread,
+                if check.accepted() { "accepted" } else { "rejected" }
+            );
+            rows.push((hold, (l / l_exact - 1.0).abs(), check.accepted()));
+        }
+        // An accepted fit has a completion within 3 % in L; the withheld error rises with the late mode.
+        for (hold, l_err, accepted) in &rows {
+            if *accepted {
+                assert!(*hold <= HOLDOUT_ERROR_LIMIT && *l_err < 0.03, "{hold} {l_err}");
+            }
+        }
+        assert!(
+            rows.windows(2).all(|w| w[1].0 >= w[0].0 * 0.9),
+            "the withheld error must rise with the late mode: {rows:?}"
+        );
+        assert!(rows.iter().any(|r| r.2) && rows.iter().any(|r| !r.2));
+    }
+
+    #[test]
+    fn a_growing_pole_is_counted_and_rejected() {
+        // A mode growing by e^(t / 4 ns): 9 ns of tail is a factor 9.
+        let rec = cut(&passive_record(200_000, 50.0, 5e-9, None, 1.0 / 4e-9), 5000);
+        let (_, info, check) = rec.checked_fit(&grid(), 1.0e-9, BAND).expect("fit");
+        assert!(info.unstable_poles >= 1 && info.max_growth > GROWTH_LIMIT, "{info:?}");
+        assert!(!check.accepted() && check.violations.iter().any(|v| v.contains("grow")), "{:?}", check.violations);
+    }
+
+    #[test]
+    fn a_negative_resistance_is_a_passivity_violation() {
+        let rec = cut(&passive_record(200_000, -50.0, 1e-9, None, 0.0), 5000);
+        let (_, _, check) = rec.checked_fit(&grid(), 1.0e-9, BAND).expect("fit");
+        assert!(check.min_re_z_ratio < -PASSIVITY_LIMIT, "{}", check.summary());
+        assert!(!check.accepted() && check.violations.iter().any(|v| v.contains("passive")), "{:?}", check.violations);
+        // The same record with a positive resistance is accepted, so the violation is the sign and nothing else.
+        let ok = cut(&passive_record(200_000, 50.0, 1e-9, None, 0.0), 5000);
+        assert!(ok.checked_fit(&grid(), 1.0e-9, BAND).expect("fit").2.accepted());
+    }
+
+    #[test]
+    fn a_tail_too_short_to_withhold_part_of_it_is_rejected_not_accepted_unchecked() {
+        let rec = cut(&passive_record(200_000, 50.0, 5e-9, None, 0.0), 700);
+        match rec.checked_fit(&grid(), 1.0e-9, BAND) {
+            None => {}
+            Some((_, _, check)) => assert!(!check.accepted(), "{}", check.summary()),
+        }
+    }
+
+    #[test]
+    fn a_rejected_fit_leaves_the_plain_transform_and_says_why() {
+        use crate::solve::port_responses;
+        let late: Vec<Record> = vec![cut(&passive_record(200_000, 50.0, 5e-9, Some((233e6, 7.5e-9, 1e-3)), 0.0), 5000)];
+        let plain = port_responses(&late, &[50.0], 0, &grid(), None).expect("plain");
+        let done = port_responses(&late, &[50.0], 0, &grid(), Some((1.0e-9, BAND))).expect("responses");
+        assert!(done.fit.is_none(), "a rejected fit must not be used");
+        let check = done.fit_check.expect("the evidence is kept");
+        assert!(!check.accepted());
+        for (a, b) in done.z_in.iter().zip(&plain.z_in) {
+            assert!((*a - *b).norm() < 1e-12 * b.norm().max(1.0));
+        }
     }
 
     #[test]
@@ -528,9 +943,9 @@ mod tests {
         };
         assert!(err(&done.s[1], &full.s[1]) < 0.02, "completed {}", err(&done.s[1], &full.s[1]));
         assert!(err(&plain.s[1], &full.s[1]) > 5.0 * err(&done.s[1], &full.s[1]));
-        // The third port's tail is not on those poles: plain transform, flagged.
+        // The third port's tail is not on those poles: plain transform, flagged, and not close to the full record's.
         assert_eq!(done.uncorrected, vec![2]);
-        assert!(err(&done.s[2], &plain.s[2]) < 1e-12);
+        assert!(err(&done.s[2], &full.s[2]) > 0.05, "{}", err(&done.s[2], &full.s[2]));
     }
 
     #[test]

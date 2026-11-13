@@ -659,7 +659,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fullwave",
-                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_difference_pct and mesh_sensitivity_pct; slow (minutes per cell), never part of the default run; screening evidence",
+                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_difference_pct and mesh_sensitivity_pct; a record that rings is completed by a fit of its ring-down only when the fit predicts a withheld part of its tail and is stable and passive, else the value is indicative (measures.fullwave.ring_fit); slow (minutes per cell), never part of the default run; screening evidence",
             },
             Opt {
                 flag: "--fullwave-fidelity {coarse,fine}",
@@ -672,6 +672,10 @@ pub const COMMANDS: &[Command] = &[
             Opt {
                 flag: "--fullwave-single-mesh",
                 help: "with --fullwave: run the standard mesh only (no second mesh, so no mesh_difference_pct; flag single_mesh)",
+            },
+            Opt {
+                flag: "--fullwave-zone-outline",
+                help: "with --fullwave: take the pours from the zone outlines minus clearances (flag zone_outline_used) instead of the native zone fill of the exported board, which is the default (flag zone_fill_used)",
             },
             Opt {
                 flag: "--fullwave-margin FULLWAVE_MARGIN",

@@ -18,11 +18,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use copper_cam::board::{Board, Layer, Pad, PadKind, PadShape, TrackPath};
-use copper_cam::fill::{ZoneFill, fill_zones};
+use copper_cam::board::{Layer, Pad, PadKind, PadShape, TrackPath};
 use copper_cam::geometry::flatten_arc;
 use copper_cam::poly::{self, Shapes};
-use copper_cam::rules::Rules;
 use copper_fullwave::hotloop::HotLoopInput;
 use copper_pcb::board::PhysicalBoard;
 
@@ -31,34 +29,13 @@ use crate::mesh::DEFAULT_PLATING_M;
 
 const NM: f64 = 1e-9;
 
-/// The exported, parsed and filled board.
-pub struct BoardModel {
-    pub cam: Board,
-    pub fills: Vec<ZoneFill>,
-    pub fill_seconds: f64,
-    /// Zone fills made, islands removed by the fill.
-    pub zone_fills: usize,
-    pub islands_removed: usize,
-}
+/// The exported, parsed and filled board (the shared code of `copper_fullwave::fill`, which the full-wave region
+/// model uses for its pours too).
+pub use copper_fullwave::fill::FilledBoard as BoardModel;
 
 /// Export `board` in memory, parse it and fill its zones natively.
 pub fn board_model(board: &PhysicalBoard) -> Result<BoardModel, String> {
-    let started = std::time::Instant::now();
-    let manifest = copper_pcb::kicad_pcb::generate(board).map_err(|e| format!("KiCad export for the fill: {e:?}"))?;
-    let find = |suffix: &str| manifest.artifacts.iter().find(|a| a.name.ends_with(suffix));
-    let pcb = find(".kicad_pcb").ok_or("the KiCad export holds no .kicad_pcb")?;
-    let project = find(".kicad_pro").ok_or("the KiCad export holds no .kicad_pro")?;
-    let rules = Rules::load(&project.content, find(".kicad_dru").map(|a| a.content.as_str()))
-        .map_err(|e| format!("design rules of the export: {e}"))?;
-    let cam = copper_cam::board::parse_board(&pcb.content, &pcb.name)?;
-    let fills = fill_zones(&cam, &rules)?;
-    Ok(BoardModel {
-        zone_fills: fills.len(),
-        islands_removed: fills.iter().map(|f| f.islands_removed).sum(),
-        cam,
-        fills,
-        fill_seconds: started.elapsed().as_secs_f64(),
-    })
+    copper_fullwave::fill::export_and_fill(board)
 }
 
 /// The pads of a hot loop and what is a port and what a short.

@@ -367,7 +367,7 @@ fn ringing_loop(z_ref: f64, ring_fit: bool, cap_ns: Option<f64>) -> (copper_full
 #[test]
 #[ignore = "about 65 s; run with `cargo test -p copper-fullwave --test shorted_line -- --ignored a_fit_completed_run`; the unit tests in fit.rs cover the same logic on synthetic records"]
 fn a_fit_completed_run_has_s_and_z_from_the_same_spectra() {
-    let (col, _) = ringing_loop(500.0, true, Some(12.0));
+    let (col, _) = ringing_loop(500.0, true, Some(18.0));
     assert!(!col.stats.converged && col.fit.is_some(), "the run is cut and completed by the fit: {:?}", col.fit);
     assert!(col.uncorrected_ports.is_empty());
     let z0 = 500.0;

@@ -250,6 +250,10 @@ pub struct RegionSpec {
     pub include_pads: bool,
     /// Include copper zones (as their outline minus holes; fills are unknown).
     pub include_zones: bool,
+    /// The real fills of the board's zones (`crate::fill::zone_fill_set`): where a net has a fill on a layer, the
+    /// fill replaces the zone's outline there (cut to the window and around the copper the model adds, bridges and
+    /// added traces). A zone with no fill on a layer keeps the outline minus clearances (flag `zone_outline_used`).
+    pub zone_fills: Option<std::sync::Arc<crate::fill::ZoneFillSet>>,
     /// The excitation pulse is a baseband Gaussian with 20 dB at `band_hz.1 x pulse_scale` (default 1).
     /// A larger scale makes the pulse, which sets the shortest run, proportionally shorter.
     pub pulse_scale: f64,
@@ -292,6 +296,7 @@ impl RegionSpec {
             edge_inset_z: EDGE_INSET_Z,
             include_pads: true,
             include_zones: true,
+            zone_fills: None,
             pulse_scale: 1.0,
             ring_fit: true,
             decay_db: -35.0,

@@ -266,6 +266,74 @@ fn text_line(r: &HotLoopExtraction, closed_form_nh: Option<f64>, fullwave_nh: Op
     text
 }
 
+/// The statement that sets the extraction's value at 100 MHz beside the full wave's at the lowest frequency of its
+/// analysis band, with both numerical sensitivities, and what the pair says.
+pub struct CrossCheck {
+    pub value: Value,
+    pub statement: String,
+}
+
+/// `None` unless a full-wave result with a value at its lowest frequency is on the finding.
+pub fn cross_check(r: &HotLoopExtraction, fullwave: Option<&Object>) -> Option<CrossCheck> {
+    let fw = fullwave?;
+    let fw_l = number(fw.get("inductance_lowest_nh"))?;
+    let fw_f = number(fw.get("lowest_frequency_mhz"))?;
+    let at = r
+        .frequencies_hz
+        .iter()
+        .position(|f| (f - 100e6).abs() < 1e6)
+        .unwrap_or_else(|| r.frequencies_hz.len().saturating_sub(1));
+    let ex_l = *r.inductance_nh.get(at)?;
+    let ex_f = r.frequencies_hz[at] * 1e-6;
+    let ex_s = r.mesh_difference_pct.get(at).copied();
+    let indicative = fw.get("status").and_then(Value::as_str) == Some("indicative");
+    let fw_s = number(fw.get("mesh_sensitivity_pct"));
+    let diff = 100.0 * (ex_l - fw_l) / fw_l;
+    let mut o = Object::new();
+    put(&mut o, "extract_nh", Value::from(round(ex_l, 3)));
+    put(&mut o, "extract_frequency_mhz", Value::from(round(ex_f, 3)));
+    put(&mut o, "extract_numerical_sensitivity_pct", ex_s.map_or(Value::Null, |v| Value::from(round(v, 2))));
+    put(&mut o, "fullwave_nh", Value::from(round(fw_l, 3)));
+    put(&mut o, "fullwave_frequency_mhz", Value::from(round(fw_f, 3)));
+    put(&mut o, "fullwave_numerical_sensitivity_pct", fw_s.map_or(Value::Null, |v| Value::from(round(v, 2))));
+    put(&mut o, "difference_pct_of_fullwave", Value::from(round(diff, 2)));
+    let head = format!(
+        "cross-check of the two models: the extraction reads {ex_l:.2} nH at {ex_f:.0} MHz and the full wave {fw_l:.2} nH at {fw_f:.0} MHz, the lowest frequency of its band; the extraction is {diff:+.1} % of the full-wave value"
+    );
+    let (relation, tail) = match (indicative, ex_s, fw_s) {
+        (true, _, _) => (
+            "not_stated",
+            "; the full-wave value is indicative only (no converged record or accepted ring-down fit, no mesh sensitivity), so no statement of agreement is made".to_owned(),
+        ),
+        (false, Some(e), Some(f)) => {
+            let sum = e + f;
+            if diff.abs() <= sum {
+                (
+                    "within_sensitivities",
+                    format!("; the numerical sensitivities are {e:.1} % (extraction, two finest meshes) and {f:.1} % (full wave, mesh), {sum:.1} % together: the two values agree within their numerical sensitivities"),
+                )
+            } else {
+                (
+                    "beyond_sensitivities",
+                    format!("; the numerical sensitivities are {e:.1} % (extraction, two finest meshes) and {f:.1} % (full wave, mesh), {sum:.1} % together: the two values disagree by more than their numerical sensitivities, so the difference is not mesh noise; the models also omit different things (not_modelled of each)"),
+                )
+            }
+        }
+        (false, None, _) => (
+            "not_stated",
+            "; the extraction ran one mesh and has no numerical sensitivity, so no statement of agreement is made".to_owned(),
+        ),
+        (false, _, None) => (
+            "not_stated",
+            "; the full wave has no mesh sensitivity here, so no statement of agreement is made".to_owned(),
+        ),
+    };
+    put(&mut o, "relation", Value::from(relation));
+    let statement = format!("{head}{tail}; a comparison of two screening numbers, not a pass or fail");
+    put(&mut o, "statement", Value::from(statement.as_str()));
+    Some(CrossCheck { value: Value::Object(o), statement })
+}
+
 fn number(value: Option<&Value>) -> Option<f64> {
     match value {
         Some(Value::Float(f)) => Some(*f),
@@ -278,8 +346,15 @@ fn attach(finding: &mut EmiFinding, result: &HotLoopExtraction, mesh: &HotLoopOp
     let closed = number(finding.measures.get("loop_inductance_nh"));
     let fullwave =
         finding.measures.get("fullwave").and_then(Value::as_object).and_then(|f| number(f.get("inductance_nh")));
-    finding.measures.insert("extract".to_owned(), result_value(result, closed, fullwave, mesh));
-    finding.measures.insert("extract_text".to_owned(), Value::from(text_line(result, closed, fullwave)));
+    let cross = cross_check(result, finding.measures.get("fullwave").and_then(Value::as_object));
+    let mut value = result_value(result, closed, fullwave, mesh);
+    let mut text = text_line(result, closed, fullwave);
+    if let (Value::Object(o), Some(c)) = (&mut value, &cross) {
+        put(o, "cross_check", c.value.clone());
+        text.push_str(&format!(" {}", c.statement));
+    }
+    finding.measures.insert("extract".to_owned(), value);
+    finding.measures.insert("extract_text".to_owned(), Value::from(text));
 }
 
 /// Run the extraction for every `EMI-HOT-LOOP` finding of `report`.
@@ -402,10 +477,12 @@ pub fn apply(
                     .get("fullwave")
                     .and_then(Value::as_object)
                     .and_then(|f| number(f.get("inductance_nh")));
+                let cross = cross_check(&result, finding.measures.get("fullwave").and_then(Value::as_object))
+                    .map_or(String::new(), |c| format!(" {}", c.statement));
                 new_coverage.push(key(
                     CoverageStatus::Executed,
                     format!(
-                        "{}; port: {}; approximations: {}",
+                        "{}{cross}; port: {}; approximations: {}",
                         text_line(&result, closed, fullwave),
                         result.port_description,
                         result.not_modelled.join("; ")
@@ -613,5 +690,46 @@ mod tests {
         );
         assert_eq!(value.get("closed_form_nh"), Some(&Value::Null));
         assert!(text_line(&extraction(true), None, None).contains("single mesh"));
+    }
+
+    fn fullwave(l: f64, status: &str, sensitivity: Option<f64>) -> Object {
+        let mut o = Object::new();
+        put(&mut o, "inductance_lowest_nh", Value::from(l));
+        put(&mut o, "lowest_frequency_mhz", Value::from(30.0));
+        put(&mut o, "status", Value::from(status));
+        put(&mut o, "mesh_sensitivity_pct", sensitivity.map_or(Value::Null, Value::from));
+        o
+    }
+
+    #[test]
+    fn the_cross_check_states_agreement_or_disagreement_against_the_two_numerical_sensitivities() {
+        let r = extraction(false);
+        // 3.95 nH at 100 MHz against 3.99 nH: 1.0 % apart, sensitivities 2.4 and 4 %.
+        let near = cross_check(&r, Some(&fullwave(3.99, "ok", Some(4.0)))).expect("cross-check");
+        assert_eq!(near.value.get("relation").and_then(Value::as_str), Some("within_sensitivities"));
+        assert!(near.statement.contains("agree within their numerical sensitivities"), "{}", near.statement);
+        assert!(
+            near.statement.contains("2.4 %") && near.statement.contains("4.0 %") && near.statement.contains("30 MHz")
+        );
+        // 3.95 against 4.84: 18 % apart.
+        let far = cross_check(&r, Some(&fullwave(4.84, "ok", Some(4.0)))).expect("cross-check");
+        assert_eq!(far.value.get("relation").and_then(Value::as_str), Some("beyond_sensitivities"));
+        assert!(far.statement.contains("disagree by more than their numerical sensitivities"), "{}", far.statement);
+        // No verdict words, ever.
+        for c in [&near, &far] {
+            assert!(c.statement.contains("not a pass or fail") && !c.statement.contains("PASS"), "{}", c.statement);
+        }
+    }
+
+    #[test]
+    fn the_cross_check_makes_no_statement_without_a_sensitivity_on_either_side() {
+        let indicative =
+            cross_check(&extraction(false), Some(&fullwave(7.3, "indicative", None))).expect("cross-check");
+        assert_eq!(indicative.value.get("relation").and_then(Value::as_str), Some("not_stated"));
+        assert!(indicative.statement.contains("indicative only"), "{}", indicative.statement);
+        let single = cross_check(&extraction(true), Some(&fullwave(4.8, "ok", Some(4.0)))).expect("cross-check");
+        assert_eq!(single.value.get("relation").and_then(Value::as_str), Some("not_stated"));
+        assert!(single.statement.contains("one mesh"), "{}", single.statement);
+        assert!(cross_check(&extraction(false), None).is_none());
     }
 }

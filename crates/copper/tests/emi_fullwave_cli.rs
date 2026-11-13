@@ -27,9 +27,14 @@ const BOARD: &str = "examples/emi_buck/board.copper";
 #[test]
 fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
     let help = stdout(&copper(&["emi-check", "--help"]));
-    for option in
-        ["--fullwave", "--fullwave-fidelity", "--fullwave-budget", "--fullwave-margin", "--fullwave-single-mesh"]
-    {
+    for option in [
+        "--fullwave",
+        "--fullwave-fidelity",
+        "--fullwave-budget",
+        "--fullwave-margin",
+        "--fullwave-single-mesh",
+        "--fullwave-zone-outline",
+    ] {
         assert!(help.contains(option), "{option} in {help}");
     }
     for arguments in [
@@ -40,6 +45,7 @@ fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
         assert_eq!(copper(&arguments).status.code(), Some(2), "{arguments:?}");
     }
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave-single-mesh"]).status.code(), Some(2));
+    assert_eq!(copper(&["emi-check", BOARD, "--fullwave-zone-outline"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-fidelity", "medium"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-budget", "-3"]).status.code(), Some(2));
 }
@@ -97,6 +103,10 @@ fn the_buck_cell_gets_a_fullwave_inductance() {
         "mesh_sensitivity_unavailable",
         "not_modelled",
         "status",
+        "status_reasons",
+        "ring_fit",
+        "inductance_lowest_nh",
+        "lowest_frequency_mhz",
         "meshes",
         "port_strap_nh",
     ] {

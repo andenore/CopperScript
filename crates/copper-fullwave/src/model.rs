@@ -84,6 +84,8 @@ pub struct Counts {
     pub bridges: usize,
     pub added_traces: usize,
     pub antipads: usize,
+    /// Real zone fills (net and layer pieces) used in place of zone outlines.
+    pub zone_fills: usize,
 }
 
 /// The mesh and what its rules did.
@@ -444,9 +446,13 @@ impl Builder<'_> {
         if !overlaps(&outer, self.region) {
             return;
         }
-        self.flag("zone_outline_used");
         self.counts.zones += 1;
         for layer in &zone.layers {
+            // Where the real fill of this net on this layer is known it replaces the outline (`zone_fill`).
+            if self.spec.zone_fills.as_ref().is_some_and(|f| f.covers(&zone.net, *layer)) {
+                continue;
+            }
+            self.flag("zone_outline_used");
             let Some(z) = self.stack.z(*layer) else {
                 self.flag("copper_on_layer_outside_stackup_dropped");
                 continue;
@@ -469,7 +475,7 @@ impl Builder<'_> {
             if !others.is_empty() {
                 self.flag("zone_cut_around_foreign_copper");
                 for ring in self.cut_zone(&outer, &holes, &others, clearance) {
-                    self.push_zone_sheet(board, zone, *layer, z, ring);
+                    self.push_zone_sheet(board, &zone.net, *layer, z, ring);
                 }
                 continue;
             }
@@ -490,7 +496,54 @@ impl Builder<'_> {
                     clipped_outer.clone()
                 }
             };
-            self.push_zone_sheet(board, zone, *layer, z, ring);
+            self.push_zone_sheet(board, &zone.net, *layer, z, ring);
+        }
+    }
+
+    /// The real fill of a net on a layer, clipped to the window and cut with the zone clearance around the copper the
+    /// model adds to the board (`others`: bridges and added traces of other nets, which the fill does not know): one
+    /// keyhole ring (millimetres) per piece that remains, as a zone sheet.
+    fn zone_fill(&mut self, board: &PhysicalBoard, fill: &crate::fill::RealFill, others: &[&Vec<Pt>]) {
+        use copper_cam::poly;
+        if !self.spec.includes(&fill.net) || !self.spec.include_zones {
+            return;
+        }
+        let Some(z) = self.stack.z(fill.layer) else {
+            self.flag("copper_on_layer_outside_stackup_dropped");
+            return;
+        };
+        let r = self.region;
+        let window = poly::polygon(&[
+            (r[0] * 1e6, r[1] * 1e6),
+            (r[2] * 1e6, r[1] * 1e6),
+            (r[2] * 1e6, r[3] * 1e6),
+            (r[0] * 1e6, r[3] * 1e6),
+        ]);
+        let mut subject = poly::intersection(&fill.shapes, &window);
+        if subject.is_empty() {
+            return;
+        }
+        let clearance_nm = board
+            .zones
+            .iter()
+            .find(|zone| zone.net == fill.net && zone.layers.contains(&fill.layer))
+            .and_then(|zone| zone.clearance_nm)
+            .unwrap_or(board.rules.minimum_clearance_nm);
+        if !others.is_empty() {
+            let mut copper: poly::Shapes = Vec::new();
+            for ring in others {
+                let nm: Vec<(f64, f64)> = ring.iter().map(|p| (p.0 * 1e6, p.1 * 1e6)).collect();
+                copper.extend(poly::polygon(&nm));
+            }
+            let clip = poly::offset(&poly::union(&copper), clearance_nm, false, 5_000.0);
+            subject = poly::difference(&subject, &clip);
+            self.flag("zone_cut_around_foreign_copper");
+        }
+        self.flag("zone_fill_used");
+        for shape in subject.iter().filter(|shape| poly::shape_area(shape) > 1e6) {
+            let ring: Vec<Pt> = poly::fracture(shape).iter().map(|p| (p.x as f64 * 1e-6, p.y as f64 * 1e-6)).collect();
+            self.counts.zone_fills += 1;
+            self.push_zone_sheet(board, &fill.net, fill.layer, z, ring);
         }
     }
 
@@ -522,9 +575,9 @@ impl Builder<'_> {
             .collect()
     }
 
-    fn push_zone_sheet(&mut self, board: &PhysicalBoard, zone: &CopperZone, layer: CopperLayer, z: f64, ring: Vec<Pt>) {
-        let net_id = self.net_id(&zone.net);
-        let treatment = self.spec.treatment(&zone.net);
+    fn push_zone_sheet(&mut self, board: &PhysicalBoard, net: &str, layer: CopperLayer, z: f64, ring: Vec<Pt>) {
+        let net_id = self.net_id(net);
+        let treatment = self.spec.treatment(net);
         let touches_edge = ring.iter().any(|p| {
             (p.0 - self.region[0]).abs() < 1e-9
                 || (p.0 - self.region[2]).abs() < 1e-9
@@ -534,7 +587,7 @@ impl Builder<'_> {
         let thickness_m = self.thickness_m(board, layer);
         self.sheets.push(Sheet {
             kind: "zone",
-            net: zone.net.clone(),
+            net: net.to_owned(),
             net_id,
             layer,
             z,
@@ -1148,6 +1201,21 @@ impl RegionModel {
         // Zones last: they are cut around the copper of other nets that exists by now.
         let foreign: Vec<(CopperLayer, String, Vec<Pt>)> =
             b.sheets.iter().filter(|s| s.kind != "zone").map(|s| (s.layer, s.net.clone(), s.ring.clone())).collect();
+        if let Some(set) = spec.zone_fills.clone() {
+            // The model adds copper the board does not have (the hull of a capacitor or diode, the legs of an unrouted
+            // loop): the real fill is cut around it as the outline was.
+            let added: Vec<(CopperLayer, String, Vec<Pt>)> = b
+                .sheets
+                .iter()
+                .filter(|s| matches!(s.kind, "bridge" | "added"))
+                .map(|s| (s.layer, s.net.clone(), s.ring.clone()))
+                .collect();
+            for fill in &set.fills {
+                let others: Vec<&Vec<Pt>> =
+                    added.iter().filter(|(l, n, _)| *l == fill.layer && *n != fill.net).map(|(_, _, r)| r).collect();
+                b.zone_fill(board, fill, &others);
+            }
+        }
         for z in &zones {
             b.zone(board, z, &barrels, &foreign);
         }
@@ -1608,6 +1676,12 @@ impl RegionModel {
             "components are not modelled: capacitors and diodes are bridged by copper, the switch is a lumped port".to_owned(),
             "copper is cut at the window edge; nets outside the include list, other layers' components and the enclosure are absent".to_owned(),
         ];
+        if self.flags.iter().any(|f| f == "zone_fill_used") {
+            a.push(format!(
+                "{} zone fill piece(s) from the native fill (clearances, thermal reliefs, openings for other nets' vias and pads, minimum width, islands removed as the zone asks) replace zone outlines where a fill exists; the fill is cut to the window and around the model's bridges and added traces",
+                self.counts.zone_fills
+            ));
+        }
         if self.flags.iter().any(|f| f == "zone_outline_used") {
             a.push("zones are their outline minus declared holes and via antipads; fills, thermal reliefs and clearances around foreign same-layer copper are not known".to_owned());
         }
