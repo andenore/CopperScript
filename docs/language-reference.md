@@ -2121,7 +2121,9 @@ fabricator's calculator or a field solver and record it in
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
 [--plot-field OUT.svg [--field-height MM]] [--fullwave [--fullwave-fidelity coarse|fine]
-[--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh]] [--json]`
+[--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh]]
+[--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM]
+[--extract-single-mesh] [--extract-no-switch-bar]] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
 EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
@@ -2259,6 +2261,28 @@ bias that the inductance includes. A loop that resonates under 750 MHz gets
 removed. It is never part of the default run and takes minutes per cell;
 `--fullwave-fidelity fine` halves the general copper cell: about twice the work on the placed example. Screening
 evidence, see [the EMI specification](emi-noise-analysis.md#11-region-of-interest-full-wave-phase-4).
+
+`--extract` adds, for each `buck` cell, the hot-loop **interconnect impedance** from a quasi-static
+partial-element (PEEC) extraction of the real filled copper (`copper-extract`): the board is exported in memory
+and its zones are filled with the native filler (`copper fill`; thermal reliefs, clearances, openings and
+islands as in the board), the tracks, pads, vias and fills of the loop's nets and of the planes that reach the
+window are meshed layer by layer into rectangular filaments, and the loop equations of `R + jwL` are solved at
+1, 10 and 100 MHz. The finding gains an `extract:` line and `measures.extract`
+(`inductance_nh`, `resistance_mohm`, `frequencies_mhz`, `closed_form_nh`, `ratio_to_closed_form`, `fullwave_nh`
+and `ratio_to_fullwave` where `--fullwave` ran, `status`, `status_reasons`, `numerical_sensitivity_pct`
+(the difference of two meshes per frequency; `null` with `numerical_sensitivity_unavailable` for a single mesh),
+`numerical_sensitivity_basis`, `parameter_assumptions` (inputs the board does not fix), `not_modelled`
+(the omissions), `flags`, `notes`, `meshes`, `via_currents` (vias that carry at least 1 % of the port current,
+with their share of the net's via current), `nets`, `window_mm`, `layers`, `copper`, `seconds`, `method`), and
+the coverage entry `EMI-EXTRACT:<cell>` says `executed`, `not_applicable` (other topologies) or `failed` with
+the reason. The capacitor and the catch diode are copper bars between their pads, the switch is the port in a
+gap in a bar between its pads (`--extract-no-switch-bar` puts the port between facing pad sides instead), and
+no lumped element is modelled. The dense inductance matrix bounds the mesh: `--extract-budget` (default 2400
+filaments) is the most filaments, and a larger mesh is coarsened by 1.3 until it fits (flag `coarsened`, status
+`indicative`); `--extract-margin` (default 3 mm) sets the window margin and the corridor the zone fills are cut
+to, `--extract-cell` the fine pitch (default 0.2 mm), `--extract-single-mesh` runs one mesh. Screening
+evidence, never part of the default run; see
+[the EMI specification](emi-noise-analysis.md#13-quasi-static-network-extraction-phase-5).
 
 The hot loop is the polygon through pad centres (`placement_estimate`) until
 copper is present on its nets. Where tracks, arcs, vias, polygons or the copper

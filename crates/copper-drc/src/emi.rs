@@ -4228,6 +4228,10 @@ impl EmiCheckReport {
                 if let Some(text) = finding.measures.get("fullwave_text").and_then(Value::as_str) {
                     lines.push(format!("     fullwave: {text}"));
                 }
+                // Added by `copper emi-check --extract` (the quasi-static extraction of the filled copper).
+                if let Some(text) = finding.measures.get("extract_text").and_then(Value::as_str) {
+                    lines.push(format!("     extract: {text}"));
+                }
             }
         }
         if !global.is_empty() {

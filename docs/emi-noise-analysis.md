@@ -581,6 +581,9 @@ No accuracy is stated for an absolute level: the estimators are checked against 
 calculations and published closed forms, not against measurements. Margins are screening
 margins and never pass/fail.
 
+`copper emi-check BOARD [--run RUN] --extract` adds, per buck cell, the hot-loop interconnect impedance from a
+quasi-static extraction of the real filled copper beside the closed form (section 13).
+
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
 node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`
@@ -725,6 +728,9 @@ where installed, FastHenry2 run as an external process on an exported deck
 (never linked, never ported from source). Capacitance (switch node to plane)
 starts as parallel-plate plus fringe and is replaced by a proper electrostatic
 solve later.
+
+The network extraction of the filled copper that goes beyond these closed forms (real fills, parallel paths,
+finite and slotted planes, current sharing between vias) is section 13.
 
 ## 10. Conducted-emission prediction (phase 3)
 
@@ -1567,3 +1573,265 @@ Observed with `copper emi-check` (phase 1):
 - CopperAssetTracker: the `TPS63020` pins `L1`/`L2` are `passive`, so the
   fallback finds no switch pin; the cells need `emi_role` annotations in the
   library part.
+
+## 13. Quasi-static network extraction (phase 5)
+
+Status: first cut, `crates/copper-extract`, reached by `copper emi-check --extract`. Screening evidence only: nothing
+here qualifies a design, and no check turns a missing input into a pass.
+
+**Why.** The closed-form hot loop (section 8) chooses one copper path geometrically (the shortest) and then evaluates it
+electromagnetically as bars over an ideal plane. A shortest path does not establish how the current divides through wide
+pours, parallel traces, several vias and return planes, and the plane shortcut (`plane_shortcut`) assumes an unbroken plane
+of infinite extent, so openings and finite boundaries are missed. The region full-wave model (section 11) sees the
+geometry but needs minutes per cell, takes zones as outlines minus clearances (no fill) and did not converge on the real
+board. This tier sits between them: the impedance of the actual filled copper, quasi-statically, in seconds to a few
+minutes.
+
+### 13.1 Model
+
+* **What is solved.** The magneto-quasi-static partial-element (PEEC, FastHenry-style) problem: the copper is cut into
+  rectangular filaments, each with a resistance `rho l / (w t)` and a partial self inductance, every pair of parallel
+  filaments has a partial mutual inductance, perpendicular filaments none. At angular frequency `w` the branch impedance
+  matrix is `Z_b = R + j w L`. Output per frequency: the port impedance matrix `Z(f) = R(f) + j w L(f)` (one or more
+  ports) and the complex current of every filament for a unit current into a port (current sharing).
+* **Formulation: loop analysis.** A spanning forest of the filament graph (breadth first, branch order) fixes
+  `n_b - n_n + n_c` independent loops. With `B` the loop-by-branch incidence matrix, the loop currents solve
+  `B Z_b B^T m = -B Z_b b_p`, `b_p` being the unit current along the tree path between the two terminals of the port;
+  the port voltage is the sum of `Z_b b` along that path. `B L B^T` and `B R B^T` do not depend on frequency and are built
+  once; each frequency is one dense complex elimination of the `n_l x n_l` loop matrix. The loop form was chosen over the
+  nodal form `A Z_b^-1 A^T` because the system is about half the size for a planar mesh and `Z_b` is never inverted.
+  **Loops in conductors that touch no port are kept**: a floating plane piece or island carries induced (eddy) current
+  loops, which is how a plane shields a loop (the image-plane effect) and how a finite or slotted plane differs from an
+  ideal one. No plane is replaced by an image.
+* **Neglected, stated in `not_modelled` and the flags.** Capacitance and displacement current (no resonance, no
+  radiation, no dielectric: the stack-up's permittivity plays no part, only its heights), skin effect across the copper
+  thickness (one filament across the thickness, so the current is uniform over it; `MeshSpec::thickness_filaments` adds
+  parallel filaments across it and the resistance then rises with frequency, 1.53 times the DC value at 1 GHz for one
+  filament and 3.9 times for four on a 10 x 1 mm bar of 35 um copper, a trend that is not validated against a closed
+  form), proximity and edge crowding only as far as the lateral mesh resolves them, magnetic materials, copper
+  temperature (resistivity 1.72e-8 ohm m), every lumped element (the capacitor and the diode are copper bars between
+  their pads and the switch is the port: no ESL, ESR, package, die or bond wires), the copper of nets that are not
+  modelled, and everything outside the window.
+
+### 13.2 Geometry in
+
+`copper_extract::board` exports the physical board in memory (`copper_pcb::kicad_pcb::generate`), parses it with
+`copper_cam::board::parse_board` and fills its zones with `copper_cam::fill::fill_zones` under the rules of the exported
+`.kicad_pro` and `.kicad_dru`: the native filler cannot be called on a `PhysicalBoard` directly (it works on its own
+drawing model of a `.kicad_pcb`), so this export is the bridge, and nothing is written to disk. The fills therefore have
+the zone clearances, thermal reliefs, openings for other nets' vias and pads, the minimum width and the removal of islands
+the zone asks for. Tracks, arcs, pads (plated through-hole pads add a barrel) and vias come from the same parsed board, so
+one net namespace holds everything.
+
+* **Nets.** The nets of the loop's pads and of every zone fill that reaches the window; `other_nets` lists the latter.
+  Copper of other nets is not modelled.
+* **Window and corridor.** The loop polygon of the finding (the traced path through its pads and vias) and the pads, grown
+  by the margin (`--extract-margin`, default 3 mm), bound the window; zone fills are cut to the polygon grown by the
+  margin (flag `plane_corridor`), so a long loop does not mesh the rectangle of its bounding box. Planes and pours are
+  therefore finite: a finite plane raises the loop inductance a little above the infinite-plane value (the validation
+  below finds this smaller than the mesh sensitivity at a margin of 3 mm over 0.2 mm dielectric).
+* **Stack-up.** Layer heights are those of `copper_fullwave::stack` (declared, else the board thickness spread over the
+  copper layers, flag `assumed_stackup`); copper thickness is the stack-up's, else 35 um (`assumed_copper_thickness`); via
+  plating is 25 um (`assumed_plating`: the export does not carry it). These are `parameter_assumptions`, separate from the
+  numerical sensitivity and from the omissions.
+* **Vias** are tube barrels along z joining the node nearest to the via on every layer it passes where its net has
+  copper within twice the coarse pitch, as a chain of segments of the height difference of the layers. A via that joins
+  fewer than two layers is listed (`via_unattached`) and left out.
+
+### 13.3 Mesh and budget
+
+Each layer has its own tensor grid of lines; layers couple through the partial inductance matrix and are joined only by
+vias. Nodes sit on line crossings; an x (y) filament joins two neighbouring nodes of a row (column) with the strip between
+the half-way lines to the neighbouring rows (columns) as its width times the fraction of its body that the layer's copper of
+the net covers (so a bar whose edges lie on lines is tiled exactly and has exactly `rho l / (w t)`; a bar between lines still
+carries the right amount of copper; a body covered by less than 5 % is dropped and counted). Filaments of different nets never
+share a node. Lines are placed on the bounding box edges of every outline and hole of the copper, of every terminal and hint,
+and at every via; between them at the fine pitch (`cell`, default 0.2 mm) where a shape is narrow (at most eight cells) in
+that axis, near vias and terminals, and in hints (strips along the loop's tracks on every layer, reaching four layer
+distances to either side with a pitch of half the layer distance); the pitch grows by 1.4 per unit distance to the coarse
+pitch (five cells) elsewhere. Holes and islands no larger than three cells ask for no lines of their own. Lines closer than
+a third of the pitch merge. Mirror-symmetric layouts get mirror-symmetric lines (the lines are marched from both ends of a
+span towards its middle), which the equal via shares below rely on.
+
+**Budget.** The inductance matrix is dense (`n_b^2` doubles) and a frequency costs one complex elimination of about
+`n_b / 2` loops, so the number of filaments is bounded: `--extract-budget` (default 2400, at most 20000). At 2400
+filaments the assembly takes seconds and each frequency a second or two in the optimised-dependency debug build used for the
+tests (`copper-extract` and `copper-emi` are built with `opt-level = 2` in `[profile.dev.package.*]` of the workspace
+`Cargo.toml`; there was no per-crate precedent there, only the rule for third-party crates). A mesh over the budget is coarsened by
+1.3 (all pitches, hints included) up to ten times, flag `coarsened`, status `indicative`; if it still does not fit the
+extraction fails with the line and bar counts per layer. For the 3 mm margin around a hot loop that fits the default
+budget (the placed `emi_buck`) the fine pitch ends at 0.34 mm; the real board of section 13.7 needs 5000 to 7000
+filaments to reach a pitch near one millimetre, which is still too coarse for its pads.
+
+### 13.4 Partial elements and thresholds
+
+* Resistance: `rho l / (w t)` (a barrel: `rho l / (pi (r_o^2 - r_i^2))`, wall = the plating).
+* Self inductance of a bar: the exact Hoer-Love integral (`copper_emi::inductance::self_inductance_bar`, Grover beyond
+  `l^2 / (w t) = 1e5`). A barrel: Grover's tube `mu0 l / (2 pi) (ln(2 l / r) - 1 + r / l)`.
+* Mutual inductance of parallel planar bars: the exact Hoer-Love integral of uniform current over both cross-sections
+  (`copper_emi::inductance::mutual_parallel_bars`, a new public wrapper of the existing 64-term closed form) when the
+  distance between the axes is below eight times the larger cross-section dimension of the pair
+  (`partial::EXACT_RANGE`), centre filaments (Grover's closed form of two parallel filaments) beyond. The error of the
+  filament form is about `s^2 / (24 d^2) / (ln(2 l / d) - 1)` and was measured against the exact form at the switching
+  distance over cell-sized squares, long traces, side by side and stacked: 0.26 % at the worst, below 0.3 %
+  (`partial::tests::the_centre_filament_switch_is_accurate_where_it_is_made`); at six sizes it was 0.46 %, which is why
+  the range is eight. Perpendicular filaments: zero. Barrels: parallel filaments.
+* Skin effect and the finite thickness of a filament are not in the partial elements; see 13.1.
+
+### 13.5 The hot loop
+
+The port, the pads and the closures are those of `copper-fullwave`'s hot-loop model (section 11), so the numbers can be
+read beside the closed form and the full-wave value. **Port:** across the high-side switch (hot-supply pad to switch pad
+for an asynchronous buck; for a synchronous one the hot-supply pad to the controller's switch pad, the low-side switch
+being a closure). **Closures:** the capacitor and the catch diode (or low-side switch) are copper bars from pad edge to pad
+edge along the line of the pad centres (width: the smaller pad dimension clamped to 0.2 to 1 mm, the bar the closed form
+draws across the body), of the net of one pad and joined to the other pad by a contact one sixth of a cell deep. A contact is the equipotential
+merge of the nodes of the bar's end face and of the pad's copper next to it (FastHenry's `.equiv`). **The switch** is
+the same kind of bar with a gap of one cell in its middle, and the port is between the two ends at the gap, so the port sees
+the flux of the gap as the closed form and the full-wave port do (`--extract-no-switch-bar` puts the port between the
+facing sides of the two pads instead, and the gap is then not in the path). Copper legs without routed copper get the straight
+bar of the closed form, as in the full-wave model.
+
+Two design points that were found by measurement and are worth stating. (1) The terminals must be small. Merging a pad
+(or any patch of area) into one node removes the inductance of the current's path across it and, worse, lets metal that
+overlaps the merged region carry eddy loops through the merged nodes: a 0.5 mm deep contact lowered a 11 mm bar by 25 %, a
+whole-pad terminal lowered the placed `emi_buck` by a third, and a bar overlapping its pad lowered the free-space loop by
+22 %. Contacts are therefore thin and the bars are clipped to the space between the pads. (2) A Manhattan mesh meshes a
+diagonal conductor as a staircase: a 10 mm, 0.5 mm wide bar at 45 degrees reads 6.94 nH on a 62.5 um mesh against 7.26 nH
+for the same bar along an axis (-4.4 %, converging slowly: -6.7 % at 250 um), and the loop of `emi_buck` has two diagonal legs.
+
+### 13.6 Outputs
+
+`measures.extract` of the `EMI-HOT-LOOP` finding (and the `extract:` line, and the coverage entry `EMI-EXTRACT:<cell>`):
+
+| Key | Meaning |
+| --- | --- |
+| `inductance_nh`, `resistance_mohm`, `frequencies_mhz` | `Im Z / w` and `Re Z` of the finer of the two meshes at 1, 10 and 100 MHz |
+| `closed_form_nh`, `ratio_to_closed_form`, `fullwave_nh`, `ratio_to_fullwave` | the traced closed form of the finding and, when `--fullwave` ran, its inductance, with the ratios |
+| `status`, `status_reasons` | `ok`, or `indicative` with the reasons: coarsened to the budget, a terminal joined by its nearest node because no node lies inside it, vias left out, two meshes more than 10 % apart at 10 MHz, a single mesh |
+| `numerical_sensitivity_pct`, `numerical_sensitivity_basis` | the difference between the two meshes (pitch ratio 1.5) per frequency; `null` with `numerical_sensitivity_unavailable` for one mesh. Two meshes that agree do not bound the error: the mesh series below still moves |
+| `parameter_assumptions` | what the board does not fix: assumed stack-up, copper thickness, plating, window, resistivity |
+| `not_modelled`, `flags`, `notes` | the omissions of 13.1; `assumed_stackup`, `assumed_copper_thickness`, `assumed_plating`, `coarsened`, `plane_corridor`, `merged_terminals`, `terminal_snapped`, `via_unattached`; how each leg and component was drawn |
+| `meshes` | per mesh: role (`standard`, `refined` or `coarser`), pitches, filaments, nodes, loops, barrels, coarsening steps, L and R, seconds |
+| `via_currents` | per frequency, the vias that carry at least 1 % of the port current: current per ampere into the port and `share_of_net`, `|I| / sum |I|` over the vias of the same net (magnitudes, adding up to 1 whatever the phases) |
+| `nets`, `other_nets`, `window_mm`, `layers`, `copper`, `seconds`, `filament_budget`, `method` | what was modelled, the fill (`zone_fills`, `islands_removed`, `fill_seconds`) and the cost |
+
+Nothing is a pass or a fail and no accuracy is claimed. The second mesh is a finer one (the standard pitch divided by 1.5)
+when it fits the budget, else a coarser one (multiplied by 1.5); the reported numbers are the finer mesh's. Without
+`--extract` nothing changes, and everything stays in the one `emi` section of the route report.
+
+### 13.7 Validation
+
+Every case has a reference written in the test (`crates/copper-extract/tests/analytic.rs`, run by default unless marked
+`ignored`) or a closed form of `copper_emi::inductance`, and a series over the mesh. The whole default suite of the crate
+takes about 35 s in the debug build of this repository (12.7 s for `analytic`, 12.6 s for `boards`).
+
+Numbers below were measured in this repository (debug build with dependencies at `opt-level = 2`); "filaments" is
+the size of the dense system. The tests assert the bounds given in the last column, not the measured values.
+
+| Case (test) | Reference | Mesh series (filaments) | Result | Asserted |
+| --- | --- | --- | --- | --- |
+| Straight bar 10 x 1 x 0.035 mm (`straight_bar_matches_...`) | `self_inductance_bar` 6.9864 nH; `rho l / (w t)` 4.9143 mohm | pitch 250 / 125 / 62.5 um (139 / 348 / 1006) | L(10 kHz) 6.9864 / 6.9864 / 6.9861 nH (0.000, 0.000, -0.003 %); R(DC) exact to 1e-6 | R within 1e-6, L within 2 % |
+| Two parallel bars, 1.0 and 0.4 mm, driven in parallel (`two_parallel_bars_...`) | 2 x 2 solution with `self_inductance_bar` and the filament-averaged `mutual_bars` (L 6.986 and 8.679 nH, M 3.513 nH, R from `rho l / (w t)`) | 250 / 125 / 62.5 um (216 / 491 / 1402) | DC share of the wide bar 0.7143 = conductance share (to 1e-3); shares at 0.1, 1, 10, 100 MHz and 1 GHz within 0.61 % of the hand solution (+0.2 to +0.6 % at 1 to 10 MHz, the lateral mesh lets each bar's current crowd, the hand solution does not) | DC within 0.1 %, all within 1.5 % |
+| Rectangular loop 10 x 6 mm in free space, trace 0.5 / 0.25 mm, 1 mm gap, port across the gap (`rectangular_loop_in_free_space_...`) | `loop_inductance` of the five centreline segments: 20.629 / 24.450 nH | 250 / 125 um (157 / 358; 123 / 210) | L(10 kHz) -1.65 / -2.71 % (0.5 mm), -5.30 / -0.44 % (0.25 mm); L(100 MHz) at 125 um 19.39 and 24.18 nH | finest mesh within 5 % |
+| The same loop over a floating plane 0.2 mm below, plane 16 and 32 mm (`rectangular_loop_over_a_plane_...`) | `loop_inductance_over_plane` (image plane at the plane layer's centre): 7.8037 nH | 0.4 mm pitch near the loop, 3 mm far (1454 / 2276) | L(1 MHz) 7.769 / 7.762 nH (-0.45 / -0.53 %); L(10 MHz) 7.435 / 7.428 (-4.7 / -4.8 %) | L(1 MHz) within 5 % |
+| Plane growth and mesh series of that loop (`study_loop_over_a_plane_...`, ignored, 64 s) | the same | 0.5 mm pitch, plane 16 / 24 / 32 / 48 / 64 mm (1058 ... 3132); 24 mm plane, pitch 800 / 500 / 350 / 250 um (909 / 1438 / 2485 / 3356) | L(1 MHz) 7.8660 / 7.8611 / 7.8596 / 7.8578 / 7.8571 nH: the finite plane lowers towards the infinite one as it grows, by 0.11 % from 16 to 64 mm, and the 64 mm value is +0.68 % over the image result. Mesh series, L(1 MHz): -1.95, +0.74, -0.63, -0.13 %; L(10 MHz): -6.0, -2.9, -4.9, -4.9 % | - |
+| Shorted microstrip, w 1.0 mm, h 0.5 mm, 10 mm (`shorted_microstrip_matches_...`) | `Z0 sqrt(eps_eff) l / c` (Hammerstad-Jensen, the low-frequency limit of `Z0 tan(beta l) / omega`): 2.9814 nH zero thickness; 2.9019 nH with the classical effective width for 35 um copper | pitch 500 / 250 um (938 / 2174) | L(1 MHz) -0.85 / -1.15 %; L(10 MHz) -2.95 / -4.37 % of the zero-thickness value, -0.29 / -1.75 % of the thick one | L(10 MHz) within 5 % of zero thickness |
+| Shorted microstrip, the four geometries of `copper-fullwave/tests/shorted_line.rs` at 20 mm (`study_shorted_microstrip`, ignored, 148 s) | zero-thickness value / thick value | pitch 250 um (1792 to 2564) | L(10 MHz) of 35 um copper against zero thickness / thick: h 0.5 w 1.0: -3.2 / -0.6 %; h 0.2 w 0.5: -5.0 / -0.6 %; h 0.5 w 0.5: -2.5 / +1.9 %; h 0.3 w 1.5: -4.2 / -2.3 %. L(100 MHz) is 0.1 to 0.2 % lower. With 5 um copper at 100 MHz against zero thickness: -0.3, +1.4, +1.0, -0.3 %; with 1 um at 100 MHz: +0.8, +3.6, +2.3, +0.9 % (at 1 MHz the thin copper is still resistive and L is 15 to 115 % high) | - |
+| Wall of vias instead of the ideal short (same study, h 0.5 w 1.0, 10 mm) | ideal short 2.8511 nH | 2 and 4 barrels (0.1 mm drill, 25 um plating) | 2.8865 / 2.8371 nH (+1.2 / -0.5 %) | - |
+| Slot in the plane under a 10 x 0.5 mm trace, plane 12 mm wide, slot 2 mm wide (`a_slot_under_the_trace_...`) | unslotted: Hammerstad with the thick correction 2.4994 nH; limits: the unslotted and the fully slotted plane | pitch 0.5 mm (700 to 1317) | L(10 MHz) for slot 0 / 2 / 4 / 6 / 8 / 10 mm: 2.583 / 3.330 / 3.961 / 4.589 / 5.222 / 5.887 nH, 1.00 / 1.29 / 1.53 / 1.78 / 2.02 / 2.28 times the unslotted value, rising with every step and bounded by the intact plane below and the slot over the whole trace above (the "no plane" limit has no finite value for this port: its return would be the far edge) | monotone rise, last above 1.3 times the first, unslotted within 10 % of the reference |
+| Four vias between two pours, symmetric (`parallel_vias_...`) | 1/N | uniform 1 mm mesh (628) | shares 0.25000 for all four at DC, 1 MHz and 100 MHz | within 1e-6 |
+| The same with one via moved from 3 to 5 mm from the pads | the far via carries less; shares add to 1 | same | DC 0.2761 / 0.2723 / 0.2761 / 0.1756; 1 MHz 0.2782 / 0.2736 / 0.2782 / 0.1699; 100 MHz 0.2796 / 0.2745 / 0.2796 / 0.1663 | far via below the others and below 1/4, sum 1 |
+| Two ports on two separate bars, 1.5 mm apart (`a_two_port_matrix_...`) | `mutual_bars` M 3.4875 nH; `self_inductance_bar` 8.2723 nH | 125 um | M12 = M21 = 3.4871 nH at 10 kHz (0.01 %), L11 = L22 = 8.2723 nH | reciprocity 1e-6, M and L within 2 % |
+| A floating shorted ring beside a bar (`network::tests::...`) | the eddy current must lower the port inductance | hand-built network | lowered | yes |
+| Partial elements (`partial::tests::...`) | exact mutual of a bar with itself equals the self inductance; centre filaments against the exact form at the switching distance | - | 1e-9; 0.26 % worst | 0.3 % |
+| Determinism (`the_extraction_is_bit_for_bit_repeatable`, `the_extraction_of_a_board_is_repeatable`) | two runs | - | identical to the bit | yes |
+
+What the series say, separately from the errors: the straight bar and the two-port self term are exact because a uniform
+current makes the sum of the mesh's partial inductances equal the bar's, so they test the assembly, the loop solve and the
+ports and not the mesh; the shares, the loop in free space, the microstrip and the plane cases do test the mesh, and their
+mesh dependence is 1 to 2 % at the pitches used (up to 6 % at the coarsest of the plane series); the 10 MHz values of every
+case with a plane or a wide trace sit 2.5 to 5 % below the uniform-current closed forms because the mesh lets the current
+crowd to the edges nearest the return, which is what the thick-copper formula also gives (the "thick" column) and which a
+closed form with uniform bar currents cannot. FastHenry was not available: no comparison with it exists.
+
+
+### 13.8 Board cases
+
+`crates/copper-extract/tests/boards.rs` and `copper emi-check --extract`. `examples/emi_buck` is placed (proxy footprints,
+four copper layers, a floating ground fill on In1.Cu, stack-up undeclared) and routed with the three 0.4 mm legs of the CLI
+tests. The full-wave values are the ones recorded in section 11 (the FDTD solver was not run here). Extracted values are
+`L(1 MHz) / L(10 MHz) / L(100 MHz)` of the default run (budget 2400, two meshes, fine pitch 0.34 mm after two coarsening
+steps), with the difference between its two meshes at 10 MHz.
+
+| Board | Traced closed form | Full wave (section 11) | Extracted, default | Mesh difference at 10 MHz | Run time |
+| --- | --- | --- | --- | --- | --- |
+| `emi_buck` placed | 4.973 nH | 4.84 nH (standard 4.841, refined 4.813) | 4.252 / 4.034 / 4.025 nH, R 10.4 / 12.3 / 12.4 mohm | 3.2 % | 5.6 s (whole `copper emi-check --extract` command) |
+| `emi_buck` routed | 6.712 nH | 5.97 nH (standard 6.067, refined 5.974) | 5.665 / 5.383 / 5.361 nH, R 17.8 / 21.8 / 22.3 mohm | 3.1 % | about 6 s (inside the test) |
+| `emi_buck_filter` placed | 4.973 nH (the same hot loop: the filter is upstream of it) | 4.84 nH | identical to `emi_buck` placed | 3.2 % | 5.7 s (whole command) |
+
+Mesh series with the budget lifted (`study_emi_buck_mesh_series`, ignored, 315 s; the fine pitch is the default times the
+scale, and the mesh is not coarsened):
+
+| Scale | Fine pitch | Placed: filaments, L(1 / 10 / 100 MHz), R(10 MHz), time | Routed: filaments, L(1 / 10 / 100 MHz), R(10 MHz), time |
+| --- | --- | --- | --- |
+| 2 | 0.40 mm | 1347, 4.234 / 3.991 / 3.978 nH, 13.0 mohm, 3 s | 1307, 5.670 / 5.418 / 5.400 nH, 21.1 mohm, 3 s |
+| 1.5 | 0.30 mm | 2095, 4.237 / 4.007 / 3.995, 12.6 mohm, 6 s | 1943, 5.655 / 5.320 / 5.264, 23.8 mohm, 5 s |
+| 1 | 0.20 mm | 4403, 4.251 / 4.002 / 3.982, 13.4 mohm, 33 s | 4169, 5.681 / 5.407 / 5.381, 21.4 mohm, 25 s |
+| 0.75 | 0.15 mm | 7510, 4.321 / 4.042 / 4.010, 14.8 mohm, 110 s | 7598, 5.746 / 5.439 / 5.396, 23.0 mohm, 130 s |
+
+The series is flat within 1.3 % (placed) and 2.2 % (routed) at 10 MHz from a pitch of 0.4 to 0.15 mm, so the default
+run's number is a property of the model and not of the mesh, and the default's 3 % two-mesh difference is of the size of
+the series' scatter.
+
+**Reading the difference to the closed form and the full wave.** Extracted over full wave is 0.83 (placed) and 0.90
+(routed) at 10 MHz; over the closed form 0.81 and 0.80. The extraction is not tuned to match and does not. What was
+measured about the gap: (1) the in-plane bar model alone, with the plane removed, reads 6.42 nH against 7.77 nH for the
+closed form of the same loop in free space (-17 %), so the deficit is not in the treatment of the plane; (2) drawing only
+the six bars (pad centre to pad centre, 1 mm wide) over the plane, with a 1.4 mm gap at the port, gives 4.10 nH against
+4.21 nH for the closed form of the same open path (-2.6 %) and the pads' copper changes it by 0.01 nH; (3) a 45 degree
+bar reads 4.4 % below the same bar along an axis (13.5), and two of the six legs are diagonal; (4) the full-wave model
+closes the capacitor and the diode with hull bridges of copper (3 mm long) where the extraction uses 1 mm bars, and its
+port straps add a bias that section 11 states. These do not add up to the whole difference and the remaining part is
+not attributed; nothing was fitted. The extraction also keeps the die out and puts the port in a one-cell gap, as the
+closed form and the full wave do not exactly.
+
+**CopperOrgan routed board** (`copper emi-check board.copper --locked --run build/ci/emi-check-20261111T161807 --extract
+--json`, read-only; traced path 54 mm through two vias and two layers, closed form 9.889 nH with `plane_shortcut`, full wave
+indicative 6.5 to 7.3 nH, not converged; window 31.4 x 14.3 mm; nets GND, SW, V24; eight zone fills of which 16 shapes
+reach the window, 291 islands removed by the fill in 14.7 s):
+
+| `--extract-budget` | Fine / coarse pitch | Filaments (standard + second) | L(1 / 10 / 100 MHz) | R(1 / 10 / 100 MHz) | Two meshes differ at 1 / 10 / 100 MHz | Time (extraction, whole command) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2400 (default) | 2.12 / 10.6 mm | 1992 + 1160 | 4.302 / 3.777 / 3.758 nH | 18.2 / 22.2 / 22.5 mohm | 1.4 / 7.1 / 7.4 % | 15 s, 34 s |
+| 4500 | 1.25 / 6.27 mm | 3927 + 2389 | 4.928 / 4.272 / 4.234 nH | 19.8 / 26.6 / 27.5 mohm | 6.0 / 5.5 / 5.3 % | 46 s, 65 s |
+| 7000 | 0.97 / 4.83 mm | 5439 + 3614 | 5.146 / 4.477 / 4.399 nH | 20.4 / 29.0 / 33.7 mohm | 4.1 / 5.7 / 5.2 % | 91 s, 108 s (a compile ran meanwhile) |
+
+Via currents per ampere into the port (budget 7000): the two ground vias at (64.47, 53.50) and (85.40, 48.50) mm carry 1.00
+each at every frequency (a third of the magnitudes of the net's barrels each; the loop changes layers through them),
+the ground pad barrels at (70.30, 54.50) and (71.70, 54.50) mm carry 0.23 to 0.25, a ground via at (74.50, 54.36) mm 0.17 and
+the two V24 vias at (59.52, 53.50) and (67.50, 54.36) mm 0.15 to 0.17 each (half of the net's via magnitudes each).
+
+**Is it trustworthy? No.** The status is `indicative` at every budget, for two reasons the mesh series itself shows: the
+inductance has not stopped moving (3.78, 4.27, 4.48 nH at 10 MHz for pitches 2.1, 1.25 and 0.97 mm: +13 % and +5 % per
+step, while the two-mesh difference of each run reads only 5 to 7 %), and the pads (about 0.6 mm) are smaller than the
+pitch, so every contact and the port terminals are joined by their nearest node (`terminal_snapped`). The values are
+well under the closed form (0.38 to 0.52) and under the indicative full-wave figure, and the converged value is not
+known; a mesh with a pitch of 0.2 mm would need tens of thousands of filaments over this window (the 0.97 mm mesh already has
+5439, and the count grows about as the square of the inverse pitch), beyond what the dense solve holds (a smaller window,
+or a sparse or accelerated solver, would be needed). Do not read the 4.4 nH as the loop's
+inductance of this board; read it as a lower figure that rises as the mesh is refined.
+
+
+### 13.9 What is integrated and what is not
+
+Integrated: `copper emi-check --extract` (hot-loop interconnect impedance beside the closed form and the full-wave value,
+with its own measure block, status, flags, numerical sensitivity, parameter assumptions and omissions). Not integrated:
+the multi-port extraction of the non-hot capacitors' connections into `EMI-CONDUCTED` (the connection inductance there
+is still the estimate of section 10). The extraction itself takes any number of ports (the two-port test above reads the
+mutual inductance of two bars to 0.01 % of the closed form) and `copper_emi::circuit` takes coupled inductors
+(`Circuit::mutual`), so the matrix could be realised as inductors with mutual couplings, but the conducted model lives in
+`copper-drc`, which `copper-extract` depends on, so the connection would have to be supplied to it from the `copper` crate
+and the cell's `EMI-CONDUCTED` finding recomputed; that is not done. A FastHenry input deck of a mesh is written by
+`copper_extract::fasthenry::deck` and an ignored test runs `fasthenry` when it is on the PATH; none is installed here, so
+no comparison with FastHenry exists.

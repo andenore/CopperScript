@@ -21,6 +21,7 @@ copper-assembly.workspace = true
 copper-cam.workspace = true
 copper-drc.workspace = true
 copper-editor.workspace = true
+copper-extract.workspace = true
 copper-fullwave.workspace = true
 copper-pcb.workspace = true
 copper-panel.workspace = true

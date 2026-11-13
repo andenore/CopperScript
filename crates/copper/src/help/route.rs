@@ -677,6 +677,27 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--fullwave-margin FULLWAVE_MARGIN",
                 help: "with --fullwave: window margin around the loop in millimetres (default: 5, at least ten dielectric heights)",
             },
+            Opt {
+                flag: "--extract",
+                help: "add, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element (PEEC) extraction of the real filled copper: zone fills made natively, tracks, pads and vias, the stack-up's heights, the capacitor and diode as copper bars between their pads and the switch as the port (measures.extract with numerical_sensitivity_pct from two meshes, parameter_assumptions and not_modelled, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values; seconds to minutes, never part of the default run; screening evidence",
+            },
+            Opt {
+                flag: "--extract-budget FILAMENTS",
+                help: "with --extract: the most filaments of the dense inductance matrix (default: 2400, which is some three seconds per frequency in an optimised build); a larger mesh is coarsened by 1.3 until it fits (flag coarsened, status indicative)",
+            },
+            Opt {
+                flag: "--extract-margin EXTRACT_MARGIN",
+                help: "with --extract: window margin around the loop in millimetres (default: 3); copper and planes end at the window edge",
+            },
+            Opt {
+                flag: "--extract-cell EXTRACT_CELL",
+                help: "with --extract: the fine mesh pitch in millimetres (default: 0.2; the coarse pitch is five times it)",
+            },
+            Opt { flag: "--extract-single-mesh", help: "with --extract: one mesh only (no numerical sensitivity)" },
+            Opt {
+                flag: "--extract-no-switch-bar",
+                help: "with --extract: put the port between the facing sides of the switch pads instead of in a gap in a copper bar across the switch (the gap between the pads is then not in the extracted path)",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

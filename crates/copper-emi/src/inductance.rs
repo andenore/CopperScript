@@ -185,6 +185,21 @@ fn hoer_love_mutual(a: f64, b: f64, c: f64, d: f64, x0: f64, y0: f64, z0: f64, l
     MU0 / (4.0 * PI) * sum / (a * b * c * d)
 }
 
+/// Exact partial mutual inductance (H) of two parallel rectangular bars with
+/// uniform current in the same direction (Hoer & Love 1965, evaluated in closed
+/// form as a 64-term sum). Bar 1 occupies `[0, w1] x [0, t1]` across and
+/// `[0, l1]` along the common axis; bar 2 occupies `[dx, dx + w2] x [dy, dy + t2]`
+/// across and `[dz, dz + l2]` along it. Bars may touch; they must not overlap.
+///
+/// Accuracy is limited by cancellation in the 64-term sum, which grows with the
+/// distance between the bars in units of their cross-section; callers use
+/// [`mutual_filaments`] instead beyond a few bar widths (see `copper-extract`,
+/// which switches at eight cross-section sizes and checks the error there).
+#[allow(clippy::too_many_arguments)]
+pub fn mutual_parallel_bars(l1: f64, w1: f64, t1: f64, l2: f64, w2: f64, t2: f64, dx: f64, dy: f64, dz: f64) -> f64 {
+    hoer_love_mutual(w1, t1, w2, t2, dx, dy, dz, l1, l2)
+}
+
 /// Exact partial self inductance of a straight rectangular bar with uniform
 /// current (Hoer & Love 1965 closed form, evaluated as the mutual inductance of
 /// the bar with itself). Relative accuracy is limited only by cancellation in

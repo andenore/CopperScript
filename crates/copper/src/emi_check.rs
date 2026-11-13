@@ -1,7 +1,9 @@
 //! `copper emi-check BOARD [--locked] [--offline] [--layers {2,4,6}]
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
 //! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]]
-//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM]] [--json]`:
+//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM]]
+//! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
+//! [--extract-no-switch-bar]] [--json]`:
 //! screen the placed switching cells for noise sources (hot loop, switch node,
 //! proximity). Screening evidence only; findings never change the exit status.
 
@@ -23,7 +25,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -52,6 +54,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--fullwave-budget"),
         value("--fullwave-margin"),
         flag("--fullwave-single-mesh"),
+        flag("--extract"),
+        value("--extract-budget"),
+        value("--extract-margin"),
+        value("--extract-cell"),
+        flag("--extract-single-mesh"),
+        flag("--extract-no-switch-bar"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -62,7 +70,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only)"
+             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of two meshes; seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 2400; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar)"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -97,6 +105,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         },
     };
     let fullwave = match fullwave_options(&parsed) {
+        Ok(options) => options,
+        Err(message) => return usage_error(err, &message),
+    };
+    let extract = match extract_options(&parsed) {
         Ok(options) => options,
         Err(message) => return usage_error(err, &message),
     };
@@ -182,6 +194,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let mut report = emi_check(&physical, &view, &model);
     if let Some(options) = &fullwave {
         crate::emi_fullwave::apply(&physical, &mut report, options, err);
+    }
+    if let Some(options) = &extract {
+        crate::emi_extract::apply(&physical, &mut report, options, err);
     }
     // `--write`: the run's report keeps one copy of the result (`emi` section) for `copper issues`.
     let written = match (parsed.flag("--write"), parsed.value("--run")) {
@@ -283,6 +298,56 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
         budget_seconds: positive("--fullwave-budget", budget)?,
         margin_mm: positive("--fullwave-margin", margin)?,
         single_mesh: parsed.flag("--fullwave-single-mesh"),
+    }))
+}
+
+/// The `--extract*` options: `None` without `--extract`; a usage error when a sub-option is given without it.
+fn extract_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_extract::Options>, String> {
+    let (budget, margin, cell) =
+        (parsed.value("--extract-budget"), parsed.value("--extract-margin"), parsed.value("--extract-cell"));
+    if !parsed.flag("--extract") {
+        for (name, given) in [
+            ("--extract-budget", budget),
+            ("--extract-margin", margin),
+            ("--extract-cell", cell),
+            ("--extract-single-mesh", parsed.flag("--extract-single-mesh").then_some("")),
+            ("--extract-no-switch-bar", parsed.flag("--extract-no-switch-bar").then_some("")),
+        ] {
+            if given.is_some() {
+                return Err(format!("argument {name}: needs --extract"));
+            }
+        }
+        return Ok(None);
+    }
+    let positive = |name: &str, text: Option<&str>| -> Result<Option<f64>, String> {
+        match text.map(str::trim) {
+            None => Ok(None),
+            Some(text) => text
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .map(Some)
+                .ok_or_else(|| format!("argument {name}: invalid positive number: '{text}'")),
+        }
+    };
+    let budget_filaments = match budget.map(str::trim) {
+        None => None,
+        Some(text) => match text.parse::<usize>() {
+            Ok(n) if (50..=20_000).contains(&n) => Some(n),
+            Ok(n) => {
+                return Err(format!(
+                    "argument --extract-budget: {n} filaments is outside 50 to 20000 (the inductance matrix is dense: n^2 doubles)"
+                ));
+            }
+            Err(_) => return Err(format!("argument --extract-budget: invalid int value: '{text}'")),
+        },
+    };
+    Ok(Some(crate::emi_extract::Options {
+        budget_filaments,
+        margin_mm: positive("--extract-margin", margin)?,
+        cell_mm: positive("--extract-cell", cell)?,
+        single_mesh: parsed.flag("--extract-single-mesh"),
+        no_switch_bar: parsed.flag("--extract-no-switch-bar"),
     }))
 }
 

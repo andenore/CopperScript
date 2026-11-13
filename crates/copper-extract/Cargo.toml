@@ -1,0 +1,24 @@
+[package]
+name = "copper-extract"
+description = "Quasi-static partial-element (PEEC) extraction of the real filled copper of a board window: port impedance Z(f) = R + jwL and current sharing between parallel paths, vias and planes, for EMI screening"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-cam.workspace = true
+copper-drc.workspace = true
+copper-emi.workspace = true
+copper-fullwave.workspace = true
+copper-json.workspace = true
+copper-pcb.workspace = true
+copper-physical.workspace = true
+indexmap.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+copper-lang.workspace = true

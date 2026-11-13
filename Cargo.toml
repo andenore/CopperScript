@@ -13,6 +13,7 @@ default-members = [
     "crates/copper-drc",
     "crates/copper-editor",
     "crates/copper-emi",
+    "crates/copper-extract",
     "crates/copper-fullwave",
     "crates/copper-json",
     "crates/copper-lang",
@@ -56,6 +57,7 @@ copper-lsp = { path = "crates/copper-lsp" }
 copper-drc = { path = "crates/copper-drc" }
 copper-editor = { path = "crates/copper-editor" }
 copper-emi = { path = "crates/copper-emi" }
+copper-extract = { path = "crates/copper-extract" }
 copper-fullwave = { path = "crates/copper-fullwave" }
 copper-pcb = { path = "crates/copper-pcb" }
 copper-panel = { path = "crates/copper-panel" }
@@ -86,6 +88,17 @@ debug = "line-tables-only"
 # tests that reach num-bigint, i_overlay or the FDTD solver run at speed.
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
+
+# The extraction crate and the partial-inductance closed forms it calls spend
+# their time in dense complex elimination and 64-term Hoer-Love sums; unoptimised
+# they are some twenty times slower. There was no per-crate precedent here (only
+# the third-party rule above), so these two workspace crates are named
+# explicitly; overflow checks stay on.
+[profile.dev.package.copper-extract]
+opt-level = 2
+
+[profile.dev.package.copper-emi]
 opt-level = 2
 
 # Optimised tests without the release profile's whole-program settings:

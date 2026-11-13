@@ -44,6 +44,7 @@ dependencies = [
  "copper-cam",
  "copper-drc",
  "copper-editor",
+ "copper-extract",
  "copper-fullwave",
  "copper-json",
  "copper-lang",
@@ -135,6 +136,21 @@ dependencies = [
 [[package]]
 name = "copper-emi"
 version = "0.1.0"
+
+[[package]]
+name = "copper-extract"
+version = "0.1.0"
+dependencies = [
+ "copper-cam",
+ "copper-drc",
+ "copper-emi",
+ "copper-fullwave",
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "indexmap",
+]
 
 [[package]]
 name = "copper-fullwave"
