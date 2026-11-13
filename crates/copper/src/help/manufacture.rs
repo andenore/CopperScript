@@ -182,6 +182,12 @@ pub const COMMANDS: &[Command] = &[
                        report lists, at that exact point on that net and layer only; native DRC only",
             },
             Opt {
+                flag: "--run RUN_JSON",
+                help: "the run.json copper build wrote beside the board: refuse unless that run passed, the \
+                       board is the one it recorded, and the .copper sources, copper.mod and copper.lock it \
+                       hashed (below the current directory) are unchanged",
+            },
+            Opt {
                 flag: "--plotter {native,kicad}",
                 help: "plot with CopperScript's own plotter or with kicad-cli (default: native)",
             },

@@ -29,6 +29,12 @@ not run and need not be installed. Two options select KiCad instead:
   is checked against the board netlist. `--drc kicad` refills and checks with
   `kicad-cli pcb drc` instead.
 
+`--run build/.../run.json` names the record `copper build` wrote beside the
+board. The export then refuses a run that did not pass, a board other than the
+one the run recorded, and a board routed before the latest change to a `.copper`
+source, `copper.mod` or `copper.lock` (compared by SHA-256, relative to the
+current directory). Makefile edits do not count.
+
 A board with synthesized antennas has track ends that are open by design; the
 route report lists them under `plane_verification.expected_open_ends`. Pass
 that report as `--expected-open-ends build/.../route-report.json` and the

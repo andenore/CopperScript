@@ -172,16 +172,32 @@ make SOURCE=path/to/my_board.copper route FAB_PROFILE=jlcpcb-four-layer
 ```
 
 Use the default `EXAMPLE=valid` when overriding `SOURCE` to avoid carrying
-another example's optional physical scenes. For an independent repository,
-include or copy the shared `make/board.mk`, install
-`copper` and use a
-settings-only Makefile such as:
+another example's optional physical scenes.
+
+An independent project does not include or copy `make/board.mk`. It keeps one
+Makefile of its own in which every target is a plain `copper` call, so the
+command a target runs can be read, copied and run by hand:
 
 ```make
-SOURCE := board.copper
-FAB_PROFILE := jlcpcb-four-layer
-include make/board.mk
+COPPER ?= copper
+ROUTE := --fab-profile jlcpcb-four-layer --candidates 1 --feedback-iterations 1 --router-iterations 5 --progress --fanout
+# Every route is a new build/board/<UTC time>-<pid>/ with a run.json; RUN is the newest.
+RUN = $(patsubst %/run.json,%,$(lastword $(sort $(wildcard build/board/*/run.json))))
+
+check:
+	$(COPPER) check board.copper --locked
+route:
+	$(COPPER) build board.copper --locked -- $(ROUTE)
+bom:
+	$(COPPER) assembly check board.copper --locked --offline --lock assembly.lock
+	$(COPPER) assembly bom board.copper --locked --offline --lock assembly.lock -o build/order/bom.csv
+order: bom
+	$(COPPER) export-manufacturing $(RUN)/board.kicad_pcb --run $(RUN)/run.json --skip-independent-cam --bom build/order/bom.csv --replace -o build/order/jlcpcb
 ```
+
+`--run` makes the export refuse a route that did not pass or that predates a
+source change, so the Makefile needs no checks of its own. The rest of this
+page describes the recipes this repository uses for its own examples.
 
 Layer selection comes from the board's declared stackup and layer requirements,
 with fabrication presets supplying a compatible count when needed. The shared

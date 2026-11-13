@@ -1,11 +1,11 @@
 //! `copper export-manufacturing PCB --skip-independent-cam -o OUTPUT
 //! [--kicad-cli PATH] [--drc native|kicad] [--plotter native|kicad]
-//! [--expected-open-ends REPORT] [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
+//! [--expected-open-ends REPORT] [--run RUN_JSON] [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
 //! independent CAM qualification, refilled, checked and plotted by
 //! CopperScript itself (the default) or by KiCad on request.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use copper_assembly::manufacturing::{Checker, Export, Plotter, export_manufacturing_files};
 use copper_json::text;
@@ -15,7 +15,7 @@ use crate::option_parser::{self, flag, short_value, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper export-manufacturing [-h] [--kicad-cli KICAD_CLI] --skip-independent-cam \
-[--drc {native,kicad}] [--plotter {native,kicad}] [--expected-open-ends REPORT] [--bom BOM] [--replace] -o OUTPUT pcb";
+[--drc {native,kicad}] [--plotter {native,kicad}] [--expected-open-ends REPORT] [--run RUN_JSON] [--bom BOM] [--replace] -o OUTPUT pcb";
 
 /// The plotter and the checker: CopperScript's own unless `kicad` is named.
 fn choices(plotter: Option<&str>, checker: Option<&str>) -> Result<(Plotter, Checker), String> {
@@ -35,6 +35,52 @@ fn choices(plotter: Option<&str>, checker: Option<&str>) -> Result<(Plotter, Che
     Ok((plotter, checker))
 }
 
+/// Check that `pcb` is the board a `copper build` run recorded in `run_json`,
+/// that the run passed, and that the design inputs it hashed (the `.copper`
+/// sources and manifests, below `root`) are unchanged since. Makefiles are
+/// recorded by the build but may change without a new route.
+fn recorded_run(run_json: &Path, pcb: &Path, root: &Path) -> Result<(), String> {
+    use copper_json::Value;
+    let shown = paths::display(run_json);
+    let text = std::fs::read_to_string(run_json).map_err(|e| format!("{shown}: {e}"))?;
+    let Ok(Value::Object(run)) = copper_json::parse(&text) else {
+        return Err(format!("{shown} is not a copper build record"));
+    };
+    let text_of = |value: Option<&Value>| match value {
+        Some(Value::Str(text)) => text.clone(),
+        _ => String::new(),
+    };
+    if !text_of(run.get("schema")).starts_with("copperscript-build/") {
+        return Err(format!("{shown} is not a copper build record"));
+    }
+    let status = text_of(run.get("status"));
+    if status != "passed" {
+        return Err(format!("the route run did not pass (status: {status}); run copper build again"));
+    }
+    let board = crate::build::sha256_file(pcb).map_err(|e| format!("{}: {e}", paths::display(pcb)))?;
+    if board != text_of(run.get("filled_board_sha256")) && board != text_of(run.get("draft_board_sha256")) {
+        return Err(format!("{} is not the board {shown} recorded", paths::display(pcb)));
+    }
+    let inputs = match run.get("provenance") {
+        Some(Value::Object(provenance)) => provenance.get("input_sha256"),
+        _ => None,
+    };
+    let Some(Value::Object(inputs)) = inputs else {
+        return Err(format!("{shown} records no inputs"));
+    };
+    let changed: Vec<&str> = inputs
+        .iter()
+        .filter(|(name, _)| !(name.ends_with("Makefile") || name.ends_with(".mk")))
+        .filter(|(name, hash)| crate::build::sha256_file(&root.join(name)).ok() != Some(text_of(Some(hash))))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if changed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("the routed board predates changes to {}; run copper build again", changed.join(", ")))
+    }
+}
+
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let usage_error = |err: &mut dyn Write, message: &str| {
         let _ = writeln!(err, "{USAGE}\ncopper export-manufacturing: error: {message}");
@@ -46,6 +92,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--plotter"),
         value("--drc"),
         value("--expected-open-ends"),
+        value("--run"),
         value("--bom"),
         flag("--replace"),
         short_value("--output", "-o"),
@@ -89,6 +136,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         },
         None => Vec::new(),
     };
+    // A stale or failed route is refused before anything is exported.
+    if let Some(record) = parsed.value("--run") {
+        let record = PathBuf::from(pypath::display(record));
+        if let Err(message) = recorded_run(&record, &PathBuf::from(pypath::display(&pcb)), Path::new(".")) {
+            let _ = text::print(out, &format!("MANUFACTURING EXPORT ERROR: {message}"));
+            return 2;
+        }
+    }
     let kicad_cli = pypath::display(parsed.value("--kicad-cli").unwrap_or("kicad-cli"));
     let bom = parsed.value("--bom").map(|bom| {
         let shown = pypath::display(bom);
@@ -157,6 +212,42 @@ mod tests {
         let err = String::from_utf8(err).unwrap();
         assert!(err.contains("argument --expected-open-ends: not supported with --drc kicad"), "{err}");
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_recorded_run_must_have_passed_with_this_board_and_unchanged_inputs() {
+        let root = std::env::temp_dir().join(format!("copper-run-record-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        let write = |name: &str, text: &str| std::fs::write(root.join(name), text).unwrap();
+        write("board.copper", "board B {}");
+        write("Makefile", "all:");
+        write("run/board.kicad_pcb", "(kicad_pcb)");
+        let hash = |name: &str| crate::build::sha256_file(&root.join(name)).unwrap();
+        let check = || recorded_run(&root.join("run/run.json"), &root.join("run/board.kicad_pcb"), &root);
+        let record = |status: &str, board: &str| {
+            let inputs =
+                format!("\"board.copper\": \"{}\", \"Makefile\": \"{}\"", hash("board.copper"), hash("Makefile"));
+            write(
+                "run/run.json",
+                &format!(
+                    "{{\"schema\": \"copperscript-build/v1\", \"status\": \"{status}\", \
+                     \"filled_board_sha256\": \"{board}\", \"provenance\": {{\"input_sha256\": {{{inputs}}}}}}}"
+                ),
+            );
+            check()
+        };
+        let board = hash("run/board.kicad_pcb");
+        assert!(record("failed", &board).unwrap_err().contains("did not pass (status: failed)"));
+        assert!(record("passed", "0000").unwrap_err().contains("is not the board"));
+        assert_eq!(record("passed", &board), Ok(()));
+        // A Makefile edit does not stale the route; a source edit does.
+        write("Makefile", "all: check");
+        assert_eq!(check(), Ok(()));
+        write("board.copper", "board B { }");
+        let stale = check().unwrap_err();
+        assert!(stale.contains("predates changes to board.copper; run copper build again"), "{stale}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
