@@ -115,6 +115,9 @@ pub struct Defaults {
     pub fiducials: u32,
     pub fiducial_offset: Option<i64>,
     pub tooling_hole: Option<i64>,
+    /// The router bit's diameter: inside corners and slot ends come out
+    /// rounded to its radius.
+    pub cutter: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +143,7 @@ const JLC_DEFAULTS: Defaults = Defaults {
     fiducials: 3,
     fiducial_offset: Some(3_850 * UM),
     tooling_hole: Some(2 * MM),
+    cutter: 2 * MM,
 };
 
 const JLC_FAB_RULES: [Rule; 11] = [
@@ -304,6 +308,7 @@ pub const PRESETS: [Preset; 4] = [
             fiducials: 3,
             fiducial_offset: None,
             tooling_hole: Some(2 * MM),
+            cutter: 1_600 * UM,
         },
         rules: &PCBWAY_RULES,
     },
@@ -318,6 +323,7 @@ pub const PRESETS: [Preset; 4] = [
             fiducials: 0,
             fiducial_offset: None,
             tooling_hole: None,
+            cutter: 2 * MM,
         },
         rules: &EUROCIRCUITS_RULES,
     },

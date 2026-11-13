@@ -692,7 +692,7 @@ digests. See [the full syntax reference](macro-definitions.md) and
 `panel NAME { ... }` places already-routed boards on a fabrication panel,
 using the macro grammar: root properties (`preset`, `spacing`, `rails`,
 `tab_width`, `mouse_bite`, `fiducials`, `fiducial_offset`, `tooling_hole`,
-`assemble_after_depanel`) and
+`cutter`, `frame_fill`, `assemble_after_depanel`) and
 `board NAME { source; pcb; at; rotation; }` and
 `tab NAME { board; side; at; width; }` blocks. A panel is not compiled as a
 board: `copper panelize` composes it into one `.kicad_pcb` and refuses tabs

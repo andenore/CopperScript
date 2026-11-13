@@ -238,6 +238,8 @@ pub fn config(spec: &PanelSpec) -> Vec<(String, String, String)> {
     rows.push(("fiducials".to_owned(), spec.fiducials.to_string(), origin("fiducials")));
     rows.push(("fiducial_offset".to_owned(), optional(spec.fiducial_offset, "rail centre"), origin("fiducial_offset")));
     rows.push(("tooling_hole".to_owned(), optional(spec.tooling_hole, "none"), origin("tooling_hole")));
+    rows.push(("cutter".to_owned(), length(spec.cutter), origin("cutter")));
+    rows.push(("frame_fill".to_owned(), spec.frame_fill.to_string(), origin("frame_fill")));
     rows
 }
 

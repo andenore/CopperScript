@@ -37,8 +37,10 @@ pub struct BuiltTab {
     /// Distance along the side from its start, and the tab width.
     pub at: i64,
     pub width: i64,
-    /// The board it bridges to, or `None` for a rail.
+    /// The board it bridges to, or `None` for the frame.
     pub across: Option<String>,
+    /// What a frame tab lands on: `rail`, or `frame` for the frame fill.
+    pub lands_on: &'static str,
     /// The gap it spans.
     pub length: i64,
     pub mouse_bites: usize,
@@ -56,6 +58,33 @@ pub struct Frame {
     pub bounds: (i64, i64, i64, i64),
     /// The rail rectangles.
     pub rails: Vec<[i64; 4]>,
+    /// The area the router mills away, in square nanometres.
+    pub cut_area: f64,
+    /// Areas beyond the milled gap that are cut away rather than kept as
+    /// frame (each drops out as a loose slug): bounds and area.
+    pub pockets: Vec<(Rect, f64)>,
+}
+
+/// Arcs (rounded corners, the frame fill's offsets) as polylines this close.
+const ARC_ERROR: f64 = 1_000.0;
+
+/// How much smaller than the cutter's radius the rounded corners are cut.
+const OPENING_SLACK: i64 = 10_000;
+
+/// Shapes eroded and grown back by `radius`: the part of a cut region a round
+/// cutter of that radius can reach. Corners of the region that the material
+/// wraps come out rounded to the radius; corners of the material stay sharp.
+///
+/// A slot exactly as wide as the cutter erodes to nothing at the full
+/// radius, so the radius is taken `OPENING_SLACK` short: such a slot stays.
+fn opening(shapes: &poly::Shapes, radius: i64) -> poly::Shapes {
+    let radius = radius - OPENING_SLACK;
+    let eroded = poly::offset(shapes, -radius, true, ARC_ERROR);
+    poly::intersection(&poly::offset(&eroded, radius, true, ARC_ERROR), shapes)
+}
+
+fn touches(a: &poly::Shapes, b: &poly::Shapes) -> bool {
+    !poly::intersection(&poly::offset(a, 1_000, false, ARC_ERROR), b).is_empty()
 }
 
 type Rect = [i64; 4];
@@ -146,13 +175,26 @@ fn side_geometry(local: Rect, side: Side) -> (Point, Point, Point, i64) {
 }
 
 /// Build the frame. `local` holds each board's outline rings in its own
-/// coordinates, `outlines` the same rings on the panel.
+/// coordinates, `outlines` the same rings on the panel, and `bodies` the
+/// parts placed with the panel that reach past their board (the frame fill
+/// keeps the milled gap from them). `clear` holds each board's stretches of
+/// sides where no tab may go, `(side, start, end)` in its own frame: the
+/// bites that run past a tab's ends stay out of them.
 pub fn build(
     spec: &PanelSpec,
     local: &IndexMap<String, Vec<Vec<Point>>>,
     outlines: &IndexMap<String, Vec<Vec<Point>>>,
     poses: &IndexMap<String, Pose>,
+    bodies: &poly::Shapes,
+    clear: &IndexMap<String, Vec<(Side, i64, i64)>>,
 ) -> Result<Frame, String> {
+    if spec.cutter <= 0 || spec.cutter > spec.spacing {
+        return Err(format!(
+            "a {} mm cutter cannot mill the {} mm gaps between boards; widen spacing or give a smaller cutter",
+            mm(spec.cutter),
+            mm(spec.spacing)
+        ));
+    }
     // Rails around the boards' overall bounds, `spacing` away.
     let all = bounds_of(outlines.values().flatten().flatten());
     let s = spec.spacing;
@@ -176,20 +218,40 @@ pub fn build(
     if spec.rails.right > 0 {
         rails.push([all[2] + s, outer[1], outer[2], outer[3]]);
     }
-    let mut shapes: poly::Shapes = Vec::new();
+    let mut boards: poly::Shapes = Vec::new();
     for rings in outlines.values() {
         for ring in rings {
-            shapes.extend(ring_shapes(ring));
+            boards.extend(ring_shapes(ring));
         }
     }
-    for rail in &rails {
-        shapes.extend(rect_shapes(*rail));
+    let boards = poly::union(&boards);
+    let rail_shapes: poly::Shapes = poly::union(&rails.iter().flat_map(|rail| rect_shapes(*rail)).collect());
+    // Beyond the milled gap round every board and placed body: kept as frame
+    // where it joins a rail, unless a web there is too thin for the cutter.
+    let mut keep_off = boards.clone();
+    keep_off.extend(bodies.iter().cloned());
+    let near = poly::offset(&poly::union(&keep_off), s, true, ARC_ERROR);
+    let beyond = poly::difference(&poly::difference(&rect_shapes(outer), &near), &rail_shapes);
+    let beyond = opening(&beyond, spec.cutter / 2);
+    let mut frame_material = rail_shapes.clone();
+    let mut pockets: Vec<(Rect, f64)> = Vec::new();
+    for piece in &beyond {
+        let piece = vec![piece.clone()];
+        if spec.frame_fill && !rail_shapes.is_empty() && touches(&piece, &rail_shapes) {
+            frame_material.extend(piece);
+        } else {
+            let (x0, y0, x1, y1) = poly::bounds(&piece[0]);
+            pockets.push(([x0, y0, x1, y1], poly::shape_area(&piece[0])));
+        }
     }
+    let frame_material = poly::union(&frame_material);
+    let mut shapes: poly::Shapes = boards.clone();
+    shapes.extend(frame_material.iter().cloned());
     let mut items: Vec<Node> = Vec::new();
     let mut tabs: Vec<BuiltTab> = Vec::new();
     let mut footprints: Vec<(String, Rect)> = Vec::new();
     for tab in &spec.tabs {
-        let built = build_tab(spec, tab, local, outlines, poses, &rails)?;
+        let built = build_tab(spec, tab, local, outlines, poses, &frame_material, &rail_shapes)?;
         // One hole as wide as the tab would cut it through.
         if built.width <= spec.mouse_bite.drill {
             return Err(format!(
@@ -256,10 +318,23 @@ pub fn build(
             (a.0 + normal.0 * far, a.1 + normal.1 * far),
         ];
         shapes.extend(ring_shapes(&corners));
-        // Mouse bites `inset` inside each board the tab touches.
+        // Mouse bites `inset` inside each board the tab touches: a row across
+        // the tab, centred. The cutter leaves a fillet in each corner where
+        // the tab meets a board, so the row goes on at its pitch up to a
+        // cutter radius past both tab ends to break through them, where those
+        // holes stay on the board and out of stretches kept clear of tabs.
         let width = built.width;
+        let fillet = spec.cutter / 2;
+        let (drill, pitch) = (spec.mouse_bite.drill, spec.mouse_bite.pitch);
         let count = holes_per_tab(width, &spec.mouse_bite);
-        let span = (count - 1) * spec.mouse_bite.pitch;
+        let span = (count - 1) * pitch;
+        let mut offsets: Vec<(i64, bool)> = (0..count).map(|k| (-span / 2 + k * pitch, true)).collect();
+        let mut beyond_end = span / 2 + pitch;
+        while beyond_end + drill / 2 <= width / 2 + fillet {
+            offsets.push((-beyond_end, false));
+            offsets.push((beyond_end, false));
+            beyond_end += pitch;
+        }
         let direction = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
         let mut pads = Vec::new();
@@ -268,15 +343,48 @@ pub fn build(
         if let Some(across) = &built.across {
             ends.push((built.length + spec.mouse_bite.inset, across.as_str()));
         }
-        let tab_material = ring_shapes(&corners);
+        // Where a hole `along` from the tab's centre falls on an end's board
+        // side, in that board's frame: the side and the position along it.
+        let place = |owner: &str, depth: i64, along: i64| -> Option<(Side, i64)> {
+            if owner == built.board {
+                return Some((built.side, built.at + along));
+            }
+            let pose = poses[owner];
+            let nb = bounds_of(local[owner].iter().flatten());
+            let far = |t: i64| {
+                pose.invert((
+                    centre.0 + direction.0 * t + normal.0 * (depth - spec.mouse_bite.inset),
+                    centre.1 + direction.1 * t + normal.1 * (depth - spec.mouse_bite.inset),
+                ))
+            };
+            let (side, ..) = crate::intent::side_of(nb, far(-width / 2), far(width / 2))?;
+            let q = far(along);
+            Some((side, if matches!(side, Side::Top | Side::Bottom) { q.0 - nb[0] } else { q.1 - nb[1] }))
+        };
+        // The tab with its fillets, as far as the bites reach: holes there
+        // drill the fillets, and the last may break out into the slot.
+        let wide = |p: Point, sign: i64| (p.0 + sign * direction.0 * fillet, p.1 + sign * direction.1 * fillet);
+        let filleted =
+            ring_shapes(&[wide(corners[0], -1), wide(corners[1], 1), wide(corners[2], 1), wide(corners[3], -1)]);
         for (depth, owner) in ends {
             // Every hole perforates its board: it lies on the board and the
             // tab, not in a slot or past a thin flange of the board.
             let mut material: poly::Shapes = outlines[owner].iter().flat_map(|ring| ring_shapes(ring)).collect();
-            material.extend(tab_material.iter().cloned());
+            material.extend(filleted.iter().cloned());
             let material = poly::union(&material);
-            for k in 0..count {
-                let along = -span / 2 + k * spec.mouse_bite.pitch;
+            for &(along, required) in &offsets {
+                if !required {
+                    let kept_clear = place(owner, depth, along).is_none_or(|(side, at)| {
+                        clear.get(owner).is_some_and(|stretches| {
+                            stretches
+                                .iter()
+                                .any(|(s, start, end)| *s == side && at - drill / 2 < *end && at + drill / 2 > *start)
+                        })
+                    });
+                    if kept_clear {
+                        continue;
+                    }
+                }
                 let p = (direction.0 * along + normal.0 * depth, direction.1 * along + normal.1 * depth);
                 let hole = poly::circle(
                     copper_cam::geometry::Point::new(centre.0 + p.0, centre.1 + p.1),
@@ -284,6 +392,9 @@ pub fn build(
                     250.0,
                 );
                 let astray: f64 = poly::difference(&hole, &material).iter().map(|s| poly::shape_area(s)).sum();
+                if astray > 1e6 && !required {
+                    continue;
+                }
                 if astray > 1e6 {
                     return Err(format!(
                         "tab {}: its mouse bites {} mm inside board {owner} fall off the board (a slot or a flange \
@@ -417,8 +528,8 @@ pub fn build(
                     members.push(format!("board {name}"));
                 }
             }
-            if rails.iter().any(|rail| !poly::intersection(&piece, &rect_shapes(*rail)).is_empty()) {
-                members.push("rails".to_owned());
+            if !poly::intersection(&piece, &frame_material).is_empty() {
+                members.push("frame".to_owned());
             }
             pieces.push(format!("[{}]", members.join(", ")));
         }
@@ -428,8 +539,71 @@ pub fn build(
             pieces.join(" ")
         ));
     }
-    // The outline: every contour of the union on Edge.Cuts.
-    for (k, shape) in united.iter().enumerate() {
+    // Rows of bites from neighbouring tabs, each run a cutter radius long,
+    // must not crowd closer than their own pitch.
+    for (k, one) in tabs.iter().enumerate() {
+        for other in &tabs[k + 1..] {
+            let closest = one
+                .bites
+                .iter()
+                .flat_map(|p| other.bites.iter().map(move |q| ((p.0 - q.0) as f64).hypot((p.1 - q.1) as f64)))
+                .fold(f64::INFINITY, f64::min);
+            if closest < spec.mouse_bite.pitch as f64 - 1_000.0 {
+                return Err(format!(
+                    "tabs {} and {}: their mouse bites, which run {} mm past each tab end through the cutter's \
+                     fillets, come {} mm apart, closer than their {} mm pitch; move the tabs apart",
+                    one.name,
+                    other.name,
+                    mm(spec.cutter / 2),
+                    mm(closest.round() as i64),
+                    mm(spec.mouse_bite.pitch)
+                ));
+            }
+        }
+    }
+    // What the router mills: the rest of the outline's rectangle, as far as
+    // a round cutter reaches. Every corner the material wraps comes out
+    // rounded to the cutter's radius; the material left there is a fillet.
+    // Past the panel's edge is open air: a slot running out to it stays open.
+    let d = spec.cutter;
+    let around = rect_shapes([outer[0] - d, outer[1] - d, outer[2] + d, outer[3] + d]);
+    let cut = poly::intersection(&opening(&poly::difference(&around, &united), d / 2), &rect_shapes(outer));
+    let milled = poly::union(&poly::difference(&rect_shapes(outer), &cut));
+    // A fillet holds to a tab or the frame; one joining two boards by
+    // itself would fuse them (a gap the cutter could not enter).
+    let mut tab_shapes: poly::Shapes = Vec::new();
+    for tab in &tabs {
+        tab_shapes.extend(rect_shapes(tab_rect(tab, poses[&tab.board])));
+    }
+    // Slivers where polygonal arcs meet are far too small to bridge a gap.
+    let board_bounds: Vec<(&String, Rect)> =
+        outlines.iter().map(|(name, rings)| (name, bounds_of(rings.iter().flatten()))).collect();
+    for fillet in poly::difference(&milled, &united) {
+        if poly::shape_area(&fillet) < 1e9 {
+            continue;
+        }
+        let (x0, y0, x1, y1) = poly::bounds(&fillet);
+        let piece = vec![fillet];
+        let joined: Vec<&String> = board_bounds
+            .iter()
+            .filter(|(_, b)| x0 <= b[2] + 1_000 && b[0] <= x1 + 1_000 && y0 <= b[3] + 1_000 && b[1] <= y1 + 1_000)
+            .filter(|(name, _)| touches(&piece, &outlines[*name].iter().flat_map(|ring| ring_shapes(ring)).collect()))
+            .map(|(name, _)| *name)
+            .collect();
+        if joined.len() > 1 && !touches(&piece, &tab_shapes) {
+            return Err(format!(
+                "boards {} and {}: the {} mm cutter cannot mill between them near ({}, {}) mm; move them apart",
+                joined[0],
+                joined[1],
+                mm(spec.cutter),
+                mm(x0),
+                mm(y0)
+            ));
+        }
+    }
+    let cut_area: f64 = cut.iter().map(|shape| poly::shape_area(shape)).sum();
+    // The outline: every contour of the milled panel on Edge.Cuts.
+    for (k, shape) in milled.iter().enumerate() {
         for (j, contour) in shape.iter().enumerate() {
             let points: Vec<String> = contour.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
             let text = format!(
@@ -440,7 +614,7 @@ pub fn build(
             items.push(crate::sexpr::parse(&text, "frame").expect("a valid outline"));
         }
     }
-    Ok(Frame { items, tabs, bounds: (outer[0], outer[1], outer[2], outer[3]), rails })
+    Ok(Frame { items, tabs, bounds: (outer[0], outer[1], outer[2], outer[3]), rails, cut_area, pockets })
 }
 
 fn build_tab(
@@ -449,7 +623,8 @@ fn build_tab(
     local: &IndexMap<String, Vec<Vec<Point>>>,
     outlines: &IndexMap<String, Vec<Vec<Point>>>,
     poses: &IndexMap<String, Pose>,
-    rails: &[Rect],
+    frame: &poly::Shapes,
+    rails: &poly::Shapes,
 ) -> Result<BuiltTab, String> {
     let side = match &tab.edge {
         TabEdge::Side(side) => *side,
@@ -517,12 +692,10 @@ fn build_tab(
             }
         }
     }
-    for rail in rails {
-        consider(rect_shapes(*rail), None);
-    }
+    consider(frame.clone(), None);
     let Some((distance, across)) = nearest else {
         return Err(format!(
-            "tab {}: nothing lies across board {}'s {} side within {} mm (a tab must bridge to a rail or a board)",
+            "tab {}: nothing lies across board {}'s {} side within {} mm (a tab must bridge to the frame or a board)",
             tab.name,
             tab.board,
             side.as_str(),
@@ -534,7 +707,7 @@ fn build_tab(
             "tab {}: board {} touches or overlaps {} across its {} side",
             tab.name,
             tab.board,
-            across.as_deref().map_or_else(|| "a rail".to_owned(), |b| format!("board {b}")),
+            across.as_deref().map_or_else(|| "the frame".to_owned(), |b| format!("board {b}")),
             side.as_str()
         ));
     }
@@ -545,7 +718,7 @@ fn build_tab(
     let face = ring_shapes(&[far(a), far(b), deep(b), deep(a)]);
     let target: poly::Shapes = match &across {
         Some(name) => outlines[name].iter().flat_map(|ring| ring_shapes(ring)).collect(),
-        None => rails.iter().flat_map(|rail| rect_shapes(*rail)).collect(),
+        None => frame.clone(),
     };
     let landed: f64 = poly::intersection(&face, &target).iter().map(|s| poly::shape_area(s)).sum();
     let whole: f64 = face.iter().map(|s| poly::shape_area(s)).sum();
@@ -553,10 +726,11 @@ fn build_tab(
         return Err(format!(
             "tab {}: only part of its far end lands on {}; move it so its whole width meets a straight side",
             tab.name,
-            across.as_deref().map_or_else(|| "a rail".to_owned(), |b| format!("board {b}"))
+            across.as_deref().map_or_else(|| "the frame".to_owned(), |b| format!("board {b}"))
         ));
     }
     let _ = spec;
+    let lands_on = if across.is_none() && poly::intersection(&face, rails).is_empty() { "frame" } else { "rail" };
     Ok(BuiltTab {
         name: tab.name.clone(),
         board: tab.board.clone(),
@@ -564,6 +738,7 @@ fn build_tab(
         at: tab.at,
         width: tab.width,
         across,
+        lands_on,
         length: distance,
         mouse_bites: 0,
         bites: Vec::new(),
