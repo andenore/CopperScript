@@ -83,7 +83,7 @@ test("build blocks highlight the block, its groups and duration units", () => {
   for (const kind of ["build", "placement", "routing", "planes", "router"]) {
     expectScope(`${kind} {`, kind, "storage.type.copper");
   }
-  expectScope("routing = 1;", "routing", "variable.other.copper");
+  expectScope("routing = 1;", "routing", "variable.other.property.copper");
   expectScope("x = 600s;", "600", "constant.numeric.copper");
   expectScope("x = 600s;", "s", "storage.type.unit.copper");
 });
