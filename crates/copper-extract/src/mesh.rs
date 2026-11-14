@@ -157,6 +157,9 @@ pub struct MeshStats {
     pub terminals_snapped: Vec<String>,
     /// Vias that joined fewer than two layers.
     pub vias_unattached: Vec<String>,
+    /// Terminals whose region overlaps more than one piece of copper (a terminal is an equipotential, so it joins
+    /// them): name and number of pieces. Recorded, not refused.
+    pub terminals_joining_pieces: Vec<(String, usize)>,
     /// Copper polygons against mesh connectivity.
     pub topology: TopologyCheck,
     /// Places where copper comes closer to other copper (or to itself across a slot) than the mesh could resolve, as
@@ -1025,28 +1028,64 @@ fn build_once(
         stats.layers.push(layer_stats);
     }
     stats.bars = bar_count;
-    // Terminals: the nodes of the terminal's net and layer inside the region.
+    // Terminals: the nodes of the terminal's net and layer inside the region, of the pieces of copper the region
+    // actually contacts (its own outline, not the grown one) and of no other piece, however near. A terminal whose
+    // region overlaps several pieces is an equipotential that joins them, which is what a terminal is: it is recorded
+    // (`terminals_joining_pieces`), not refused.
     let mut terminal_nodes: Vec<Vec<usize>> = Vec::new();
+    let mut terminal_pieces: Vec<Vec<Piece>> = Vec::new();
     for t in &layout.terminals {
+        let layer_name = layout.layers.get(t.layer).map_or("?", |l| l.name.as_str());
         let candidates = by_layer_net.get(&(t.layer, t.net.clone()));
         let Some(candidates) = candidates.filter(|c| !c.is_empty()) else {
             return Err(MeshError::NoCopper(format!(
-                "terminal {}: no copper of net {} on layer {} inside the window",
-                t.name,
-                t.net,
-                layout.layers.get(t.layer).map_or("?", |l| l.name.as_str())
+                "terminal {}: no copper of net {} on layer {layer_name} inside the window",
+                t.name, t.net,
             )));
         };
+        let mut contacted: Vec<usize> = Vec::new();
+        if let (Some(shapes), Some(rb)) =
+            (layer_shapes.get(t.layer).and_then(|m| m.get(t.net.as_str())), region_bounds(&t.region))
+        {
+            for (c, shape) in shapes.iter().enumerate() {
+                let b = poly::bounds(shape);
+                if b.0 >= rb.2 || b.2 <= rb.0 || b.1 >= rb.3 || b.3 <= rb.1 {
+                    continue;
+                }
+                let area: f64 =
+                    poly::intersection(&t.region, &vec![shape.clone()]).iter().map(|p| poly::shape_area(p)).sum();
+                if area > 1.0 {
+                    contacted.push(c);
+                }
+            }
+        }
+        if contacted.is_empty() {
+            return Err(MeshError::NoCopper(format!(
+                "terminal {}: its region touches no copper of net {} on layer {layer_name}",
+                t.name, t.net
+            )));
+        }
+        let on_pieces: Vec<&(i64, i64, usize)> =
+            candidates.iter().filter(|(_, _, id)| contacted.contains(&node_comp[*id])).collect();
+        if on_pieces.is_empty() {
+            return Err(MeshError::NoCopper(format!(
+                "terminal {}: the copper of net {} on layer {layer_name} that its region touches has no mesh node",
+                t.name, t.net
+            )));
+        }
+        if contacted.len() > 1 {
+            stats.terminals_joining_pieces.push((t.name.clone(), contacted.len()));
+        }
         let grown = poly::offset(&t.region, ABS_GAP_NM, false, 1000.0);
-        let mut inside: Vec<usize> = candidates
+        let mut inside: Vec<usize> = on_pieces
             .iter()
-            .filter(|&&(x, y, _)| poly::shapes_contain(&grown, (x as f64, y as f64)))
-            .map(|&(_, _, id)| id)
+            .filter(|&&&(x, y, _)| poly::shapes_contain(&grown, (x as f64, y as f64)))
+            .map(|&&(_, _, id)| id)
             .collect();
         if inside.is_empty() {
             let centre = region_bounds(&t.region).map(|b| ((b.0 + b.2) as f64 / 2.0, (b.1 + b.3) as f64 / 2.0));
             let (cx, cy) = centre.unwrap_or((0.0, 0.0));
-            let nearest = candidates
+            let nearest = on_pieces
                 .iter()
                 .min_by(|a, b| {
                     let da = (a.0 as f64 - cx).hypot(a.1 as f64 - cy);
@@ -1059,6 +1098,7 @@ fn build_once(
         }
         inside.sort_unstable();
         terminal_nodes.push(inside);
+        terminal_pieces.push(contacted.iter().map(|&c| (t.layer, t.net.clone(), c)).collect());
     }
     // Vias.
     let attach = 2 * coarse;
@@ -1067,6 +1107,7 @@ fn build_once(
     let mut via_pieces: Vec<Vec<(usize, String, usize)>> = Vec::new();
     for (vi, via) in layout.vias.iter().enumerate() {
         let mut attached: Vec<(usize, usize)> = Vec::new(); // (layer, node)
+        let r_contact = via.drill_nm as f64 / 2.0 + via.plating_nm as f64;
         let mut pieces: Vec<(usize, String, usize)> = Vec::new();
         for li in via.first_layer..=via.last_layer.min(layout.layers.len().saturating_sub(1)) {
             let net = via.layer_nets.iter().find(|(l, _)| *l == li).map_or(&via.net, |(_, n)| n);
@@ -1083,12 +1124,34 @@ fn build_once(
                         && poly::shape_contains(shape, (via.x as f64, via.y as f64))
                 })
             });
-            let in_piece: Vec<&(i64, i64, usize)> = match inside {
-                Some(c) => candidates.iter().filter(|(_, _, id)| node_comp[*id] == c).collect(),
-                None => Vec::new(),
+            // A via that does not stand in copper of its net on this layer attaches only to a piece its own circle (the
+            // drill and the plating) overlaps, never to a piece it does not touch because it is the nearest.
+            let touched: Vec<usize> = match inside {
+                Some(c) => vec![c],
+                None => {
+                    let circle = poly::circle(copper_cam::geometry::Point::new(via.x, via.y), r_contact, 1000.0);
+                    layer_shapes
+                        .get(li)
+                        .and_then(|m| m.get(net.as_str()))
+                        .map(|shapes| {
+                            shapes
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, shape)| {
+                                    poly::intersection(&circle, &vec![(*shape).clone()])
+                                        .iter()
+                                        .map(|p| poly::shape_area(p))
+                                        .sum::<f64>()
+                                        > 1.0
+                                })
+                                .map(|(c, _)| c)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
             };
             let pool: Vec<&(i64, i64, usize)> =
-                if in_piece.is_empty() { candidates.iter().collect() } else { in_piece };
+                candidates.iter().filter(|(_, _, id)| touched.contains(&node_comp[*id])).collect();
             let best = pool
                 .iter()
                 .map(|&&(x, y, id)| (((x - via.x) as f64).hypot((y - via.y) as f64), id))
@@ -1145,7 +1208,16 @@ fn build_once(
     }
     stats.filaments = network.branches.len();
     stats.nodes = network.node_count;
-    let (topology, split, cut_nodes) = check_topology(&layer_shapes, &nodes, &node_comp, &network, &via_pieces);
+    // The pieces each terminal contacts, and those a short joins through its terminals.
+    let mut joined_pieces: Vec<Vec<Piece>> = terminal_pieces.clone();
+    for set in &layout.shorts {
+        joined_pieces.push(set.iter().flat_map(|&t| terminal_pieces[t].iter().cloned()).collect());
+    }
+    let (topology, split, cut_nodes) =
+        check_topology(&layer_shapes, &nodes, &node_comp, &network, &via_pieces, &joined_pieces);
+    if !stats.terminals_joining_pieces.is_empty() {
+        stats.flags.push("terminal_joins_pieces".to_owned());
+    }
     if !topology.mismatches.is_empty() {
         stats.flags.push("topology_mismatch".to_owned());
     }
@@ -1189,6 +1261,7 @@ fn check_topology(
     node_comp: &[usize],
     network: &Network,
     via_pieces: &[Vec<(usize, String, usize)>],
+    joined_pieces: &[Vec<Piece>],
 ) -> (TopologyCheck, BTreeSet<Piece>, Vec<CutNode>) {
     let mut item: BTreeMap<(usize, String, usize), usize> = BTreeMap::new();
     for (li, map) in layer_shapes.iter().enumerate() {
@@ -1207,9 +1280,22 @@ fn check_topology(
             }
         }
     }
+    // What a terminal or a short joins on purpose: the pieces its region contacts (the copper side of the merges the
+    // solver makes between the terminal's nodes and between the nodes of a short).
+    for pieces in joined_pieces {
+        for pair in pieces.windows(2) {
+            if let (Some(&a), Some(&b)) = (item.get(&pair[0]), item.get(&pair[1])) {
+                union(&mut copper, a, b);
+            }
+        }
+    }
     let mut mesh: Vec<usize> = (0..network.node_count).collect();
     for branch in &network.branches {
         union(&mut mesh, branch.a, branch.b);
+    }
+    // The merges of the solver (`Network::merge_pairs`): every node of a terminal, every node of a short.
+    for (a, b) in network.merge_pairs() {
+        union(&mut mesh, a, b);
     }
     let node_item = |n: usize| item.get(&(nodes[n].layer, nodes[n].net.clone(), node_comp[n])).copied();
     // Per piece of copper: the components of the network its nodes are in; per component: the pieces.
@@ -1571,5 +1657,41 @@ impl Terminal {
     /// Bounding box of the region, nm.
     pub fn bounds(&self) -> Option<(i64, i64, i64, i64)> {
         region_bounds(&self.region)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A merge the solver makes that joins copper the terminal does not contact is a mismatch of the topology check:
+    /// two pieces of copper, one node on each, and a port terminal that lists both nodes.
+    #[test]
+    fn a_terminal_that_merges_nodes_of_pieces_it_does_not_contact_is_a_mismatch() {
+        let square = |x0: i64| {
+            poly::polygon(&[(x0 as f64, 0.0), ((x0 + 10) as f64, 0.0), ((x0 + 10) as f64, 10.0), (x0 as f64, 10.0)])
+        };
+        let layer_shapes = vec![BTreeMap::from([("S".to_owned(), vec![square(0)[0].clone(), square(100)[0].clone()])])];
+        let node = |x: f64, comp: usize| (MeshNode { layer: 0, net: "S".to_owned(), position: [x, 0.0] }, comp);
+        let nodes = vec![node(0.0, 0).0, node(1.0, 1).0];
+        let node_comp = vec![0, 1];
+        let mut network = Network { node_count: 2, ..Network::default() };
+        let check = |network: &Network, joined: &[Vec<Piece>]| {
+            check_topology(&layer_shapes, &nodes, &node_comp, network, &[], joined).0
+        };
+        // No merge: two pieces, two components, agreement.
+        assert!(check(&network, &[]).mismatches.is_empty());
+        // The terminal lists a node of each piece: the solver merges them. The terminal contacts only the first piece.
+        network.ports.push(NodePort { plus: vec![0, 1], minus: vec![] });
+        let t = check(&network, &[vec![(0, "S".to_owned(), 0)]]);
+        assert_eq!(t.mismatches.len(), 1, "{t:?}");
+        assert!(t.mismatches[0].contains("joins 2 separate pieces"), "{:?}", t.mismatches);
+        // The same merge is no mismatch when the terminal contacts both pieces (it is an equipotential on purpose).
+        let t = check(&network, &[vec![(0, "S".to_owned(), 0), (0, "S".to_owned(), 1)]]);
+        assert!(t.mismatches.is_empty(), "{t:?}");
+        // A short between the two nodes is a merge too.
+        let mut shorted = Network { node_count: 2, ..Network::default() };
+        shorted.shorts.push(vec![0, 1]);
+        assert_eq!(check(&shorted, &[]).mismatches.len(), 1);
     }
 }

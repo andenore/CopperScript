@@ -246,3 +246,125 @@ fn the_refinement_nearest_the_port_goes_first_when_the_budget_cannot_hold_them_a
     assert_eq!((s.topology.copper_components, s.topology.mesh_components), (8, 8));
     assert!(matches!(extract(&layout, &spec, &[1e3], false), Err(Error::Solve(SolveError::PortDisconnected(0)))));
 }
+
+/// Two islands of one net `gap` apart. The port runs from a terminal on the left island that ends at the gap's edge to
+/// a terminal at the far end of the right island (`across`) or of the left island itself.
+fn islands_with_a_terminal_at_the_gap(gap: i64, across: bool) -> Layout {
+    let mut layout = Layout::new([0, 0, 12 * MM, 6 * MM]);
+    let top = layout.add_layer("F.Cu", 0.0, T);
+    let mid = 6 * MM;
+    let a = [MM, MM, mid - gap / 2, 5 * MM];
+    let b = [mid + gap / 2, MM, 11 * MM, 5 * MM];
+    layout.add_rect(top, "S", a);
+    layout.add_rect(top, "S", b);
+    let near = layout.add_terminal_rect("at the gap", top, "S", [a[2] - MM / 2, a[1], a[2], a[3]]);
+    let far = if across {
+        layout.add_terminal_rect("far end of the right island", top, "S", [b[2] - MM / 2, b[1], b[2], b[3]])
+    } else {
+        layout.add_terminal_rect("far end of the left island", top, "S", [a[0], a[1], a[0] + MM / 2, a[3]])
+    };
+    layout.add_port("p", near, far);
+    layout
+}
+
+#[test]
+fn a_terminal_at_a_gap_never_takes_the_copper_on_the_other_side() {
+    let mut wrong: Vec<String> = Vec::new();
+    for gap_um in [10, 20, 30, 50] {
+        // Across the gap: open circuit.
+        match extract(&islands_with_a_terminal_at_the_gap(gap_um * 1000, true), &MeshSpec::default(), &[1e3], false) {
+            Err(Error::Solve(SolveError::PortDisconnected(0))) => {}
+            Ok(x) => wrong.push(format!(
+                "gap {gap_um} um, to the right island: {:.3} mOhm across copper that does not touch (mismatches {:?})",
+                x.resistance(0, 0, 0) * 1e3,
+                x.mesh.stats.topology.mismatches
+            )),
+            Err(other) => wrong.push(format!("gap {gap_um} um, to the right island: {other}")),
+        }
+        // On the same island: a finite resistance of the island's length, rho l / (w t) within the terminals' shape.
+        match extract(&islands_with_a_terminal_at_the_gap(gap_um * 1000, false), &MeshSpec::default(), &[1e3], false) {
+            Ok(x) => {
+                let (length, width) = (4.5e-3, 4e-3);
+                let expected = copper_extract::layout::COPPER_RESISTIVITY * length / (width * T);
+                let r = x.resistance(0, 0, 0);
+                if !(r > 0.5 * expected && r < 1.5 * expected) {
+                    wrong.push(format!(
+                        "gap {gap_um} um, same island: {:.3} mOhm against {:.3} mOhm",
+                        r * 1e3,
+                        expected * 1e3
+                    ));
+                }
+                println!("gap {gap_um} um, same island: {:.3} mOhm (rho l / w t {:.3})", r * 1e3, expected * 1e3);
+            }
+            Err(e) => wrong.push(format!("gap {gap_um} um, same island: {e}")),
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+#[test]
+fn a_terminal_over_two_pieces_joins_them_on_purpose_and_says_so_and_one_over_nothing_is_refused() {
+    // A terminal whose region overlaps both islands is an equipotential that joins them (what a terminal is): the
+    // mesh records it, the topology check agrees (it joins what the terminal contacts), and the port is not open.
+    let gap = 40_000;
+    let mut layout = Layout::new([0, 0, 12 * MM, 6 * MM]);
+    let top = layout.add_layer("F.Cu", 0.0, T);
+    let mid = 6 * MM;
+    let (a, b) = ([MM, MM, mid - gap / 2, 5 * MM], [mid + gap / 2, MM, 11 * MM, 5 * MM]);
+    layout.add_rect(top, "S", a);
+    layout.add_rect(top, "S", b);
+    let across = layout.add_terminal_rect("over the gap", top, "S", [mid - MM / 2, MM, mid + MM / 2, 5 * MM]);
+    let far = layout.add_terminal_rect("far end", top, "S", [b[2] - MM / 2, b[1], b[2], b[3]]);
+    layout.add_port("p", across, far);
+    let m = mesh(&layout, &MeshSpec::default()).expect("mesh");
+    assert_eq!(m.stats.terminals_joining_pieces, vec![("over the gap".to_owned(), 2)]);
+    assert!(m.stats.flags.iter().any(|f| f == "terminal_joins_pieces"), "{:?}", m.stats.flags);
+    assert!(m.stats.topology.mismatches.is_empty(), "{:?}", m.stats.topology);
+    // A terminal whose region touches no copper of its net is an error that names it, not a snap to other copper.
+    let mut nothing = Layout::new([0, 0, 12 * MM, 6 * MM]);
+    let top = nothing.add_layer("F.Cu", 0.0, T);
+    nothing.add_rect(top, "S", a);
+    let t0 = nothing.add_terminal_rect("beside the copper", top, "S", [8 * MM, MM, 9 * MM, 5 * MM]);
+    let t1 = nothing.add_terminal_rect("on the copper", top, "S", [a[0], a[1], a[0] + MM, a[3]]);
+    nothing.add_port("p", t0, t1);
+    let error = mesh(&nothing, &MeshSpec::default()).expect_err("an error").to_string();
+    assert!(error.contains("beside the copper") && error.contains("touches no copper"), "{error}");
+}
+
+/// A via at 3 mm on two layers: an island of net S on the top layer 0.7 mm to its right (it does not touch the via),
+/// and a plane of S below under the via. The port runs from the island to the plane.
+fn via_beside_an_island() -> Layout {
+    let mut layout = Layout::new([0, 0, 12 * MM, 6 * MM]);
+    let top = layout.add_layer("F.Cu", 0.0, T);
+    let bottom = layout.add_layer("B.Cu", -0.2e-3, T);
+    layout.add_rect(top, "S", [4 * MM, MM, 7 * MM, 5 * MM]);
+    layout.add_rect(bottom, "S", [0, 0, 12 * MM, 6 * MM]);
+    layout.vias.push(ViaGeom {
+        name: "stray".to_owned(),
+        x: 3 * MM,
+        y: 3 * MM,
+        net: "S".to_owned(),
+        first_layer: 0,
+        last_layer: 1,
+        drill_nm: 300_000,
+        plating_nm: 25_000,
+        layer_nets: Vec::new(),
+    });
+    let island = layout.add_terminal_rect("island", top, "S", [6 * MM, MM, 7 * MM, 5 * MM]);
+    let plane = layout.add_terminal_rect("plane", bottom, "S", [10 * MM, MM, 11 * MM, 5 * MM]);
+    layout.add_port("p", island, plane);
+    layout
+}
+
+#[test]
+fn a_via_beside_an_island_it_does_not_touch_does_not_join_it() {
+    let layout = via_beside_an_island();
+    let m = mesh(&layout, &MeshSpec::default()).expect("mesh");
+    assert_eq!(m.stats.vias_unattached, vec!["stray".to_owned()], "the via touches copper on one layer only");
+    assert_eq!(m.stats.barrels, 0);
+    assert!(m.stats.topology.mismatches.is_empty(), "{:?}", m.stats.topology);
+    assert!(matches!(
+        extract(&layout, &MeshSpec::default(), &[1e3], false),
+        Err(Error::Solve(SolveError::PortDisconnected(0)))
+    ));
+}

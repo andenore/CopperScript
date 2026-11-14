@@ -156,6 +156,8 @@ pub struct HotLoopExtraction {
     /// `layer, net, x, y: what`, at most 20 listed; the number of them. Never bridged.
     pub unresolved_gaps: Vec<String>,
     pub unresolved_gap_count: usize,
+    /// Terminals whose region overlaps several pieces of copper (equipotentials that join them): name and number of pieces.
+    pub terminals_joining_pieces: Vec<(String, usize)>,
     /// The current distribution of the hot loop's port (`HotLoopOptions::current_map`).
     pub currents: Option<Box<HotLoopCurrents>>,
 }
@@ -318,6 +320,11 @@ pub fn extract_hot_loop(
             stats.topology.mismatches[0]
         ));
     }
+    for (name, count) in &stats.terminals_joining_pieces {
+        notes.push(format!(
+            "terminal {name} overlaps {count} separate pieces of copper of its net and joins them (a terminal is an equipotential): the copper it joins is not otherwise connected there"
+        ));
+    }
     if stats.refine_rounds > 0 {
         notes.push(format!(
             "the mesh was refined in {} round(s) locally where a slot, an opening or two pieces of copper were closer than the cell, so that no filament bridges copper that does not touch: {} refinement(s) applied, {} left out because the filament budget did not hold them (the repairs of a topology mismatch first, then the gaps nearest to the port); {} filament bodies dropped for a gap in the copper along them",
@@ -430,6 +437,7 @@ pub fn extract_hot_loop(
         connection_legs,
         synthesized_legs: layout.synthesized_legs.clone(),
         unconnected_capacitors: unconnected,
+        terminals_joining_pieces: stats.terminals_joining_pieces.clone(),
         copper_components: stats.topology.copper_components,
         mesh_components: stats.topology.mesh_components,
         topology_mismatches: stats.topology.mismatches.clone(),

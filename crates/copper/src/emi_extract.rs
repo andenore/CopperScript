@@ -213,6 +213,21 @@ fn result_value(
     put(&mut topology, "copper_components", Value::from(r.copper_components as i64));
     put(&mut topology, "mesh_components", Value::from(r.mesh_components as i64));
     put(&mut topology, "mismatches", strings(&r.topology_mismatches));
+    put(
+        &mut topology,
+        "terminals_joining_pieces",
+        Value::Array(
+            r.terminals_joining_pieces
+                .iter()
+                .map(|(name, count)| {
+                    let mut o = Object::new();
+                    put(&mut o, "terminal", Value::from(name.as_str()));
+                    put(&mut o, "pieces", Value::from(*count as i64));
+                    Value::Object(o)
+                })
+                .collect(),
+        ),
+    );
     put(&mut topology, "unresolved_gap_count", Value::from(r.unresolved_gap_count as i64));
     put(&mut topology, "unresolved_gaps", strings(&r.unresolved_gaps));
     put(
@@ -776,6 +791,7 @@ mod tests {
             connection_legs: false,
             synthesized_legs: Vec::new(),
             unconnected_capacitors: Vec::new(),
+            terminals_joining_pieces: Vec::new(),
             copper_components: 1,
             mesh_components: 1,
             topology_mismatches: Vec::new(),

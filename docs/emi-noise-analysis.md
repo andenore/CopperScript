@@ -2042,8 +2042,19 @@ found by bisection, deterministic). A mesh that was whole and whose next repair 
 holds even the repairs, the best mesh that fitted (fewest mismatches) is kept, status `error`. What was left out is reported:
 `unresolved_gaps` (at most 20 listed with layer, net and place, and their number), the flag `unresolved_gap` (the extraction is
 `indicative`), the flag `refinement_stopped_by_budget`, and `refinements_applied` / `refinements_skipped` (counted over the
-rounds). Nothing left out is bridged. **A topology self-check** follows every build: the connected components of the copper
-pieces (joined by the vias that stand in them) are compared with those of the meshed network (filaments and barrels).
+rounds). Nothing left out is bridged. **Terminals and vias attach to the copper they touch, and only to it.** A terminal takes the nodes inside its region
+(grown by 25 um as a tolerance) **of the pieces of copper its own region overlaps with non-zero area**, never those of
+another piece of its net however near, and when no node lies inside it snaps to the nearest node of those pieces only; a
+terminal whose region touches no copper of its net is an error (`NoCopper`) that names it. A terminal whose region overlaps
+several pieces is an equipotential that joins them, which is what a terminal is: it is kept, and recorded
+(`measures.extract.topology.terminals_joining_pieces`, the flag `terminal_joins_pieces`, a note). A via that stands in copper of
+its net on a layer joins the piece it stands in; one that does not attaches only to a piece its own circle (drill plus plating)
+overlaps, else it joins nothing on that layer (before, it took the nearest node of any piece within twice the coarse pitch: a via
+0.7 mm beside an island it did not touch joined it). Before, a terminal took every node of its net and layer inside the grown
+region from any piece: two islands 10, 20 and 30 um apart with a terminal at the gap's edge read 0.60 mohm across the gap
+instead of an open circuit, with no mismatch reported (`tests/topology.rs`, `a_terminal_at_a_gap_never_takes_the_copper_on_the_other_side`).
+**A topology self-check** follows every build: the connected components of the copper
+pieces (joined by the vias that stand in them, and by the terminals and shorts that contact them) are compared with those of the network the solver solves (filaments, barrels, and the merges of every terminal's nodes and every short, `Network::merge_pairs`).
 A piece the mesh cut apart, or a network component that joins pieces that are not one piece of copper, is a mismatch,
 listed in `measures.extract.topology.mismatches` with the flag `topology_mismatch` and the extraction status `error`
 (the numbers are listed but are not the board's, and the multi-port matrix is not used in `EMI-CONDUCTED`).
@@ -2131,7 +2142,7 @@ for the same bar along an axis (-4.4 %, converging slowly: -6.7 % at 250 um), an
 | `parameter_assumptions` | what the board does not fix: assumed stack-up, copper thickness, plating, window, resistivity |
 | `not_modelled`, `flags`, `notes` | the omissions of 13.1; `assumed_stackup`, `assumed_copper_thickness`, `assumed_plating`, `coarsened`, `plane_corridor`, `merged_terminals`, `terminal_snapped`, `via_unattached`, `connection_legs`, `unresolved_gap`, `topology_mismatch`, `refinement_stopped_by_budget`; how each leg and component was drawn |
 | `meshes` | per mesh: role (`standard` = the finest, then `coarser` and `coarsest`), pitches, filaments, nodes, loops, barrels, coarsening steps, `dropped_bars`, `gap_bars_dropped`, `refine_rounds`, `unresolved_gaps`, `copper_components`, `mesh_components`, L and R, seconds |
-| `topology`, `unconnected_capacitors`, `not_used_in_conducted`, `synthesized_connection_legs` | the connected components of the copper polygons against those of the mesh (`copper_components`, `mesh_components`, `mismatches`, `unresolved_gap_count`, `unresolved_gaps`), and each straight bar added for a capacitor pad that no copper joins to the hot capacitor (`capacitor`, `pad`, `net`, `to`, `length_mm`) |
+| `topology` (with `terminals_joining_pieces`), `unconnected_capacitors`, `not_used_in_conducted`, `synthesized_connection_legs` | the connected components of the copper polygons against those of the mesh (`copper_components`, `mesh_components`, `mismatches`, `unresolved_gap_count`, `unresolved_gaps`), and each straight bar added for a capacitor pad that no copper joins to the hot capacitor (`capacitor`, `pad`, `net`, `to`, `length_mm`) |
 | `port_labels`, `inductance_matrix_nh` | the ports (`hot loop`, then the other capacitors of the hot net) and the inductance matrix of the finest mesh at each frequency (1 x 1 without other capacitors), the input of the multi-port use in `EMI-CONDUCTED` (section 10) |
 | `via_currents` | per frequency, the vias that carry at least 1 % of the port current: current per ampere into the port and `share_of_net`, `|I| / sum |I|` over the vias of the same net (magnitudes, adding up to 1 whatever the phases) |
 | `nets`, `other_nets`, `window_mm`, `layers`, `copper`, `seconds`, `filament_budget`, `method` | what was modelled, the fill (`zone_fills`, `islands_removed`, `fill_seconds`) and the cost |
@@ -2305,7 +2316,7 @@ Via currents per ampere into the port are in `measures.extract.via_currents`.
   `ok`. First version of the fix (all-or-nothing refinement): 6.599 / 6.142 / 6.109 nH, status `error` (5 pieces of copper cut
   apart, 23 gaps), the extraction not used in `EMI-CONDUCTED`. **With the prioritised refinement: L 6.632 / 6.175 / 6.139 nH,
   R 24.1 / 28.0 / 31.2 mohm, matrix at 10 MHz [[6.175, 0.851], [0.851, 1.908]], status `indicative`, no topology mismatch (16
-  pieces of copper, 16 network components)**, filaments 8998 + 8999 + 7275, the finest mesh at the pitch multiplier 6.27
+  pieces of copper, 16 network components; 14 and 14 once the check also counts what the terminals and shorts join, below)**, filaments 8998 + 8999 + 7275, the finest mesh at the pitch multiplier 6.27
   (7 coarsening steps) after 4 refinement rounds with 73 refinements applied and 85 left out (counted over the rounds), 31 gaps
   reported unresolved (`unresolved_gap`, `refinement_stopped_by_budget`: cells of 0.25 to 1.9 mm, the nearest to the port
   first have been refined), numerical sensitivity 2.3 / 2.4 / 2.7 % (earlier step 5.3 / 6.1 / 6.4 %: the third mesh, with no

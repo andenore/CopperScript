@@ -206,6 +206,24 @@ fn assemble_inductance(branches: &[Branch]) -> Vec<f64> {
     m
 }
 
+impl Network {
+    /// The pairs of nodes the solver merges into one: consecutive nodes of every set of `shorts` and of each terminal
+    /// (`plus` and `minus`) of every port. The one definition of those merges, used by the solver and by the
+    /// topology check of the mesher.
+    pub fn merge_pairs(&self) -> Vec<(usize, usize)> {
+        let mut pairs = Vec::new();
+        for set in &self.shorts {
+            pairs.extend(set.windows(2).map(|w| (w[0], w[1])));
+        }
+        for port in &self.ports {
+            for set in [&port.plus, &port.minus] {
+                pairs.extend(set.windows(2).map(|w| (w[0], w[1])));
+            }
+        }
+        pairs
+    }
+}
+
 impl Solver {
     /// Build the loop system. `limit` bounds the number of filaments (the inductance matrix is dense).
     pub fn new(network: &Network, limit: usize) -> Result<Solver, SolveError> {
@@ -215,17 +233,8 @@ impl Solver {
         }
         // Merge nodes: shorts and the terminals of every port.
         let mut dsu = Dsu::new(network.node_count);
-        for set in &network.shorts {
-            for w in set.windows(2) {
-                dsu.union(w[0], w[1]);
-            }
-        }
-        for port in &network.ports {
-            for set in [&port.plus, &port.minus] {
-                for w in set.windows(2) {
-                    dsu.union(w[0], w[1]);
-                }
-            }
+        for (a, b) in network.merge_pairs() {
+            dsu.union(a, b);
         }
         // Dense renumbering of the representatives.
         let mut index: BTreeMap<usize, usize> = BTreeMap::new();

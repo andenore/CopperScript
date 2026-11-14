@@ -27,6 +27,13 @@ fn microstrip(vias: &[(i64, i64)]) -> Layout {
     let plus = layout.add_terminal_rect("trace start", top, "SIG", [-10 * MM, -250_000, -9_500_000, 250_000]);
     let minus = layout.add_terminal_rect("plane under the start", plane, "GND", [-10 * MM, -500_000, -9 * MM, 500_000]);
     layout.add_port("p", plus, minus);
+    for &(x, y) in vias {
+        // A via off the trace stands on a stub of the trace's copper (a via in no copper joins nothing).
+        if y.abs() > 250_000 {
+            let (lo, hi) = if y < 0 { (y - 300_000, 0) } else { (0, y + 300_000) };
+            layout.add_rect(top, "SIG", [x - 300_000, lo, x + 300_000, hi]);
+        }
+    }
     for (k, &(x, y)) in vias.iter().enumerate() {
         layout.vias.push(ViaGeom {
             name: format!("v{k}"),
