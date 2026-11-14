@@ -4301,21 +4301,28 @@ impl EmiCheckReport {
         lines.push(String::new());
         let conducted =
             self.findings.iter().filter(|f| f.finding.code == "EMI-CONDUCTED" && f.accepted.is_none()).count();
+        let counted = |count: usize, one: &str, many: &str| format!("{count} {}", if count == 1 { one } else { many });
         let mut summary = format!(
-            "EMI check: {} cell(s), {} finding(s), {} accepted (screening evidence; exit status does not reflect findings)",
-            self.cells.len(),
-            self.open_findings(),
+            "EMI check: {}, {}, {} accepted (screening evidence; exit status does not reflect findings)",
+            counted(self.cells.len(), "cell", "cells"),
+            counted(self.open_findings(), "finding", "findings"),
             self.accepted_findings()
         );
         let on_rules = self.rule_of_thumb_findings();
         if on_rules > 0 {
             summary.push_str(&format!(
-                "; {on_rules} finding(s) rest on rule-of-thumb defaults (their levels are bands, see the input: lines)"
+                "; {} on rule-of-thumb defaults (their levels are bands, see the input: lines)",
+                if on_rules == 1 { "1 finding rests".to_owned() } else { format!("{on_rules} findings rest") }
             ));
         }
         if conducted > 0 {
             summary.push_str(&format!(
-                "; {conducted} conducted estimate(s) are dBuV at a LISN (line amplitudes where the detector assumption fails), the radiated estimates are dBuV/m and the common-mode scores are relative dB: none is comparable with another"
+                "; {} dBuV at a LISN (line amplitudes where the detector assumption fails), the radiated estimates are dBuV/m and the common-mode scores are relative dB: none is comparable with another",
+                if conducted == 1 {
+                    "1 conducted estimate is".to_owned()
+                } else {
+                    format!("{conducted} conducted estimates are")
+                }
             ));
         }
         lines.push(summary);

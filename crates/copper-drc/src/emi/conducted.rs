@@ -94,6 +94,18 @@ fn package_of(footprint: &str) -> Option<(&'static str, f64)> {
     None
 }
 
+/// A margin (limit minus level) in words that cannot be misread: "49.6 dB over the average limit", "6.4 dB under the
+/// quasi-peak limit", or "at the average limit" (the spectrum picture uses the same wording).
+fn margin_words(margin: f64, limit: &str) -> String {
+    if margin.abs() < 0.05 {
+        format!("at the {limit} limit")
+    } else if margin < 0.0 {
+        format!("{:.1} dB over the {limit} limit", -margin)
+    } else {
+        format!("{margin:.1} dB under the {limit} limit")
+    }
+}
+
 fn si(value: f64, unit: &str) -> String {
     let (scaled, prefix) = if value == 0.0 {
         (0.0, "")
@@ -2321,23 +2333,21 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     // Message.
     let level_part = match (worst_margin, worst.reading) {
         (Some(m), Some(r)) if emulated => format!(
-            "{:.1} dBuV {} reading (line amplitude {:.1} dBuV, band [{:.1} .. {:.1}] dBuV; {:+.1} dB to the {} line from the high end)",
+            "{:.1} dBuV {} reading (line amplitude {:.1} dBuV, band [{:.1} .. {:.1}] dBuV; {}, from the high end of the band)",
             if worst_detector == Some(Detector::Average) { r.average_high } else { r.quasi_peak_high },
             detector_text(worst_detector),
             worst.total,
             if worst_detector == Some(Detector::Average) { r.average_low } else { r.quasi_peak_low },
             if worst_detector == Some(Detector::Average) { r.average_high } else { r.quasi_peak_high },
-            m,
-            detector_text(worst_detector)
+            margin_words(m, detector_text(worst_detector))
         ),
         (Some(m), _) => format!(
-            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {:+.1} dB to the {} line from the high end)",
+            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {}, from the high end of the band)",
             worst.high,
             worst.low,
             worst.high,
             worst.total,
-            m,
-            detector_text(worst_detector)
+            margin_words(m, detector_text(worst_detector))
         ),
         (None, _) => format!(
             "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1})",
@@ -2462,7 +2472,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             si(current_limit, "A"),
             w.high,
             si(w.f, "Hz"),
-            w.margin().map_or(String::new(), |m| format!(" ({m:+.1} dB)"))
+            w.margin().map_or(String::new(), |m| format!(" ({})", margin_words(m, "nearer")))
         ));
     }
     message.push_str(&format!(

@@ -1,5 +1,6 @@
-//! `copper emi-check --plot-spectrum/--plot-field` and `copper view RUN --issue M<n> --emi-field`:
-//! the conducted spectrum chart and the hot-loop near-field map, both screening estimates.
+//! `copper emi-check --plot-spectrum/--plot-field/--plot-impedance/--plot-current/--plot-summary` and `copper view RUN
+//! --issue M<n> --emi-field`: the conducted spectrum chart, the hot-loop near-field map, the input-network impedance, the
+//! current distribution and the one-page summary, all screening estimates.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -59,7 +60,7 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
     let path = directory.join("spectrum.svg");
     let result = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--plot-spectrum", path.to_str().unwrap()]);
     assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
-    assert!(stdout(&result).contains("conducted spectrum of 1 cell(s) written to"), "{}", stdout(&result));
+    assert!(stdout(&result).contains("conducted spectrum of 1 cell written to"), "{}", stdout(&result));
     let svg = std::fs::read_to_string(&path).expect("the SVG");
 
     // The harmonics of the finding, as the JSON lists them.
@@ -270,7 +271,7 @@ fn the_field_map_has_a_colour_bar_the_loop_outline_and_a_level_at_the_feedback_p
     let path = directory.join("field.svg");
     let (result, svg) = plot_field(BUCK, &path, &[]);
     assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
-    assert!(stdout(&result).contains("near-field map of 1 hot loop(s) at 1 mm"), "{}", stdout(&result));
+    assert!(stdout(&result).contains("near-field map of 1 hot loop at 1 mm"), "{}", stdout(&result));
     assert!(svg.contains("<g class=\"colorbar\">") && svg.contains("dB(uA/m)"));
     assert_eq!(svg.matches("class=\"emi_loop\"").count(), 1, "the loop outline");
     assert!(svg.contains("Screening estimate, a ranking and placement aid"));
@@ -342,6 +343,7 @@ fn plot_options_are_checked_and_documented() {
         "--field-height",
         "--plot-impedance",
         "--plot-current",
+        "--plot-summary",
         "screening estimate",
     ] {
         assert!(help.contains(needle), "{needle} in the emi-check help");
@@ -424,6 +426,13 @@ fn a_routed_run_gives_the_map_through_view_and_emi_check() {
     assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
     let direct = std::fs::read_to_string(&direct_path).expect("the SVG");
     assert!(direct.contains("<g class=\"colorbar\">") && direct.contains("routed board"));
+    // The summary of the routed run numbers its findings as `copper issues` does, and points to that listing.
+    let summary_path = run.join("summary.svg");
+    let summary = copper(&["emi-check", BUCK, "--run", run_text, "--plot-summary", summary_path.to_str().unwrap()]);
+    assert_eq!(summary.status.code(), Some(0), "{}{}", stdout(&summary), stderr(&summary));
+    let page = std::fs::read_to_string(&summary_path).expect("the SVG");
+    assert!(page.contains(&format!("{id}  EMI-HOT-LOOP")), "{id} in the summary");
+    assert!(page.contains("copper issues") && page.contains("--run"), "the commands keep the run");
     let _ = std::fs::remove_dir_all(&run);
 }
 
@@ -461,7 +470,7 @@ fn a_frequency_range_plots_line_amplitudes_without_limit_lines_for_both_ends() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
-    assert!(stdout(&result).contains("conducted spectrum of 2 cell(s)"), "{}", stdout(&result));
+    assert!(stdout(&result).contains("conducted spectrum of 2 cells"), "{}", stdout(&result));
     let svg = std::fs::read_to_string(&path).expect("the SVG");
     assert_eq!(svg.matches("<g class=\"panel\"").count(), 2, "one panel per frequency scenario");
     assert!(svg.contains("(range lower bound)") && svg.contains("(range upper bound)"), "{svg}");
@@ -474,4 +483,102 @@ fn a_frequency_range_plots_line_amplitudes_without_limit_lines_for_both_ends() {
     assert!(text.contains("NOT a detector reading") && text.contains("no quasi-peak or average margin"), "{text}");
     assert!(text.contains("EMI-CONDUCTED:U1@min") && text.contains("EMI-CONDUCTED:U1@max"), "{text}");
     let _ = std::fs::remove_dir_all(board.parent().unwrap());
+}
+
+/// The font sizes of an SVG, px.
+fn font_sizes(svg: &str) -> Vec<f64> {
+    svg.split("font-size=\"").skip(1).filter_map(|part| part.split('"').next()?.parse().ok()).collect()
+}
+
+/// The `id="..."` values of an SVG.
+fn ids(svg: &str) -> Vec<String> {
+    svg.split(" id=\"").skip(1).filter_map(|part| part.split('"').next().map(str::to_owned)).collect()
+}
+
+#[test]
+fn the_summary_page_gathers_the_key_numbers_the_findings_and_four_thumbnails() {
+    let directory = scratch("emi-plots-summary");
+    let path = directory.join("summary.svg");
+    let result = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--plot-summary", path.to_str().unwrap()]);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    assert!(stdout(&result).contains("summary of 1 cell written to"), "{}", stdout(&result));
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    for needle in [
+        "U1 (p.Buck): buck converter",
+        "switching at 500 kHz (fixed), input 12 V, output 5 V",
+        "Current scenario: the declared operating point, 2 A load current",
+        "Screening estimate, not a compliance measurement.",
+        "Hot loop, closed form",
+        "Worst conducted harmonic",
+        "6.44 dB under the average limit",
+        "16.44 dB under the quasi-peak limit",
+        "quasi-static extraction: not available without --extract",
+        "Findings for U1 (5)",
+        "EMI-HOT-LOOP",
+        "EMI-PROXIMITY",
+        "What the numbers assume",
+        "Full-size pictures",
+        "emi-check examples/emi_buck_filter/board.copper --allow-proxy-footprints --plot-field emi-field.svg",
+        "--plot-spectrum emi-spectrum.svg",
+        "--plot-impedance emi-impedance.svg",
+        "--extract --plot-current emi-current.svg",
+        "run with --extract for the current distribution",
+    ] {
+        assert!(svg.contains(needle), "{needle}");
+    }
+    // Three thumbnails drawn by the code of the full-size pictures, the fourth a labelled placeholder.
+    assert_eq!(svg.matches("class=\"thumbnail\"").count(), 3);
+    assert_eq!(svg.matches("class=\"placeholder\"").count(), 1);
+    assert!(svg.contains("magnetic near field |H|") && svg.contains("conducted spectrum at the input"));
+    assert!(svg.contains("input-network impedance"));
+    // No row without a number, no signed margin, nothing that was not computed.
+    assert!(!svg.contains("n/a") && !svg.contains("NaN") && !svg.contains("dB to the"));
+    // About 1400 px wide, the smallest text 9 px or more at the scale of the thumbnails (at least 0.9).
+    assert!(svg.contains("width=\"1400\""));
+    let smallest = font_sizes(&svg).into_iter().fold(f64::INFINITY, f64::min);
+    assert!(smallest >= 9.0, "the smallest text is {smallest} px");
+    let all = ids(&svg);
+    let mut sorted = all.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(all.len(), sorted.len(), "clip path ids are unique: {all:?}");
+    // The report itself is unchanged by the picture, and the picture is repeatable to the byte.
+    let plain = stdout(&copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--json"]));
+    let with_plot = copper(&[
+        "emi-check",
+        FILTER,
+        "--allow-proxy-footprints",
+        "--json",
+        "--plot-summary",
+        directory.join("again.svg").to_str().unwrap(),
+    ]);
+    assert_eq!(stdout(&with_plot), plain);
+    // The conducted message states its margins the way the pictures do, never as a signed number.
+    assert!(plain.contains("6.4 dB under the average limit, from the high end of the band"), "{plain}");
+    assert!(plain.contains("(0.5 dB over the nearer limit)"));
+    assert!(!plain.contains("dB to the average line") && !plain.contains("dB to the quasi-peak line"));
+    assert_eq!(std::fs::read_to_string(directory.join("again.svg")).unwrap(), svg);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn the_summary_page_with_the_extraction_adds_its_row_and_the_current_map() {
+    let directory = scratch("emi-plots-summary-extract");
+    let path = directory.join("summary.svg");
+    let mut arguments = vec!["emi-check", BUCK, "--allow-proxy-footprints"];
+    arguments.extend(QUICK_EXTRACT);
+    arguments.extend(["--plot-summary", path.to_str().unwrap()]);
+    let result = copper(&arguments);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    assert!(svg.contains("Hot loop, extraction") && svg.contains("status indicative"), "{svg}");
+    assert!(svg.contains("full wave: not available without --fullwave"));
+    assert!(!svg.contains("not available without --extract") && !svg.contains("run with --extract"));
+    assert_eq!(svg.matches("class=\"thumbnail\"").count(), 4);
+    assert!(svg.contains("current distribution in the copper"), "the fourth thumbnail");
+    assert!(svg.contains("--extract") && svg.contains("--plot-current emi-current.svg"));
+    assert!(!svg.contains("--plot-summary"), "the commands name the full-size pictures only");
+    let smallest = font_sizes(&svg).into_iter().fold(f64::INFINITY, f64::min);
+    assert!(smallest >= 9.0, "the smallest text is {smallest} px");
+    let _ = std::fs::remove_dir_all(&directory);
 }

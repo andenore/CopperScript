@@ -231,6 +231,17 @@ const LEFT: f64 = 24.0;
 
 /// The picture of one cell.
 pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
+    picture(panel, false, 0)
+}
+
+/// The picture of one cell as a thumbnail for the summary page: its own title and the layer with the strongest
+/// current (heat, arrows, pads, vias and the port), a one-row colour scale, a caption and the legend; without the
+/// notes and the right-hand column. `id` makes the clip path unique within the page.
+pub fn current_thumbnail(panel: &CurrentPanel, id: usize) -> FieldPicture {
+    picture(panel, true, id)
+}
+
+fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
     let full = panel.window;
     let (fw, fh) = ((full[2] - full[0]).max(1e-3), (full[3] - full[1]).max(1e-3));
     // Raster step: 0.05 mm, coarser when the window would exceed about 90 000 pixels.
@@ -259,6 +270,17 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
                 || panel.port.minus.0 == l
         })
         .collect();
+    // The thumbnail shows the one layer that carries the most current.
+    let shown: Vec<usize> = if compact {
+        shown
+            .iter()
+            .copied()
+            .max_by(|&a, &b| peak(&rasters[a]).total_cmp(&peak(&rasters[b])).then(b.cmp(&a)))
+            .into_iter()
+            .collect()
+    } else {
+        shown
+    };
     let hidden: Vec<String> = (0..panel.layers.len())
         .filter(|l| !shown.contains(l))
         .map(|l| {
@@ -326,25 +348,31 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
         ]
     });
     let (ww, wh) = ((wx1 - wx0).max(1e-3), (wy1 - wy0).max(1e-3));
-    let scale = (620.0 / ww).min(400.0 / wh).min(80.0);
+    let scale = if compact { (616.0 / ww).min(270.0 / wh).min(80.0) } else { (620.0 / ww).min(400.0 / wh).min(80.0) };
     let (map_w, map_h) = (ww * scale, wh * scale);
 
     // Text blocks first: the picture's width depends on them.
     let side = LEFT + map_w + 30.0;
     let column = 330.0;
-    let width = (side + column + LEFT).max(560.0);
     let title = format!(
-        "{} hot loop: current distribution in the copper, quasi-static extraction at {}",
+        "{} hot loop: current distribution in the copper, {}extraction at {}",
         panel.cell,
+        if compact { "" } else { "quasi-static " },
         frequency_label(panel.frequency_hz)
     );
+    let width = if compact {
+        (LEFT + map_w + LEFT).max(text_px(&title, 14.0) * 1.07 + 2.0 * LEFT).max(460.0)
+    } else {
+        (side + column + LEFT).max(560.0)
+    };
     let mut out: Vec<String> = Vec::new();
     out.push(format!(
-        "<text x=\"{}\" y=\"26\" font-size=\"16\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
+        "<text x=\"{}\" y=\"26\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
         n(LEFT),
+        if compact { 14 } else { 16 },
         escape(&title)
     ));
-    let mut y = 46.0;
+    let mut y = if compact { 34.0 } else { 46.0 };
     let notes = [format!(
         "Screening estimate from a quasi-static partial-element extraction of the filled copper ({} filaments, status {}{}): the current in every filament for one ampere into the port across the switch. Heat: sheet current |I|/w per mesh cell on a {} dB scale; arrows: direction at the instant the port current peaks. The displacement current and the skin effect are not modelled.",
         panel.filaments,
@@ -352,7 +380,7 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
         if panel.status_reasons.is_empty() { String::new() } else { format!(": {}", panel.status_reasons.join("; ")) },
         n(RANGE_DB)
     )];
-    for text in &notes {
+    for text in notes.iter().filter(|_| !compact) {
         for line in text_rows(text, 12.0, width - 2.0 * LEFT) {
             out.push(format!(
                 "<text class=\"note\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
@@ -391,7 +419,7 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
                 n(rel_db(layer_peak).max(-99.0))
             ))
         ));
-        let clip = format!("clip{slot}");
+        let clip = if compact { format!("tclip{id}") } else { format!("clip{slot}") };
         defs.push(format!(
             "<clipPath id=\"{clip}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
             n(ox),
@@ -679,6 +707,7 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
     }
 
     // Right column: colour bar, legend, loop inductance, the vias.
+    let column_start = out.len();
     let (bar_x, bar_y, bar_h) = (side, column_top + 18.0, 180.0);
     out.push("<g class=\"colorbar\">".to_owned());
     out.push(format!(
@@ -886,6 +915,75 @@ pub fn current_picture(panel: &CurrentPanel) -> FieldPicture {
             escape(&line)
         ));
         cy += 12.0;
+    }
+    if compact {
+        // The thumbnail drops the column: a one-row colour scale under the map, a caption and the legend in rows.
+        out.truncate(column_start);
+        let map_bottom = top - 34.0;
+        let (bar_w, bar_h) = (200.0, 10.0);
+        let bx = (LEFT + map_w - bar_w).max(LEFT + 150.0);
+        let by = map_bottom + 6.0;
+        out.push("<g class=\"colorbar\">".to_owned());
+        for k in 0..STEPS {
+            out.push(format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+                n(bx + bar_w * k as f64 / STEPS as f64),
+                n(by),
+                n(bar_w / STEPS as f64 + 0.3),
+                n(bar_h),
+                scale_color((k as f64 + 0.5) / STEPS as f64)
+            ));
+        }
+        let ticks = (RANGE_DB / 10.0).round() as usize;
+        for k in 0..=ticks {
+            let x = bx + bar_w * k as f64 / ticks as f64;
+            out.push(format!(
+                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{0}\" y=\"{3}\" font-size=\"10\" text-anchor=\"middle\" fill=\"{INK}\">{4} dB</text>",
+                n(x),
+                n(by + bar_h),
+                n(by + bar_h + 4.0),
+                n(by + bar_h + 15.0),
+                n(-RANGE_DB + 10.0 * k as f64)
+            ));
+        }
+        out.push("</g>".to_owned());
+        let mut ty = by + bar_h + 34.0;
+        let caption = format!(
+            "Sheet current per mesh cell for one ampere into the port, dB below the level the strongest 1 % of the cells exceed ({} A/mm); quasi-static extraction, {} filaments, status {}.",
+            n(reference),
+            panel.filaments,
+            panel.status
+        );
+        for line in wrap_px(&caption, 11.0, width - 2.0 * LEFT) {
+            out.push(format!(
+                "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
+                n(LEFT),
+                n(ty),
+                escape(&line)
+            ));
+            ty += 14.0;
+        }
+        ty += 6.0;
+        let mut lx = LEFT;
+        out.push("<g class=\"legend\">".to_owned());
+        for (glyph, label) in &legend {
+            let need = 30.0 + text_px(label, 11.0) + 16.0;
+            if lx + need > width - LEFT && lx > LEFT {
+                lx = LEFT;
+                ty += 17.0;
+            }
+            out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(lx), n(ty)));
+            out.push(format!(
+                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
+                n(lx + 30.0),
+                n(ty + 4.0)
+            ));
+            lx += need;
+        }
+        out.push("</g>".to_owned());
+        let mut content = vec![format!("<defs>{}</defs>", defs.join(""))];
+        content.extend(out);
+        return FieldPicture { content: content.join("\n"), width, height: ty + 14.0 };
     }
     let height = top.max(cy) + 10.0;
     let mut content = vec![format!("<defs>{}</defs>", defs.join(""))];

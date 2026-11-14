@@ -2369,6 +2369,7 @@ fabricator's calculator or a field solver and record it in
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
 [--plot-field OUT.svg [--field-height MM]] [--plot-impedance OUT.svg] [--plot-current OUT.svg (needs --extract)]
+[--plot-summary OUT.svg]
 [--fullwave [--fullwave-fidelity coarse|fine]
 [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline]]
 [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM]
@@ -2586,6 +2587,18 @@ copper of each layer that carries loop current, direction arrows, the vias sized
 the loop's pads and the port, with the loop inductance and the division between the vias beside it; it is made from
 the extraction of the same run and is not stored in the report. Both are screening estimates; see
 [the EMI specification](emi-noise-analysis.md).
+`--plot-summary OUT.svg` writes the picture to open first, one page per switching cell (stacked for several), about 1400 px
+wide: the converter, its switching frequency, input voltage and current scenario in a sentence; the key numbers (the hot-loop
+inductance by method, the closed form always, the quasi-static extraction with `--extract` and the full wave with
+`--fullwave`, with their status and the cross-check of the two; the loop area and path; the worst conducted harmonic with
+its margin to each limit as "x dB over the average limit" or "x dB under the quasi-peak limit"; the anti-resonances and
+the harmonic that lands on each; the switch node); the cell's findings by severity, at most ten (the `M` ids of
+`copper issues` when `--run` is given); four thumbnails of the near-field map, the conducted spectrum, the
+input-network impedance and, with `--extract`, the current distribution, each drawn by the code of its full-size picture;
+and the assumptions, what is not modelled and the command lines of the full-size pictures. Every number is read from the
+report or the pictures' own results; a value the report does not hold is left out. It changes no number of the report
+and is a screening estimate, not a compliance measurement. The message of an `EMI-CONDUCTED` finding states the margin
+of its worst harmonic in the same words (the `margin_*_db` fields keep the signed numbers, limit minus level).
 
 ### Native copper connectivity and package escape
 

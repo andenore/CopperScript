@@ -752,9 +752,20 @@ fn track_outline(
 
 /// Draw one map.
 pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
+    picture(map, scene_source, false)
+}
+
+/// The map as a thumbnail for the summary page: its own title, the map with the loop, the contours and the labels at
+/// the sensitive pads, a one-row colour scale, the legend and one caption line; the notes, the right-hand column and
+/// the footer of [`field_picture`] are left out (the summary states what they say once).
+pub fn field_thumbnail(map: &FieldMap) -> FieldPicture {
+    picture(map, "", true)
+}
+
+fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
     let [wx0, wy0, wx1, wy1] = map.window;
     let (ww, wh) = (wx1 - wx0, wy1 - wy0);
-    let scale = (640.0 / ww).min(440.0 / wh).min(60.0);
+    let scale = if compact { (616.0 / ww).min(270.0 / wh).min(60.0) } else { (640.0 / ww).min(440.0 / wh).min(60.0) };
     let ox = 24.0;
     let (map_w, map_h) = (ww * scale, wh * scale);
     let px = |x: f64| ox + (x - wx0) * scale;
@@ -784,25 +795,37 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
             Some(name) => format!("{} {name}", map.cell),
             None => map.cell.clone(),
         };
-        format!("{label} hot loop: magnetic near field |H|, {} mm above the top copper", n(map.height_mm))
+        if compact {
+            format!("{label} hot loop: magnetic near field |H|, {} mm above the copper", n(map.height_mm))
+        } else {
+            format!("{label} hot loop: magnetic near field |H|, {} mm above the top copper", n(map.height_mm))
+        }
     };
-    let width = (side + column + ox).max(text_px(&title, 16.0) * 1.07 + 2.0 * ox).max(560.0);
+    let width = if compact {
+        (ox + map_w + ox).max(text_px(&title, 14.0) * 1.07 + 2.0 * ox).max(460.0)
+    } else {
+        (side + column + ox).max(text_px(&title, 16.0) * 1.07 + 2.0 * ox).max(560.0)
+    };
 
     let mut out: Vec<String> = Vec::new();
     out.push(format!(
-        "<text x=\"{}\" y=\"26\" font-size=\"16\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
+        "<text x=\"{}\" y=\"26\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
         n(ox),
+        if compact { 14 } else { 16 },
         escape(&title)
     ));
     let plane = match map.plane_z_mm {
         Some(z) => format!("ideal ground plane at z = {} mm by image currents", n(z)),
         None => "no reference plane: free space".to_owned(),
     };
-    let mut y = 46.0;
+    let mut y = if compact { 34.0 } else { 46.0 };
     for text in [
         "Screening estimate, a ranking and placement aid: the quasi-static field of the hot-loop current only. The power inductor's own field is NOT included (coverage unsupported EMI-FIELD:inductor).".to_owned(),
         format!("Amplitude {}; loop: {}; {plane}.", amplitude_text(map), loop_basis(map)),
-    ] {
+    ]
+    .into_iter()
+    .filter(|_| !compact)
+    {
         for line in wrap_px(&text, 12.0, width - 2.0 * ox) {
             out.push(format!(
                 "<text class=\"note\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
@@ -985,9 +1008,11 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
     let mut labels: Vec<String> = Vec::new();
     for (level, at) in &contour_labels {
         let text = format!("{} dB", n(*level));
-        let w = text_px(&text, 9.0);
-        let (x, y) = placer.place(*at, w, 9.0, &[(-w / 2.0, -3.0), (-w / 2.0, 11.0), (4.0, -3.0), (-w - 4.0, -3.0)]);
-        labels.push(halo(x, y, 9.0, "normal", "start", "contour-label", &text));
+        // The thumbnail is shown at 0.9 at the smallest: 10 px there is 9 px on the page.
+        let size = if compact { 10.0 } else { 9.0 };
+        let w = text_px(&text, size);
+        let (x, y) = placer.place(*at, w, size, &[(-w / 2.0, -3.0), (-w / 2.0, 11.0), (4.0, -3.0), (-w - 4.0, -3.0)]);
+        labels.push(halo(x, y, size, "normal", "start", "contour-label", &text));
     }
     for victim in &shown_victims {
         let (x, y) = (px(victim.at.0), py(victim.at.1));
@@ -1063,6 +1088,7 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
     ));
 
     // Right column: colour bar in dB below the maximum, then the legend, then the field at the victims.
+    let column_start = out.len();
     let (bar_x, bar_y, bar_h) = (side, oy + 14.0, 200.0_f64.min(map_h));
     out.push("<g class=\"colorbar\">".to_owned());
     out.push(format!(
@@ -1188,6 +1214,78 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
             cy += 14.0;
         }
         cy += 2.0;
+    }
+
+    if compact {
+        // The thumbnail drops the column: a one-row colour scale under the map, one caption line and the legend in rows.
+        out.truncate(column_start);
+        let (bar_w, bar_h) = (200.0, 10.0);
+        let bx = (ox + map_w - bar_w).max(ox + 150.0);
+        let by = oy + map_h + 6.0;
+        out.push("<g class=\"colorbar\">".to_owned());
+        for k in 0..STEPS {
+            out.push(format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+                n(bx + bar_w * k as f64 / STEPS as f64),
+                n(by),
+                n(bar_w / STEPS as f64 + 0.3),
+                n(bar_h),
+                scale_color((k as f64 + 0.5) / STEPS as f64)
+            ));
+        }
+        let ticks = (RANGE_DB / CONTOUR_DB).round() as usize;
+        for k in 0..=ticks {
+            let x = bx + bar_w * k as f64 / ticks as f64;
+            out.push(format!(
+                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{0}\" y=\"{3}\" font-size=\"10\" text-anchor=\"middle\" fill=\"{INK}\">{4} dB</text>",
+                n(x),
+                n(by + bar_h),
+                n(by + bar_h + 4.0),
+                n(by + bar_h + 15.0),
+                n(-RANGE_DB + CONTOUR_DB * k as f64)
+            ));
+        }
+        out.push("</g>".to_owned());
+        let mut ty = by + bar_h + 34.0;
+        let caption = format!(
+            "0 dB = {} dB(uA/m) at the map maximum ({}), a ranking aid; contours every {} dB{}.",
+            n1(map.max_db),
+            amplitude_short(map),
+            n(CONTOUR_DB),
+            if shown_victims.is_empty() {
+                ""
+            } else {
+                "; the labels at the rings give the level at that pad, dB below the peak"
+            }
+        );
+        for line in wrap_px(&caption, 11.0, width - 2.0 * ox) {
+            out.push(format!(
+                "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
+                n(ox),
+                n(ty),
+                escape(&line)
+            ));
+            ty += 14.0;
+        }
+        ty += 6.0;
+        let mut lx = ox;
+        out.push("<g class=\"legend\">".to_owned());
+        for (glyph, label) in &legend {
+            let need = 30.0 + text_px(label, 11.0) + 16.0;
+            if lx + need > width - ox && lx > ox {
+                lx = ox;
+                ty += 17.0;
+            }
+            out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(lx), n(ty)));
+            out.push(format!(
+                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
+                n(lx + 30.0),
+                n(ty + 4.0)
+            ));
+            lx += need;
+        }
+        out.push("</g>".to_owned());
+        return FieldPicture { content: out.join("\n"), width, height: ty + 14.0 };
     }
 
     // Footer: what the map is, in one neutral line or two.

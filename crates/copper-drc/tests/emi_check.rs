@@ -984,7 +984,13 @@ fn the_conducted_levels_match_the_hand_calculation() {
             || finding.margin_db.is_some()
     );
     assert_eq!(estimate.basis.as_deref(), Some("rule_of_thumb"));
-    assert!(message.contains("dB to the") && !message.to_lowercase().contains("pass"));
+    assert!(
+        (message.contains(" dB over the ") || message.contains(" dB under the "))
+            && message.contains(" limit, from the high end of the band"),
+        "{message}"
+    );
+    assert!(!message.contains("dB to the"), "{message}");
+    assert!(!message.to_lowercase().contains("pass"));
     // Class B limits at 500 kHz: quasi-peak 56, average 46 dBuV; margin of the fundamental to the average line.
     let row = first_row(finding);
     assert_eq!(number(row.get("limit_qp").unwrap()), 56.0);
@@ -997,7 +1003,7 @@ fn the_conducted_levels_match_the_hand_calculation() {
     assert_eq!(cm.status, CoverageStatus::NotApplicable);
     assert!(cm.detail.contains("ground plane"), "{}", cm.detail);
     assert_eq!(coverage(&report, "EMI-CONDUCTED:U1:filter").status, CoverageStatus::NotApplicable);
-    assert!(report.lines().iter().any(|l| l.contains("conducted estimate(s) are dBuV at a LISN")));
+    assert!(report.lines().iter().any(|l| l.contains("conducted estimate is dBuV at a LISN")));
 }
 
 #[test]
@@ -1156,7 +1162,7 @@ fn a_missing_edge_time_becomes_a_default_band_over_all_harmonics() {
     assert!(report.rule_of_thumb_findings() >= 3);
     assert!(report.limits.notes.iter().any(|n| n.contains("rest on rule-of-thumb defaults")));
     assert!(report.json().contains("\"rule_of_thumb\""));
-    assert!(report.lines().iter().any(|l| l.contains("rest on rule-of-thumb defaults")));
+    assert!(report.lines().iter().any(|l| l.contains("on rule-of-thumb defaults (their levels are bands")));
 }
 
 #[test]
@@ -1872,7 +1878,12 @@ fn a_frequency_range_is_two_fixed_scenarios_whose_line_amplitudes_get_no_margin(
         assert_eq!(finding.measures.get("margins_available"), Some(&Value::Bool(false)));
         assert_eq!(finding.estimate.as_ref().unwrap().quantity, "conducted_line_amplitude");
         let message = &finding.finding.message;
-        assert!(message.contains("NOT a detector reading") && !message.contains("dB to the"), "{message}");
+        assert!(
+            message.contains("NOT a detector reading")
+                && !message.contains(" dB over the ")
+                && !message.contains(" dB under the "),
+            "{message}"
+        );
         assert!(message.contains("no quasi-peak or average margin"), "{message}");
         for row in finding.measures.get("harmonics").and_then(Value::as_array).unwrap() {
             let Value::Object(row) = row else { panic!("row") };

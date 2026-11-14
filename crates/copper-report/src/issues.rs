@@ -18,7 +18,7 @@ use crate::scene::{Point, Scene, fixed, round3, scene_from_kicad_text, scene_fro
 
 mod emi;
 
-pub use emi::emi_finding;
+pub use emi::{emi_finding, ordered_findings};
 
 pub const ISSUES_SCHEMA: &str = "copperscript.run-issues/v1";
 pub const FIXED_PREFIX_VIEW_SOURCE: &str = "PhysicalBoard with declared fixed prefix (view only)";

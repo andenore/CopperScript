@@ -1,7 +1,7 @@
 //! `copper emi-check BOARD [--locked] [--offline] [--layers {2,4,6}]
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
 //! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]] [--plot-impedance OUT.svg]
-//! [--plot-current OUT.svg]
+//! [--plot-current OUT.svg] [--plot-summary OUT.svg]
 //! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-zone-outline]]
 //! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
 //! [--extract-no-switch-bar]] [--json]`:
@@ -26,7 +26,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--plot-impedance PLOT_IMPEDANCE] [--plot-current PLOT_CURRENT] [--plot-summary PLOT_SUMMARY] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -52,6 +52,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--field-height"),
         value("--plot-impedance"),
         value("--plot-current"),
+        value("--plot-summary"),
         flag("--fullwave"),
         value("--fullwave-fidelity"),
         value("--fullwave-budget"),
@@ -74,7 +75,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar)"
+             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). 
+             --plot-summary OUT.svg draws the one-page summary of each cell (key numbers, findings, four thumbnails of the other pictures, assumptions and the commands for the full-size pictures), the picture to open first"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -243,6 +245,25 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         }
     }
+    if let Some(path) = parsed.value("--plot-summary") {
+        let input = SummaryInput {
+            report: &report,
+            physical: &physical,
+            extracted: &extracted,
+            parsed: &parsed,
+            board: &board,
+            height_mm,
+            extract: extract.is_some(),
+            fullwave: fullwave.is_some(),
+        };
+        match plot_summary(&input, &pypath::display(path)) {
+            Ok(message) => plotted.push(message),
+            Err(message) => {
+                let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
+                return 2;
+            }
+        }
+    }
     if parsed.value("--plot-spectrum").is_some() || parsed.value("--plot-field").is_some() {
         let document = report.to_value();
         if let Some(path) = parsed.value("--plot-spectrum") {
@@ -376,7 +397,7 @@ fn extract_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_e
         cell_mm: positive("--extract-cell", cell)?,
         single_mesh: parsed.flag("--extract-single-mesh"),
         no_switch_bar: parsed.flag("--extract-no-switch-bar"),
-        current_map: parsed.value("--plot-current").is_some(),
+        current_map: parsed.value("--plot-current").is_some() || parsed.value("--plot-summary").is_some(),
     }))
 }
 
@@ -403,43 +424,45 @@ fn plot_spectrum(document: &copper_json::Value, path: &str) -> Result<String, St
     let board = document.get("board").and_then(copper_json::Value::as_str).unwrap_or("board");
     write_plot(path, &copper_report::emi_plot::spectrum_svg(board, &panels))?;
     Ok(format!(
-        "conducted spectrum of {} cell(s) written to {path} (screening estimate, not EMC qualification)",
-        panels.len()
+        "conducted spectrum of {} written to {path} (screening estimate, not EMC qualification)",
+        copper_report::emi_impedance::counted(panels.len(), "cell", "cells")
     ))
+}
+
+/// The picture data of the input network of an `EMI-CONDUCTED` finding; `None` for one without its network.
+fn impedance_panel(
+    finding: &copper_drc::emi::EmiFinding,
+) -> Option<Result<copper_report::emi_impedance::ImpedancePanel, String>> {
+    use std::collections::BTreeMap;
+    let (Some(input), Some(cell)) = (finding.conducted_input.as_deref(), finding.cell.as_deref()) else { return None };
+    let sources: BTreeMap<String, String> = finding
+        .measures
+        .get("capacitor_branches")
+        .and_then(copper_json::Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|b| {
+            let component = b.get("component").and_then(copper_json::Value::as_str)?;
+            let source = b.get("connection_source").and_then(copper_json::Value::as_str)?;
+            Some((component.to_owned(), source.to_owned()))
+        })
+        .collect();
+    let extraction = finding
+        .measures
+        .get("extracted_connections")
+        .and_then(|e| e.get("status"))
+        .and_then(copper_json::Value::as_str);
+    let scenario = finding.tags.iter().find_map(|t| t.strip_prefix("frequency_scenario_"));
+    Some(copper_report::emi_impedance::panel_from_input(cell, scenario, &finding.tags, input, &sources, extraction))
 }
 
 /// `--plot-impedance`: the input-network impedance of every `EMI-CONDUCTED` finding, stacked in one SVG.
 fn plot_impedance(report: &copper_drc::emi::EmiCheckReport, path: &str) -> Result<String, String> {
-    use std::collections::BTreeMap;
     let mut panels = Vec::new();
     for finding in report.findings.iter().filter(|f| f.finding.code == "EMI-CONDUCTED") {
-        let (Some(input), Some(cell)) = (finding.conducted_input.as_deref(), finding.cell.as_deref()) else { continue };
-        let sources: BTreeMap<String, String> = finding
-            .measures
-            .get("capacitor_branches")
-            .and_then(copper_json::Value::as_array)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|b| {
-                let component = b.get("component").and_then(copper_json::Value::as_str)?;
-                let source = b.get("connection_source").and_then(copper_json::Value::as_str)?;
-                Some((component.to_owned(), source.to_owned()))
-            })
-            .collect();
-        let extraction = finding
-            .measures
-            .get("extracted_connections")
-            .and_then(|e| e.get("status"))
-            .and_then(copper_json::Value::as_str);
-        let scenario = finding.tags.iter().find_map(|t| t.strip_prefix("frequency_scenario_"));
-        panels.push(copper_report::emi_impedance::panel_from_input(
-            cell,
-            scenario,
-            &finding.tags,
-            input,
-            &sources,
-            extraction,
-        )?);
+        if let Some(panel) = impedance_panel(finding) {
+            panels.push(panel?);
+        }
     }
     if panels.is_empty() {
         return Err("--plot-impedance: no EMI-CONDUCTED finding with a network to plot (see the EMI-CONDUCTED:<cell> coverage entries for why a cell has none)".to_owned());
@@ -506,8 +529,159 @@ fn plot_field(
     let board = document.get("board").and_then(copper_json::Value::as_str).unwrap_or("board");
     write_plot(path, &copper_report::emi_field::field_svg(board, &pictures))?;
     Ok(format!(
-        "near-field map of {} hot loop(s) at {height_mm} mm written to {path} (screening estimate; the inductor's own field is not included)",
-        pictures.len()
+        "near-field map of {} at {height_mm} mm written to {path} (screening estimate; the inductor's own field is not included)",
+        copper_report::emi_impedance::counted(pictures.len(), "hot loop", "hot loops")
+    ))
+}
+
+/// What `--plot-summary` needs besides the report.
+struct SummaryInput<'a> {
+    report: &'a copper_drc::emi::EmiCheckReport,
+    physical: &'a copper_pcb::board::PhysicalBoard,
+    extracted: &'a [(String, copper_extract::hotloop::HotLoopExtraction)],
+    parsed: &'a option_parser::Parsed,
+    board: &'a str,
+    height_mm: f64,
+    extract: bool,
+    fullwave: bool,
+}
+
+/// `copper emi-check ...` as run, without the plot options, the JSON and write switches and the full-wave options:
+/// the base of the commands that draw the full-size pictures (the options are as the parser resolved them).
+fn command_base(parsed: &option_parser::Parsed, board: &str) -> String {
+    const DROPPED: [&str; 12] = [
+        "--plot-spectrum",
+        "--plot-field",
+        "--field-height",
+        "--plot-impedance",
+        "--plot-current",
+        "--plot-summary",
+        "--fullwave",
+        "--fullwave-fidelity",
+        "--fullwave-budget",
+        "--fullwave-margin",
+        "--fullwave-single-mesh",
+        "--fullwave-zone-outline",
+    ];
+    let quote = |text: &str| {
+        if text.is_empty() || text.contains(|c: char| c.is_whitespace() || "\"'&|;<>()$`".contains(c)) {
+            format!("\"{}\"", text.replace('"', "\\\""))
+        } else {
+            text.to_owned()
+        }
+    };
+    let mut words = vec!["copper".to_owned(), "emi-check".to_owned(), quote(board)];
+    for (name, value) in &parsed.options {
+        if DROPPED.contains(name) || matches!(*name, "--json" | "--write" | "--help") {
+            continue;
+        }
+        words.push((*name).to_owned());
+        if let Some(value) = value {
+            words.push(quote(value));
+        }
+    }
+    words.join(" ")
+}
+
+/// `--plot-summary`: one page per cell, the key numbers, the findings and four thumbnails of the other pictures.
+fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
+    use copper_report::emi_summary::{CellThumbnails, Context, Thumb};
+    let document = input.report.to_value();
+    let cells: Vec<String> = document
+        .get("cells")
+        .and_then(copper_json::Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| c.get("controller").and_then(copper_json::Value::as_str).map(str::to_owned))
+        .collect();
+    if cells.is_empty() {
+        return Err("--plot-summary: no switching cell to summarise".to_owned());
+    }
+    let state = copper_route::state_codec::encode_board(input.physical);
+    let scene = copper_report::scene::scene_from_physical(&state).map_err(|error| error.message.clone());
+    let spectrum = copper_report::emi_plot::panels_from_report(&document);
+    let findings: &[copper_json::Value] =
+        document.get("findings").and_then(copper_json::Value::as_array).unwrap_or_default();
+    let impedance: Vec<Result<copper_report::emi_impedance::ImpedancePanel, String>> = input
+        .report
+        .findings
+        .iter()
+        .filter(|f| f.finding.code == "EMI-CONDUCTED")
+        .filter_map(impedance_panel)
+        .collect();
+    let missing = |text: &str| Thumb::Missing(text.to_owned());
+    let mut thumbnails = Vec::new();
+    for (i, cell) in cells.iter().enumerate() {
+        let loop_finding = findings.iter().find(|f| {
+            f.get("code").and_then(copper_json::Value::as_str) == Some("EMI-HOT-LOOP")
+                && f.get("cell").and_then(copper_json::Value::as_str) == Some(cell.as_str())
+        });
+        let overlay = match (loop_finding, &scene) {
+            (None, _) => missing("no EMI-HOT-LOOP finding for this cell (see the EMI-HOT-LOOP coverage entries)"),
+            (_, Err(why)) => Thumb::Missing(format!("the board scene could not be built: {why}")),
+            (Some(finding), Ok(scene)) => match copper_report::emi_field::hot_loop_field(
+                finding,
+                &document,
+                scene,
+                input.height_mm,
+                copper_report::emi_field::DEFAULT_STEP_MM,
+            ) {
+                Ok(map) => Thumb::Picture(copper_report::emi_field::field_thumbnail(&map)),
+                Err(why) => Thumb::Missing(format!("the near-field map could not be drawn: {why}")),
+            },
+        };
+        let spectrum_thumb = match spectrum.iter().find(|p| p.cell == *cell) {
+            Some(panel) => Thumb::Picture(copper_report::emi_plot::spectrum_thumbnail(panel, i)),
+            None => missing(
+                "no EMI-CONDUCTED finding with harmonics for this cell (see the EMI-CONDUCTED coverage entries)",
+            ),
+        };
+        let impedance_thumb = match impedance.iter().find(|p| p.as_ref().map_or(true, |p| p.cell == *cell)) {
+            Some(Ok(panel)) => Thumb::Picture(copper_report::emi_impedance::impedance_thumbnail(panel, i)),
+            Some(Err(why)) => Thumb::Missing(format!("the input network could not be drawn: {why}")),
+            None => missing(
+                "no EMI-CONDUCTED finding with a network for this cell (see the EMI-CONDUCTED coverage entries)",
+            ),
+        };
+        let current_thumb = if !input.extract {
+            missing("run with --extract for the current distribution")
+        } else {
+            let drawn = input
+                .extracted
+                .iter()
+                .find(|(name, _)| name == cell)
+                .and_then(|(name, result)| crate::emi_current::panel(name, result));
+            match drawn {
+                Some(panel) => Thumb::Picture(copper_report::emi_current::current_thumbnail(&panel, i)),
+                None => Thumb::Missing(format!(
+                    "the extraction produced no current distribution for this cell (see the EMI-EXTRACT:{cell} coverage entry)"
+                )),
+            }
+        };
+        thumbnails.push(CellThumbnails {
+            cell: cell.clone(),
+            overlay,
+            spectrum: spectrum_thumb,
+            impedance: impedance_thumb,
+            current: current_thumb,
+        });
+    }
+    let command = command_base(input.parsed, input.board);
+    let context = Context {
+        run: input.parsed.value("--run"),
+        extract: input.extract,
+        fullwave: input.fullwave,
+        command: &command,
+        field_file: "emi-field.svg",
+        spectrum_file: "emi-spectrum.svg",
+        impedance_file: "emi-impedance.svg",
+        current_file: "emi-current.svg",
+    };
+    let pages = copper_report::emi_summary::summary_pages(&document, &context, &thumbnails);
+    write_plot(path, &copper_report::emi_summary::summary_svg(&input.report.board, &pages))?;
+    Ok(format!(
+        "summary of {} written to {path} (screening estimate, not EMC qualification)",
+        copper_report::emi_impedance::counted(pages.len(), "cell", "cells")
     ))
 }
 

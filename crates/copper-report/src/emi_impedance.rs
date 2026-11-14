@@ -276,6 +276,8 @@ const LEFT: f64 = 78.0;
 const RIGHT: f64 = 300.0;
 const TOP_HEIGHT: f64 = 300.0;
 const BOTTOM_HEIGHT: f64 = 170.0;
+/// Natural width of the thumbnail form of a picture ([`impedance_thumbnail`]), px.
+const THUMB_WIDTH: f64 = 664.0;
 
 /// A line label of the share panel: y of the line's end, text, colour, and its level (dB, Hz) at the fundamental.
 type ShareLabel<'a> = (f64, String, &'a str, Option<(f64, f64)>);
@@ -285,7 +287,7 @@ pub fn counted(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-fn impedance_text(ohm: f64) -> String {
+pub(crate) fn impedance_text(ohm: f64) -> String {
     if ohm < 1.0 { format!("{} mohm", n(ohm * 1e3)) } else { format!("{} ohm", n(ohm)) }
 }
 
@@ -376,13 +378,13 @@ fn legend_items(panel: &ImpedancePanel, show_source: bool) -> Vec<(String, Strin
 }
 
 /// Rows the legend needs when it wraps at the picture width.
-fn legend_rows(legend: &[(String, String, f64)]) -> usize {
-    let mut x = LEFT;
+fn legend_rows(legend: &[(String, String, f64)], width: f64, left: f64) -> usize {
+    let mut x = left;
     let mut rows = 1;
     for (_, text, w) in legend {
         let need = w + 6.0 + text_px(text, 11.0) + 18.0;
-        if x + need > WIDTH - 10.0 {
-            x = LEFT;
+        if x + need > width - 10.0 {
+            x = left;
             rows += 1;
         }
         x += need;
@@ -390,12 +392,15 @@ fn legend_rows(legend: &[(String, String, f64)]) -> usize {
     rows
 }
 
-fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
-    let plot_w = WIDTH - LEFT - RIGHT;
+fn picture(panel: &ImpedancePanel, id: usize, compact: bool) -> FieldPicture {
+    // The thumbnail has the impedance panel only, a narrower right margin for the line names, no notes and no footer.
+    let (width, left, right, top_h, bottom_h) =
+        if compact { (THUMB_WIDTH, 84.0, 126.0, 190.0, 0.0) } else { (WIDTH, LEFT, RIGHT, TOP_HEIGHT, BOTTOM_HEIGHT) };
+    let plot_w = width - left - right;
     let f_lo = panel.frequencies_hz.first().copied().unwrap_or(BAND_LOW);
     let f_hi = panel.frequencies_hz.last().copied().unwrap_or(BAND_HIGH);
     let (lo_f, hi_f) = (f_lo.log10(), f_hi.log10());
-    let px = |f: f64| LEFT + (f.log10() - lo_f) / (hi_f - lo_f) * plot_w;
+    let px = |f: f64| left + (f.log10() - lo_f) / (hi_f - lo_f) * plot_w;
     let colour = |b: usize| PALETTE[b % PALETTE.len()];
 
     let show_source = panel.loop_inductance_nh > 0.0
@@ -420,28 +425,40 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         Some(s) => format!("input-network impedance seen by the switching current ({s})"),
         None => "input-network impedance seen by the switching current".to_owned(),
     };
+    let what = match (&panel.scenario, compact) {
+        (_, false) => what,
+        (Some(s), true) => format!("input-network impedance ({s})"),
+        (None, true) => "input-network impedance".to_owned(),
+    };
     let title = format!("{}: {what}, switching at {}", panel.cell, frequency_text(panel.switching_frequency_hz));
     let filter = panel.filter.as_ref().map_or_else(|| "no input filter".to_owned(), |f| format!("input filter: {f}"));
-    header.extend(crate::emi_plot::wrap(
+    let header_wrap =
+        |text: &str| -> Vec<String> { if compact { Vec::new() } else { crate::emi_plot::wrap(text, 150) } };
+    header.extend(header_wrap(
         &format!(
             "|Z| at the node K of the input network ({}), all sources off, solved with the circuit of the conducted estimate: every capacitor its own R-L-C (capacitance at bias, ESR, ESL, connection inductance), the 50 uH V-network, {filter}.",
             counted(panel.branches.len(), "capacitor branch", "capacitor branches")
         ),
-        150,
     ));
-    header.extend(crate::emi_plot::wrap(&panel.connection_basis, 150));
+    header.extend(header_wrap(&panel.connection_basis));
     let relevant: Vec<String> = panel.tags.clone();
-    if !relevant.is_empty() {
+    if !relevant.is_empty() && !compact {
         header.extend(assumption_lines(&relevant));
     }
-    let x0 = LEFT;
+    let x0 = left;
     let head = 36.0 + 15.0 * header.len() as f64;
     // Legend rows (glyphs drawn below the header).
-    let legend = legend_items(panel, show_source);
+    let mut legend = legend_items(panel, show_source);
+    if compact && let Some(last) = legend.last_mut() {
+        last.1 = format!("harmonic within {} % of an anti-resonance", n(TOLERANCE * 100.0));
+    }
     let legend_y = head + 14.0;
-    let y1 = legend_y + 18.0 * legend_rows(&legend) as f64 + 12.0;
-    let y2 = y1 + TOP_HEIGHT + 22.0;
-    let zy = |z: f64| y1 + TOP_HEIGHT - (z.max(1e-300).log10() - lo_dec) / (hi_dec - lo_dec) * TOP_HEIGHT;
+    let y1 = legend_y + 18.0 * legend_rows(&legend, width, left) as f64 + 12.0;
+    let y2 = y1 + top_h + 22.0;
+    // The panels drawn: |Z| and, outside the thumbnail, the current shares under it.
+    let drawn: Vec<(f64, f64)> = if compact { vec![(y1, top_h)] } else { vec![(y1, top_h), (y2, bottom_h)] };
+    let axis_bottom = if compact { y1 + top_h } else { y2 + bottom_h };
+    let zy = |z: f64| y1 + top_h - (z.max(1e-300).log10() - lo_dec) / (hi_dec - lo_dec) * top_h;
     // The floor of the share axis: the 5th percentile of the shares of the capacitor branches, in steps of 10 dB between
     // -60 and -20 (the line to the V-network, far below, may leave the axis: its label says so).
     let mut shares: Vec<f64> =
@@ -451,20 +468,21 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     let sy_lo = ((low / 10.0).floor() * 10.0 - 10.0).clamp(-60.0, -20.0);
     let max_share = panel.branches.iter().flat_map(|b| b.share_db.iter().copied()).fold(0.0_f64, f64::max);
     let sy_hi = (((max_share + 3.0) / 10.0).ceil().max(1.0) * 10.0).min(40.0);
-    let sy = |db: f64| y2 + BOTTOM_HEIGHT - (db - sy_lo) / (sy_hi - sy_lo) * BOTTOM_HEIGHT;
+    let sy = |db: f64| y2 + bottom_h - (db - sy_lo) / (sy_hi - sy_lo) * bottom_h;
 
     let mut out: Vec<String> = Vec::new();
     out.push(format!("<g class=\"panel\" data-cell=\"{}\">", escape(&panel.cell)));
     out.push(format!(
-        "<text x=\"{}\" y=\"26\" font-size=\"16\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-        n(LEFT),
+        "<text x=\"{}\" y=\"26\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
+        n(if compact { 24.0 } else { left }),
+        if compact { 14 } else { 16 },
         escape(&title)
     ));
     for (i, line) in header.iter().enumerate() {
         out.push(format!(
             "<text class=\"{}\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
             if i == 0 { "subtitle" } else { "assumption" },
-            n(LEFT),
+            n(left),
             n(44.0 + 15.0 * i as f64),
             escape(line)
         ));
@@ -474,11 +492,11 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         n(x0),
         n(y1),
         n(plot_w),
-        n(TOP_HEIGHT),
+        n(top_h),
         n(x0),
         n(y2),
         n(plot_w),
-        n(BOTTOM_HEIGHT)
+        n(bottom_h)
     ));
 
     // Tolerance bands round the anti-resonances, behind everything.
@@ -487,7 +505,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
             px((peak.frequency_hz * (1.0 - TOLERANCE)).max(f_lo)),
             px((peak.frequency_hz * (1.0 + TOLERANCE)).min(f_hi)),
         );
-        for (top, h) in [(y1, TOP_HEIGHT), (y2, BOTTOM_HEIGHT)] {
+        for &(top, h) in &drawn {
             out.push(format!(
                 "<rect class=\"tolerance\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{WARNING}\" fill-opacity=\"0.09\"/>",
                 n(a),
@@ -526,7 +544,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         decade += 1.0;
     }
     let mut level = sy_lo;
-    while level <= sy_hi + 1e-9 {
+    while level <= sy_hi + 1e-9 && !compact {
         let y = sy(level);
         out.push(format!(
             "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\"/>",
@@ -561,7 +579,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     let mut last_label = f64::NEG_INFINITY;
     for (f, major) in &vertical {
         let x = px(*f);
-        for (top, h) in [(y1, TOP_HEIGHT), (y2, BOTTOM_HEIGHT)] {
+        for &(top, h) in &drawn {
             out.push(format!(
                 "<line class=\"fgrid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>",
                 n(x),
@@ -576,13 +594,13 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
             out.push(format!(
                 "<text x=\"{}\" y=\"{}\" font-size=\"11\" text-anchor=\"middle\" fill=\"{MUTED}\">{}</text>",
                 n(x),
-                n(y2 + BOTTOM_HEIGHT + 16.0),
+                n(axis_bottom + 16.0),
                 frequency_text(*f)
             ));
             last_label = x;
         }
     }
-    for (top, h) in [(y1, TOP_HEIGHT), (y2, BOTTOM_HEIGHT)] {
+    for &(top, h) in &drawn {
         out.push(format!(
             "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{MUTED}\" stroke-width=\"1\"/>",
             n(x0),
@@ -594,26 +612,28 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     out.push(format!(
         "<text x=\"{}\" y=\"{}\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">frequency (log scale)</text>",
         n(x0 + plot_w / 2.0),
-        n(y2 + BOTTOM_HEIGHT + 34.0)
+        n(axis_bottom + 34.0)
     ));
     out.push(format!(
         "<text transform=\"translate({},{}) rotate(-90)\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">|Z| (log scale)</text>",
         n(16.0),
-        n(y1 + TOP_HEIGHT / 2.0)
+        n(y1 + top_h / 2.0)
     ));
-    out.push(format!(
-        "<text transform=\"translate({},{}) rotate(-90)\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">branch current, dB</text>",
-        n(16.0),
-        n(y2 + BOTTOM_HEIGHT / 2.0)
-    ));
-    out.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">0 dB: the whole current the converter draws</text>",
-        n(x0 + 6.0),
-        n(sy(0.0) - 4.0)
-    ));
+    if !compact {
+        out.push(format!(
+            "<text transform=\"translate({},{}) rotate(-90)\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">branch current, dB</text>",
+            n(16.0),
+            n(y2 + bottom_h / 2.0)
+        ));
+        out.push(format!(
+            "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">0 dB: the whole current the converter draws</text>",
+            n(x0 + 6.0),
+            n(sy(0.0) - 4.0)
+        ));
+    }
 
     let xs: Vec<f64> = panel.frequencies_hz.iter().map(|f| px(*f)).collect();
-    let mut placer = Placer { taken: Vec::new(), bounds: [x0, y1, x0 + plot_w, y1 + TOP_HEIGHT], pad: 1.5 };
+    let mut placer = Placer { taken: Vec::new(), bounds: [x0, y1, x0 + plot_w, y1 + top_h], pad: 1.5 };
 
     // Top panel: the line behind the loop inductance, the total, then each branch's own impedance over it.
     out.push(format!("<g clip-path=\"url(#zplot{id})\" fill=\"none\" stroke-linejoin=\"round\">"));
@@ -637,7 +657,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     out.push(format!("<g class=\"branches\" clip-path=\"url(#zplot{id})\" fill=\"none\">"));
     for (b, branch) in panel.branches.iter().enumerate() {
         let points: Vec<(f64, f64)> = xs.iter().zip(&branch.z_ohm).map(|(x, z)| (*x, zy(*z))).collect();
-        for run in runs(&points, y1, y1 + TOP_HEIGHT) {
+        for run in runs(&points, y1, y1 + top_h) {
             out.push(format!(
                 "<polyline class=\"branch\" data-branch=\"{}\" points=\"{}\" stroke=\"{}\" stroke-width=\"1.3\" stroke-opacity=\"0.9\"/>",
                 escape(&branch.label),
@@ -657,7 +677,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     let mut highlighted: Vec<(u32, f64, f64)> = Vec::new();
     for &(k, i) in &panel.harmonics {
         let (x, y) = (xs[i], zy(panel.z_node[i]));
-        if y < y1 || y > y1 + TOP_HEIGHT {
+        if y < y1 || y > y1 + top_h {
             continue;
         }
         match panel.near_anti_resonance(i) {
@@ -687,7 +707,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     let mut labels: Vec<String> = Vec::new();
     for peak in &panel.anti_resonances {
         let (x, y) = (px(peak.frequency_hz), zy(peak.impedance_ohm));
-        if y < y1 - 2.0 || y > y1 + TOP_HEIGHT + 2.0 {
+        if y < y1 - 2.0 || y > y1 + top_h + 2.0 {
             continue;
         }
         out.push(format!(
@@ -701,7 +721,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     }
     for peak in &panel.anti_resonances {
         let (x, y) = (px(peak.frequency_hz), zy(peak.impedance_ohm));
-        if y < y1 - 2.0 || y > y1 + TOP_HEIGHT + 2.0 {
+        if y < y1 - 2.0 || y > y1 + top_h + 2.0 {
             continue;
         }
         let text = format!("{} ({})", frequency_text(peak.frequency_hz), impedance_text(peak.impedance_ohm));
@@ -718,7 +738,7 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
     for (b, branch) in panel.branches.iter().enumerate() {
         let Some(fs) = branch.self_resonance_hz.filter(|f| *f > f_lo && *f < f_hi) else { continue };
         let (x, y) = (px(fs), zy(branch.esr_ohm.max(1e-12)));
-        if y < y1 || y > y1 + TOP_HEIGHT {
+        if y < y1 || y > y1 + top_h {
             continue;
         }
         out.push(format!(
@@ -770,9 +790,9 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         names.push((zy(*panel.z_source.last().unwrap_or(&1.0)), "at the switch".to_owned(), INK, "normal"));
     }
     let wanted: Vec<f64> = names.iter().map(|n| n.0).collect();
-    let placed = spread(&wanted, 13.0, y1 + 6.0, y1 + TOP_HEIGHT - 4.0);
+    let placed = spread(&wanted, 13.0, y1 + 6.0, y1 + top_h - 4.0);
     for ((want, text, color, weight), y) in names.iter().zip(&placed) {
-        let on_plot = *want >= y1 - 2.0 && *want <= y1 + TOP_HEIGHT + 2.0;
+        let on_plot = *want >= y1 - 2.0 && *want <= y1 + top_h + 2.0;
         let x_end = x0 + plot_w;
         if on_plot {
             out.push(format!(
@@ -786,7 +806,8 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         let text = if on_plot {
             text.clone()
         } else {
-            format!("{text} ({} the axis)", if *want > y1 + TOP_HEIGHT { "below" } else { "above" })
+            let side = if *want > y1 + top_h { "below" } else { "above" };
+            if compact { format!("{text} (off axis, {side})") } else { format!("{text} ({side} the axis)") }
         };
         out.push(format!(
             "<text class=\"line-label\" x=\"{}\" y=\"{}\" font-size=\"11\" font-weight=\"{weight}\" fill=\"{color}\">{}</text>",
@@ -796,103 +817,105 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         ));
     }
 
-    // Bottom panel: current shares.
-    out.push(format!("<g class=\"shares\" clip-path=\"url(#splot{id})\" fill=\"none\" stroke-linejoin=\"round\">"));
-    let supply: Vec<(f64, f64)> = xs.iter().zip(&panel.to_supply_db).map(|(x, d)| (*x, sy(*d))).collect();
-    for run in runs(&supply, y2, y2 + BOTTOM_HEIGHT) {
-        out.push(format!(
-            "<polyline class=\"share-supply\" points=\"{}\" stroke=\"{INK}\" stroke-width=\"1.6\" stroke-dasharray=\"6 4\"/>",
-            polyline(&run)
-        ));
-    }
-    for (b, branch) in panel.branches.iter().enumerate() {
-        let points: Vec<(f64, f64)> = xs.iter().zip(&branch.share_db).map(|(x, d)| (*x, sy(*d))).collect();
-        for run in runs(&points, y2, y2 + BOTTOM_HEIGHT) {
-            // The share at the fundamental, as the report lists it (peak branch current over peak source current).
-            let fundamental = panel.harmonics.iter().find(|(k, _)| *k == 1).map_or(String::new(), |(_, i)| {
-                format!(" data-fundamental-share=\"{:.4}\"", 10f64.powf(branch.share_db[*i] / 20.0))
-            });
+    if !compact {
+        // Bottom panel: current shares.
+        out.push(format!("<g class=\"shares\" clip-path=\"url(#splot{id})\" fill=\"none\" stroke-linejoin=\"round\">"));
+        let supply: Vec<(f64, f64)> = xs.iter().zip(&panel.to_supply_db).map(|(x, d)| (*x, sy(*d))).collect();
+        for run in runs(&supply, y2, y2 + bottom_h) {
             out.push(format!(
-                "<polyline class=\"share\" data-branch=\"{}\"{fundamental} points=\"{}\" stroke=\"{}\" stroke-width=\"1.7\"/>",
-                escape(&branch.label),
-                polyline(&run),
-                colour(b)
+                "<polyline class=\"share-supply\" points=\"{}\" stroke=\"{INK}\" stroke-width=\"1.6\" stroke-dasharray=\"6 4\"/>",
+                polyline(&run)
             ));
         }
-    }
-    out.push("</g>".to_owned());
-    // The harmonics on the share axis: a tick up from the floor, red where highlighted.
-    let mut rug = String::new();
-    let mut rug_hot = String::new();
-    for &(_, i) in &panel.harmonics {
-        let x = xs[i];
-        if panel.near_anti_resonance(i).is_some() {
-            rug_hot.push_str(&format!("M{} {}v-14", n(x), n(y2 + BOTTOM_HEIGHT)));
-        } else {
-            rug.push_str(&format!("M{} {}v-7", n(x), n(y2 + BOTTOM_HEIGHT)));
-        }
-    }
-    out.push(format!(
-        "<path class=\"rug\" d=\"{rug}\" fill=\"none\" stroke=\"{INK}\" stroke-width=\"1.2\"/><path class=\"rug-near\" d=\"{rug_hot}\" fill=\"none\" stroke=\"{WARNING}\" stroke-width=\"2.2\"/>"
-    ));
-    let at_fundamental = |values: &[f64]| -> Option<(f64, f64)> {
-        let (_, i) = panel.harmonics.iter().find(|(k, _)| *k == 1).or_else(|| panel.harmonics.first())?;
-        Some((values[*i], panel.frequencies_hz[*i]))
-    };
-    let mut names: Vec<ShareLabel> = Vec::new();
-    for (b, branch) in panel.branches.iter().enumerate() {
-        names.push((
-            sy(*branch.share_db.last().unwrap_or(&-100.0)),
-            format!("{} {}", branch.label, branch.value),
-            colour(b),
-            at_fundamental(&branch.share_db),
-        ));
-    }
-    names.push((
-        sy(*panel.to_supply_db.last().unwrap_or(&-100.0)),
-        "to the V-network".to_owned(),
-        INK,
-        at_fundamental(&panel.to_supply_db),
-    ));
-    let wanted: Vec<f64> = names.iter().map(|n| n.0).collect();
-    let placed = spread(&wanted, 13.0, y2 + 6.0, y2 + BOTTOM_HEIGHT - 4.0);
-    for ((want, text, color, level), y) in names.iter().zip(&placed) {
-        let x_end = x0 + plot_w;
-        if *want >= y2 - 2.0 && *want <= y2 + BOTTOM_HEIGHT + 2.0 {
-            out.push(format!(
-                "<path d=\"M{} {}L{} {}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1\"/>",
-                n(x_end),
-                n(*want),
-                n(x_end + 8.0),
-                n(*y)
-            ));
-        }
-        let text = if *want >= y2 - 2.0 && *want <= y2 + BOTTOM_HEIGHT + 2.0 {
-            text.clone()
-        } else {
-            // Off the axis at the right-hand end: say where the line is, with the model's value at the fundamental.
-            let side = if *want > y2 + BOTTOM_HEIGHT { "below" } else { "above" };
-            match level {
-                Some((db, f)) => format!("{text}: {} dB at {} ({side} the axis)", n(*db), frequency_text(*f)),
-                None => format!("{text} ({side} the axis)"),
+        for (b, branch) in panel.branches.iter().enumerate() {
+            let points: Vec<(f64, f64)> = xs.iter().zip(&branch.share_db).map(|(x, d)| (*x, sy(*d))).collect();
+            for run in runs(&points, y2, y2 + bottom_h) {
+                // The share at the fundamental, as the report lists it (peak branch current over peak source current).
+                let fundamental = panel.harmonics.iter().find(|(k, _)| *k == 1).map_or(String::new(), |(_, i)| {
+                    format!(" data-fundamental-share=\"{:.4}\"", 10f64.powf(branch.share_db[*i] / 20.0))
+                });
+                out.push(format!(
+                    "<polyline class=\"share\" data-branch=\"{}\"{fundamental} points=\"{}\" stroke=\"{}\" stroke-width=\"1.7\"/>",
+                    escape(&branch.label),
+                    polyline(&run),
+                    colour(b)
+                ));
             }
-        };
+        }
+        out.push("</g>".to_owned());
+        // The harmonics on the share axis: a tick up from the floor, red where highlighted.
+        let mut rug = String::new();
+        let mut rug_hot = String::new();
+        for &(_, i) in &panel.harmonics {
+            let x = xs[i];
+            if panel.near_anti_resonance(i).is_some() {
+                rug_hot.push_str(&format!("M{} {}v-14", n(x), n(y2 + bottom_h)));
+            } else {
+                rug.push_str(&format!("M{} {}v-7", n(x), n(y2 + bottom_h)));
+            }
+        }
         out.push(format!(
-            "<text class=\"line-label\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{color}\">{}</text>",
-            n(x_end + 11.0),
-            n(*y + 4.0),
-            escape(&text)
+            "<path class=\"rug\" d=\"{rug}\" fill=\"none\" stroke=\"{INK}\" stroke-width=\"1.2\"/><path class=\"rug-near\" d=\"{rug_hot}\" fill=\"none\" stroke=\"{WARNING}\" stroke-width=\"2.2\"/>"
         ));
+        let at_fundamental = |values: &[f64]| -> Option<(f64, f64)> {
+            let (_, i) = panel.harmonics.iter().find(|(k, _)| *k == 1).or_else(|| panel.harmonics.first())?;
+            Some((values[*i], panel.frequencies_hz[*i]))
+        };
+        let mut names: Vec<ShareLabel> = Vec::new();
+        for (b, branch) in panel.branches.iter().enumerate() {
+            names.push((
+                sy(*branch.share_db.last().unwrap_or(&-100.0)),
+                format!("{} {}", branch.label, branch.value),
+                colour(b),
+                at_fundamental(&branch.share_db),
+            ));
+        }
+        names.push((
+            sy(*panel.to_supply_db.last().unwrap_or(&-100.0)),
+            "to the V-network".to_owned(),
+            INK,
+            at_fundamental(&panel.to_supply_db),
+        ));
+        let wanted: Vec<f64> = names.iter().map(|n| n.0).collect();
+        let placed = spread(&wanted, 13.0, y2 + 6.0, y2 + bottom_h - 4.0);
+        for ((want, text, color, level), y) in names.iter().zip(&placed) {
+            let x_end = x0 + plot_w;
+            if *want >= y2 - 2.0 && *want <= y2 + bottom_h + 2.0 {
+                out.push(format!(
+                    "<path d=\"M{} {}L{} {}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1\"/>",
+                    n(x_end),
+                    n(*want),
+                    n(x_end + 8.0),
+                    n(*y)
+                ));
+            }
+            let text = if *want >= y2 - 2.0 && *want <= y2 + bottom_h + 2.0 {
+                text.clone()
+            } else {
+                // Off the axis at the right-hand end: say where the line is, with the model's value at the fundamental.
+                let side = if *want > y2 + bottom_h { "below" } else { "above" };
+                match level {
+                    Some((db, f)) => format!("{text}: {} dB at {} ({side} the axis)", n(*db), frequency_text(*f)),
+                    None => format!("{text} ({side} the axis)"),
+                }
+            };
+            out.push(format!(
+                "<text class=\"line-label\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{color}\">{}</text>",
+                n(x_end + 11.0),
+                n(*y + 4.0),
+                escape(&text)
+            ));
+        }
     }
 
     // Legend, rows of glyphs under the header.
-    let mut lx = LEFT;
+    let mut lx = left;
     out.push("<g class=\"legend\">".to_owned());
     let mut ly = legend_y + 8.0;
     for (glyph, text, w) in &legend {
         let need = w + 6.0 + text_px(text, 11.0) + 18.0;
-        if lx + need > WIDTH - 10.0 {
-            lx = LEFT;
+        if lx + need > width - 10.0 {
+            lx = left;
             ly += 18.0;
         }
         out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(lx), n(ly)));
@@ -905,6 +928,10 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
         lx += need;
     }
     out.push("</g>".to_owned());
+    if compact {
+        out.push("</g>".to_owned());
+        return FieldPicture { content: out.join("\n"), width, height: axis_bottom + 46.0 };
+    }
     let near = panel.harmonics.iter().filter(|(_, i)| panel.near_anti_resonance(*i).is_some()).count();
     let proportional = if panel.couplings > 0 {
         format!(
@@ -934,26 +961,33 @@ fn picture(panel: &ImpedancePanel, id: usize) -> FieldPicture {
             }
         )
     };
-    let mut foot = y2 + BOTTOM_HEIGHT + 56.0;
-    for line in wrap_px(&note, 12.0, WIDTH - 2.0 * LEFT)
+    let mut foot = y2 + bottom_h + 56.0;
+    for line in wrap_px(&note, 12.0, width - 2.0 * left)
         .into_iter()
         .chain(["Screening estimate, not a compliance measurement.".to_owned()])
     {
         out.push(format!(
             "<text class=\"footer\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
-            n(LEFT),
+            n(left),
             n(foot),
             escape(&line)
         ));
         foot += 15.0;
     }
     out.push("</g>".to_owned());
-    FieldPicture { content: out.join("\n"), width: WIDTH, height: foot + 4.0 }
+    FieldPicture { content: out.join("\n"), width, height: foot + 4.0 }
+}
+
+/// The picture of `panel` for the summary page: its own title, the |Z| panel with the branches, the anti-resonances and
+/// the harmonics, and a short legend; without the header paragraphs, the current-share panel and the footer. `id` makes
+/// the clip paths unique within the page.
+pub fn impedance_thumbnail(panel: &ImpedancePanel, id: usize) -> FieldPicture {
+    picture(panel, id, true)
 }
 
 /// The SVG of `panels`, stacked; `title` names the board in the document title.
 pub fn impedance_svg(title: &str, panels: &[ImpedancePanel]) -> String {
-    let pictures: Vec<FieldPicture> = panels.iter().enumerate().map(|(i, p)| picture(p, i)).collect();
+    let pictures: Vec<FieldPicture> = panels.iter().enumerate().map(|(i, p)| picture(p, i, false)).collect();
     stacked_svg(&format!("{} input-network impedance (screening estimate)", escape(title)), &pictures, WIDTH)
 }
 

@@ -116,7 +116,7 @@ fn scalar_measures(measures: Option<&Value>) -> Value {
 }
 
 /// The findings of an `emi` section in issue order: grouped by cell (report order inside a cell).
-fn ordered_findings(section: &Value) -> Vec<&Value> {
+pub fn ordered_findings(section: &Value) -> Vec<&Value> {
     let Some(findings) = section.get("findings").and_then(Value::as_array) else { return Vec::new() };
     let cells: Vec<String> = section
         .get("cells")

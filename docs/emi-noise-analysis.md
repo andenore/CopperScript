@@ -648,8 +648,8 @@ stays the single file of a run (there is no sidecar):
 
 ### Visualization
 
-Two hand-written, deterministic SVGs (no dependencies, explicit white
-background, fixed palette), both labelled as screening estimates in one short
+Hand-written, deterministic SVGs (no dependencies, explicit white
+background, fixed palette), each labelled as a screening estimate in one short
 line ("Screening estimate, not a compliance measurement" under the spectrum, a
 neutral note that also says the inductor's own field is not included on the
 map); the assumptions and the limits of the model are stated once, in plain
@@ -809,6 +809,55 @@ for a unit current into the port across the switch.
   bottom panel.
 
 Both pictures are screening estimates and say so in one line; neither is a pass or a fail.
+
+**One-page summary.** `copper emi-check BOARD [--run RUN] [--extract] [--fullwave] --plot-summary OUT.svg` writes the
+picture to open first: one page per switching cell (stacked when the board has several, as the other pictures do),
+about 1400 px wide and as tall as its text needs (renderer `copper_report::emi_summary`; roughly 1400 x 1500 px for a
+cell with four thumbnails). Every number on it is read from the report document or comes from the in-memory results
+the other pictures use; nothing is computed for the page, and a value the report does not hold is left out (its row is
+not drawn; one line such as "quasi-static extraction: not available without --extract" says what is missing and how to
+get it). It changes no number of the report: the default `emi-check --json` is byte-identical with and without it.
+
+1. **Header**: the converter's reference and part, the topology, the switching frequency (with its basis, `fixed` or a
+   range bound), the input and output voltage and the switch edge from the cell and its conducted finding, the current
+   scenario in one sentence (the declared operating point with its load current, inductor ripple and switch peak, or the
+   switch current limit as a worst case with no load current declared) and "Screening estimate, not a compliance
+   measurement".
+2. **Key numbers**: the hot-loop inductance by method, one row each: the closed form (always, with whether it rests on
+   traced copper or on the placement), the quasi-static extraction (only when `--extract` ran: the inductance at each
+   solved frequency, its status and the mesh sensitivity at the last), the full wave (only when `--fullwave` ran: the
+   value over its band, its status, "indicative only" when it is, and its mesh sensitivity) and, when both ran, the
+   cross-check statement of `measures.extract.cross_check` verbatim; the loop area and path length; the worst conducted
+   harmonic with the margin to each limit line in the wording of the spectrum picture ("49.64 dB over the average
+   limit", "16.44 dB under the quasi-peak limit"; no margin where the levels are line amplitudes or no standard is
+   declared, and the row says so); how many harmonics lie over each limit; the input filter when one is modelled; each
+   anti-resonance with its frequency and impedance and the harmonic that lands on it ("raised x dB over the best
+   capacitor branch alone", or "lies in its lobe ... (not significant)"); and the switch node (copper area, capacitance to
+   the plane, and the voltage swing and edge time or the declared slew rate when the report holds it).
+3. **Findings** of the cell, worst severity first, then by id (the `M` ids `copper issues` gives, when `--run` is
+   given: they are those of the findings ordered by cell and report order, the ids the run's report holds once
+   `--write` stored this result), with the rule, the severity (or the `emi_accept` reason of an accepted one), the
+   objects and nets and the first clause of the message on one line; at most ten, then "+N more (copper issues RUN --stage
+   emi)".
+4. **Four thumbnails** in a 2 x 2 grid, each drawn by the code of its full-size picture with a `compact` form of the
+   renderer (the same plot area, the same marks and labels, a title of its own, a one-row colour scale and a legend
+   under the map where the full-size one has a column; the header paragraphs, the notes, the current-share panel of the
+   impedance picture, the sensitive-pad listing and the footers are left out because the page states them once) and
+   embedded as nested SVGs at their natural size, or smaller by at most 10 % (the smallest text on the page is then about
+   9 px): the board overlay (the near-field map with the hot loop, the pads and the field at the sensitive pads), the
+   conducted spectrum, the input-network impedance (the `|Z|` panel) and, when `--extract` ran, the current
+   distribution of the layer that carries the most current; without `--extract` a labelled box says "run with --extract
+   for the current distribution". A picture that cannot be drawn (no scene, no harmonics, no network) is a box with the
+   reason.
+5. **Footer**: the assumptions as plain sentences (the table of `copper_report::emi_plot`, at most four, then "+N more
+   in the report"), what is not modelled (the first words of each `estimate.not_modelled` entry of the cell's hot-loop and
+   conducted findings), and the exact command line of each full-size picture (the options of the run, without the plot,
+   `--json`, `--write` and `--fullwave` options; `--plot-current` shows `--extract`).
+
+For a cell with several hot loops the loop rows are repeated per loop, named by the loop; for a declared frequency
+range the page reads the first conducted finding (the lower bound), the other scenarios are in `--plot-spectrum`. The
+board overlay needs the board scene (the placed board in memory, or the routed run's board).
+
 
 ## 9. Quasi-static extraction (phase 2)
 
@@ -1043,8 +1092,10 @@ fixed-frequency buck in continuous conduction, capacitors that could not be mode
 assumed stack-up).
 `measures.harmonics` lists `harmonic`, `frequency_hz`, `source_current_a`,
 `dm_dbuv`, `cm_dbuv` (null), `total_dbuv` (the nominal case), `low_dbuv`, `high_dbuv`, `limit_qp`, `limit_avg`, `margin_qp_db`,
-`margin_avg_db`, `margin_db` (from the high end); `measures.assumptions`
-holds the `predict` assumptions and the tool's. Tests:
+`margin_avg_db`, `margin_db` (from the high end; limit minus level, so negative is over the line); `measures.assumptions`
+holds the `predict` assumptions and the tool's. The finding's message states the margin of the worst harmonic in words, as the
+spectrum picture and the summary page do ("49.6 dB over the average limit", "6.4 dB under the quasi-peak limit", "at the
+average limit"), never as a signed number against a line; the numbers stay in the `margin_*_db` fields. Tests:
 `crates/copper-emi/src/conducted.rs` (the circuit solution of a hot capacitor alone and of hot capacitor +
 bulk electrolytic + LC filter + damping branch against an independent ladder reduction to 0.1 dB; the anti-resonance of
 unlike capacitors against `1/(2 pi sqrt(L C))`; the independence of the LISN level from the hot-loop inductance; the

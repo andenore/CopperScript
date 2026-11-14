@@ -102,7 +102,7 @@ impl SpectrumPanel {
     }
 
     /// Whether limit lines and margins are drawn (isolated lines, or the harmonics the receiver emulation read).
-    fn shows_limits(&self) -> bool {
+    pub(crate) fn shows_limits(&self) -> bool {
         self.detector_ok() || self.receiver_emulation
     }
 }
@@ -218,6 +218,9 @@ const LEFT: f64 = 70.0;
 const RIGHT: f64 = 24.0;
 const PLOT_HEIGHT: f64 = 290.0;
 const FOOTER: f64 = 40.0;
+/// Natural width and plot height of the thumbnail form of a panel (`spectrum_thumbnail`), px.
+const THUMB_WIDTH: f64 = 664.0;
+const THUMB_PLOT_HEIGHT: f64 = 180.0;
 /// Harmonics drawn with a stem from the axis floor; above this many the stems would merge into a fence.
 const STEMS: usize = 10;
 /// Assumption sentences shown under the title, most consequential first.
@@ -248,7 +251,7 @@ fn ceil10(value: f64) -> f64 {
 }
 
 /// The worst harmonic: the least margin when margins exist, else the highest level.
-fn worst(harmonics: &[Harmonic], limits_shown: bool) -> Option<usize> {
+pub(crate) fn worst(harmonics: &[Harmonic], limits_shown: bool) -> Option<usize> {
     let by_margin = harmonics
         .iter()
         .enumerate()
@@ -355,7 +358,7 @@ fn limit_points(class: Class, detector: Detector) -> Vec<(f64, f64)> {
 }
 
 /// "12.3 dB over the average limit" / "4.1 dB under the quasi-peak limit"; `margin` is limit minus level.
-fn margin_phrase(margin: f64, limit: &str) -> String {
+pub(crate) fn margin_phrase(margin: f64, limit: &str) -> String {
     if margin.abs() < 0.05 {
         format!("at the {limit} limit")
     } else if margin < 0.0 {
@@ -363,6 +366,42 @@ fn margin_phrase(margin: f64, limit: &str) -> String {
     } else {
         format!("{} dB under the {limit} limit", n(margin))
     }
+}
+
+/// The words of the label on the worst harmonic (also the worst-harmonic row of the summary page): its frequency
+/// and level, then its margin to each limit line it has, in the same unambiguous wording.
+pub(crate) fn worst_lines(panel: &SpectrumPanel, h: &Harmonic) -> Vec<String> {
+    let ok = panel.detector_ok();
+    let emulated = panel.receiver_emulation;
+    let limits = panel.shows_limits();
+    let shown = if emulated { h.reading_qp.unwrap_or(h.level()) } else { h.level() };
+    let mut lines: Vec<String> = Vec::new();
+    if ok {
+        lines.push(format!("worst harmonic: {} at {} dBuV", frequency_text(h.frequency_hz), n(h.level())));
+        if let Some(l) = h.limit_avg.filter(|_| limits) {
+            lines.push(margin_phrase(l - h.level(), "average"));
+        }
+        if let Some(l) = h.limit_qp.filter(|_| limits) {
+            lines.push(margin_phrase(l - h.level(), "quasi-peak"));
+        }
+        if let (1, Some(m)) = (lines.len(), h.margin_db.filter(|_| limits)) {
+            lines.push(margin_phrase(m, "nearer"));
+        }
+    } else if emulated && h.margin_db.is_some() {
+        lines.push(format!(
+            "worst evaluated harmonic: {} at {} dBuV quasi-peak reading",
+            frequency_text(h.frequency_hz),
+            n(shown)
+        ));
+        lines.push(format!("{} (receiver emulation)", margin_phrase(h.margin_db.unwrap_or(0.0), "nearer")));
+    } else {
+        lines.push(format!(
+            "highest line amplitude: {} at {} dBuV (not a detector reading, no limit)",
+            frequency_text(h.frequency_hz),
+            n(h.level())
+        ));
+    }
+    lines
 }
 
 /// An SVG text with a white halo, so it reads over lines and markers.
@@ -377,7 +416,9 @@ pub(crate) fn halo_text(x: f64, y: f64, size: u32, weight: &str, anchor: &str, c
 }
 
 /// Draw one panel with its top edge at `top`; returns its height.
-fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) -> f64 {
+fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize, compact: bool) -> f64 {
+    let (page_width, left, right, plot_height) =
+        if compact { (THUMB_WIDTH, 56.0, 30.0, THUMB_PLOT_HEIGHT) } else { (WIDTH, LEFT, RIGHT, PLOT_HEIGHT) };
     let ok = panel.detector_ok();
     let emulated = panel.receiver_emulation;
     let limits = panel.shows_limits();
@@ -390,9 +431,9 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     let draw_limits = limits && (panel.standard.is_some() || panel.harmonics.iter().any(|h| h.limit_qp.is_some()));
     let qp_points = if draw_limits { limit_points(class, Detector::QuasiPeak) } else { Vec::new() };
     let avg_points = if draw_limits { limit_points(class, Detector::Average) } else { Vec::new() };
-    let plot_w = WIDTH - LEFT - RIGHT;
+    let plot_w = page_width - left - right;
     let (lo_f, hi_f) = (BAND_HZ.0.log10(), BAND_HZ.1.log10());
-    let px = |f: f64| LEFT + (f.log10() - lo_f) / (hi_f - lo_f) * plot_w;
+    let px = |f: f64| left + (f.log10() - lo_f) / (hi_f - lo_f) * plot_w;
 
     // Level axis: 10 dB gridlines around the data and the limits, at most 90 dB high.
     let mut values: Vec<f64> = Vec::new();
@@ -415,6 +456,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     } else {
         "conducted line amplitudes, NOT a detector reading"
     };
+    let what = if compact && ok { "conducted spectrum" } else { what };
     let title = match (panel.frequency_hz, &panel.scenario) {
         (Some(f), Some(scenario)) => {
             format!("{}: {what} at the input, switching at {} ({scenario})", panel.cell, frequency_text(f))
@@ -437,28 +479,32 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         }
     };
     let subtitle = format!("dBuV at a 50 uH V-network, RMS per harmonic; {standard}");
-    let mut header: Vec<String> = wrap(&subtitle, 146);
-    header.extend(assumption_lines(&panel.tags));
-    let y0 = top + 36.0 + 15.0 * header.len() as f64 + 16.0;
+    // The thumbnail has its title only: the summary page states the assumptions once.
+    let mut header: Vec<String> = if compact { Vec::new() } else { wrap(&subtitle, 146) };
+    if !compact {
+        header.extend(assumption_lines(&panel.tags));
+    }
+    let y0 = if compact { top + 44.0 } else { top + 36.0 + 15.0 * header.len() as f64 + 16.0 };
 
     out.push(format!("<g class=\"panel\" data-cell=\"{}\">", escape(&panel.cell)));
     out.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"16\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-        n(LEFT),
+        "<text x=\"{}\" y=\"{}\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
+        n(left),
         n(top + 26.0),
+        if compact { 14 } else { 16 },
         escape(&title)
     ));
     for (i, line) in header.iter().enumerate() {
         out.push(format!(
             "<text class=\"{}\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
             if i == 0 || line.starts_with("dBuV") { "subtitle" } else { "assumption" },
-            n(LEFT),
+            n(left),
             n(top + 44.0 + 15.0 * i as f64),
             escape(line)
         ));
     }
-    let x0 = LEFT;
-    let py = |v: f64| y0 + PLOT_HEIGHT - (v - lo) / (hi - lo) * PLOT_HEIGHT;
+    let x0 = left;
+    let py = |v: f64| y0 + plot_height - (v - lo) / (hi - lo) * plot_height;
 
     // Plot frame, clip and gridlines.
     out.push(format!(
@@ -466,7 +512,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         n(x0),
         n(y0),
         n(plot_w),
-        n(PLOT_HEIGHT)
+        n(plot_height)
     ));
     let mut level = lo;
     while level <= hi + 1e-9 {
@@ -493,14 +539,14 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             n(x),
             n(y0),
             n(x),
-            n(y0 + PLOT_HEIGHT),
+            n(y0 + plot_height),
             if major { GRID_MAJOR } else { GRID }
         ));
         if labelled {
             out.push(format!(
                 "<text x=\"{}\" y=\"{}\" font-size=\"11\" text-anchor=\"middle\" fill=\"{MUTED}\">{}</text>",
                 n(x),
-                n(y0 + PLOT_HEIGHT + 16.0),
+                n(y0 + plot_height + 16.0),
                 frequency_text(f)
             ));
         }
@@ -510,17 +556,17 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         n(x0),
         n(y0),
         n(plot_w),
-        n(PLOT_HEIGHT)
+        n(plot_height)
     ));
     out.push(format!(
         "<text x=\"{}\" y=\"{}\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">frequency (log scale)</text>",
         n(x0 + plot_w / 2.0),
-        n(y0 + PLOT_HEIGHT + 34.0)
+        n(y0 + plot_height + 34.0)
     ));
     out.push(format!(
         "<text transform=\"translate({},{}) rotate(-90)\" font-size=\"12\" text-anchor=\"middle\" fill=\"{INK}\">level, dBuV</text>",
         n(16.0),
-        n(y0 + PLOT_HEIGHT / 2.0)
+        n(y0 + plot_height / 2.0)
     ));
 
     out.push(format!("<g clip-path=\"url(#plot{id})\">"));
@@ -581,7 +627,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             run.join(" ")
         ));
     }
-    let baseline = y0 + PLOT_HEIGHT;
+    let baseline = y0 + plot_height;
     let radius = if sorted.len() > 20 { 2.2 } else { 3.0 };
     let mut any_over = false;
     for (rank, h) in sorted.iter().enumerate() {
@@ -654,7 +700,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         out.push(format!(
             "<text class=\"below-axis\" x=\"{}\" y=\"{}\" font-size=\"11\" text-anchor=\"end\" fill=\"{MUTED}\">{below} harmonic{} below {} dBuV not shown</text>",
             n(x0 + plot_w),
-            n(y0 + PLOT_HEIGHT + 34.0),
+            n(y0 + plot_height + 34.0),
             if below == 1 { "" } else { "s" },
             n(lo)
         ));
@@ -670,32 +716,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             n(x),
             n(y)
         ));
-        let mut lines: Vec<String> = Vec::new();
-        if ok {
-            lines.push(format!("worst harmonic: {} at {} dBuV", frequency_text(h.frequency_hz), n(h.level())));
-            if let Some(l) = h.limit_avg.filter(|_| limits) {
-                lines.push(margin_phrase(l - h.level(), "average"));
-            }
-            if let Some(l) = h.limit_qp.filter(|_| limits) {
-                lines.push(margin_phrase(l - h.level(), "quasi-peak"));
-            }
-            if let (1, Some(m)) = (lines.len(), h.margin_db.filter(|_| limits)) {
-                lines.push(margin_phrase(m, "nearer"));
-            }
-        } else if emulated && h.margin_db.is_some() {
-            lines.push(format!(
-                "worst evaluated harmonic: {} at {} dBuV quasi-peak reading",
-                frequency_text(h.frequency_hz),
-                n(shown)
-            ));
-            lines.push(format!("{} (receiver emulation)", margin_phrase(h.margin_db.unwrap_or(0.0), "nearer")));
-        } else {
-            lines.push(format!(
-                "highest line amplitude: {} at {} dBuV (not a detector reading, no limit)",
-                frequency_text(h.frequency_hz),
-                n(h.level())
-            ));
-        }
+        let lines = worst_lines(panel, h);
         let widest = lines.iter().map(|l| l.len()).max().unwrap_or(0) as f64 * 6.3;
         let height = 14.0 * (lines.len() as f64 - 1.0);
         // The first of eight spots (right or left of the point; above, level with it, below it) that stays inside the
@@ -715,7 +736,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         {
             let lx = x + side * 12.0;
             let (left_edge, right_edge) = if side > 0.0 { (lx, lx + widest) } else { (lx - widest, lx) };
-            let first = (y + dy).clamp(y0 + 14.0, y0 + PLOT_HEIGHT - height - 6.0);
+            let first = (y + dy).clamp(y0 + 14.0, y0 + plot_height - height - 6.0);
             if left_edge < x0 + 4.0 || right_edge > x0 + plot_w - 4.0 {
                 continue;
             }
@@ -819,12 +840,21 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     if avg_points.len() >= 2 {
         entries.push((format!("<line x1=\"-8\" y1=\"-4\" x2=\"8\" y2=\"-4\" stroke=\"{LIMIT_AVG}\" stroke-width=\"2\" stroke-dasharray=\"6 4\"/>"), "average limit".to_owned()));
     }
-    let mut ly = y0 + PLOT_HEIGHT + 56.0;
-    let mut x = LEFT + 10.0;
+    if compact {
+        // The summary page keeps the legend short: the words that tell the marks apart.
+        for entry in &mut entries {
+            entry.1 = entry
+                .1
+                .replace(", not above the average limit", "")
+                .replace("stem from the axis, first 10 harmonics only", "stem from the axis, first 10 harmonics");
+        }
+    }
+    let mut ly = y0 + plot_height + 56.0;
+    let mut x = left + 10.0;
     for (glyph, label) in entries {
         let width = 24.0 + label.len() as f64 * 6.0;
-        if x + width > WIDTH - RIGHT && x > LEFT + 10.0 {
-            x = LEFT + 10.0;
+        if x + width > page_width - right && x > left + 10.0 {
+            x = left + 10.0;
             ly += 18.0;
         }
         out.push(format!("<g transform=\"translate({},{})\">{glyph}</g>", n(x), n(ly)));
@@ -840,12 +870,21 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     ly + 22.0 - top
 }
 
+/// One panel as a thumbnail picture for the summary page: its own title, the plot with the limit lines, the worst
+/// harmonic and the legend, without the assumptions and the footer (the summary states those once). `id` makes the
+/// clip path unique within the page.
+pub fn spectrum_thumbnail(panel: &SpectrumPanel, id: usize) -> crate::emi_field::FieldPicture {
+    let mut body: Vec<String> = Vec::new();
+    let height = panel_svg(panel, 0.0, &mut body, id, true);
+    crate::emi_field::FieldPicture { content: body.join("\n"), width: THUMB_WIDTH, height }
+}
+
 /// The SVG of `panels`, stacked; `title` names the board or run in the heading.
 pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
     let mut body: Vec<String> = Vec::new();
     let mut top = 0.0;
     for (i, panel) in panels.iter().enumerate() {
-        top += panel_svg(panel, top, &mut body, i);
+        top += panel_svg(panel, top, &mut body, i, false);
     }
     let height = top + FOOTER;
     let mut out: Vec<String> = Vec::new();
