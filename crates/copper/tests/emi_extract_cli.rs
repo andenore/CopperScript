@@ -154,6 +154,22 @@ fn conducted(report: &copper_json::Object) -> &copper_json::Object {
         .expect("a conducted finding")
 }
 
+/// `measures.extract` of the EMI-HOT-LOOP finding.
+fn hot_loop_extract(report: &copper_json::Object) -> &copper_json::Object {
+    report
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .and_then(|f| f.get("measures"))
+        .and_then(Value::as_object)
+        .and_then(|m| m.get("extract"))
+        .and_then(Value::as_object)
+        .expect("measures.extract on the hot loop")
+}
+
 fn tags(finding: &copper_json::Object) -> Vec<&str> {
     finding.get("tags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect()
 }
@@ -190,7 +206,7 @@ fn buck_with_a_second_capacitor() -> PathBuf {
 }
 
 #[test]
-fn a_second_hot_capacitor_gets_its_connection_inductance_and_couplings_from_the_extraction() {
+fn a_second_unrouted_hot_capacitor_gets_no_port_keeps_its_estimate_and_is_named() {
     let dir = buck_with_a_second_capacitor();
     let board = dir.join("board.copper");
     let board = board.to_string_lossy().into_owned();
@@ -200,38 +216,49 @@ fn a_second_hot_capacitor_gets_its_connection_inductance_and_couplings_from_the_
     assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
     let Ok(Value::Object(report)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
     let finding = conducted(&report);
+    // The hot loop's own inductance is extracted; CIN2 has no copper to the hot node (a placed board without
+    // tracks), so its port was closed with straight bars and its connection keeps the estimate.
     assert!(tags(finding).contains(&"extracted_connection_inductance"), "{:?}", tags(finding));
+    assert!(tags(finding).contains(&"estimated_connection_inductance"), "{:?}", tags(finding));
     let measures = finding.get("measures").and_then(Value::as_object).unwrap();
     let block = measures.get("extracted_connections").and_then(Value::as_object).expect("extracted_connections");
+    // No copper joins CIN2 to the hot node: no port, no bar, only the hot loop's own port is extracted.
     let ports: Vec<&str> =
         block.get("ports").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
-    assert_eq!(ports, ["hot loop", "CIN2"]);
-    let matrix = block.get("inductance_matrix_nh").and_then(Value::as_array).unwrap();
-    assert_eq!(matrix.len(), 2);
-    let entry = |i: usize, j: usize| match &matrix[i].as_array().unwrap()[j] {
-        Value::Float(f) => *f,
-        other => panic!("{other:?}"),
-    };
-    // Symmetric, positive on the diagonal, and a positive mutual inductance between the loop and the connection
-    // (they share the copper of the hot capacitor) that stays below sqrt(L1 L2).
-    assert!((entry(0, 1) - entry(1, 0)).abs() < 1e-3);
-    assert!(entry(0, 0) > 1.0 && entry(1, 1) > 0.1, "{matrix:?}");
-    assert!(entry(0, 1) > 0.0 && entry(0, 1) < (entry(0, 0) * entry(1, 1)).sqrt(), "{matrix:?}");
-    let mutuals = block.get("mutual_inductances").and_then(Value::as_array).unwrap();
-    assert_eq!(mutuals.len(), 1);
+    assert_eq!(ports, ["hot loop"]);
+    assert_eq!(block.get("mutual_inductances").and_then(Value::as_array).map(<[Value]>::len), Some(0));
+    let unconnected = block.get("estimated_connections_unconnected").and_then(Value::as_array).unwrap();
+    assert_eq!(unconnected.len(), 1, "{unconnected:?}");
+    let extract = hot_loop_extract(&report);
+    assert_eq!(extract.get("synthesized_connection_legs").and_then(Value::as_array).map(<[Value]>::len), Some(0));
+    let named = extract.get("unconnected_capacitors").and_then(Value::as_array).unwrap();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert_eq!(named[0].as_object().unwrap().get("capacitor").and_then(Value::as_str), Some("CIN2"));
     // The status of the extraction is carried into the conducted finding, and an indicative one is tagged.
     let status = block.get("status").and_then(Value::as_str).unwrap();
     assert_eq!(tags(finding).contains(&"extraction_indicative"), status == "indicative");
-    // The branch of CIN2 says where its value came from and keeps the estimate.
+    // The branch of CIN2 says where its value came from: the estimate.
     let branches = measures.get("capacitor_branches").and_then(Value::as_array).unwrap();
     let cin2 = branches
         .iter()
         .filter_map(Value::as_object)
         .find(|b| b.get("component").and_then(Value::as_str) == Some("CIN2"))
         .expect("CIN2 branch");
-    assert_eq!(cin2.get("connection_source").and_then(Value::as_str), Some("extracted"));
-    assert!(matches!(cin2.get("connection_inductance_estimate_nh"), Some(Value::Float(_))), "{cin2:?}");
-    assert!(cin2.get("connection_basis").and_then(Value::as_str).is_some_and(|b| b.starts_with("extracted:")));
+    assert_eq!(cin2.get("connection_source").and_then(Value::as_str), Some("estimated"));
+    assert!(cin2.get("connection_basis").and_then(Value::as_str).is_some_and(|b| b.starts_with("estimated:")));
+    assert!(
+        block
+            .get("notes")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|n| n.starts_with("CIN2:")
+                && n.contains("no copper of the board joins pad(s)")
+                && n.contains("stays the estimate")),
+        "{:?}",
+        block.get("notes")
+    );
 }
 
 #[test]

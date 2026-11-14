@@ -17,18 +17,36 @@
 //! rectangles on either side, so the strips tile the copper: a bar whose edges lie on cell edges is tiled exactly
 //! and has exactly `rho l / (w t)` resistance. The width of a filament is the strip width times the fraction of its
 //! body that the layer's copper of the net covers; a filament whose body is covered by less than `min_coverage` is
-//! dropped, and so is one whose axis is not followed by the copper along `MIN_AXIS_COVERAGE` of its length (it
-//! would bridge a gap in the copper: the end of a trace, the port gap). Filaments of different nets never share a
-//! node. Layers couple through the partial inductance matrix and are joined only by vias.
+//! dropped.
 //!
-//! **Vias** join the node nearest to the via position on every layer they pass where the net has copper within
-//! `2 coarse_nm`, in a chain of barrel segments whose length is the height difference of the layers.
+//! **Connectivity is the copper's.** The mesh has exactly the connectivity of the copper polygons:
+//! * The copper of a net on a layer is the union of its shapes; each polygon of it is one *piece*, and a filament is
+//!   made from one piece only (the copper of the other pieces is not in its strip), with nodes that carry the piece:
+//!   two pieces that do not touch never share a node and are never joined by a filament, however close their
+//!   outlines and whatever the pitch. Filaments of different nets never share a node.
+//! * A filament's copper has to run along its axis without a gap: within `ABS_GAP_NM` of the axis it has to be one
+//!   chain (pieces of it no more than `GAP_TOL_NM` apart) covering `MIN_AXIS_COVERAGE` of the length, so no filament
+//!   bridges a slot, an opening or the end of a trace, and a filament over a slot of one plane is not made.
+//! * A node that the copper does not reach (every filament that ends on it stops short of it) is shared only by
+//!   filaments whose copper inside their bodies touches (a diagonal trace is carried from filament to filament over
+//!   such nodes); where it does not touch the node is split, one for each side.
+//! * Every place that violates one of these (a slot or gap narrower than the filament, two pieces of copper in one
+//!   filament body, a piece of copper that the meshing cut apart) is a defect of the partition and is refined: cells of
+//!   half the body's extents there, at most `MAX_REFINE_ROUNDS` times, down to `2 ABS_GAP_NM`, while the budget holds.
+//!   What cannot be resolved (a gap narrower than the smallest cell, the budget) is never bridged: it is listed in
+//!   `MeshStats::unresolved_gaps` with the flag `unresolved_gap`, and the extraction is `indicative`.
+//! * A topology check follows the build: the connected components of the copper pieces (joined by vias) are compared
+//!   with those of the meshed network; a piece the mesh cut apart, or a network component that joins copper that is
+//!   not one piece, is a mismatch (`MeshStats::topology`, flag `topology_mismatch`, extraction status `error`).
+//!
+//! **Vias** join the node nearest to the via position (in the piece of copper the via stands in, when it stands in
+//! one) on every layer they pass where the net has copper within `2 coarse_nm`, in a chain of barrel segments whose length is the height difference of the layers.
 //!
 //! **Budget.** The inductance matrix is dense, so the number of filaments is bounded (`max_filaments`). When the
 //! mesh is larger and `coarsen` is on, `cell_nm` and `coarse_nm` are multiplied by 1.3 until it fits (at most ten
 //! times, the flag `coarsened` says so); when it is off the mesh is refused.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use copper_cam::poly::{self, Shapes};
 
@@ -139,6 +157,34 @@ pub struct MeshStats {
     pub terminals_snapped: Vec<String>,
     /// Vias that joined fewer than two layers.
     pub vias_unattached: Vec<String>,
+    /// Copper polygons against mesh connectivity.
+    pub topology: TopologyCheck,
+    /// Places where copper comes closer to other copper (or to itself across a slot) than the mesh could resolve, as
+    /// `layer, net, x, y: gap`: at most `MAX_LISTED_GAPS` of them (`unresolved_gap_count` is the number).
+    pub unresolved_gaps: Vec<String>,
+    pub unresolved_gap_count: usize,
+    /// Rounds of local refinement round gaps and cut copper (0: the first mesh was the answer).
+    pub refine_rounds: usize,
+    /// Refinements of the partition applied, and found but left out because the budget did not hold them (the
+    /// farthest from the port's terminals go first; the repairs of a topology mismatch are never left out).
+    pub refinements_applied: usize,
+    pub refinements_skipped: usize,
+    /// Filament bodies dropped because the copper does not run along them without a gap.
+    pub gap_bars_dropped: usize,
+}
+
+/// The connectivity of the copper polygons against the connectivity of the meshed network.
+#[derive(Clone, Debug, Default)]
+pub struct TopologyCheck {
+    /// Connected pieces of copper (polygons joined by vias) that have mesh nodes.
+    pub copper_components: usize,
+    /// Connected components of the meshed network (filaments and via barrels).
+    pub mesh_components: usize,
+    /// Polygons of copper without a single node (too small for the mesh, or all their filaments dropped).
+    pub unmeshed_pieces: usize,
+    /// One line for every copper piece the mesh cut apart and for every network component that joins copper that
+    /// is not one piece. Empty when the mesh has exactly the connectivity of the copper.
+    pub mismatches: Vec<String>,
 }
 
 /// The mesh: the network and the bookkeeping to read it.
@@ -188,6 +234,21 @@ const ABS_GAP_NM: i64 = 25_000;
 
 /// The least share of a filament's length that the copper must span along its axis.
 const MIN_AXIS_COVERAGE: f64 = 0.25;
+
+/// A gap in the copper along a filament's axis this narrow or narrower is not a gap (the polygons touch, to the
+/// resolution of the mesher), nm.
+const GAP_TOL_NM: i64 = ABS_GAP_NM;
+
+/// The most rounds of local refinement round gaps and cut copper.
+const MAX_REFINE_ROUNDS: usize = 8;
+
+/// Growth of the cell size round a refined defect, plus one: steeper than the general `growth` (2), so that the
+/// refinement stays local (the cell size is the body's half extent at the defect and grows by three times the
+/// distance from it).
+const REFINE_GROWTH: f64 = 4.0;
+
+/// The most unresolved gaps listed in the statistics.
+const MAX_LISTED_GAPS: usize = 20;
 
 fn rect_shapes(r: [i64; 4]) -> Shapes {
     poly::polygon(&[
@@ -429,6 +490,7 @@ fn segments(cells: &[[i64; 4]], horizontal: bool) -> Vec<(i64, i64, i64, i64, i6
     out
 }
 
+#[derive(Clone)]
 struct Attempt {
     network: Network,
     nodes: Vec<MeshNode>,
@@ -437,13 +499,204 @@ struct Attempt {
     by_layer_net: LayerNodes,
     terminal_nodes: Vec<Vec<usize>>,
     port_names: Vec<String>,
+    /// What the partition could not resolve, and the bars cut off a piece of copper.
+    defects: Vec<Defect>,
+    /// The pieces of copper the mesh cut apart, as `(layer, net, piece)`.
+    split: BTreeSet<Piece>,
+    /// The nodes of the parts a piece of copper was cut into other than its largest, `(layer, net, x_nm, y_nm)`:
+    /// where the cut is.
+    cut_nodes: Vec<CutNode>,
+    /// For a refined mesh that is over the budget: the last mesh of the same pitch that fitted, before the
+    /// refinement (its gaps are reported). Used when the pitch cannot be coarsened any further.
+    fallback: Option<Box<Attempt>>,
+}
+
+/// Why a place wants a finer mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DefectKind {
+    /// The copper along a filament's axis has a gap (a slot or an opening): the filament would bridge it.
+    Gap,
+    /// Copper of two pieces of one net shares the filament's body: the pieces are closer than the cell.
+    Shared,
+    /// A filament of copper that is one piece with the rest was dropped (little copper along it): kept to refine
+    /// where the meshing cuts a piece apart.
+    Dropped,
+}
+
+/// A place where the mesh is too coarse for the copper.
+#[derive(Clone, Debug)]
+struct Defect {
+    kind: DefectKind,
+    layer: usize,
+    net: String,
+    /// The polygon of the net on the layer (index into the layer's union of that net's copper).
+    comp: usize,
+    /// The body of the filament, `[x0, y0, x1, y1]`.
+    rect: [i64; 4],
+    horizontal: bool,
+}
+
+impl Defect {
+    /// Length of the filament along its axis, nm.
+    fn length(&self) -> i64 {
+        if self.horizontal { self.rect[2] - self.rect[0] } else { self.rect[3] - self.rect[1] }
+    }
+}
+
+/// A piece of copper: `(layer, net, polygon index)`.
+type Piece = (usize, String, usize);
+
+/// A node on the far side of a cut: `(layer, net, x_nm, y_nm)`.
+type CutNode = (usize, String, i64, i64);
+
+/// A filament of one layer, kept to see which of its nodes the copper does not reach.
+struct BarRec {
+    first_branch: usize,
+    count: usize,
+    ends: [usize; 2],
+    /// The copper along the filament stops short of the end's node.
+    dangling: [bool; 2],
+    /// The copper inside the filament's body, kept when an end dangles.
+    piece: Option<Shapes>,
+    net: String,
+    comp: usize,
+    rect: [i64; 4],
+    horizontal: bool,
+}
+
+/// Nodes that are not where the copper is must not join copper that is not connected there. A node that no copper
+/// reaches (every filament that ends on it stops short of it) is shared by the filaments of one piece of copper only
+/// where the pieces of copper inside their bodies touch (a diagonal trace is carried over such nodes from filament to
+/// filament); where they do not touch (a slot between them) the node is split, one node for each side, and the place
+/// is a defect of the partition, refined or reported. Nodes in the copper are never split.
+fn split_bridged_nodes(
+    layer: usize,
+    recs: &[BarRec],
+    network: &mut Network,
+    nodes: &mut Vec<MeshNode>,
+    node_comp: &mut Vec<usize>,
+    by_layer_net: &mut LayerNodes,
+    defects: &mut Vec<Defect>,
+) {
+    // The filament ends on each node.
+    let mut at: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new(); // node -> (record, end)
+    for (r, rec) in recs.iter().enumerate() {
+        for e in 0..2 {
+            at.entry(rec.ends[e]).or_default().push((r, e));
+        }
+    }
+    for (node, ends) in at {
+        if ends.len() < 2 || ends.iter().any(|&(r, e)| !recs[r].dangling[e]) {
+            continue;
+        }
+        // Cluster the dangling ends by whether the copper of their filaments touches.
+        let mut parent: Vec<usize> = (0..ends.len()).collect();
+        for i in 0..ends.len() {
+            for j in (i + 1)..ends.len() {
+                if find(&mut parent, i) == find(&mut parent, j) {
+                    continue;
+                }
+                let (a, b) = (&recs[ends[i].0], &recs[ends[j].0]);
+                let touch = match (&a.piece, &b.piece) {
+                    (Some(pa), Some(pb)) => {
+                        !poly::intersection(&poly::offset(pa, GAP_TOL_NM, false, 1000.0), pb).is_empty()
+                    }
+                    _ => true,
+                };
+                if touch {
+                    union(&mut parent, i, j);
+                }
+            }
+        }
+        let mut roots: Vec<usize> = (0..ends.len()).map(|i| find(&mut parent, i)).collect();
+        roots.sort_unstable();
+        roots.dedup();
+        if roots.len() < 2 {
+            continue;
+        }
+        // The first cluster keeps the node, each other gets a node of its own at the same place.
+        for &root in &roots[1..] {
+            let id = network.node_count;
+            network.node_count += 1;
+            let original = nodes[node].clone();
+            nodes.push(original.clone());
+            node_comp.push(node_comp[node]);
+            let (x, y) = ((original.position[0] / NM).round() as i64, (original.position[1] / NM).round() as i64);
+            by_layer_net.entry((layer, original.net.clone())).or_default().push((x, y, id));
+            for (i, &(r, e)) in ends.iter().enumerate() {
+                if find(&mut parent, i) != root {
+                    continue;
+                }
+                let rec = &recs[r];
+                for k in rec.first_branch..rec.first_branch + rec.count {
+                    if e == 0 {
+                        network.branches[k].a = id;
+                    } else {
+                        network.branches[k].b = id;
+                    }
+                }
+            }
+        }
+        for &(r, _) in &ends {
+            let rec = &recs[r];
+            defects.push(Defect {
+                kind: DefectKind::Gap,
+                layer,
+                net: rec.net.clone(),
+                comp: rec.comp,
+                rect: rec.rect,
+                horizontal: rec.horizontal,
+            });
+        }
+    }
+}
+
+/// The union intervals along the axis of the copper `strip` inside `band`, sorted, chained where they are no more
+/// than `GAP_TOL_NM` apart: `(start, end)` of each chain.
+fn axis_chains(band: [i64; 4], strip: &Shapes, horizontal: bool) -> Vec<(i64, i64)> {
+    let mut parts: Vec<(i64, i64)> = Vec::new();
+    let mut rect: Option<Shapes> = None;
+    for shape in strip {
+        let (bx0, by0, bx1, by1) = poly::bounds(shape);
+        if bx0 >= band[2] || bx1 <= band[0] || by0 >= band[3] || by1 <= band[1] {
+            continue;
+        }
+        let outer = &shape[0];
+        let axis_rect = shape.len() == 1
+            && outer.len() == 4
+            && outer.iter().all(|p| (p.x == bx0 || p.x == bx1) && (p.y == by0 || p.y == by1));
+        let interval = |b: [i64; 4]| if horizontal { (b[0], b[2]) } else { (b[1], b[3]) };
+        if axis_rect {
+            parts.push(interval([bx0.max(band[0]), by0.max(band[1]), bx1.min(band[2]), by1.min(band[3])]));
+        } else {
+            let rect = rect.get_or_insert_with(|| rect_shapes(band));
+            for piece in poly::intersection(rect, &vec![shape.clone()]) {
+                let b = poly::bounds(&piece);
+                parts.push(interval([b.0, b.1, b.2, b.3]));
+            }
+        }
+    }
+    parts.sort_unstable();
+    let mut chains: Vec<(i64, i64)> = Vec::new();
+    for (a, b) in parts {
+        match chains.last_mut() {
+            Some(last) if a <= last.1 + GAP_TOL_NM => last.1 = last.1.max(b),
+            _ => chains.push((a, b)),
+        }
+    }
+    chains
 }
 
 fn clip_window(shapes: &Shapes, window: [i64; 4]) -> Shapes {
     poly::intersection(&poly::union(shapes), &rect_shapes(window))
 }
 
-fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, MeshError> {
+fn build_once(
+    layout: &Layout,
+    spec: &MeshSpec,
+    auto_scale: f64,
+    extra: &BTreeMap<usize, Vec<Source>>,
+) -> Result<Attempt, MeshError> {
     let scale = spec.scale * auto_scale;
     let cell = ((spec.cell_nm as f64) * scale).round() as i64;
     let coarse = ((spec.coarse_nm as f64) * scale).round().max(cell as f64) as i64;
@@ -459,6 +712,12 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
     let mut stats = MeshStats { cell_nm: cell, coarse_nm: coarse, scale, ..MeshStats::default() };
     let mut by_layer_net: LayerNodes = BTreeMap::new();
     let mut bar_count = 0usize;
+    let mut defects: Vec<Defect> = Vec::new();
+    // The pieces of copper (the polygons of each net's union) of each layer, and the piece each node belongs to:
+    // nodes of different pieces are different nodes whatever their position, so copper that does not touch is
+    // never joined by the mesh.
+    let mut layer_shapes: Vec<BTreeMap<String, Shapes>> = Vec::new();
+    let mut node_comp: Vec<usize> = Vec::new();
     for (li, layer) in layout.layers.iter().enumerate() {
         // Union of every net's copper, clipped to the window.
         let mut per_net: BTreeMap<&str, Shapes> = BTreeMap::new();
@@ -471,6 +730,7 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
             .filter(|(_, shapes)| !shapes.is_empty())
             .collect();
         let mut layer_stats = LayerStats { name: layer.name.clone(), ..LayerStats::default() };
+        layer_shapes.push(per_net.iter().map(|(net, shapes)| ((*net).to_owned(), shapes.clone())).collect());
         if per_net.is_empty() {
             stats.layers.push(layer_stats);
             continue;
@@ -551,6 +811,9 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
             });
             req.soft.push(h.rect);
         }
+        if let Some(list) = extra.get(&li) {
+            req.sources.extend(list.iter().copied());
+        }
         for t in layout.terminals.iter().filter(|t| t.layer == li) {
             if let Some((x0, y0, x1, y1)) = region_bounds(&t.region) {
                 req.hard.push([x0, y0, x1, y1]);
@@ -578,20 +841,30 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
         layer_stats.lines_y = hseg.iter().map(|s| s.0).collect::<std::collections::BTreeSet<_>>().len();
         let thickness = layer.thickness_m;
         let t_sub = thickness / nt as f64;
-        let mut ids: BTreeMap<(i64, i64, String), usize> = BTreeMap::new();
-        let mut make_node = |x: i64, y: i64, net: &str, network: &mut Network, nodes: &mut Vec<MeshNode>| -> usize {
-            let key = (x, y, net.to_owned());
+        let mut recs: Vec<BarRec> = Vec::new();
+        let mut ids: BTreeMap<(i64, i64, String, usize), usize> = BTreeMap::new();
+        let mut make_node = |x: i64,
+                             y: i64,
+                             net: &str,
+                             comp: usize,
+                             network: &mut Network,
+                             nodes: &mut Vec<MeshNode>,
+                             node_comp: &mut Vec<usize>|
+         -> usize {
+            let key = (x, y, net.to_owned(), comp);
             if let Some(&id) = ids.get(&key) {
                 return id;
             }
             let id = network.node_count;
             network.node_count += 1;
             nodes.push(MeshNode { layer: li, net: net.to_owned(), position: [x as f64 * NM, y as f64 * NM] });
+            node_comp.push(comp);
             by_layer_net.entry((li, net.to_owned())).or_default().push((x, y, id));
             ids.insert(key, id);
             id
         };
         for (&net, shapes) in &per_net {
+            let boxes: Vec<(i64, i64, i64, i64)> = shapes.iter().map(|s| poly::bounds(s)).collect();
             for horizontal in [true, false] {
                 let segs = if horizontal { &hseg } else { &vseg };
                 let mut i = 0;
@@ -612,46 +885,80 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
                     } else {
                         [line - max_lo / 2, from, line + max_hi / 2, to]
                     };
-                    let strip = poly::intersection(shapes, &rect_shapes(strip_rect));
-                    if !strip.is_empty() {
-                        for &(_, p, q, lo, hi) in &segs[i..j] {
+                    // How many pieces of copper put a filament on each segment of the line.
+                    let mut hits = vec![0u32; j - i];
+                    for (comp, shape) in shapes.iter().enumerate() {
+                        let b = boxes[comp];
+                        if b.0 >= strip_rect[2] || b.2 <= strip_rect[0] || b.1 >= strip_rect[3] || b.3 <= strip_rect[1]
+                        {
+                            continue;
+                        }
+                        // The strip of this piece of copper alone: a filament never joins two pieces.
+                        let strip = poly::intersection(&vec![shape.clone()], &rect_shapes(strip_rect));
+                        if strip.is_empty() {
+                            continue;
+                        }
+                        for (k, &(_, p, q, lo, hi)) in segs[i..j].iter().enumerate() {
                             let rect = if horizontal {
                                 [p, line - lo / 2, q, line + hi / 2]
                             } else {
                                 [line - lo / 2, p, line + hi / 2, q]
                             };
+                            let defect = |kind: DefectKind| Defect {
+                                kind,
+                                layer: li,
+                                net: net.to_owned(),
+                                comp,
+                                rect,
+                                horizontal,
+                            };
                             let (f, bbox) = covered(rect, &strip);
                             let Some(bbox) = bbox.filter(|_| f >= spec.min_coverage) else {
                                 if f > 0.0 {
                                     stats.dropped_bars += 1;
+                                    defects.push(defect(DefectKind::Dropped));
                                 }
                                 continue;
                             };
-                            // The copper has to run along the filament, not only stand beside it: within a band of
-                            // `ABS_GAP_NM` round the filament's axis it has to span `MIN_AXIS_COVERAGE` of the length.
-                            // A filament that would bridge a gap in the copper (the end of a trace, the port gap) is
-                            // not made.
+                            hits[k] += 1;
+                            // The copper has to run along the filament without a gap, not only stand beside it:
+                            // within a band of `ABS_GAP_NM` round the filament's axis it has to be one chain (no
+                            // slot, opening or gap between pieces wider than `GAP_TOL_NM`) and span
+                            // `MIN_AXIS_COVERAGE` of the length. A filament that would bridge a gap in the copper
+                            // (the end of a trace, the port gap, a slot) is not made; a gap inside one is a
+                            // defect of the partition and is refined.
                             let band = if horizontal {
                                 [p, line - ABS_GAP_NM, q, line + ABS_GAP_NM]
                             } else {
                                 [line - ABS_GAP_NM, p, line + ABS_GAP_NM, q]
                             };
-                            let spans = covered(band, &strip)
-                                .1
-                                .map_or(0, |b| if horizontal { b[2] - b[0] } else { b[3] - b[1] });
-                            if (spans as f64) < MIN_AXIS_COVERAGE * (q - p) as f64 {
+                            let chains = axis_chains(band, &strip, horizontal);
+                            if chains.len() > 1 {
                                 stats.dropped_bars += 1;
+                                stats.gap_bars_dropped += 1;
+                                defects.push(defect(DefectKind::Gap));
                                 continue;
                             }
+                            let (c0, c1) = chains.first().copied().unwrap_or((p, p));
+                            if ((c1 - c0) as f64) < MIN_AXIS_COVERAGE * (q - p) as f64 {
+                                stats.dropped_bars += 1;
+                                defects.push(defect(DefectKind::Dropped));
+                                continue;
+                            }
+                            // An end whose node the copper does not reach (the copper along the filament stops short
+                            // of it by more than the tolerance) is a dangling end: the node is not where the copper is.
+                            let (dangling_a, dangling_b) = (c0 - p > GAP_TOL_NM, q - c1 > GAP_TOL_NM);
+                            let piece =
+                                (dangling_a || dangling_b).then(|| poly::intersection(&rect_shapes(rect), &strip));
                             let (a, b) = if horizontal {
                                 (
-                                    make_node(p, line, net, &mut network, &mut nodes),
-                                    make_node(q, line, net, &mut network, &mut nodes),
+                                    make_node(p, line, net, comp, &mut network, &mut nodes, &mut node_comp),
+                                    make_node(q, line, net, comp, &mut network, &mut nodes, &mut node_comp),
                                 )
                             } else {
                                 (
-                                    make_node(line, p, net, &mut network, &mut nodes),
-                                    make_node(line, q, net, &mut network, &mut nodes),
+                                    make_node(line, p, net, comp, &mut network, &mut nodes, &mut node_comp),
+                                    make_node(line, q, net, comp, &mut network, &mut nodes, &mut node_comp),
                                 )
                             };
                             let length = (q - p) as f64 * NM;
@@ -663,6 +970,7 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
                             } else {
                                 (Axis::Y, (bbox[0] + bbox[2]) as f64 / 2.0 * NM, (p + q) as f64 / 2.0 * NM)
                             };
+                            let first_branch = network.branches.len();
                             for k in 0..nt {
                                 let z = layer.z_m - thickness / 2.0 + (k as f64 + 0.5) * t_sub;
                                 let bar = Bar::planar(axis, [cx, cy, z], length, width, t_sub);
@@ -675,14 +983,45 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
                                     group: bar_count,
                                 });
                             }
+                            recs.push(BarRec {
+                                first_branch,
+                                count: nt,
+                                ends: [a, b],
+                                dangling: [dangling_a, dangling_b],
+                                piece,
+                                net: net.to_owned(),
+                                comp,
+                                rect,
+                                horizontal,
+                            });
                             bar_count += 1;
                             layer_stats.bars += 1;
+                        }
+                    }
+                    // Copper of two pieces of the net in one filament body: the pieces are closer than the cell.
+                    for (k, &h) in hits.iter().enumerate() {
+                        if h >= 2 {
+                            let (_, p, q, lo, hi) = segs[i + k];
+                            let rect = if horizontal {
+                                [p, line - lo / 2, q, line + hi / 2]
+                            } else {
+                                [line - lo / 2, p, line + hi / 2, q]
+                            };
+                            defects.push(Defect {
+                                kind: DefectKind::Shared,
+                                layer: li,
+                                net: net.to_owned(),
+                                comp: 0,
+                                rect,
+                                horizontal,
+                            });
                         }
                     }
                     i = j;
                 }
             }
         }
+        split_bridged_nodes(li, &recs, &mut network, &mut nodes, &mut node_comp, &mut by_layer_net, &mut defects);
         stats.layers.push(layer_stats);
     }
     stats.bars = bar_count;
@@ -724,25 +1063,48 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
     // Vias.
     let attach = 2 * coarse;
     let mut barrels = 0usize;
+    // The pieces of copper each via joins, for the topology check: `(layer, net, piece)`.
+    let mut via_pieces: Vec<Vec<(usize, String, usize)>> = Vec::new();
     for (vi, via) in layout.vias.iter().enumerate() {
         let mut attached: Vec<(usize, usize)> = Vec::new(); // (layer, node)
+        let mut pieces: Vec<(usize, String, usize)> = Vec::new();
         for li in via.first_layer..=via.last_layer.min(layout.layers.len().saturating_sub(1)) {
             let net = via.layer_nets.iter().find(|(l, _)| *l == li).map_or(&via.net, |(_, n)| n);
             let Some(candidates) = by_layer_net.get(&(li, net.clone())) else { continue };
-            let best = candidates
+            // The via joins the piece of copper it stands in (a node of another piece of the net is not the via's
+            // copper, however near), else the nearest node.
+            let inside = layer_shapes.get(li).and_then(|m| m.get(net.as_str())).and_then(|shapes| {
+                shapes.iter().position(|shape| {
+                    let b = poly::bounds(shape);
+                    b.0 <= via.x
+                        && via.x <= b.2
+                        && b.1 <= via.y
+                        && via.y <= b.3
+                        && poly::shape_contains(shape, (via.x as f64, via.y as f64))
+                })
+            });
+            let in_piece: Vec<&(i64, i64, usize)> = match inside {
+                Some(c) => candidates.iter().filter(|(_, _, id)| node_comp[*id] == c).collect(),
+                None => Vec::new(),
+            };
+            let pool: Vec<&(i64, i64, usize)> =
+                if in_piece.is_empty() { candidates.iter().collect() } else { in_piece };
+            let best = pool
                 .iter()
-                .map(|&(x, y, id)| (((x - via.x) as f64).hypot((y - via.y) as f64), id))
+                .map(|&&(x, y, id)| (((x - via.x) as f64).hypot((y - via.y) as f64), id))
                 .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             if let Some((d, id)) = best
                 && d <= attach as f64
             {
                 attached.push((li, id));
+                pieces.push((li, net.clone(), inside.unwrap_or(node_comp[id])));
             }
         }
         if attached.len() < 2 {
             stats.vias_unattached.push(via.name.clone());
             continue;
         }
+        via_pieces.push(pieces);
         let r_out = (via.drill_nm as f64 / 2.0 + via.plating_nm as f64) * NM;
         for pair in attached.windows(2) {
             let ((la, na), (lb, nb)) = (pair[0], pair[1]);
@@ -783,35 +1145,393 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
     }
     stats.filaments = network.branches.len();
     stats.nodes = network.node_count;
-    Ok(Attempt { network, nodes, stats, by_layer_net, terminal_nodes, port_names })
+    let (topology, split, cut_nodes) = check_topology(&layer_shapes, &nodes, &node_comp, &network, &via_pieces);
+    if !topology.mismatches.is_empty() {
+        stats.flags.push("topology_mismatch".to_owned());
+    }
+    stats.topology = topology;
+    Ok(Attempt {
+        network,
+        nodes,
+        stats,
+        by_layer_net,
+        terminal_nodes,
+        port_names,
+        defects,
+        split,
+        cut_nodes,
+        fallback: None,
+    })
+}
+
+fn find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn union(parent: &mut [usize], a: usize, b: usize) {
+    let (ra, rb) = (find(parent, a), find(parent, b));
+    if ra != rb {
+        parent[ra.max(rb)] = ra.min(rb);
+    }
+}
+
+/// The connected components of the copper polygons (the pieces of each net on each layer, joined where a via stands
+/// in both) against those of the meshed network (filaments and barrels): every component of the network has to be
+/// one component of the copper and every component of the copper that has nodes one component of the network. The
+/// second value is the set of copper pieces that the mesh cut apart.
+fn check_topology(
+    layer_shapes: &[BTreeMap<String, Shapes>],
+    nodes: &[MeshNode],
+    node_comp: &[usize],
+    network: &Network,
+    via_pieces: &[Vec<(usize, String, usize)>],
+) -> (TopologyCheck, BTreeSet<Piece>, Vec<CutNode>) {
+    let mut item: BTreeMap<(usize, String, usize), usize> = BTreeMap::new();
+    for (li, map) in layer_shapes.iter().enumerate() {
+        for (net, shapes) in map {
+            for comp in 0..shapes.len() {
+                let id = item.len();
+                item.insert((li, net.clone(), comp), id);
+            }
+        }
+    }
+    let mut copper: Vec<usize> = (0..item.len()).collect();
+    for pieces in via_pieces {
+        for pair in pieces.windows(2) {
+            if let (Some(&a), Some(&b)) = (item.get(&pair[0]), item.get(&pair[1])) {
+                union(&mut copper, a, b);
+            }
+        }
+    }
+    let mut mesh: Vec<usize> = (0..network.node_count).collect();
+    for branch in &network.branches {
+        union(&mut mesh, branch.a, branch.b);
+    }
+    let node_item = |n: usize| item.get(&(nodes[n].layer, nodes[n].net.clone(), node_comp[n])).copied();
+    // Per piece of copper: the components of the network its nodes are in; per component: the pieces.
+    let mut meshed: BTreeSet<usize> = BTreeSet::new();
+    let mut of_group: BTreeMap<usize, BTreeMap<usize, Vec<usize>>> = BTreeMap::new();
+    let mut of_mesh: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+    for n in 0..network.node_count {
+        let Some(it) = node_item(n) else { continue };
+        meshed.insert(it);
+        let (g, m) = (find(&mut copper, it), find(&mut mesh, n));
+        of_group.entry(g).or_default().entry(m).or_default().push(n);
+        of_mesh.entry(m).or_default().insert(g);
+    }
+    let place = |n: usize| {
+        format!(
+            "layer {}, net {}, near ({:.2}, {:.2}) mm",
+            nodes[n].layer,
+            nodes[n].net,
+            nodes[n].position[0] * 1e3,
+            nodes[n].position[1] * 1e3
+        )
+    };
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut split: BTreeSet<(usize, String, usize)> = BTreeSet::new();
+    let mut cut_groups: BTreeSet<usize> = BTreeSet::new();
+    let mut cut_nodes: Vec<(usize, String, i64, i64)> = Vec::new();
+    for (g, parts) in &of_group {
+        if parts.len() > 1 {
+            cut_groups.insert(*g);
+            // Every part but the one with most nodes is on the far side of a cut.
+            let largest = parts.iter().max_by_key(|(m, ns)| (ns.len(), std::cmp::Reverse(**m))).map(|(m, _)| *m);
+            for (m, ns) in parts {
+                if Some(*m) != largest {
+                    for &n in ns {
+                        let q = nodes[n].position;
+                        cut_nodes.push((
+                            nodes[n].layer,
+                            nodes[n].net.clone(),
+                            (q[0] / NM).round() as i64,
+                            (q[1] / NM).round() as i64,
+                        ));
+                    }
+                }
+            }
+            let mut sizes: Vec<(usize, usize)> = parts.iter().map(|(m, ns)| (ns.len(), *m)).collect();
+            sizes.sort_unstable();
+            let small = parts[&sizes[0].1][0];
+            mismatches.push(format!(
+                "copper that is one piece is cut into {} pieces by the mesh (nodes {}), the smallest {}",
+                parts.len(),
+                sizes.iter().map(|s| s.0.to_string()).collect::<Vec<_>>().join(" + "),
+                place(small)
+            ));
+        }
+    }
+    for (m, groups) in &of_mesh {
+        if groups.len() > 1 {
+            let first = (0..network.node_count).find(|&n| find(&mut mesh, n) == *m).unwrap_or(0);
+            mismatches.push(format!(
+                "the mesh joins {} separate pieces of copper into one network component, {}",
+                groups.len(),
+                place(first)
+            ));
+        }
+    }
+    if !cut_groups.is_empty() {
+        for (key, &id) in &item {
+            if cut_groups.contains(&find(&mut copper, id)) {
+                split.insert(key.clone());
+            }
+        }
+    }
+    let copper_components = of_group.len();
+    let mesh_components = of_mesh.len();
+    (
+        TopologyCheck { copper_components, mesh_components, unmeshed_pieces: item.len() - meshed.len(), mismatches },
+        split,
+        cut_nodes,
+    )
 }
 
 fn region_bounds(region: &Shapes) -> Option<(i64, i64, i64, i64)> {
     region.iter().map(|s| poly::bounds(s)).reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
 }
 
+/// The source of finer cells a defect asks for: each extent of the filament's body halved, an extent at least
+/// `4 ABS_GAP_NM` long (the cells go no finer than `2 ABS_GAP_NM`); `None` when the body is already that small. Both
+/// axes: the gap that the body holds may lie across its axis as well as along it.
+fn refinement(defect: &Defect) -> Option<Source> {
+    let r = defect.rect;
+    let half = |extent: i64| if extent >= 4 * ABS_GAP_NM { extent / 2 } else { 0 };
+    let (sx, sy) = (half(r[2] - r[0]), half(r[3] - r[1]));
+    (sx > 0 || sy > 0).then_some(Source { rect: r, sx, sy, growth: REFINE_GROWTH })
+}
+
+/// Build the mesh and refine it locally where the partition is too coarse for the copper: a filament body that holds
+/// a gap of its copper (a slot narrower than the cell), copper of two pieces, or a piece of copper that the meshing
+/// cut apart gets cells of half the filament's extents, up to `MAX_REFINE_ROUNDS` times, **in order of priority while
+/// the budget holds**:
+/// 1. the refinements that repair a topology mismatch (dropped filaments next to the nodes of a cut-off part): all of
+///    them or the pitch is coarsened;
+/// 2. then the gaps and shared cells, nearest to the port's terminals first, as many as fit: the largest prefix of the
+///    ordered list that keeps the mesh within the budget, found by bisection (deterministic).
+///
+/// What is left is reported (`unresolved_gaps`, the flag `unresolved_gap`, `refinement_stopped_by_budget` and the
+/// counts of refinements applied and left out), never bridged.
+fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, MeshError> {
+    // Where the port is: the bounding boxes of the terminals of the layout's ports.
+    let anchors: Vec<[i64; 4]> = layout
+        .ports
+        .iter()
+        .flat_map(|p| [p.plus, p.minus])
+        .filter_map(|t| layout.terminals.get(t).and_then(|t| region_bounds(&t.region)))
+        .map(|b| [b.0, b.1, b.2, b.3])
+        .collect();
+    let fits = |a: &Attempt| a.stats.filaments <= spec.max_filaments;
+    let with = |extra: &BTreeMap<usize, Vec<Source>>, add: &[(usize, Source)]| {
+        let mut e = extra.clone();
+        for (layer, source) in add {
+            e.entry(*layer).or_default().push(*source);
+        }
+        e
+    };
+    let mut extra: BTreeMap<usize, Vec<Source>> = BTreeMap::new();
+    let mut attempt = build_once(layout, spec, auto_scale, &extra)?;
+    let (mut applied, mut skipped, mut rounds) = (0usize, 0usize, 0usize);
+    // The last mesh that was whole (no topology mismatch), before the gaps were refined.
+    let mut clean: Option<Attempt> = None;
+    for round in 0..=MAX_REFINE_ROUNDS {
+        attempt.stats.refine_rounds = rounds;
+        attempt.stats.refinements_applied = applied;
+        attempt.stats.refinements_skipped = skipped;
+        if !fits(&attempt) {
+            // Over the budget without any refinement: the pitch has to be coarsened.
+            return Ok(attempt);
+        }
+        // The defects of this mesh as sources of finer cells.
+        let mut required: Vec<(usize, Source)> = Vec::new();
+        let mut optional: Vec<(f64, usize, [i64; 4], Source)> = Vec::new();
+        for d in &attempt.defects {
+            let Some(source) = refinement(d) else { continue };
+            match d.kind {
+                // A dropped filament is refined where it may be what cut a piece of copper: next to a node of a part
+                // that was cut off (within a filament length of its body), not everywhere in a big piece.
+                DefectKind::Dropped => {
+                    if attempt.split.contains(&(d.layer, d.net.clone(), d.comp))
+                        && attempt.cut_nodes.iter().any(|(l, n, x, y)| {
+                            *l == d.layer && *n == d.net && rect_distance(d.rect, [*x, *y, *x, *y]) <= d.length() as f64
+                        })
+                    {
+                        required.push((d.layer, source));
+                    }
+                }
+                DefectKind::Gap | DefectKind::Shared => {
+                    let distance = anchors.iter().map(|a| rect_distance(d.rect, *a)).fold(f64::INFINITY, f64::min);
+                    optional.push((distance, d.layer, d.rect, source));
+                }
+            }
+        }
+        optional.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        optional.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+        let optional: Vec<(usize, Source)> = optional.into_iter().map(|(_, l, _, s)| (l, s)).collect();
+        if (required.is_empty() && optional.is_empty()) || round == MAX_REFINE_ROUNDS {
+            break;
+        }
+        if !required.is_empty() {
+            // First the repairs of the topology, alone: every one of them or no refinement at this pitch.
+            let trial_extra = with(&extra, &required);
+            let trial = build_once(layout, spec, auto_scale, &trial_extra)?;
+            if fits(&trial) {
+                applied += required.len();
+                rounds += 1;
+                extra = trial_extra;
+                attempt = trial;
+                continue;
+            }
+            return Ok(match clean {
+                // Gaps were refined on a mesh that was whole, and now a repair does not fit: that mesh is the answer.
+                Some(mut kept) => {
+                    kept.stats.flags.push("refinement_stopped_by_budget".to_owned());
+                    report_gaps(&mut kept, layout);
+                    kept
+                }
+                // Not whole yet: coarsen, the best mesh so far goes along as the answer when no pitch holds them.
+                None => {
+                    let mut over = trial;
+                    let mut keep = attempt;
+                    keep.stats.flags.push("refinement_stopped_by_budget".to_owned());
+                    report_gaps(&mut keep, layout);
+                    over.fallback = Some(Box::new(keep));
+                    over
+                }
+            });
+        }
+        // The mesh is whole (the copper's connectivity): now the gaps, nearest the port first, as many as fit.
+        if attempt.stats.topology.mismatches.is_empty() && clean.is_none() {
+            clean = Some(attempt.clone());
+        }
+        let all: Vec<(usize, Source)> = optional.clone();
+        let full_extra = with(&extra, &all);
+        let full = build_once(layout, spec, auto_scale, &full_extra)?;
+        if fits(&full) {
+            applied += all.len();
+            rounds += 1;
+            extra = full_extra;
+            attempt = full;
+            continue;
+        }
+        // The largest prefix of the ordered gaps that keeps the mesh within the budget, by bisection.
+        let mut best: Option<(Attempt, BTreeMap<usize, Vec<Source>>, usize)> = None;
+        let (mut lo, mut hi) = (0usize, optional.len());
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            let trial_extra = with(&extra, &optional[..mid]);
+            let trial = build_once(layout, spec, auto_scale, &trial_extra)?;
+            if fits(&trial) {
+                lo = mid;
+                best = Some((trial, trial_extra, mid));
+            } else {
+                hi = mid;
+            }
+        }
+        skipped += optional.len() - lo;
+        if !attempt.stats.flags.iter().any(|f| f == "refinement_stopped_by_budget") {
+            attempt.stats.flags.push("refinement_stopped_by_budget".to_owned());
+        }
+        match best {
+            Some((kept, kept_extra, prefix)) => {
+                applied += prefix;
+                rounds += 1;
+                let mut kept = kept;
+                kept.stats.flags.push("refinement_stopped_by_budget".to_owned());
+                attempt = kept;
+                extra = kept_extra;
+            }
+            // Nothing more fits within the budget.
+            None => break,
+        }
+    }
+    attempt.stats.refine_rounds = rounds;
+    attempt.stats.refinements_applied = applied;
+    attempt.stats.refinements_skipped = skipped;
+    report_gaps(&mut attempt, layout);
+    Ok(attempt)
+}
+
+/// Put the gaps the mesh could not resolve into the statistics and the flags.
+fn report_gaps(attempt: &mut Attempt, layout: &Layout) {
+    let mut seen: BTreeSet<(usize, String, i64, i64)> = BTreeSet::new();
+    let mut listed: Vec<String> = Vec::new();
+    for d in attempt.defects.iter().filter(|d| matches!(d.kind, DefectKind::Gap | DefectKind::Shared)) {
+        let (cx, cy) = ((d.rect[0] + d.rect[2]) / 2, (d.rect[1] + d.rect[3]) / 2);
+        if !seen.insert((d.layer, d.net.clone(), cx / 200_000, cy / 200_000)) {
+            continue;
+        }
+        if listed.len() < MAX_LISTED_GAPS {
+            listed.push(format!(
+                "{}, net {}, near ({:.2}, {:.2}) mm: {} that the {:.0} um cell does not resolve",
+                layout.layers.get(d.layer).map_or("?", |l| l.name.as_str()),
+                d.net,
+                cx as f64 * 1e-6,
+                cy as f64 * 1e-6,
+                if d.kind == DefectKind::Gap {
+                    "a gap in the copper"
+                } else {
+                    "copper of two pieces closer than the cell"
+                },
+                d.length() as f64 * 1e-3
+            ));
+        }
+    }
+    attempt.stats.unresolved_gap_count = seen.len();
+    attempt.stats.unresolved_gaps = listed;
+    if !seen.is_empty() {
+        attempt.stats.flags.push("unresolved_gap".to_owned());
+    }
+}
+
+/// The mesh of an attempt that fits the budget, after `step` coarsening steps.
+fn finish(attempt: Attempt, step: usize) -> Result<Mesh, MeshError> {
+    let mut stats = attempt.stats;
+    stats.coarsen_steps = step;
+    if step > 0 {
+        stats.flags.push("coarsened".to_owned());
+    }
+    if !attempt.network.shorts.is_empty() {
+        stats.flags.push("merged_terminals".to_owned());
+    }
+    Ok(Mesh {
+        network: attempt.network,
+        nodes: attempt.nodes,
+        stats,
+        port_names: attempt.port_names,
+        terminal_nodes: attempt.terminal_nodes,
+        layer_nodes: attempt.by_layer_net,
+    })
+}
+
 /// Mesh a layout. Coarsens to the budget when `spec.coarsen` allows.
 pub fn mesh(layout: &Layout, spec: &MeshSpec) -> Result<Mesh, MeshError> {
     let mut scale = 1.0;
+    let mut fallback: Option<(usize, Box<Attempt>)> = None;
     for step in 0..=10 {
-        let attempt = build(layout, spec, scale)?;
+        let mut attempt = build(layout, spec, scale)?;
+        if let Some(kept) = attempt.fallback.take() {
+            // The best mesh that fitted without the whole refinement: fewest topology mismatches, then fewest
+            // unresolved gaps, then the finest pitch.
+            let key = |a: &Attempt| (a.stats.topology.mismatches.len(), a.stats.unresolved_gap_count);
+            if fallback.as_ref().is_none_or(|(_, held)| key(&kept) < key(held)) {
+                fallback = Some((step, kept));
+            }
+        }
+        if attempt.stats.filaments > spec.max_filaments
+            && (!spec.coarsen || step == 10)
+            && let Some((fit_step, kept)) = fallback.take()
+        {
+            // The refinement does not fit at any pitch tried: the finest mesh that fitted without it, with its gaps
+            // reported (flag `refinement_stopped_by_budget`).
+            return finish(*kept, fit_step);
+        }
         if attempt.stats.filaments <= spec.max_filaments {
-            let mut stats = attempt.stats;
-            stats.coarsen_steps = step;
-            if step > 0 {
-                stats.flags.push("coarsened".to_owned());
-            }
-            if !attempt.network.shorts.is_empty() {
-                stats.flags.push("merged_terminals".to_owned());
-            }
-            return Ok(Mesh {
-                network: attempt.network,
-                nodes: attempt.nodes,
-                stats,
-                port_names: attempt.port_names,
-                terminal_nodes: attempt.terminal_nodes,
-                layer_nodes: attempt.by_layer_net,
-            });
+            return finish(attempt, step);
         }
         if !spec.coarsen || step == 10 {
             let detail = attempt

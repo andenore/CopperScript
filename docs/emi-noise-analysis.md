@@ -484,12 +484,14 @@ each with the missing input when skipped.
   decided once exactly as `EMI-CONDUCTED` decides it (`copper_drc::emi::conducted::operating_point`), and the radiated field,
   the stored energy and overshoot, and the near-field map all use it, so one report holds one operating
   assumption per cell. `declared_operating_point`: the component declares `load_current`, the topology is `buck`, the supply
-  voltages of the hot-supply and output nets are declared with `Vout < Vin`, and the inductor current stays positive
-  (`I_out >= dI/2`). The high-side switch current is the hot-loop current: the ramp from `I_out - dI/2` to `I_out + dI/2`
+  voltages of the hot-supply and output nets are declared with `Vout < Vin`, the inductor current stays positive
+  (`I_out >= dI/2`) and the peak `I_out + dI/2` does not exceed the switch current limit `current_peak` (a limit that
+  chops the ramp makes the assumed waveform wrong). The high-side switch current is the hot-loop current: the ramp from `I_out - dI/2` to `I_out + dI/2`
   with the declared current edges. The current limit `current_peak`, when declared, is the secondary worst case
   (`measures.secondary_scenario`: level, frequency, margin, band of the same estimate with flat-top pulses of the limit's
   amplitude, as a trapezoid envelope). `current_limit`: no operating point is declared, or it is outside the model
-  (`operating_point.status` `not_declared` / `outside_model` with the `reason`; the tag `operating_point_outside_model`), or
+  (`operating_point.status` `not_declared` / `outside_model` with the `reason` and its machine-readable `reason_code`,
+  `discontinuous_conduction` or `peak_exceeds_current_limit`; the tag `operating_point_outside_model`), or
   the cell is not a buck (`how_to_declare` is `null`; the finding says that the operating-point model is for a buck stage only and
   does not advise `load_current`, which `CMP133` would refuse); the amplitude is `current_peak`, a worst case that bounds
   operation and is not a prediction of it (tag `worst_case_current`, the message says so). Without either a usable
@@ -940,7 +942,17 @@ between it and the LISN is solved as one linear circuit
   matrix that is not positive definite is not used). With a coupling the hot-loop inductance is no longer without
   effect on the level at the LISN: the coupled inductors form a transformer between the source branch and the
   capacitor branches. The resistance of the interconnect is not in the circuit. Capacitors on the supply side of an
-  input filter are not ports of the extraction and keep the estimate; the extraction's status (`ok` or
+  input filter are not ports of the extraction and keep the estimate. So does a capacitor that no copper of the
+  board joins to the hot node (a pad of it is not on the same piece of copper as the hot capacitor's pad on its net, decided
+  before meshing from the copper's own connectivity): it gets **no port and no bar** in the extraction, so nothing is added
+  to the board and the other capacitors' numbers are those of the board without it (to 1e-9 relative: `tests/connection_legs.rs`);
+  its connection inductance stays the pad-distance estimate with its estimated provenance (`connection_source = estimated`,
+  tag `estimated_connection_inductance`), the basis text and a note say "not extracted" with the pads that are not joined,
+  and `measures.extracted_connections.estimated_connections_unconnected` and `measures.extract.unconnected_capacitors` name
+  it. With the explicit option `BoardOptions::connection_legs` (off; the CLI does not set it) a straight bar is added for
+  each pad that needs one, such a capacitor does get a port, and its row is still not used (`estimated_connections_synthesized_leg`).
+  An extraction whose status is `error` (the mesh does not have the copper's connectivity) is not used at all, and the CLI and
+  the extract text say why (count and first mismatch, `--extract-budget N`; `measures.extract.not_used_in_conducted`); the extraction's status (`ok` or
   `indicative`) is carried into the finding (tag `extraction_indicative`). Without `--extract` nothing here changes:
   `emi_check` and `emi_check_with_connections` with no matrix give identical reports. The coupled circuit is
   checked against a hand nodal solution of the branch current of a second capacitor with a mutual inductance to the
@@ -987,13 +999,22 @@ between it and the LISN is solved as one linear circuit
   reported as the secondary worst case, `measures.secondary_scenario`
   (`scenario: current_limit`, the same `harmonics`, `worst_harmonic`,
   `fundamental` keys).
-* Continuous conduction is checked: `I_out >= dI/2` (the valley of the ramp is not
-  negative). Otherwise (`measures.operating_point.status = outside_model`, tag
-  `operating_point_outside_model`; discontinuous conduction, pulse skipping and
-  forced-PWM light-load operation) the model does not apply and says so: the
-  declared point is not evaluated, the detector comparison is not touched, and the
-  current-limit scenario is the only one reported (without a `current_peak` the
-  prediction is skipped, coverage `not_applicable` with the reason).
+* Two conditions are checked, in this order. Continuous conduction: `I_out >= dI/2` (the valley of the ramp is not
+  negative). Otherwise (`measures.operating_point.status = outside_model`, `reason_code =
+  discontinuous_conduction`, tag `operating_point_outside_model`; discontinuous conduction, pulse skipping and
+  forced-PWM light-load operation) the model does not apply and says so. And the switch current limit: the peak
+  `I_out + dI/2` (nominal ripple) must not exceed the switch pin's `current_peak`, because a converter whose current
+  would pass the limit current-limits and the ramp-on-pedestal waveform does not exist (1e-9 relative slack). Otherwise
+  the status is `outside_model` too, with `reason_code = peak_exceeds_current_limit`, a `reason` that gives the peak, the
+  load, the ripple and the limit (for `load_current = 4A` on `examples/emi_buck`: dI = 1.2411 A, peak 4.6206 A against
+  4.5 A; 3.8 A, peak 4.4206 A, stays supported), and the same tag. Either way the declared point is not evaluated, the
+  detector comparison is not touched, and the current-limit scenario is the only one reported (without a
+  `current_peak` the prediction is skipped, coverage `not_applicable` with the reason; the limit check cannot fail
+  without a limit). `continuous_conduction` stays what it is (a point can conduct continuously and still exceed the
+  limit). The one-page summary and the plots word the two reasons apart. With the rule-of-thumb ripple band (the
+  inductor's value is not known) a point whose nominal peak is within the limit but whose band's high end is above it stays
+  supported and carries the tag `peak_may_exceed_current_limit` and a sentence with the nominal peak, the limit and the
+  high-end peak (`operating_point.peak_at_high_ripple_a`).
 * `current_limit`: no operating point is declared (`operating_point.status =
   not_declared`, which names how to declare one), or it is outside the model. The
   switch pin's `current_peak`, the current LIMIT, is the amplitude of flat-top
@@ -1041,6 +1062,15 @@ is an adjustable setting or a spread-spectrum or modulated sweep is not declared
 is run through the time-domain receiver model (`copper_emi::receiver::scan_lines`, which reads a periodic signal given by
 its harmonic lines and is equal to `scan` of the sampled record that holds them, and `conducted::receiver_emulation`, which forms the LISN
 port voltages of both lines from every harmonic of the solution, so the neighbours inside the IF filter are present, and reads the larger port).
+A reading is a pure function of the source spectrum and of its own tuning: the lines it uses are those inside the
+filter's window `tuned +- 4 half-bandwidths` (`Band::skirt_half_width`, 2 x the 6 dB bandwidth, where the Gaussian is 96 dB
+down: 18 kHz either side in Band B), whichever other tunings are requested and in whatever order. The solve therefore
+reaches `max over the tunings of (n + skirt_lines)` harmonics (`receiver::skirt_lines`: 36 lines at a 500 Hz fundamental in
+Band B, 1 at 500 kHz), and a request that would need more than `conducted::MAX_EMULATION_LINES` (1 000 000) is refused
+as a whole with `ConductedError::NotEvaluated` and the reason (`measures.receiver_emulation_failure`), never read
+with a truncated window. (Before, the solve stopped a fixed 8 lines above the highest tuning: at a 500 Hz fundamental a
+tuning at 150 kHz read 62.35 dBuV peak alone and 63.45 dBuV with a second tuning requested, the window being cut
+at +4 kHz instead of +18 kHz. Only a window wider than 8 lines was cut: a harmonic spacing below 2.25 kHz in Band B. No reading at 500 kHz, 15 kHz or 3 kHz moved (the window is 1, 2 and 6 lines); below 2.25 kHz the reading of a tuning is now the value it has in a request that asks for it alone.)
 A full scan of the thousands of lines of a low-frequency converter is not a screening-cost computation, so the detectors are
 read at a bounded selection of at most 48 harmonics (`measures.receiver_emulation.selection_rule`,
 `selected_as`): the 8 with the least quasi-peak margin and the 8 with the least average margin (line level against the
@@ -1977,7 +2007,8 @@ one net namespace holds everything.
   copper layers, flag `assumed_stackup`); copper thickness is the stack-up's, else 35 um (`assumed_copper_thickness`); via
   plating is 25 um (`assumed_plating`: the export does not carry it). These are `parameter_assumptions`, separate from the
   numerical sensitivity and from the omissions.
-* **Vias** are tube barrels along z joining the node nearest to the via on every layer it passes where its net has
+* **Vias** are tube barrels along z joining the node nearest to the via (of the piece of copper it stands in, when it
+  stands in one) on every layer it passes where its net has
   copper within twice the coarse pitch, as a chain of segments of the height difference of the layers. A via that joins
   fewer than two layers is listed (`via_unattached`) and left out.
 
@@ -1988,11 +2019,37 @@ inductance matrix and are joined only by vias. The nodes are the corners of the 
 neighbouring nodes along a side of a rectangle (a rectangle next to two smaller ones has their corners as hanging
 nodes on its side). Its cross-section is the strip between the half-way lines to the rectangles on either side times
 the fraction of its body that the layer's copper of the net covers, so a bar whose edges lie on rectangle edges is
-tiled exactly and has exactly `rho l / (w t)`; a body covered by less than 5 % is dropped and counted, and so is a
-filament whose axis the copper does not follow along a quarter of its length within 25 um of the axis (it would bridge
-a gap in the copper: a first version of this mesher joined the two halves of a switch bar across the port gap with
-such a filament, and the port read 0.035 nH instead of 4 nH; it is a heuristic, not a proof that no gap is bridged).
-Filaments of different nets never share a node.
+tiled exactly and has exactly `rho l / (w t)`; a body covered by less than 5 % is dropped and counted.
+**The mesh has the connectivity of the copper polygons** (`copper-extract/src/mesh.rs`, tests `tests/topology.rs`). The
+copper of a net on a layer is the union of its shapes, each polygon of it one *piece*; a filament is cut from one piece
+only and its nodes carry the piece, so two pieces of copper that do not touch never share a node and are never joined
+by a filament, whatever the pitch and however close their outlines (a first version of this mesher joined the two
+halves of a switch bar across the port gap with a filament, and the port read 0.035 nH instead of 4 nH; a later one
+kept a filament when the copper covered a quarter of its axis, measured on the hull of the covered part, so two
+rectangles 0.4 mm apart in cells of 0.75 mm read 1.2 mOhm at default settings, and a plane with a slot was shortcut
+across it by filaments that ended on a node in the slot). Now: the copper within 25 um of the filament's axis has to be
+one chain (its pieces no more than 25 um apart) and cover a quarter of the length, else the filament is dropped
+(`gap_bars_dropped` counts those); a node that no copper reaches (every filament on it stops short of it) is shared
+only by filaments whose copper inside their bodies touches, as a diagonal trace needs, and is split otherwise, one
+node for each side of the slot; filaments of different nets never share a node. A slot or gap narrower than a filament,
+two pieces of copper in one filament body, and a piece of copper that the meshing cut apart are defects of the
+partition, and each is **refined locally**: cells of half the body's extents round the defect, down to 50 um, in up to eight
+rounds, **in order of priority while the filament budget holds**. First the repairs of a topology mismatch (the dropped
+filaments next to the nodes of a part that was cut off), alone and repeated round by round until the mesh is whole:
+they are required, and a pitch at which they do not fit is coarsened. Only then the gaps and shared cells, nearest to the
+port's terminals first, as many as fit (the largest prefix of that ordered list that keeps the mesh within the budget,
+found by bisection, deterministic). A mesh that was whole and whose next repair does not fit stays as it was; if no pitch
+holds even the repairs, the best mesh that fitted (fewest mismatches) is kept, status `error`. What was left out is reported:
+`unresolved_gaps` (at most 20 listed with layer, net and place, and their number), the flag `unresolved_gap` (the extraction is
+`indicative`), the flag `refinement_stopped_by_budget`, and `refinements_applied` / `refinements_skipped` (counted over the
+rounds). Nothing left out is bridged. **A topology self-check** follows every build: the connected components of the copper
+pieces (joined by the vias that stand in them) are compared with those of the meshed network (filaments and barrels).
+A piece the mesh cut apart, or a network component that joins pieces that are not one piece of copper, is a mismatch,
+listed in `measures.extract.topology.mismatches` with the flag `topology_mismatch` and the extraction status `error`
+(the numbers are listed but are not the board's, and the multi-port matrix is not used in `EMI-CONDUCTED`).
+Genuinely connected thin copper is kept connected by the same rules: a 0.15 mm and a 0.25 mm neck between two pads read 1.19 and 1.31
+times the neck's own `rho l / (w t)` at default settings (the pads add the rest), unrefined, and a piece of copper that the mesh cuts is refined until it is whole or
+reported.
 
 A rectangle is cut in the middle (snapped to a copper edge within the middle half) while it is larger than the size
 asked for at its place, which is the smallest of the requests round it, each `request + (growth - 1) distance` with
@@ -2069,11 +2126,12 @@ for the same bar along an axis (-4.4 %, converging slowly: -6.7 % at 250 um), an
 | --- | --- |
 | `inductance_nh`, `resistance_mohm`, `frequencies_mhz` | `Im Z / w` and `Re Z` of the finest mesh of the series at 1, 10 and 100 MHz |
 | `closed_form_nh`, `ratio_to_closed_form`, `fullwave_nh`, `ratio_to_fullwave` | the traced closed form of the finding and, when `--fullwave` ran, its inductance, with the ratios |
-| `status`, `status_reasons` | `ok`, or `indicative` with the reasons: a terminal joined by its nearest node because no node lies inside it (the mesh is coarser than the terminal), vias left out, the two finest meshes more than 3 % apart at 10 MHz (`convergence_threshold_pct`), a self inductance of the port matrix moving more than 3 % between them, a single mesh (no evidence of convergence). Coarsening to the budget is a flag and a note, not a reason: it cannot coarsen below the terminals, vias and narrow copper of the loop, and the series shows what it cost |
+| `status`, `status_reasons` | `ok`, `indicative` with the reasons, or `error` (the meshed network does not have the connectivity of the copper; the multi-port matrix is not used). Reasons: a gap in the copper narrower than the smallest cell that the mesh did not resolve (`unresolved_gap`, listed in `topology.unresolved_gaps`), a terminal joined by its nearest node because no node lies inside it (the mesh is coarser than the terminal), vias left out, the two finest meshes more than 3 % apart at 10 MHz (`convergence_threshold_pct`), a self inductance of the port matrix moving more than 3 % between them, a single mesh (no evidence of convergence). Coarsening to the budget is a flag and a note, not a reason: it cannot coarsen below the terminals, vias and narrow copper of the loop, and the series shows what it cost |
 | `numerical_sensitivity_pct`, `numerical_sensitivity_earlier_pct`, `numerical_sensitivity_basis` | the difference between the two finest meshes of the series (pitch ratio 1.5) per frequency, and between the two coarser ones; `null` with `numerical_sensitivity_unavailable` for one mesh. Two meshes that agree do not bound the error: the series below still moves, and a falling step is evidence, not proof |
 | `parameter_assumptions` | what the board does not fix: assumed stack-up, copper thickness, plating, window, resistivity |
-| `not_modelled`, `flags`, `notes` | the omissions of 13.1; `assumed_stackup`, `assumed_copper_thickness`, `assumed_plating`, `coarsened`, `plane_corridor`, `merged_terminals`, `terminal_snapped`, `via_unattached`, `connection_legs`; how each leg and component was drawn |
-| `meshes` | per mesh: role (`standard` = the finest, then `coarser` and `coarsest`), pitches, filaments, nodes, loops, barrels, coarsening steps, L and R, seconds |
+| `not_modelled`, `flags`, `notes` | the omissions of 13.1; `assumed_stackup`, `assumed_copper_thickness`, `assumed_plating`, `coarsened`, `plane_corridor`, `merged_terminals`, `terminal_snapped`, `via_unattached`, `connection_legs`, `unresolved_gap`, `topology_mismatch`, `refinement_stopped_by_budget`; how each leg and component was drawn |
+| `meshes` | per mesh: role (`standard` = the finest, then `coarser` and `coarsest`), pitches, filaments, nodes, loops, barrels, coarsening steps, `dropped_bars`, `gap_bars_dropped`, `refine_rounds`, `unresolved_gaps`, `copper_components`, `mesh_components`, L and R, seconds |
+| `topology`, `unconnected_capacitors`, `not_used_in_conducted`, `synthesized_connection_legs` | the connected components of the copper polygons against those of the mesh (`copper_components`, `mesh_components`, `mismatches`, `unresolved_gap_count`, `unresolved_gaps`), and each straight bar added for a capacitor pad that no copper joins to the hot capacitor (`capacitor`, `pad`, `net`, `to`, `length_mm`) |
 | `port_labels`, `inductance_matrix_nh` | the ports (`hot loop`, then the other capacitors of the hot net) and the inductance matrix of the finest mesh at each frequency (1 x 1 without other capacitors), the input of the multi-port use in `EMI-CONDUCTED` (section 10) |
 | `via_currents` | per frequency, the vias that carry at least 1 % of the port current: current per ampere into the port and `share_of_net`, `|I| / sum |I|` over the vias of the same net (magnitudes, adding up to 1 whatever the phases) |
 | `nets`, `other_nets`, `window_mm`, `layers`, `copper`, `seconds`, `filament_budget`, `method` | what was modelled, the fill (`zone_fills`, `islands_removed`, `fill_seconds`) and the cost |
@@ -2221,6 +2279,55 @@ Which of the two changes (the terminals or the vias, or the finer narrow copper 
 
 Via currents per ampere into the port are in `measures.extract.via_currents`.
 
+**After the topology fix (external review, defects 1 and 2).** The mesher no longer bridges copper that does not touch
+(section 13.3) and the capacitor legs are made per pad. What it moved, measured with the same commands:
+
+* Closed cases (`tests/topology.rs`, default `MeshSpec`): two rectangles of one net 0.1, 0.2, 0.4 and 1.0 mm apart read
+  1.186, 1.202, 1.243 and 1.565 mOhm before (a finite resistance across copper that does not touch) and are an open
+  circuit (`PortDisconnected`) now; a 0.03 mm gap, below the 0.05 mm the mesher does not go under, is the same open
+  circuit with `unresolved_gap` and a place in the statistics. A 0.8 mm trace 20 mm long over a plane 0.2 mm below,
+  shorted to the plane at its far end, reads 3.548 nH at 100 MHz over the plain plane, 3.583 nH over a plane with a
+  0.4 mm x 6 mm slot under it before (the slot was bridged) and 4.335 nH after (4.876 nH with a 1.0 mm slot): the return
+  current goes round the slot. A 0.15 and a 0.25 mm neck of copper stay connected (1.19 and 1.31 times the neck's own
+  `rho l / (w t)`). The slot case of `tests/edge_rule.rs` (`study_bend_and_slot_series`, ignored, 8.7 minutes, run once
+  after the change) reads what it read before: slotted 4.0617 / 4.0617 nH, slot excess +1.0621 nH at both pitches (its
+  slot is resolved by the pitch, so nothing was bridged); the analytic tests are unchanged.
+* `emi_buck` placed (and `emi_buck_filter`, the same hot loop): L 4.140 / 3.901 / 3.883 nH at 1 / 10 / 100 MHz, as before to
+  the last digit; R(10 MHz) 12.892 to 12.893 mohm; the numerical sensitivity 0.52 / 1.43 / 1.69 % and the status `ok`
+  are unchanged. The finest mesh has 6787 filaments and 3731 nodes (6816 and 3751 before: one round of local refinement
+  where two pieces of copper shared a cell); the coarser meshes are the same 2991 and 1673 filaments. Dropped filament
+  bodies (the old mesher's own count): 192 / 140 / 107 before, 198 / 140 / 107 after, and none dropped for a gap in the
+  copper along them (`gap_bars_dropped` 0): thin copper that is connected is not cut. Routed (the CLI test's tracks),
+  the three meshes are identical before and after: 4855 / 2560 / 1398 filaments, 89 / 70 / 56 filament bodies dropped.
+  The topology check reports 5 pieces of copper and 5 network components.
+* CopperOrgan (`--run build/ci/emi-check-20261111T161807 --extract`, default budget 9000). Before the fix: L 6.506 / 6.039 /
+  6.006 nH, R 23.8 / 27.6 / 30.4 mohm, matrix at 10 MHz [[6.039, 0.852], [0.852, 1.883]], filaments 8158 + 7621 + 7365, status
+  `ok`. First version of the fix (all-or-nothing refinement): 6.599 / 6.142 / 6.109 nH, status `error` (5 pieces of copper cut
+  apart, 23 gaps), the extraction not used in `EMI-CONDUCTED`. **With the prioritised refinement: L 6.632 / 6.175 / 6.139 nH,
+  R 24.1 / 28.0 / 31.2 mohm, matrix at 10 MHz [[6.175, 0.851], [0.851, 1.908]], status `indicative`, no topology mismatch (16
+  pieces of copper, 16 network components)**, filaments 8998 + 8999 + 7275, the finest mesh at the pitch multiplier 6.27
+  (7 coarsening steps) after 4 refinement rounds with 73 refinements applied and 85 left out (counted over the rounds), 31 gaps
+  reported unresolved (`unresolved_gap`, `refinement_stopped_by_budget`: cells of 0.25 to 1.9 mm, the nearest to the port
+  first have been refined), numerical sensitivity 2.3 / 2.4 / 2.7 % (earlier step 5.3 / 6.1 / 6.4 %: the third mesh, with no
+  refinement, is coarser than the budget needs). The direction against the old numbers is the physical one (filaments across
+  antipads and gaps are gone; +2.1 % at 10 MHz); the matrix is used in `EMI-CONDUCTED` (C_BIN2 extracted 1.908 nH, mutual 0.851 nH,
+  tag `extraction_indicative`) and the fundamental at 597 kHz reads 95.48 dBuV as before. The command takes 3 min 28 s. For
+  comparison, `--extract-budget 14500 --extract-single-mesh` (finer pitch, multiplier 2.86, 12 361 filaments, no gap left, 16 / 16
+  components) reads 6.278 / 5.767 / 5.733 nH: the default-budget value is 7 % above it, as the old default mesh was 4.7 % above the
+  old 14 500 run; a difference between two meshes is not an error bound. The reason the topology could be repaired at 9000
+  only at a coarser pitch: the repairs (about 50 to 90 dropped filaments next to the cut parts, refined to cells of 0.25 to 0.5 mm)
+  cost about 900 to 1 600 filaments on top of the base mesh (8148 at multiplier 4.83), which is above 9000 there; the base mesh falls
+  only to 7277 at multiplier 13.8 because terminals, vias and the loop's narrow copper keep their resolution.
+* Connection legs (`tests/connection_legs.rs`): `emi_buck` with CIN2 routed to the hot capacitor's pads and CIN3 on the board
+  without copper to the hot node. By default (no bars) asking for a port on CIN3 gives it none: the matrix has the ports
+  `hot loop` and `CIN2` only, CIN3 is listed in `unconnected_capacitors` with its two pads, and the hot-loop self term, CIN2's self
+  term and their mutual are equal to 1e-9 relative at 1, 10 and 100 MHz to the same board with no port requested on CIN3
+  (the window and the filament count are the same too). Before this, asking for the port widened the window and moved the
+  hot-loop/CIN2 mutual from 0.318 to 0.298 nH and the hot loop's own term from 5.48 to 5.04 nH. With the explicit option
+  `connection_legs`, CIN2's self inductance at 10 MHz is 1.468 nH without CIN3 and 1.469 nH with it (3 % allowed), no bar is
+  synthesized for CIN2 and one for each pad of CIN3 (5.3 mm each); forcing bars on every terminal, as the first retry did
+  (measured with the first version of this change), gave CIN2 1.036 nH against 1.465 nH (-29 %).
+
 ### 13.9 What is integrated and what is not
 
 Integrated: `copper emi-check --extract` (hot-loop interconnect impedance beside the closed-form and full-wave values,
@@ -2232,10 +2339,13 @@ calls with the matrices and whose conducted findings and coverage entries replac
 Not integrated: (1) capacitors on the supply side of an input filter (`supply_capacitors`) keep the estimate: the node
 they hang on has no copper closure in the extracted window (the hot capacitor closes the hot loop and the other
 hot-net capacitors; nothing closes the filter's supply side), so a port across them has nothing to be measured
-against; `examples/emi_buck_filter` therefore has an extracted hot-loop inductance and an estimated `CUP`. (2) A cell's
-capacitors that no copper joins to the hot capacitor (a placed board without tracks) are joined by straight bars from
-pad centre to pad centre, flag `connection_legs`: the connection of the estimate, not copper that exists, and such
-legs can cross another net's pads where the pads alternate along a line. (3) The resistance of the interconnect and the
+against; `examples/emi_buck_filter` therefore has an extracted hot-loop inductance and an estimated `CUP`. (2) A capacitor that no copper joins to the hot capacitor's pads (a placed board without tracks, or one pad
+unrouted) gets no port and no bar, is named in `unconnected_capacitors` and keeps its pad-distance estimate with its
+estimated provenance in `EMI-CONDUCTED` (section 10); it is decided before meshing from the copper's own connectivity (the
+polygons of the net joined by vias), per capacitor. The explicit option `BoardOptions::connection_legs` (off; the CLI does not
+set it) adds a straight bar from pad centre to pad centre for each pad that needs one, flag `connection_legs`, each bar in
+`synthesized_connection_legs`: the connection of the estimate, not copper that exists, which can cross another net's pads, and the
+capacitor's row is still not used. (3) The resistance of the interconnect and the
 components' own parasitics (ESL, ESR) stay as they were: the matrix is read at 10 MHz and used as a constant inductance
 over 150 kHz to 30 MHz. A FastHenry input deck of a mesh is written by `copper_extract::fasthenry::deck` and an ignored
 test runs `fasthenry` when it is on the PATH; none is installed here, so no comparison with FastHenry exists.

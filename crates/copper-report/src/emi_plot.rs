@@ -288,7 +288,10 @@ const ASSUMPTIONS: &[(&str, &str)] = &[
     ("scenario_current_limit", "The current is the switch current limit, a worst case, not a load current."),
     ("declared_operating_point", "The current is the declared operating point."),
     ("scenario_declared_operating_point", "The current is the declared operating point."),
-    ("operating_point_outside_model", "The declared operating point lies outside what the model covers."),
+    (
+        "operating_point_outside_model",
+        "The declared operating point lies outside what the model covers (discontinuous conduction, or a peak above the switch current limit).",
+    ),
     ("detector_not_applicable", "The levels are line amplitudes, not detector readings."),
     ("line_amplitudes_only", "The levels are line amplitudes, not detector readings."),
     ("detector_receiver_emulation", "Detector readings come from a receiver emulation at some harmonics only."),

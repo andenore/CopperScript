@@ -2435,6 +2435,8 @@ struct LoopScenario {
     status: &'static str,
     /// Why the declared point is not used, or what is missing to evaluate it.
     reason: Option<String>,
+    /// The machine-readable form of `reason` for an operating point outside the model.
+    reason_code: Option<&'static str>,
     point: Option<conducted::OperatingPoint>,
     vin: Option<f64>,
     vout: Option<f64>,
@@ -2471,6 +2473,9 @@ impl LoopScenario {
         if self.status == "outside_model" {
             tags.push("operating_point_outside_model");
         }
+        if self.declared_point().is_some_and(|p| p.peak_may_exceed_limit().is_some()) {
+            tags.push("peak_may_exceed_current_limit");
+        }
         if self.declared_point().is_some_and(|p| matches!(p.ripple, conducted::Ripple::Rule { .. })) {
             tags.push(defaults::TAG_RIPPLE);
         }
@@ -2480,13 +2485,15 @@ impl LoopScenario {
     /// One sentence naming the scenario and its current.
     fn describe(&self, controller: &str) -> String {
         match (self.declared_point(), self.limit) {
-            (Some(p), _) => format!(
-                "declared operating point: load {} A, ripple {} A peak to peak, high-side switch current a ramp from {} A to {} A, continuous conduction",
-                rounded(p.load, 4),
-                rounded(p.nominal_ripple(), 4),
-                rounded(p.valley(), 4),
-                rounded(p.peak(), 4)
-            ),
+            (Some(p), _) => {
+                format!(
+                    "declared operating point: load {} A, ripple {} A peak to peak, high-side switch current a ramp from {} A to {} A, continuous conduction",
+                    rounded(p.load, 4),
+                    rounded(p.nominal_ripple(), 4),
+                    rounded(p.valley(), 4),
+                    rounded(p.peak(), 4)
+                ) + &p.peak_may_exceed_text().map_or(String::new(), |t| format!("; {t}"))
+            }
             (None, Some(limit)) => format!(
                 "current limit {} A, a worst case that bounds operation, NOT a prediction of it ({})",
                 rounded(limit, 4),
@@ -2533,6 +2540,7 @@ fn loop_scenario(view: &FlatElectricalView, cell: &SwitchingCell, drive: &Result
         kind: conducted::Kind::CurrentLimit,
         status: "not_declared",
         reason: None,
+        reason_code: None,
         point: None,
         vin: None,
         vout: None,
@@ -2574,15 +2582,13 @@ fn loop_scenario(view: &FlatElectricalView, cell: &SwitchingCell, drive: &Result
         return out;
     }
     let point = conducted::operating_point(view, cell, load, drive.frequency, vin, vout);
-    if point.ccm {
+    if point.supported() {
         out.kind = conducted::Kind::Declared;
         out.status = "declared_ccm";
     } else {
         out.status = "outside_model";
-        out.reason = Some(format!(
-            "I_out < dI/2 (dI = {} A peak to peak): the inductor current reaches zero in the off-time; discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the supported model",
-            rounded(point.nominal_ripple(), 4)
-        ));
+        out.reason = point.outside_reason();
+        out.reason_code = point.outside().map(conducted::Outside::code);
     }
     out.point = Some(point);
     out
@@ -2599,6 +2605,7 @@ fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &Swi
     put(&mut operating, "how_to_declare", scenario.how_to_declare(&cell.controller).map_or(Value::Null, Value::from));
     put(&mut operating, "topology", cell.topology.map_or(Value::Null, |t| Value::from(t.value())));
     put(&mut operating, "reason", scenario.reason.as_deref().map_or(Value::Null, Value::from));
+    put(&mut operating, "reason_code", scenario.reason_code.map_or(Value::Null, Value::from));
     put(&mut operating, "load_current_a", scenario.point.as_ref().map_or(Value::Null, |p| num(p.load, 6)));
     put(&mut operating, "current_limit_a", scenario.limit.map_or(Value::Null, |i| num(i, 6)));
     if let Some(p) = &scenario.point {
@@ -2616,6 +2623,7 @@ fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &Swi
         put(&mut operating, "valley_a", num(p.valley(), 6));
         put(&mut operating, "peak_a", num(p.peak(), 6));
         put(&mut operating, "continuous_conduction", Value::Bool(p.ccm));
+        put(&mut operating, "peak_at_high_ripple_a", p.peak_may_exceed_limit().map_or(Value::Null, |v| num(v, 6)));
     }
     put(&mut finding.measures, "operating_point", Value::Object(operating));
     let mut current = Object::new();
@@ -3913,6 +3921,14 @@ pub struct ExtractedConnections {
     pub reasons: Vec<String>,
     /// What the matrix leaves out, for the finding (capacitors that are not ports, and why).
     pub notes: Vec<String>,
+    /// References of the capacitors whose port the extraction closed with a straight bar between pad centres because
+    /// no copper of the board joins a terminal of theirs to the hot node. Their row and column of the matrix do not
+    /// describe the board's copper: their connection inductance stays the estimate (with its estimated provenance)
+    /// and their couplings are left out. Each is named in the finding with the reason.
+    pub synthesized: Vec<String>,
+    /// Capacitors of the hot net that no copper joins to the hot capacitor, with the pads that are not joined: they
+    /// got no port and no bar in the extraction, keep their estimate and are named in the finding.
+    pub unconnected: Vec<(String, String)>,
 }
 
 /// [`emi_check`] with the connection inductances of the input networks from an extraction (see

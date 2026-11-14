@@ -71,6 +71,14 @@ impl Band {
         }
     }
 
+    /// Half width of the frequency window the IF filter is applied over, Hz: four half-bandwidths (`2 rbw`). The
+    /// Gaussian response is 96 dB down at its edge (`6.02 (4)^2`); beyond it the filter is taken as zero. This is the
+    /// receiver's defined skirt: a reading at a tuned frequency is a function of the source lines inside
+    /// `tuned +- skirt_half_width()` and of nothing else.
+    pub fn skirt_half_width(self) -> f64 {
+        2.0 * self.rbw()
+    }
+
     /// Quasi-peak time constants, CISPR 16-1-1 Table 1 as remembered:
     ///
     /// | Band | charge | discharge | meter |
@@ -197,8 +205,8 @@ pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -
 /// held one period sampled at `fundamental * (2 * phasors.len() + 2)` and the lines were exactly
 /// represented; the result is identical to `scan` on that record (a test checks it), without
 /// synthesising the waveform. The tuned frequencies must be below `phasors.len() * fundamental`; the
-/// lines above the last are taken as zero, so a tuned frequency within two IF half-bandwidths of it
-/// reads low.
+/// lines above the last are taken as zero, so a tuned frequency within [`Band::skirt_half_width`] of the
+/// last line reads low (give `phasors` up to `tuned / fundamental + `[`skirt_lines`]).
 ///
 /// Cost: per tuned frequency one inverse FFT of a few dozen points and the detector run over the
 /// settled repetitions (quasi-peak: about `10 (discharge + meter) / period` passes, at most).
@@ -216,6 +224,12 @@ pub fn scan_lines(fundamental: f64, phasors: &[Complex], frequencies: &[f64], ba
     scan_spectrum(&spectrum, fundamental * n as f64, frequencies, band)
 }
 
+/// The number of lines of spacing `df` (Hz) from the tuned frequency to the edge of the IF window
+/// ([`Band::skirt_half_width`]), at least one: the lines `tuned +- skirt_lines` are the ones a reading uses.
+pub fn skirt_lines(df: f64, band: Band) -> u32 {
+    ((band.skirt_half_width() / df).ceil() as u32).max(1)
+}
+
 fn silent(f: f64) -> Reading {
     Reading { frequency: f, peak: f64::NEG_INFINITY, quasi_peak: f64::NEG_INFINITY, average: f64::NEG_INFINITY }
 }
@@ -225,7 +239,7 @@ fn scan_spectrum(spectrum: &[Complex], sample_rate: f64, frequencies: &[f64], ba
     let n = spectrum.len();
     let df = sample_rate / n as f64;
     let half_bw = band.rbw() / 2.0;
-    let kspan = ((4.0 * half_bw / df).ceil() as i64).max(1);
+    let kspan = skirt_lines(df, band) as i64;
     let m = (2 * kspan as usize + 1).next_power_of_two() * 4;
     let dt = n as f64 / (m as f64 * sample_rate);
     frequencies

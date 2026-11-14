@@ -1057,6 +1057,32 @@ mod tests {
     }
 
     #[test]
+    fn the_subtitle_counts_extracted_and_estimated_connections_from_the_extraction_run() {
+        // One capacitor whose connection is the extraction's, one that kept its estimate (its port in the extraction
+        // was closed by a synthesized leg, or it is not a port): the subtitle counts them apart.
+        let mut two = input();
+        two.parallel_capacitors.push(CapacitorBranch::new("C3", cap(10e-6, 5e-3, 1e-9)).with_connection(2e-9));
+        let connections: BTreeMap<String, String> =
+            [("C2".to_owned(), "extracted".to_owned()), ("C3".to_owned(), "estimated".to_owned())].into();
+        let p = panel_from_input("U1", None, &[], &two, &connections, Some("ok")).expect("a panel");
+        assert!(
+            p.connection_basis.contains("and 1 capacitor of the hot net")
+                && p.connection_basis.contains("1 capacitor estimated from the pad distance"),
+            "{}",
+            p.connection_basis
+        );
+        let all_estimated: BTreeMap<String, String> =
+            [("C2".to_owned(), "estimated".to_owned()), ("C3".to_owned(), "estimated".to_owned())].into();
+        let q = panel_from_input("U1", None, &[], &two, &all_estimated, Some("ok")).expect("a panel");
+        assert!(
+            !q.connection_basis.contains("of the hot net")
+                && q.connection_basis.contains("2 capacitors estimated from the pad distance"),
+            "{}",
+            q.connection_basis
+        );
+    }
+
+    #[test]
     fn spread_keeps_labels_apart_and_inside() {
         let y = spread(&[10.0, 11.0, 12.0, 300.0, 301.0], 13.0, 0.0, 305.0);
         for w in y.windows(2) {

@@ -2812,6 +2812,71 @@ fn the_ccm_boundary_decides_between_the_declared_point_and_the_current_limit() {
 }
 
 #[test]
+fn a_peak_above_the_switch_current_limit_is_outside_the_model() {
+    // 12 V to 5 V, 4.7 uH, 500 kHz: dI = 1.2411 A, so a declared 4 A load peaks at 4.6206 A, above the 4.5 A
+    // current_peak of the switch pin. The limit would chop the ramp: the assumed waveform no longer exists.
+    let over = with_load("peak-over", "4A", None);
+    let plain = run("peak-over-plain", &[]);
+    let conducted_over = conducted(&over);
+    assert_eq!(text(conducted_over, "scenario"), "current_limit", "{:?}", conducted_over.tags);
+    let point = operating_point(conducted_over);
+    assert_eq!(point.get("status").and_then(Value::as_str), Some("outside_model"), "{point:?}");
+    let reason = point.get("reason").and_then(Value::as_str).unwrap_or("");
+    assert!(reason.contains("peak_exceeds_current_limit"), "{reason}");
+    assert!(reason.contains("4.62") && reason.contains("4.5"), "{reason}");
+    assert!(!reason.contains("discontinuous"), "{reason}");
+    assert_eq!(point.get("continuous_conduction"), Some(&Value::Bool(true)), "conduction is continuous");
+    assert_eq!(point.get("reason_code").and_then(Value::as_str), Some("peak_exceeds_current_limit"));
+    assert!(conducted_over.tags.contains(&"operating_point_outside_model".to_owned()), "{:?}", conducted_over.tags);
+    assert!(conducted_over.tags.contains(&"scenario_current_limit".to_owned()));
+    assert!(!conducted_over.tags.contains(&"declared_operating_point".to_owned()));
+    let message = &conducted_over.finding.message;
+    assert!(message.contains("NOT a prediction") && message.contains("exceeds the switch current limit"), "{message}");
+    assert!(!message.contains("discontinuous conduction"), "{message}");
+    // Exactly the levels of the current-limit scenario of a board without an operating point.
+    for (a, b) in harmonic_rows(conducted_over).iter().zip(&harmonic_rows(conducted(&plain))) {
+        assert!((a.1 - b.1).abs() < 1e-9);
+    }
+    // The hot-loop estimates fall back the same way.
+    let hot = hot_loop(&over);
+    assert_eq!(text(hot, "scenario"), "current_limit");
+    assert_eq!(operating_point(hot).get("status").and_then(Value::as_str), Some("outside_model"));
+    assert!(hot.tags.contains(&"operating_point_outside_model".to_owned()), "{:?}", hot.tags);
+    assert!(hot.finding.message.contains("exceeds the switch current limit"), "{}", hot.finding.message);
+    assert_eq!(hot.estimate.as_ref().unwrap().value, hot_loop(&plain).estimate.as_ref().unwrap().value);
+    // Just under the limit (3.8 A peaks at 4.4206 A) the declared point stays supported.
+    let under = with_load("peak-under", "3.8A", None);
+    assert_eq!(text(conducted(&under), "scenario"), "declared_operating_point");
+    assert_eq!(operating_point(conducted(&under)).get("status").and_then(Value::as_str), Some("declared_ccm"));
+}
+
+#[test]
+fn a_rule_of_thumb_ripple_whose_high_end_passes_the_limit_keeps_the_point_but_says_so() {
+    // The inductor value is not a quantity: ripple 0.3 x 3.85 A nominal (peak 4.4275 A, within 4.5 A), band up to
+    // 0.4 x 3.85 A (peak 4.62 A, above it).
+    let report = with_load("peak-may", "3.85A", Some("\"4.7uH\""));
+    for finding in [conducted(&report), hot_loop(&report)] {
+        assert_eq!(text(finding, "scenario"), "declared_operating_point");
+        assert!(finding.tags.contains(&"peak_may_exceed_current_limit".to_owned()), "{:?}", finding.tags);
+        assert!(!finding.tags.contains(&"operating_point_outside_model".to_owned()));
+        let point = operating_point(finding);
+        assert_eq!(point.get("status").and_then(Value::as_str), Some("declared_ccm"));
+        assert!((number(point.get("peak_at_high_ripple_a").unwrap()) - 4.62).abs() < 1e-9, "{point:?}");
+    }
+    let message = text_lines(conducted(&report)).join(
+        "
+",
+    );
+    assert!(message.contains("high end gives a peak of 4.62 A above it"), "{message}");
+    // Well inside the limit, or a computed ripple: no tag.
+    let inside = with_load("peak-inside", "2A", Some("\"4.7uH\""));
+    assert!(!conducted(&inside).tags.contains(&"peak_may_exceed_current_limit".to_owned()));
+    assert!(
+        !conducted(&with_load("peak-computed", "2A", None)).tags.contains(&"peak_may_exceed_current_limit".to_owned())
+    );
+}
+
+#[test]
 fn a_declared_point_needs_no_current_limit_but_an_unsupported_point_does() {
     let no_limit = [("buck.copper", " current_peak = 4.5A;", "")];
     let board = [(U1_DECLARATION, "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }")];
@@ -2981,6 +3046,8 @@ fn known_matrix(status: &str) -> ExtractedConnections {
         status: status.to_owned(),
         reasons: if status == "ok" { Vec::new() } else { vec!["the two finest meshes differ by 4 %".to_owned()] },
         notes: Vec::new(),
+        synthesized: Vec::new(),
+        unconnected: Vec::new(),
     }
 }
 
@@ -3054,4 +3121,68 @@ fn extracted_connection_inductances_replace_the_estimate_and_the_conducted_resul
     assert!(conducted(&indicative).tags.contains(&"extraction_indicative".to_owned()));
     let Some(Value::Object(block)) = conducted(&indicative).measures.get("extracted_connections") else { panic!() };
     assert_eq!(block.get("status").and_then(Value::as_str), Some("indicative"));
+}
+
+#[test]
+fn a_capacitor_whose_extraction_used_a_synthesized_leg_keeps_its_estimated_connection() {
+    // The extraction closed CIN2's port with a straight bar because no copper of the board joins one of its pads to
+    // the hot node: its row of the matrix describes that bar, not the board. The value is not used (the pad-distance
+    // estimate stays, with its estimated provenance) and no coupling to it is used.
+    let edits = with_second_capacitor();
+    let estimated = run("synth-estimate", &edits);
+    let mut matrix = known_matrix("ok");
+    matrix.synthesized = vec!["CIN2".to_owned()];
+    let report = run_with_connections("synth-known", &edits, &[matrix]);
+    let finding = conducted(&report);
+    let was = number(branch_of(conducted(&estimated), "CIN2").get("connection_inductance_nh").unwrap());
+    let cin2 = branch_of(finding, "CIN2");
+    assert_eq!(cin2.get("connection_source").and_then(Value::as_str), Some("estimated"), "{cin2:?}");
+    assert!((number(cin2.get("connection_inductance_nh").unwrap()) - was).abs() < 1e-9);
+    assert!(
+        !cin2.get("connection_basis").and_then(Value::as_str).unwrap().starts_with("extracted:"),
+        "{:?}",
+        cin2.get("connection_basis")
+    );
+    assert!(finding.tags.contains(&"estimated_connection_inductance".to_owned()), "{:?}", finding.tags);
+    // Only the hot loop's own port is extracted: the extracted-connection tag stands for it alone.
+    let Some(Value::Object(block)) = finding.measures.get("extracted_connections") else { panic!("no block") };
+    assert_eq!(block.get("mutual_inductances").and_then(Value::as_array).map(<[Value]>::len), Some(0));
+    assert_eq!(block.get("estimated_connections_synthesized_leg").and_then(Value::as_array).map(|a| a.len()), Some(1));
+    let notes = block.get("notes").and_then(Value::as_array).unwrap();
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .is_some_and(|n| n.starts_with("CIN2:") && n.contains("straight bar") && n.contains("estimate"))),
+        "{notes:?}"
+    );
+    assert!(!notes.iter().any(|n| n.as_str().is_some_and(|n| n.contains("not a branch of this network"))), "{notes:?}");
+}
+
+#[test]
+fn a_capacitor_that_no_copper_joins_to_the_hot_node_is_named_with_its_reason_and_keeps_its_estimate() {
+    let edits = with_second_capacitor();
+    let estimated = run("unconn-estimate", &edits);
+    let mut matrix = known_matrix("ok");
+    matrix.labels = vec!["hot loop".to_owned()];
+    matrix.inductance_h = vec![vec![5.0e-9]];
+    matrix.unconnected = vec![("CIN2".to_owned(), "CIN2.1 (VIN), CIN2.2 (GND)".to_owned())];
+    let report = run_with_connections("unconn-known", &edits, &[matrix]);
+    let finding = conducted(&report);
+    let was = number(branch_of(conducted(&estimated), "CIN2").get("connection_inductance_nh").unwrap());
+    let cin2 = branch_of(finding, "CIN2");
+    assert_eq!(cin2.get("connection_source").and_then(Value::as_str), Some("estimated"));
+    assert!((number(cin2.get("connection_inductance_nh").unwrap()) - was).abs() < 1e-9);
+    let basis = cin2.get("connection_basis").and_then(Value::as_str).unwrap();
+    assert!(basis.contains("not extracted") && basis.contains("CIN2.1 (VIN)"), "{basis}");
+    assert!(finding.tags.contains(&"estimated_connection_inductance".to_owned()), "{:?}", finding.tags);
+    let Some(Value::Object(block)) = finding.measures.get("extracted_connections") else { panic!("no block") };
+    let listed = block.get("estimated_connections_unconnected").and_then(Value::as_array).unwrap();
+    assert_eq!(listed.len(), 1);
+    let notes = block.get("notes").and_then(Value::as_array).unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().is_some_and(|n| n.starts_with("CIN2:") && n.contains("no copper of the board joins"))),
+        "{notes:?}"
+    );
 }

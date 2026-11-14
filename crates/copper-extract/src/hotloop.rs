@@ -10,7 +10,7 @@ use std::time::Instant;
 use copper_fullwave::hotloop::HotLoopInput;
 use copper_pcb::board::PhysicalBoard;
 
-use crate::board::{BoardModel, BoardOptions, LoopPad, build_layout, loop_ports};
+use crate::board::{BoardModel, BoardOptions, LoopPad, SynthesizedLeg, UnconnectedCapacitor, build_layout, loop_ports};
 use crate::current::CurrentMap;
 use crate::extract::{Extraction, extract};
 use crate::layout::Layout;
@@ -61,6 +61,21 @@ pub struct MeshRun {
     pub loops: usize,
     pub barrels: usize,
     pub coarsen_steps: usize,
+    /// Filament bodies dropped for too little copper, or because the copper has a gap along them.
+    pub dropped_bars: usize,
+    /// Of those, bodies whose copper has a gap along the axis (a slot or opening the filament would bridge).
+    pub gap_bars_dropped: usize,
+    /// Rounds of local refinement round gaps and cut copper.
+    pub refine_rounds: usize,
+    /// Refinements applied, and found but left out because the budget did not hold them.
+    pub refinements_applied: usize,
+    pub refinements_skipped: usize,
+    /// Gaps the mesh could not resolve (see `HotLoopExtraction::unresolved_gaps`).
+    pub unresolved_gap_count: usize,
+    /// Copper pieces and mesh components of the topology check, and its mismatches.
+    pub copper_components: usize,
+    pub mesh_components: usize,
+    pub topology_mismatches: usize,
     /// Inductance (nH) and resistance (ohm) at each frequency.
     pub inductance_nh: Vec<f64>,
     pub resistance_ohm: Vec<f64>,
@@ -123,8 +138,24 @@ pub struct HotLoopExtraction {
     pub inductance_matrix_nh: Vec<Vec<Vec<f64>>>,
     /// Largest relative change of a diagonal entry between the two finest meshes at the second frequency, percent.
     pub matrix_difference_pct: f64,
-    /// The capacitor ports were joined to the hot capacitor by straight bars because no copper did.
+    /// A capacitor port was joined to the hot capacitor by a straight bar because no copper did (any of
+    /// `synthesized_legs`).
     pub connection_legs: bool,
+    /// Each straight bar added between a capacitor's pad and the hot capacitor's pad on its net because no copper
+    /// joins them (the capacitor's terminal that no copper reaches, and only that one).
+    pub synthesized_legs: Vec<SynthesizedLeg>,
+    /// Capacitors that copper does not join to the hot capacitor: no port, no bar, their connection stays the
+    /// estimate.
+    pub unconnected_capacitors: Vec<UnconnectedCapacitor>,
+    /// The copper's connectivity against the mesh's (finest mesh): the polygons of copper (joined by vias) and the
+    /// connected components of the network, and one line for every mismatch; empty when they agree.
+    pub copper_components: usize,
+    pub mesh_components: usize,
+    pub topology_mismatches: Vec<String>,
+    /// Gaps the finest mesh could not resolve (a slot or gap in the copper narrower than the smallest cell), as
+    /// `layer, net, x, y: what`, at most 20 listed; the number of them. Never bridged.
+    pub unresolved_gaps: Vec<String>,
+    pub unresolved_gap_count: usize,
     /// The current distribution of the hot loop's port (`HotLoopOptions::current_map`).
     pub currents: Option<Box<HotLoopCurrents>>,
 }
@@ -155,6 +186,15 @@ fn run_info(role: &'static str, x: &Extraction) -> MeshRun {
         loops: x.loops,
         barrels: x.mesh.stats.barrels,
         coarsen_steps: x.mesh.stats.coarsen_steps,
+        dropped_bars: x.mesh.stats.dropped_bars,
+        gap_bars_dropped: x.mesh.stats.gap_bars_dropped,
+        refine_rounds: x.mesh.stats.refine_rounds,
+        refinements_applied: x.mesh.stats.refinements_applied,
+        refinements_skipped: x.mesh.stats.refinements_skipped,
+        unresolved_gap_count: x.mesh.stats.unresolved_gap_count,
+        copper_components: x.mesh.stats.topology.copper_components,
+        mesh_components: x.mesh.stats.topology.mesh_components,
+        topology_mismatches: x.mesh.stats.topology.mismatches.len(),
         inductance_nh: (0..x.frequencies.len()).map(|f| x.inductance(f, 0, 0) * 1e9).collect(),
         resistance_ohm: (0..x.frequencies.len()).map(|f| x.resistance(f, 0, 0)).collect(),
         inductance_matrix_nh: (0..x.frequencies.len())
@@ -181,23 +221,26 @@ pub fn extract_hot_loop(
     let build = |board_options: &BoardOptions| {
         build_layout(model, board, input, &ports, board_options, options.mesh.cell_nm, options.mesh.coarse_nm)
     };
+    // A capacitor with a pad that no copper joins to the hot capacitor's pad gets no port and no bar (decided from the
+    // copper's own connectivity, before meshing; `BoardOptions::connection_legs` asks for per-pad bars instead).
     let mut layout = build(&options.board)?;
+    let unconnected = layout.unconnected.clone();
+    if !unconnected.is_empty() {
+        // No port and no copper for a capacitor that copper does not join: build again without it, so that the
+        // window and the plane corridor are those of the capacitors that have a port.
+        let ports_kept: Vec<String> = options
+            .board
+            .capacitor_ports
+            .iter()
+            .filter(|c| !unconnected.iter().any(|u| &u.capacitor == *c))
+            .cloned()
+            .collect();
+        layout = build(&BoardOptions { capacitor_ports: ports_kept, ..options.board.clone() })?;
+    }
     let freqs = &options.frequencies_hz;
     let base = MeshSpec { coarsen: true, ..options.mesh.clone() };
-    let mut connection_legs = options.board.connection_legs;
-    let first = match mesh_with(&layout.layout, &base, freqs, true) {
-        // A capacitor whose pads no copper joins to the hot capacitor's: the straight bars of the estimate join them.
-        Err(e)
-            if !options.board.capacitor_ports.is_empty()
-                && !connection_legs
-                && e.contains("not connected by copper") =>
-        {
-            connection_legs = true;
-            layout = build(&BoardOptions { connection_legs: true, ..options.board.clone() })?;
-            mesh_with(&layout.layout, &base, freqs, true)?
-        }
-        other => other?,
-    };
+    let first = mesh_with(&layout.layout, &base, freqs, true)?;
+    let connection_legs = !layout.synthesized_legs.is_empty();
     let mut runs = vec![run_info("standard", &first)];
     if options.series {
         // Two coarser meshes (pitches times 1.5 and 2.25) so that the last two steps of a refinement series exist:
@@ -230,6 +273,13 @@ pub fn extract_hot_loop(
     let stats = &first.mesh.stats;
     let mut reasons = Vec::new();
     let mut notes = layout.notes.clone();
+    for u in &unconnected {
+        notes.push(format!(
+            "capacitor {}: no copper joins pad(s) {} to the hot capacitor's pad on the same net, so it gets no port and no bar: its connection inductance stays the estimate",
+            u.capacitor,
+            u.pads.join(", ")
+        ));
+    }
     if stats.coarsen_steps > 0 {
         // Terminals, vias and narrow copper keep their own resolution whatever the pitch, so coarsening is not by
         // itself a reason; the convergence evidence below is.
@@ -251,6 +301,28 @@ pub fn extract_hot_loop(
     if !stats.vias_unattached.is_empty() {
         flags.push("via_unattached".to_owned());
         reasons.push(format!("{} via(s) joined fewer than two layers and are left out", stats.vias_unattached.len()));
+    }
+    if stats.unresolved_gap_count > 0 {
+        flags.push("unresolved_gap".to_owned());
+        reasons.push(format!(
+            "{} gap(s) in the copper are narrower than the smallest cell the mesher can use and were not resolved (no filament bridges them, so the copper on either side is cut there): {}",
+            stats.unresolved_gap_count,
+            stats.unresolved_gaps.first().map_or(String::new(), |g| format!("first: {g}"))
+        ));
+    }
+    if !stats.topology.mismatches.is_empty() {
+        flags.push("topology_mismatch".to_owned());
+        reasons.push(format!(
+            "the meshed network does not have the connectivity of the copper ({} mismatch(es)): {}",
+            stats.topology.mismatches.len(),
+            stats.topology.mismatches[0]
+        ));
+    }
+    if stats.refine_rounds > 0 {
+        notes.push(format!(
+            "the mesh was refined in {} round(s) locally where a slot, an opening or two pieces of copper were closer than the cell, so that no filament bridges copper that does not touch: {} refinement(s) applied, {} left out because the filament budget did not hold them (the repairs of a topology mismatch first, then the gaps nearest to the port); {} filament bodies dropped for a gap in the copper along them",
+            stats.refine_rounds, stats.refinements_applied, stats.refinements_skipped, stats.gap_bars_dropped
+        ));
     }
     if mesh_difference_pct.is_empty() {
         reasons.push("a single mesh: no evidence of convergence".to_owned());
@@ -311,7 +383,14 @@ pub fn extract_hot_loop(
     } else {
         None
     };
-    let status = if reasons.is_empty() { "ok" } else { "indicative" };
+    // A mesh that does not have the copper's connectivity is not a measurement of the board: status `error`.
+    let status = if !stats.topology.mismatches.is_empty() {
+        "error"
+    } else if reasons.is_empty() {
+        "ok"
+    } else {
+        "indicative"
+    };
     let port_description = format!(
         "{} to {}; {}",
         ports.labels[ports.port.0],
@@ -349,6 +428,13 @@ pub fn extract_hot_loop(
         inductance_matrix_nh: chosen.inductance_matrix_nh.clone(),
         matrix_difference_pct,
         connection_legs,
+        synthesized_legs: layout.synthesized_legs.clone(),
+        unconnected_capacitors: unconnected,
+        copper_components: stats.topology.copper_components,
+        mesh_components: stats.topology.mesh_components,
+        topology_mismatches: stats.topology.mismatches.clone(),
+        unresolved_gaps: stats.unresolved_gaps.clone(),
+        unresolved_gap_count: stats.unresolved_gap_count,
         currents,
     })
 }

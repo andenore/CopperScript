@@ -131,6 +131,22 @@ fn result_value(
     );
     put(&mut o, "convergence_threshold_pct", Value::from(copper_extract::hotloop::CONVERGENCE_THRESHOLD_PCT));
     put(&mut o, "port_labels", strings(&r.port_labels));
+    put(&mut o, "not_used_in_conducted", not_used(r).map_or(Value::Null, Value::from));
+    put(
+        &mut o,
+        "unconnected_capacitors",
+        Value::Array(
+            r.unconnected_capacitors
+                .iter()
+                .map(|u| {
+                    let mut uo = Object::new();
+                    put(&mut uo, "capacitor", Value::from(u.capacitor.as_str()));
+                    put(&mut uo, "pads_not_joined", strings(&u.pads));
+                    Value::Object(uo)
+                })
+                .collect(),
+        ),
+    );
     put(
         &mut o,
         "inductance_matrix_nh",
@@ -174,6 +190,14 @@ fn result_value(
             put(&mut mo, "loops", Value::from(m.loops as i64));
             put(&mut mo, "barrels", Value::from(m.barrels as i64));
             put(&mut mo, "coarsen_steps", Value::from(m.coarsen_steps as i64));
+            put(&mut mo, "dropped_bars", Value::from(m.dropped_bars as i64));
+            put(&mut mo, "gap_bars_dropped", Value::from(m.gap_bars_dropped as i64));
+            put(&mut mo, "refine_rounds", Value::from(m.refine_rounds as i64));
+            put(&mut mo, "refinements_applied", Value::from(m.refinements_applied as i64));
+            put(&mut mo, "refinements_skipped", Value::from(m.refinements_skipped as i64));
+            put(&mut mo, "unresolved_gaps", Value::from(m.unresolved_gap_count as i64));
+            put(&mut mo, "copper_components", Value::from(m.copper_components as i64));
+            put(&mut mo, "mesh_components", Value::from(m.mesh_components as i64));
             put(&mut mo, "inductance_nh", floats(&m.inductance_nh, 3));
             put(
                 &mut mo,
@@ -185,6 +209,38 @@ fn result_value(
         })
         .collect();
     put(&mut o, "meshes", Value::Array(meshes));
+    let mut topology = Object::new();
+    put(&mut topology, "copper_components", Value::from(r.copper_components as i64));
+    put(&mut topology, "mesh_components", Value::from(r.mesh_components as i64));
+    put(&mut topology, "mismatches", strings(&r.topology_mismatches));
+    put(&mut topology, "unresolved_gap_count", Value::from(r.unresolved_gap_count as i64));
+    put(&mut topology, "unresolved_gaps", strings(&r.unresolved_gaps));
+    put(
+        &mut topology,
+        "definition",
+        Value::from(
+            "the connected components of the copper polygons (joined by vias) against those of the meshed network: they agree when mismatches is empty; unresolved_gaps are slots, openings or gaps between pieces of copper narrower than the smallest cell the mesher uses, which no filament bridges",
+        ),
+    );
+    put(&mut o, "topology", Value::Object(topology));
+    put(
+        &mut o,
+        "synthesized_connection_legs",
+        Value::Array(
+            r.synthesized_legs
+                .iter()
+                .map(|l| {
+                    let mut lo = Object::new();
+                    put(&mut lo, "capacitor", Value::from(l.capacitor.as_str()));
+                    put(&mut lo, "pad", Value::from(l.pad.as_str()));
+                    put(&mut lo, "net", Value::from(l.net.as_str()));
+                    put(&mut lo, "to", Value::from(l.to.as_str()));
+                    put(&mut lo, "length_mm", Value::from(round(l.length_mm, 3)));
+                    Value::Object(lo)
+                })
+                .collect(),
+        ),
+    );
     let vias = r
         .via_currents
         .iter()
@@ -265,6 +321,9 @@ fn text_line(r: &HotLoopExtraction, closed_form_nh: Option<f64>, fullwave_nh: Op
         r.status,
         if r.status_reasons.is_empty() { String::new() } else { format!(" ({})", r.status_reasons.join("; ")) },
     ));
+    if let Some(reason) = not_used(r) {
+        text.push_str(&format!("; NOT used in EMI-CONDUCTED: {reason}"));
+    }
     text
 }
 
@@ -471,7 +530,8 @@ pub fn apply(
                     None => {
                         let _ = writeln!(
                             progress,
-                            "extract: cell {cell}: the port matrix is not positive definite or is missing; the connection inductances of EMI-CONDUCTED stay the estimates"
+                            "extract: cell {cell}: {}",
+                            not_used(&result).unwrap_or_else(|| "the port matrix is missing".to_owned())
                         );
                     }
                 }
@@ -518,6 +578,41 @@ pub fn apply(
 /// can be the inductance matrix of coupled inductors: symmetric, positive definite.
 #[allow(clippy::needless_range_loop)]
 fn connections_of(cell: &str, result: &HotLoopExtraction) -> Option<ExtractedConnections> {
+    not_used(result).is_none().then(|| connections_unchecked(cell, result)).flatten()
+}
+
+/// Why the extraction's matrix is not used in `EMI-CONDUCTED` (`None`: it is used).
+fn not_used(result: &HotLoopExtraction) -> Option<String> {
+    if result.status == "error" {
+        let first = result.topology_mismatches.first().map_or(String::new(), |m| format!(" (first: {m})"));
+        return Some(format!(
+            "the mesh does not have the copper's connectivity: {} mismatch(es) between the copper pieces and the meshed network{first}; {} unresolved gap(s); the numbers are not the board's, so the connection inductances of EMI-CONDUCTED stay the estimates; `--extract-budget N` (more filaments, up to 20000) gives the mesher room to refine them",
+            result.topology_mismatches.len(),
+            result.unresolved_gap_count
+        ));
+    }
+    let at = 1.min(result.frequencies_hz.len().saturating_sub(1));
+    let Some(matrix_nh) = result.inductance_matrix_nh.get(at) else {
+        return Some(
+            "the extraction has no port matrix; the connection inductances of EMI-CONDUCTED stay the estimates"
+                .to_owned(),
+        );
+    };
+    if matrix_nh.is_empty() || result.port_labels.len() != matrix_nh.len() {
+        return Some(
+            "the port matrix does not match the ports; the connection inductances of EMI-CONDUCTED stay the estimates"
+                .to_owned(),
+        );
+    }
+    let h: Vec<Vec<f64>> = matrix_nh.iter().map(|row| row.iter().map(|v| v * 1e-9).collect()).collect();
+    if !positive_definite(&h) {
+        return Some("the port matrix is not positive definite (not realisable as coupled inductors); the connection inductances of EMI-CONDUCTED stay the estimates".to_owned());
+    }
+    None
+}
+
+#[allow(clippy::needless_range_loop)]
+fn connections_unchecked(cell: &str, result: &HotLoopExtraction) -> Option<ExtractedConnections> {
     let at = 1.min(result.frequencies_hz.len().checked_sub(1)?);
     let matrix_nh = result.inductance_matrix_nh.get(at)?;
     let n = matrix_nh.len();
@@ -537,11 +632,15 @@ fn connections_of(cell: &str, result: &HotLoopExtraction) -> Option<ExtractedCon
         // Not realisable as coupled inductors: the connection inductances stay the estimates.
         return None;
     }
+    let mut synthesized: Vec<String> = result.synthesized_legs.iter().map(|l| l.capacitor.clone()).collect();
+    synthesized.dedup();
     Some(ExtractedConnections {
         controller: cell.to_owned(),
         labels: result.port_labels.iter().map(|l| if l == "hot loop" { copper_drc::emi::HOT_LOOP_PORT.to_owned() } else { l.clone() }).collect(),
         inductance_h: h,
         frequency_hz: result.frequencies_hz[at],
+        synthesized,
+        unconnected: result.unconnected_capacitors.iter().map(|u| (u.capacitor.clone(), u.pads.join(", "))).collect(),
         status: result.status.to_owned(),
         reasons: result.status_reasons.clone(),
         notes: vec![
@@ -628,6 +727,15 @@ mod tests {
             inductance_nh: vec![l, l * 0.95, l * 0.94],
             resistance_ohm: vec![0.01, 0.012, 0.013],
             inductance_matrix_nh: vec![vec![vec![l]], vec![vec![l * 0.95]], vec![vec![l * 0.94]]],
+            dropped_bars: 0,
+            gap_bars_dropped: 0,
+            refine_rounds: 0,
+            refinements_applied: 0,
+            refinements_skipped: 0,
+            unresolved_gap_count: 0,
+            copper_components: 1,
+            mesh_components: 1,
+            topology_mismatches: 0,
             seconds: 3.0,
             assemble_seconds: 2.0,
             solve_seconds: 1.0,
@@ -666,6 +774,13 @@ mod tests {
             inductance_matrix_nh: vec![vec![vec![4.2]], vec![vec![4.0]], vec![vec![3.95]]],
             matrix_difference_pct: 0.0,
             connection_legs: false,
+            synthesized_legs: Vec::new(),
+            unconnected_capacitors: Vec::new(),
+            copper_components: 1,
+            mesh_components: 1,
+            topology_mismatches: Vec::new(),
+            unresolved_gaps: Vec::new(),
+            unresolved_gap_count: 0,
             currents: None,
             earlier_difference_pct: if single { Vec::new() } else { vec![3.0, 3.1, 3.1] },
         }
@@ -687,6 +802,35 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("+-"), "{text}");
+    }
+
+    #[test]
+    fn an_extraction_that_does_not_have_the_coppers_connectivity_is_not_used_and_a_synthesized_leg_is_passed_on() {
+        let mut ok = extraction(false);
+        ok.status = "ok";
+        ok.port_labels = vec!["hot loop".to_owned(), "CIN2".to_owned()];
+        ok.inductance_matrix_nh = vec![vec![vec![4.2, 0.3], vec![0.3, 1.5]]; 3];
+        let used = connections_of("U1", &ok).expect("a positive definite matrix of a sound extraction is used");
+        assert!(used.synthesized.is_empty());
+        // A straight bar closed CIN2's port: the connection says so, so that its value stays the estimate.
+        let mut synth = ok.clone();
+        synth.synthesized_legs = vec![copper_extract::board::SynthesizedLeg {
+            capacitor: "CIN2".to_owned(),
+            pad: "CIN2.1".to_owned(),
+            net: "VIN".to_owned(),
+            to: "CIN supply CIN.1".to_owned(),
+            length_mm: 2.0,
+        }];
+        assert_eq!(connections_of("U1", &synth).expect("used").synthesized, vec!["CIN2".to_owned()]);
+        // The mesh cut the copper apart (or joined what is not joined): the numbers are not the board's.
+        let mut bad = ok.clone();
+        bad.status = "error";
+        bad.topology_mismatches = vec!["copper that is one piece is cut into 2 pieces by the mesh".to_owned()];
+        assert!(connections_of("U1", &bad).is_none());
+        let value = result_value(&bad, None, None, &HotLoopOptions::default());
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("error"));
+        let topology = value.get("topology").and_then(Value::as_object).expect("topology");
+        assert_eq!(topology.get("mismatches").and_then(Value::as_array).map(<[Value]>::len), Some(1));
     }
 
     #[test]

@@ -140,7 +140,7 @@ use crate::estimate::limits::{Class, Detector, LimitLine, cispr32_conducted};
 use crate::estimate::volts_to_dbuv;
 use crate::harmonic::{HarmonicError, HarmonicResponse, PeriodicSpectrum, harmonic_steady_state};
 use crate::lisn::VNetwork;
-use crate::receiver::{Band, Reading, scan, scan_lines};
+use crate::receiver::{Band, Reading, scan, scan_lines, skirt_lines};
 use crate::spectrum::Complex;
 use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
@@ -435,6 +435,8 @@ pub enum ConductedError {
     Harmonic(HarmonicError),
     /// The network could not be solved.
     Circuit(CircuitError),
+    /// The request is valid but this evaluation does not run it (a stated cap), with the reason.
+    NotEvaluated(String),
 }
 
 impl std::fmt::Display for ConductedError {
@@ -443,6 +445,7 @@ impl std::fmt::Display for ConductedError {
             ConductedError::InvalidInput(s) => write!(f, "invalid input: {s}"),
             ConductedError::Harmonic(e) => write!(f, "{e}"),
             ConductedError::Circuit(e) => write!(f, "{e}"),
+            ConductedError::NotEvaluated(s) => write!(f, "not evaluated: {s}"),
         }
     }
 }
@@ -1303,6 +1306,11 @@ pub struct EmulatedReading {
     pub average_dbuv: f64,
 }
 
+/// The most source lines (harmonics) the receiver emulation will solve: the cost is linear in it. A request that
+/// needs more (a tuning plus its IF skirt, in lines) is refused with [`ConductedError::NotEvaluated`], never
+/// truncated.
+pub const MAX_EMULATION_LINES: u32 = 1_000_000;
+
 /// Peak, quasi-peak and average readings of the receiver emulation at the listed harmonics of a strictly periodic
 /// waveform (one constant switching frequency): the LISN port voltages of both lines are formed from the harmonic
 /// solution (every line, not only the listed ones, so the neighbours inside the IF filter are present) and run
@@ -1312,7 +1320,13 @@ pub struct EmulatedReading {
 /// of the two ports. Not modelled: jitter, spread spectrum, frequency modulation and burst modes (they need a
 /// record that holds the modulation), the sweep dwell time of a real receiver.
 ///
-/// Cost: one harmonic solve per line up to the highest requested (as [`predict`]), then per requested frequency
+/// Each reading is a pure function of the source spectrum and its own tuning: the lines used are the ones inside
+/// the IF window of that tuning ([`Band::skirt_half_width`], four half-bandwidths either side, where the Gaussian
+/// is 96 dB down), whichever other tunings are requested and in whatever order. The lines solved reach the
+/// highest such window ([`skirt_lines`]); more than [`MAX_EMULATION_LINES`] is refused with
+/// [`ConductedError::NotEvaluated`].
+///
+/// Cost: one harmonic solve per line up to the highest requested plus its skirt (as [`predict`]), then per requested frequency
 /// and port one small inverse FFT and the detector run.
 pub fn receiver_emulation(input: &ConductedInput, harmonics: &[u32]) -> Result<Vec<EmulatedReading>, ConductedError> {
     validate(input)?;
@@ -1321,15 +1335,30 @@ pub fn receiver_emulation(input: &ConductedInput, harmonics: &[u32]) -> Result<V
     if highest == 0 {
         return Ok(Vec::new());
     }
-    // A few lines above the highest requested are needed for the IF filter around it.
-    let lines = highest + 8;
+    // Every tuning reads the source lines inside its own IF window (`Band::skirt_half_width` either side) and
+    // nothing else, so the lines needed are those of the tuning that reaches highest, whatever else is requested:
+    // a reading is a function of the source spectrum and its tuning alone.
+    let mut lines = 0u32;
+    for &n in harmonics.iter().filter(|&&n| n > 0) {
+        let reach = u64::from(n) + u64::from(skirt_lines(f0, band_of(f64::from(n) * f0)));
+        if reach > u64::from(MAX_EMULATION_LINES) {
+            return Err(ConductedError::NotEvaluated(format!(
+                "the receiver emulation of harmonic {n} ({} Hz) needs {reach} source lines (the tuning plus {} lines of IF skirt at a {} Hz spacing), above the cap of {MAX_EMULATION_LINES}",
+                f64::from(n) * f0,
+                skirt_lines(f0, band_of(f64::from(n) * f0)),
+                f0
+            )));
+        }
+        lines = lines.max(reach as u32);
+    }
     let (net, resp) = port_response(input, lines)?;
     let phasors =
         |node: Node| -> Vec<Complex> { (0..lines as usize).map(|k| resp.harmonics[k].voltage(node)).collect() };
     let (positive, negative) = (phasors(net.port_p), phasors(net.port_n));
     let mut out: Vec<EmulatedReading> = Vec::with_capacity(harmonics.len());
     for band in [Band::A, Band::B, Band::C, Band::D] {
-        let wanted: Vec<u32> = harmonics.iter().copied().filter(|&n| band_of(f64::from(n) * f0) == band).collect();
+        let wanted: Vec<u32> =
+            harmonics.iter().copied().filter(|&n| n > 0 && band_of(f64::from(n) * f0) == band).collect();
         if wanted.is_empty() {
             continue;
         }
@@ -1878,6 +1907,93 @@ mod tests {
         input.hot_loop_inductance = 5e-9;
         let r = receiver_emulation(&input, &[200]).unwrap()[0];
         assert!(r.peak_dbuv > r.average_dbuv + 1.0 || (r.peak_dbuv - r.line_dbuv).abs() > 1.0, "{r:?}");
+    }
+
+    #[test]
+    fn a_reading_does_not_depend_on_which_other_tunings_are_requested() {
+        // The reviewer's case: a 500 Hz fundamental read at 150 kHz (harmonic 300) alone and together with another
+        // tuning. The IF neighbourhood of a tuning is fixed by the receiver bandwidth and the harmonic spacing.
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 500.0, 20e-9, hot);
+        input.hot_loop_inductance = 5e-9;
+        let alone = receiver_emulation(&input, &[300]).unwrap();
+        let together = receiver_emulation(&input, &[300, 600]).unwrap();
+        println!(
+            "alone {:?}
+together {:?}",
+            alone, together
+        );
+        assert_eq!(alone.len(), 1);
+        let a = alone[0];
+        assert!(a.peak_dbuv.is_finite(), "{a:?}");
+        let b = together.iter().find(|r| r.harmonic == 300).unwrap();
+        assert_eq!(a.peak_dbuv, b.peak_dbuv);
+        assert_eq!(a.quasi_peak_dbuv, b.quasi_peak_dbuv);
+        assert_eq!(a.average_dbuv, b.average_dbuv);
+    }
+
+    #[test]
+    fn any_subset_and_order_of_tunings_reads_the_same_per_tuning() {
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        // (fundamental, tunings: harmonics spread over the bands, some within each other's IF window, some in other bands)
+        let cases: [(f64, Vec<u32>); 3] = [
+            (500.0, vec![150, 299, 301, 340, 480, 600]),
+            (50e3, vec![1, 3, 4, 5, 9, 10, 40]),
+            (500e3, vec![1, 2, 3, 7, 20]),
+        ];
+        for (f0, tunings) in cases {
+            let mut input = ConductedInput::buck(12.0, 5.0, 2.0, f0, 20e-9, hot);
+            input.hot_loop_inductance = 5e-9;
+            let reference = receiver_emulation(&input, &tunings).unwrap();
+            assert_eq!(reference.len(), tunings.len(), "{f0}");
+            let mut subsets: Vec<Vec<u32>> = Vec::new();
+            for &n in &tunings {
+                subsets.push(vec![n]);
+            }
+            let mut reversed = tunings.clone();
+            reversed.reverse();
+            subsets.push(reversed);
+            subsets.push(vec![tunings[0], *tunings.last().unwrap()]);
+            subsets.push(vec![*tunings.last().unwrap(), tunings[1], tunings[0]]);
+            subsets.push(tunings.iter().copied().step_by(2).collect());
+            for subset in subsets {
+                let got = receiver_emulation(&input, &subset).unwrap();
+                assert_eq!(got.len(), subset.len());
+                for r in got {
+                    let want = reference.iter().find(|x| x.harmonic == r.harmonic).unwrap();
+                    for (name, a, b) in [
+                        ("line", r.line_dbuv, want.line_dbuv),
+                        ("peak", r.peak_dbuv, want.peak_dbuv),
+                        ("quasi-peak", r.quasi_peak_dbuv, want.quasi_peak_dbuv),
+                        ("average", r.average_dbuv, want.average_dbuv),
+                    ] {
+                        assert!(
+                            a == b || (a - b).abs() < 1e-9,
+                            "f0 {f0} harmonic {} {name} in {subset:?}: {a} against {b}",
+                            r.harmonic
+                        );
+                        assert!(a.is_finite() || name == "line", "f0 {f0} harmonic {} {name}: {a}", r.harmonic);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tuning_whose_skirt_needs_more_lines_than_the_cap_is_not_evaluated_not_silent() {
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        // 1 Hz fundamental: 2 MHz is line 2 000 000, above MAX_EMULATION_LINES.
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 1.0, 20e-9, hot);
+        input.hot_loop_inductance = 5e-9;
+        let error = receiver_emulation(&input, &[2_000_000]).unwrap_err();
+        match &error {
+            ConductedError::NotEvaluated(reason) => {
+                assert!(reason.contains("cap") && reason.contains("2000000"), "{reason}")
+            }
+            other => panic!("{other:?}"),
+        }
+        // The same request together with a cheap tuning is refused as a whole: never a partial answer.
+        assert!(receiver_emulation(&input, &[2, 2_000_000]).is_err());
     }
 
     #[test]

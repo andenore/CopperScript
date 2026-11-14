@@ -252,9 +252,20 @@ fn scenario_sentence(data: &CellData) -> String {
                 .and_then(|o| number(o.get("load_current_a")))
                 .map(|l| format!(" of {}", amperes(l)))
                 .unwrap_or_default();
-            format!(
-                "Current scenario: the switch current limit{limit} as a worst case; the declared load current{load} lies outside what the model covers, so this is not the converter's operation."
-            )
+            let code = operating.and_then(|o| o.get("reason_code")).and_then(Value::as_str);
+            if code == Some("peak_exceeds_current_limit") {
+                let peak = operating
+                    .and_then(|o| number(o.get("peak_a")))
+                    .map(|p| format!(" would peak at {}, above the limit, and", amperes(p)))
+                    .unwrap_or_default();
+                format!(
+                    "Current scenario: the switch current limit{limit} as a worst case; the declared load current{load}{peak} would be current-limited, so the assumed ramp does not exist and this is not the converter's operation."
+                )
+            } else {
+                format!(
+                    "Current scenario: the switch current limit{limit} as a worst case; the declared load current{load} lies outside what the model covers, so this is not the converter's operation."
+                )
+            }
         }
         Some("current_limit") => match limit {
             Some(limit) => format!(
@@ -1052,6 +1063,51 @@ mod tests {
         assert!(!page.contains("n/a") && !page.contains("NaN") && !page.contains("Cross-check"));
         // The old signed wording never appears.
         assert!(!page.contains("dB to the"));
+    }
+
+    /// `document` with an `operating_point` measure on the conducted finding.
+    fn with_operating_point(mut document: Value, operating_point: &str) -> Value {
+        let op = copper_json::parse(operating_point).unwrap();
+        if let Value::Object(root) = &mut document
+            && let Some(Value::Array(findings)) = root.get_mut("findings")
+        {
+            for finding in findings {
+                if let Value::Object(f) = finding
+                    && f.get("code").and_then(Value::as_str) == Some("EMI-CONDUCTED")
+                    && let Some(Value::Object(measures)) = f.get_mut("measures")
+                {
+                    measures.insert("operating_point".to_owned(), op.clone());
+                }
+            }
+        }
+        document
+    }
+
+    #[test]
+    fn the_scenario_sentence_names_why_a_declared_point_is_outside_the_model() {
+        let dcm = with_operating_point(
+            document(false, 0),
+            r#"{"status":"outside_model","reason_code":"discontinuous_conduction","load_current_a":0.5,"current_limit_a":4.5}"#,
+        );
+        let page = svg(&dcm, &context(None, false));
+        assert!(
+            page.contains("the declared load current of 0.5 A lies outside what the model covers"),
+            "{}",
+            page.lines().filter(|l| l.contains("scenario")).collect::<String>()
+        );
+        let over = with_operating_point(
+            document(false, 0),
+            r#"{"status":"outside_model","reason_code":"peak_exceeds_current_limit","load_current_a":4.0,"peak_a":4.6206,"current_limit_a":4.5}"#,
+        );
+        let page = svg(&over, &context(None, false));
+        assert!(
+            page.contains(
+                "the declared load current of 4 A would peak at 4.62 A, above the limit, and would be current-limited"
+            ),
+            "{}",
+            page.lines().filter(|l| l.contains("scenario")).collect::<String>()
+        );
+        assert!(!page.contains("lies outside what the model covers"));
     }
 
     #[test]

@@ -25,7 +25,8 @@
 //! on-time (`dI = (Vin - Vout) D / (L f)` with the power inductor's value, or a
 //! rule-of-thumb ripple ratio when the value cannot be read), zero in the
 //! off-time. `current_limit`: no operating point is declared (or it is outside
-//! the model), and the switch current limit `current_peak` is used as the
+//! the model: discontinuous conduction, or a peak `I_out + dI/2` above the
+//! switch current limit, `operating_point.reason_code`), and the switch current limit `current_peak` is used as the
 //! amplitude of a flat-top pulse: a worst case, not a prediction of operation.
 //!
 //! Differential mode only: the common-mode path is not modelled (see
@@ -62,7 +63,7 @@ const NOT_MODELLED: [&str; 9] = [
     "mutual inductance between the capacitor branches and between the hot loop and the branches (each branch has self inductance only)",
     "the load-side network (the output capacitor, the load and the inductor current's own harmonics are not in the input network; the converter is only an input-current source)",
     "inductor saturation and the dead time, reverse recovery and ringing of the switch (the ramp uses the inductance as a constant)",
-    "operating modes other than a fixed-frequency buck in continuous conduction (discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the model)",
+    "operating modes other than a fixed-frequency buck in continuous conduction (discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the model), and a declared peak above the switch current limit (the converter would current-limit)",
 ];
 
 /// Why the common-mode path is not modelled.
@@ -957,6 +958,27 @@ pub(super) struct OperatingPoint {
     pub(super) ripple: Ripple,
     /// `I_out >= dI / 2`: the valley of the ramp is not below zero.
     pub(super) ccm: bool,
+    /// The switch pin's `current_peak`, the current limit, when declared.
+    pub(super) limit: Option<f64>,
+}
+
+/// Why a declared operating point is outside the supported model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Outside {
+    /// `I_out < dI/2`: the inductor current reaches zero in the off-time.
+    Discontinuous,
+    /// The peak `I_out + dI/2` is above the switch current limit: current limiting chops the ramp.
+    PeakExceedsLimit,
+}
+
+impl Outside {
+    /// The machine-readable reason, `operating_point.reason_code`.
+    pub(super) fn code(self) -> &'static str {
+        match self {
+            Outside::Discontinuous => "discontinuous_conduction",
+            Outside::PeakExceedsLimit => "peak_exceeds_current_limit",
+        }
+    }
 }
 
 /// The declared operating point of a buck cell at `frequency`: the inductor ripple from the power inductor on the
@@ -971,6 +993,7 @@ pub(super) fn operating_point(
     vout: f64,
 ) -> OperatingPoint {
     let duty = vout / vin;
+    let limit = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
     let inductor =
         cell.magnetic.as_ref().and_then(|m| inductance_of(view, &m.component).map(|l| (m.component.clone(), l)));
     match inductor {
@@ -981,6 +1004,7 @@ pub(super) fn operating_point(
                 inductor: Some((name, l)),
                 ripple: Ripple::Computed(ripple),
                 ccm: ripple / 2.0 <= load * (1.0 + 1e-9),
+                limit,
             }
         }
         None => {
@@ -990,12 +1014,68 @@ pub(super) fn operating_point(
                 inductor: None,
                 ripple: Ripple::Rule { nominal: ratio.0 * load, low: ratio.1 * load, high: ratio.2 * load },
                 ccm: true,
+                limit,
             }
         }
     }
 }
 
 impl OperatingPoint {
+    /// Why the point is outside the supported model, `None` when it is supported. Two conditions: continuous
+    /// conduction (`I_out >= dI/2`, checked first) and a peak `I_out + dI/2` that the switch current limit lets
+    /// through: above the limit the converter current-limits and the assumed ramp-on-pedestal waveform does not exist.
+    pub(super) fn outside(&self) -> Option<Outside> {
+        if !self.ccm {
+            Some(Outside::Discontinuous)
+        } else if self.limit.is_some_and(|limit| self.peak() > limit * (1.0 + 1e-9)) {
+            Some(Outside::PeakExceedsLimit)
+        } else {
+            None
+        }
+    }
+
+    /// For a supported point whose ripple is the rule-of-thumb band: the peak at the high end of the band, when it
+    /// exceeds the switch current limit while the nominal peak does not (the point stays supported, but may not be).
+    pub(super) fn peak_may_exceed_limit(&self) -> Option<f64> {
+        let (Ripple::Rule { high, .. }, Some(limit)) = (self.ripple, self.limit) else { return None };
+        let peak = self.load + high / 2.0;
+        (self.supported() && peak > limit * (1.0 + 1e-9)).then_some(peak)
+    }
+
+    /// The sentence that goes with [`Self::peak_may_exceed_limit`].
+    pub(super) fn peak_may_exceed_text(&self) -> Option<String> {
+        self.peak_may_exceed_limit().map(|peak| {
+            format!(
+                "the nominal peak {} A is within the switch current limit {} A, but the ripple is a rule-of-thumb band and its high end gives a peak of {} A above it: the point may be current-limited (tag peak_may_exceed_current_limit)",
+                rounded(self.peak(), 4),
+                rounded(self.limit.unwrap_or(0.0), 4),
+                rounded(peak, 4)
+            )
+        })
+    }
+
+    /// The point is a declared continuous-conduction ramp the switch can carry.
+    pub(super) fn supported(&self) -> bool {
+        self.outside().is_none()
+    }
+
+    /// The reason text (with its numbers) of an unsupported point; the code comes first for machines.
+    pub(super) fn outside_reason(&self) -> Option<String> {
+        self.outside().map(|why| match why {
+            Outside::Discontinuous => format!(
+                "discontinuous_conduction: I_out < dI/2 (dI = {} A peak to peak): the inductor current reaches zero in the off-time; discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the supported model",
+                rounded(self.nominal_ripple(), 4)
+            ),
+            Outside::PeakExceedsLimit => format!(
+                "peak_exceeds_current_limit: the peak I_out + dI/2 = {} A (load {} A, dI = {} A peak to peak) exceeds the switch current limit {} A (current_peak): the converter would current-limit and the assumed ramp-on-pedestal waveform does not exist",
+                rounded(self.peak(), 4),
+                rounded(self.load, 4),
+                rounded(self.nominal_ripple(), 4),
+                rounded(self.limit.unwrap_or(0.0), 4)
+            ),
+        })
+    }
+
     pub(super) fn nominal_ripple(&self) -> f64 {
         match self.ripple {
             Ripple::Computed(r) => r,
@@ -1666,6 +1746,25 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             used.push((conducted::LOOP_LABEL.to_owned(), i));
         }
         for extra in extras.iter_mut() {
+            if let Some((_, pads)) = ex.unconnected.iter().find(|(c, _)| *c == extra.model.component) {
+                // No copper joins this capacitor to the hot node: it got no port in the extraction.
+                let reason = format!(
+                    "no copper of the board joins pad(s) {pads} to the hot capacitor's pad on the same net, so the extraction gave it no port and no bar; its connection inductance stays the estimate"
+                );
+                extraction_notes.push(format!("{}: {reason}", extra.model.component));
+                extra.connection.text = format!("{} (not extracted: {reason})", extra.connection.text);
+                continue;
+            }
+            if ex.synthesized.contains(&extra.model.component) {
+                // The extraction joined this capacitor to the hot node by a straight bar where no copper of the board
+                // does: its port describes that bar, not the board. Its connection keeps the estimate.
+                extraction_notes.push(format!(
+                    "{}: no copper of the board joins one of its pads to the hot node, so the extraction closed it with a straight bar between pad centres; its extracted self and mutual inductances stand for that bar and are not used: its connection inductance stays the estimate ({})",
+                    extra.model.component,
+                    si(extra.connection.inductance, "H")
+                ));
+                continue;
+            }
             if let Some(i) = at(&extra.model.component) {
                 let value = ex.inductance_h[i][i];
                 let estimate = extra.connection.estimate.or(Some(extra.connection.inductance).filter(|l| *l > 0.0));
@@ -1699,9 +1798,11 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 couplings.push(conducted::Coupling { first: first.clone(), second: second.clone(), mutual });
             }
         }
-        for label in
-            ex.labels.iter().filter(|l| l.as_str() != conducted::LOOP_LABEL && !used.iter().any(|(u, _)| u == *l))
-        {
+        for label in ex.labels.iter().filter(|l| {
+            l.as_str() != conducted::LOOP_LABEL
+                && !used.iter().any(|(u, _)| u == *l)
+                && !ex.synthesized.iter().any(|s| s == *l)
+        }) {
             extraction_notes.push(format!("{label}: extracted but not a branch of this network, left out"));
         }
     }
@@ -1710,7 +1811,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let duty = vout / vin;
     let point: Option<OperatingPoint> =
         load_declared.map(|load| operating_point(view, cell, load, drive.frequency, vin, vout));
-    let declared_ok = point.as_ref().is_some_and(|p| p.ccm);
+    let declared_ok = point.as_ref().is_some_and(OperatingPoint::supported);
     let headline = if declared_ok { Kind::Declared } else { Kind::CurrentLimit };
     if headline == Kind::CurrentLimit && limit_current.is_none() {
         let reason = match &point {
@@ -1955,6 +2056,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     if point.is_some() && !declared_ok {
         tags.push("operating_point_outside_model".to_owned());
     }
+    if declared_ok && point.as_ref().is_some_and(|p| p.peak_may_exceed_limit().is_some()) {
+        tags.push("peak_may_exceed_current_limit".to_owned());
+    }
     tags.push("differential_mode_only".to_owned());
     for tag in edge.tags() {
         tags.push(tag.to_owned());
@@ -2091,16 +2195,28 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 cell.controller,
                 si(p.load - ripple / 2.0, "A"),
                 si(p.load + ripple / 2.0, "A")
-            )
+            ) + &p.peak_may_exceed_text().map_or(String::new(), |t| format!("; {t}"))
         }
-        (Some(p), Kind::CurrentLimit) => format!(
-            "load current {} declared on {} is OUTSIDE the supported model: dI = {} peak to peak exceeds 2 x I_out (from {} at {}), so the inductor current reaches zero in the off-time (discontinuous conduction, pulse skipping or forced-PWM light-load operation); only the current-limit scenario is reported",
-            si(p.load, "A"),
-            cell.controller,
-            si(p.nominal_ripple(), "A"),
-            p.inductor.as_ref().map_or("the inductor".to_owned(), |(n, l)| format!("{n} {}", si(*l, "H"))),
-            si(drive.frequency, "Hz")
-        ),
+        (Some(p), Kind::CurrentLimit) => match p.outside() {
+            Some(Outside::PeakExceedsLimit) => format!(
+                "load current {} declared on {} is OUTSIDE the supported model: the peak I_out + dI/2 = {} (dI = {} peak to peak, from {} at {}) exceeds the switch current limit {}, so the converter would current-limit and the assumed ramp-on-pedestal waveform does not exist; only the current-limit scenario is reported",
+                si(p.load, "A"),
+                cell.controller,
+                si(p.peak(), "A"),
+                si(p.nominal_ripple(), "A"),
+                p.inductor.as_ref().map_or("the inductor".to_owned(), |(n, l)| format!("{n} {}", si(*l, "H"))),
+                si(drive.frequency, "Hz"),
+                si(p.limit.unwrap_or(0.0), "A")
+            ),
+            _ => format!(
+                "load current {} declared on {} is OUTSIDE the supported model: dI = {} peak to peak exceeds 2 x I_out (from {} at {}), so the inductor current reaches zero in the off-time (discontinuous conduction, pulse skipping or forced-PWM light-load operation); only the current-limit scenario is reported",
+                si(p.load, "A"),
+                cell.controller,
+                si(p.nominal_ripple(), "A"),
+                p.inductor.as_ref().map_or("the inductor".to_owned(), |(n, l)| format!("{n} {}", si(*l, "H"))),
+                si(drive.frequency, "Hz")
+            ),
+        },
         (None, _) => format!(
             "no load_current is declared on {}: the switch current limit {} is used as the pulse amplitude, a worst case and not a prediction of operation; declare `load_current = <current>;` on the component to give the cell an operating point",
             cell.controller,
@@ -2360,9 +2476,14 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             si(p.load, "A"),
             si(p.nominal_ripple(), "A")
         ),
-        (Kind::CurrentLimit, Some(_)) => format!(
-            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction: the declared operating point is outside the model, discontinuous conduction)",
-            si(current_limit, "A")
+        (Kind::CurrentLimit, Some(p)) => format!(
+            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction: the declared operating point is outside the model, {})",
+            si(current_limit, "A"),
+            match p.outside() {
+                Some(Outside::PeakExceedsLimit) =>
+                    format!("its peak {} exceeds the switch current limit", si(p.peak(), "A")),
+                _ => "discontinuous conduction".to_owned(),
+            }
         ),
         (Kind::CurrentLimit, None) => format!(
             "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction of operation; declare load_current on {} for an operating point)",
@@ -2627,17 +2748,9 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         put(&mut operating, "valley_a", num(p.load - p.nominal_ripple() / 2.0, 6));
         put(&mut operating, "peak_a", num(p.load + p.nominal_ripple() / 2.0, 6));
         put(&mut operating, "continuous_conduction", Value::Bool(p.ccm));
-        put(
-            &mut operating,
-            "reason",
-            if p.ccm {
-                Value::Null
-            } else {
-                Value::from(
-                    "I_out < dI/2: the inductor current reaches zero in the off-time; discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the supported model",
-                )
-            },
-        );
+        put(&mut operating, "peak_at_high_ripple_a", p.peak_may_exceed_limit().map_or(Value::Null, |v| num(v, 6)));
+        put(&mut operating, "reason_code", p.outside().map_or(Value::Null, |why| Value::from(why.code())));
+        put(&mut operating, "reason", p.outside_reason().map_or(Value::Null, Value::from));
     }
     put(m, "operating_point", Value::Object(operating));
     put(m, "vin_v", num(vin, 4));
@@ -2874,6 +2987,26 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                     })
                     .collect(),
             ),
+        );
+        put(
+            &mut o,
+            "estimated_connections_unconnected",
+            Value::Array(
+                ex.unconnected
+                    .iter()
+                    .map(|(c, pads)| {
+                        let mut u = Object::new();
+                        put(&mut u, "capacitor", Value::from(c.as_str()));
+                        put(&mut u, "pads_not_joined", Value::from(pads.as_str()));
+                        Value::Object(u)
+                    })
+                    .collect(),
+            ),
+        );
+        put(
+            &mut o,
+            "estimated_connections_synthesized_leg",
+            Value::Array(ex.synthesized.iter().map(|c| Value::from(c.as_str())).collect()),
         );
         put(
             &mut o,

@@ -24,7 +24,7 @@ use copper_cam::poly::{self, Shapes};
 use copper_fullwave::hotloop::HotLoopInput;
 use copper_pcb::board::PhysicalBoard;
 
-use crate::layout::{Conductor, Hint, Layout, Terminal, ViaGeom};
+use crate::layout::{Conductor, CopperPieces, Hint, Layout, Terminal, ViaGeom};
 use crate::mesh::DEFAULT_PLATING_M;
 
 const NM: f64 = 1e-9;
@@ -102,8 +102,12 @@ pub struct BoardOptions {
     /// its current and every capacitor port's current leave the hot node along the V+ copper (positive mutual
     /// inductance when they share it).
     pub capacitor_ports: Vec<String>,
-    /// Join the pads of the `capacitor_ports` capacitors to the hot capacitor's pads with straight bars where no
-    /// copper does (the legs the closed form assumes), the connection of the estimate of section 10.
+    /// Off (the default, and what the CLI uses): a `capacitor_ports` capacitor with a pad that no copper joins to the
+    /// hot capacitor's pad on its net gets no port and no bar (`BoardLayout::unconnected`). On: for each terminal (pad)
+    /// of such a capacitor that no copper joins, and for that terminal only, add a straight bar between the two pad centres (the leg the closed form
+    /// assumes, the connection of the estimate of section 10). A terminal that copper joins keeps exactly its copper.
+    /// Without this, a capacitor with an unconnected terminal makes the port disconnected (an error). Every such bar is
+    /// listed in [`BoardLayout::synthesized_legs`]: the capacitor's connection is then not the board's copper.
     pub connection_legs: bool,
 }
 
@@ -148,6 +152,35 @@ pub struct BoardLayout {
     pub port_labels: Vec<String>,
     /// The pads of the loop and of the capacitors that have a port.
     pub loop_pads: Vec<LoopPad>,
+    /// The straight legs added because no copper joins a capacitor's pad to the hot capacitor's (see
+    /// [`BoardOptions::connection_legs`]), one for each terminal that needed one.
+    pub synthesized_legs: Vec<SynthesizedLeg>,
+    /// The `capacitor_ports` capacitors with a pad that no copper joins to the hot capacitor's pad on its net, when
+    /// `connection_legs` is off: they get no port and no bar (the layout was built with them in the window; the
+    /// caller builds it again without them).
+    pub unconnected: Vec<UnconnectedCapacitor>,
+}
+
+/// A capacitor of the hot net that copper does not join to the hot capacitor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnconnectedCapacitor {
+    pub capacitor: String,
+    /// The pads no copper joins, `CIN3.1 (VIN)`.
+    pub pads: Vec<String>,
+}
+
+/// A straight bar added between a capacitor's pad and a pad of the hot capacitor because no copper joins them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SynthesizedLeg {
+    /// The capacitor's reference.
+    pub capacitor: String,
+    /// The capacitor's pad, `CIN3.1`.
+    pub pad: String,
+    pub net: String,
+    /// The hot capacitor's pad the bar goes to, `CIN.1`.
+    pub to: String,
+    /// Length of the bar between the pad centres, mm.
+    pub length_mm: f64,
 }
 
 fn corner_radius(pad: &Pad) -> f64 {
@@ -666,7 +699,12 @@ pub fn build_layout(
         );
     }
     let mut port_labels = vec!["hot loop".to_owned()];
+    let mut synthesized_legs: Vec<SynthesizedLeg> = Vec::new();
+    let mut unconnected: Vec<UnconnectedCapacitor> = Vec::new();
     if !options.capacitor_ports.is_empty() {
+        // Which copper is one piece, before anything is added for the capacitors: a capacitor's terminal is joined to
+        // the hot node when its pad is on the same piece of copper as the hot capacitor's pad of that net.
+        let mut pieces = CopperPieces::of_layout(&layout);
         // Port 0 the other way round: the current leaves the hot supply pad's copper into the switch, as the
         // branch currents of the conducted circuit leave the hot node.
         let p0 = layout.ports[0].clone();
@@ -691,6 +729,29 @@ pub fn build_layout(
                 .ok_or_else(|| format!("capacitor {reference}: its pads share no copper layer"))?;
             if layer != pad_layers[hot_supply_pad] {
                 return Err(format!("capacitor {reference} is not on the layer of the hot capacitor's pads"));
+            }
+            // Is each pad joined to the hot capacitor's pad on its net by copper? A capacitor with a pad that is not
+            // gets no port and no bar (unless `connection_legs` asks for bars): its connection stays the estimate.
+            let joined_by_copper: Vec<(&Pad, usize, bool)> = [(sp, hot_supply_pad), (rp, hot_return_pad)]
+                .into_iter()
+                .map(|(pad, hot_pad)| {
+                    let net = pad.net.clone().expect("found by net");
+                    let a = (pad.center.x as f64, pad.center.y as f64);
+                    (pad, hot_pad, pieces.connected(layer, &net, a, pad_layers[hot_pad], &net, centre(hot_pad)))
+                })
+                .collect();
+            if !options.connection_legs && joined_by_copper.iter().any(|(_, _, j)| !j) {
+                let pads: Vec<String> = joined_by_copper
+                    .iter()
+                    .filter(|(_, _, j)| !j)
+                    .map(|(pad, _, _)| format!("{reference}.{} ({})", pad.number, pad.net.clone().unwrap_or_default()))
+                    .collect();
+                notes.push(format!(
+                    "capacitor {reference}: no copper joins pad(s) {} to the hot capacitor's pad on the same net, so it gets no port and no bar: its connection inductance stays the estimate",
+                    pads.join(", ")
+                ));
+                unconnected.push(UnconnectedCapacitor { capacitor: reference.clone(), pads });
+                continue;
             }
             // A port across the pads: a small patch at the middle of each pad (the body of the capacitor).
             let mut terminals = Vec::new();
@@ -729,25 +790,50 @@ pub fn build_layout(
             }
             layout.add_port(reference, terminals[0], terminals[1]);
             port_labels.push(reference.clone());
-            if options.connection_legs {
-                for (pad, hot_pad) in [(sp, hot_supply_pad), (rp, hot_return_pad)] {
-                    let width = (pad
-                        .width
-                        .min(pad.height)
-                        .min(terminal_pads[hot_pad][0].width.min(terminal_pads[hot_pad][0].height))
-                        as f64)
-                        .clamp(200_000.0, 1_000_000.0);
-                    let (a, b) = ((pad.center.x as f64, pad.center.y as f64), centre(hot_pad));
-                    let net = pad.net.clone().expect("found by net");
-                    layout.layers[layer].conductors.push(Conductor {
-                        net,
-                        shapes: poly::polyline(&[a, b], width, false, max_error),
-                        on_loop: true,
-                    });
-                    track_hints(layer, a, b, width, &mut link_hints);
+            let mut joined: Vec<String> = Vec::new();
+            let mut added: Vec<String> = Vec::new();
+            for &(pad, hot_pad, is_joined) in &joined_by_copper {
+                let net = pad.net.clone().expect("found by net");
+                let (a, b) = ((pad.center.x as f64, pad.center.y as f64), centre(hot_pad));
+                if is_joined {
+                    joined.push(format!("{reference}.{}", pad.number));
+                    continue;
                 }
+                if !options.connection_legs {
+                    continue;
+                }
+                let width = (pad
+                    .width
+                    .min(pad.height)
+                    .min(terminal_pads[hot_pad][0].width.min(terminal_pads[hot_pad][0].height))
+                    as f64)
+                    .clamp(200_000.0, 1_000_000.0);
+                layout.layers[layer].conductors.push(Conductor {
+                    net: net.clone(),
+                    shapes: poly::polyline(&[a, b], width, false, max_error),
+                    on_loop: true,
+                });
+                track_hints(layer, a, b, width, &mut link_hints);
+                let leg = SynthesizedLeg {
+                    capacitor: reference.clone(),
+                    pad: format!("{reference}.{}", pad.number),
+                    net,
+                    to: ports.labels[hot_pad].clone(),
+                    length_mm: (b.0 - a.0).hypot(b.1 - a.1) * 1e-6,
+                };
+                added.push(format!("{} ({:.2} mm to {})", leg.pad, leg.length_mm, leg.to));
+                synthesized_legs.push(leg);
+            }
+            if !joined.is_empty() {
                 notes.push(format!(
-                    "capacitor {reference} is joined to the hot capacitor's pads by straight bars pad centre to pad centre (the connection the estimate of section 10 assumes)"
+                    "capacitor {reference}: pad(s) {} are joined to the hot capacitor's pads by the board's own copper, which is all the extraction uses for them",
+                    joined.join(", ")
+                ));
+            }
+            if !added.is_empty() {
+                notes.push(format!(
+                    "capacitor {reference}: no copper joins pad(s) {} to the hot capacitor's pad on the same net, so a straight bar joins the pad centres there (the connection the estimate of section 10 assumes, not copper of the board); the capacitor's extracted values stand for that bar and are not used as its connection inductance",
+                    added.join(", ")
                 ));
             }
             notes.push(format!(
@@ -788,6 +874,8 @@ pub fn build_layout(
         other_nets,
         port_labels,
         loop_pads,
+        synthesized_legs,
+        unconnected,
     })
 }
 

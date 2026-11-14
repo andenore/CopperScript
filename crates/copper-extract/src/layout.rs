@@ -163,3 +163,99 @@ impl Layout {
         self.ports.push(PortDef { name: name.to_owned(), plus, minus });
     }
 }
+
+/// The pieces of copper of a layout and which of them are one piece of copper: the polygons of each net's union on
+/// each layer (clipped to the window), joined where a via (or the barrel of a through-hole pad) stands in the copper
+/// of its net on two layers. This is the connectivity of the copper itself, before any mesh: what the extraction's
+/// network has to reproduce.
+pub struct CopperPieces {
+    shapes: Vec<std::collections::BTreeMap<String, Shapes>>,
+    ids: std::collections::BTreeMap<(usize, String, usize), usize>,
+    parent: Vec<usize>,
+}
+
+impl CopperPieces {
+    pub fn of_layout(layout: &Layout) -> CopperPieces {
+        use copper_cam::poly;
+        let window = layout.window;
+        let frame = poly::polygon(&[
+            (window[0] as f64, window[1] as f64),
+            (window[2] as f64, window[1] as f64),
+            (window[2] as f64, window[3] as f64),
+            (window[0] as f64, window[3] as f64),
+        ]);
+        let mut shapes = Vec::new();
+        let mut ids = std::collections::BTreeMap::new();
+        for (li, layer) in layout.layers.iter().enumerate() {
+            let mut per_net: std::collections::BTreeMap<String, Shapes> = std::collections::BTreeMap::new();
+            for c in &layer.conductors {
+                per_net.entry(c.net.clone()).or_default().extend(c.shapes.iter().cloned());
+            }
+            let per_net: std::collections::BTreeMap<String, Shapes> = per_net
+                .into_iter()
+                .map(|(net, s)| (net, poly::intersection(&poly::union(&s), &frame)))
+                .filter(|(_, s)| !s.is_empty())
+                .collect();
+            for (net, s) in &per_net {
+                for comp in 0..s.len() {
+                    let id = ids.len();
+                    ids.insert((li, net.clone(), comp), id);
+                }
+            }
+            shapes.push(per_net);
+        }
+        let mut pieces = CopperPieces { parent: (0..ids.len()).collect(), shapes, ids };
+        for via in &layout.vias {
+            let mut joined: Vec<usize> = Vec::new();
+            for li in via.first_layer..=via.last_layer.min(layout.layers.len().saturating_sub(1)) {
+                let net = via.layer_nets.iter().find(|(l, _)| *l == li).map_or(&via.net, |(_, n)| n);
+                if let Some(piece) = pieces.piece_at(li, net, (via.x as f64, via.y as f64)) {
+                    joined.push(piece);
+                }
+            }
+            for pair in joined.windows(2) {
+                pieces.join(pair[0], pair[1]);
+            }
+        }
+        pieces
+    }
+
+    fn root(&mut self, mut x: usize) -> usize {
+        while self.parent[x] != x {
+            self.parent[x] = self.parent[self.parent[x]];
+            x = self.parent[x];
+        }
+        x
+    }
+
+    fn join(&mut self, a: usize, b: usize) {
+        let (ra, rb) = (self.root(a), self.root(b));
+        if ra != rb {
+            self.parent[ra.max(rb)] = ra.min(rb);
+        }
+    }
+
+    /// The polygon of `net`'s copper on `layer` that contains `point` (nm), if any.
+    fn piece_at(&self, layer: usize, net: &str, point: (f64, f64)) -> Option<usize> {
+        let shapes = self.shapes.get(layer)?.get(net)?;
+        let comp = shapes.iter().position(|s| copper_cam::poly::shape_contains(s, point))?;
+        self.ids.get(&(layer, net.to_owned(), comp)).copied()
+    }
+
+    /// Whether the copper of `net_a` on `layer_a` at `a` and the copper of `net_b` on `layer_b` at `b` are one piece of
+    /// copper (`false` when either point is not on copper).
+    pub fn connected(
+        &mut self,
+        layer_a: usize,
+        net_a: &str,
+        a: (f64, f64),
+        layer_b: usize,
+        net_b: &str,
+        b: (f64, f64),
+    ) -> bool {
+        match (self.piece_at(layer_a, net_a, a), self.piece_at(layer_b, net_b, b)) {
+            (Some(x), Some(y)) => self.root(x) == self.root(y),
+            _ => false,
+        }
+    }
+}
