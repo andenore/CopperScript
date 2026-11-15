@@ -26,6 +26,8 @@ pub struct Options {
     pub single_mesh: bool,
     /// Between the pad centres, without the bar across the switch.
     pub no_switch_bar: bool,
+    /// Also run the independent reference solver and compare it with the extraction (`--extract-reference`).
+    pub reference: bool,
     /// Keep the current distribution of each hot loop (for `--plot-current`); it is not part of the report.
     pub current_map: bool,
 }
@@ -130,6 +132,9 @@ fn result_value(
         if r.earlier_difference_pct.is_empty() { Value::Null } else { floats(&r.earlier_difference_pct, 2) },
     );
     put(&mut o, "convergence_threshold_pct", Value::from(copper_extract::hotloop::CONVERGENCE_THRESHOLD_PCT));
+    put(&mut o, "numerical_sensitivity_established", Value::from(r.convergence.established));
+    put(&mut o, "convergence", convergence_value(r));
+    put(&mut o, "reference", reference_value(r));
     put(&mut o, "port_labels", strings(&r.port_labels));
     put(&mut o, "not_used_in_conducted", not_used(r).map_or(Value::Null, Value::from));
     put(
@@ -212,6 +217,7 @@ fn result_value(
     let mut topology = Object::new();
     put(&mut topology, "copper_components", Value::from(r.copper_components as i64));
     put(&mut topology, "mesh_components", Value::from(r.mesh_components as i64));
+    put(&mut topology, "unmeshed_pieces", Value::from(r.unmeshed_pieces as i64));
     put(&mut topology, "mismatches", strings(&r.topology_mismatches));
     put(
         &mut topology,
@@ -306,6 +312,134 @@ fn result_value(
     Value::Object(o)
 }
 
+fn matrices(changes: &[Vec<Vec<f64>>]) -> Value {
+    Value::Array(changes.iter().map(|f| Value::Array(f.iter().map(|row| floats(row, 3)).collect())).collect())
+}
+
+fn worst_value(w: &Option<copper_extract::convergence::Worst>) -> Value {
+    let Some(w) = w else { return Value::Null };
+    let mut o = Object::new();
+    put(&mut o, "matrix", Value::from(w.matrix));
+    put(&mut o, "row", Value::from(w.row.as_str()));
+    put(&mut o, "column", Value::from(w.col.as_str()));
+    put(&mut o, "frequency_mhz", Value::from(round(w.frequency_hz * 1e-6, 3)));
+    put(&mut o, "change_pct", Value::from(round(w.pct, 3)));
+    put(&mut o, "text", Value::from(w.text()));
+    Value::Object(o)
+}
+
+/// `measures.extract.convergence`: the change of every entry of the L and R matrices between meshes.
+fn convergence_value(r: &HotLoopExtraction) -> Value {
+    let c = &r.convergence;
+    let mut o = Object::new();
+    put(&mut o, "definition", Value::from(c.definition));
+    put(&mut o, "ports", strings(&r.port_labels));
+    put(
+        &mut o,
+        "frequencies_mhz",
+        Value::Array(r.frequencies_hz.iter().map(|f| Value::from(round(f * 1e-6, 3))).collect()),
+    );
+    put(&mut o, "l_threshold_pct", Value::from(c.l_threshold_pct));
+    put(&mut o, "r_threshold_pct", Value::from(c.r_threshold_pct));
+    put(&mut o, "established", Value::from(c.established));
+    put(&mut o, "crowding_length_um", floats(&c.crowding_length_um, 3));
+    put(&mut o, "reasons_not_established", strings(&c.reasons_not_established));
+    for (key, step) in [("finest_vs_next", &c.finest_vs_next), ("next_vs_earlier", &c.next_vs_earlier)] {
+        put(
+            &mut o,
+            key,
+            match step {
+                None => Value::Null,
+                Some(s) => {
+                    let mut so = Object::new();
+                    put(&mut so, "comparable", Value::from(s.comparable));
+                    put(&mut so, "comparability", strings(&s.comparability));
+                    put(&mut so, "l_change_pct", matrices(&s.l_pct));
+                    put(&mut so, "r_change_pct", matrices(&s.r_pct));
+                    Value::Object(so)
+                }
+            },
+        );
+    }
+    put(&mut o, "not_contracting", strings(&c.not_contracting));
+    put(&mut o, "worst_l", worst_value(&c.worst_l));
+    put(&mut o, "worst_r", worst_value(&c.worst_r));
+    Value::Object(o)
+}
+
+fn matrix_values(m: &[Vec<f64>], digits: i32) -> Value {
+    Value::Array(
+        m.iter()
+            .map(|row| {
+                Value::Array(
+                    row.iter()
+                        .map(|v| if v.is_finite() { Value::from(round(*v, digits)) } else { Value::Null })
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// `measures.extract.reference`: the independent reference solver beside the extraction (null when not asked for).
+fn reference_value(r: &HotLoopExtraction) -> Value {
+    let mut o = Object::new();
+    if let Some(e) = &r.reference_error {
+        put(&mut o, "status", Value::from("failed"));
+        put(&mut o, "error", Value::from(e.as_str()));
+        return Value::Object(o);
+    }
+    let Some(c) = &r.reference else { return Value::Null };
+    let x = &c.reference;
+    put(
+        &mut o,
+        "method",
+        Value::from(
+            "independent raster solver from the same layout: uniform pixels per layer, flood-fill connectivity (4-neighbours, vias, terminals, shorts), finite-difference sheet conduction by conjugate gradient, DC inductance from the field energy of the resulting current (FFT convolution; sheets at the layer heights, via barrels as filaments); shares no code with the mesher, the network or the partial elements",
+        ),
+    );
+    put(&mut o, "pitch_mm", Value::from(round(x.pitch_nm as f64 * 1e-6, 4)));
+    put(
+        &mut o,
+        "grid",
+        Value::Array(vec![Value::from(x.grid.0 as i64), Value::from(x.grid.1 as i64), Value::from(x.grid.2 as i64)]),
+    );
+    put(&mut o, "cells", Value::from(x.cells as i64));
+    put(&mut o, "components", Value::from(x.components as i64));
+    put(&mut o, "extraction_components", Value::from(c.peec_components as i64));
+    put(&mut o, "port_open", Value::Array(x.port_open.iter().map(|b| Value::from(*b)).collect()));
+    put(&mut o, "ports", strings(&r.port_labels));
+    put(&mut o, "frequency_hz", Value::from(c.frequency_hz));
+    put(&mut o, "reference_resistance_ohm", matrix_values(&x.resistance_ohm, 9));
+    put(&mut o, "reference_inductance_nh", matrix_values(&x.inductance_nh, 4));
+    put(&mut o, "extraction_resistance_ohm", matrix_values(&c.peec_r_ohm, 9));
+    put(&mut o, "extraction_inductance_nh", matrix_values(&c.peec_l_nh, 4));
+    put(&mut o, "difference_resistance_pct", matrix_values(&c.difference_r_pct, 2));
+    put(&mut o, "difference_inductance_pct", matrix_values(&c.difference_l_pct, 2));
+    put(&mut o, "limit_pct", Value::from(c.limit_pct));
+    put(&mut o, "disagreements", strings(&c.disagreements));
+    put(&mut o, "reference_sensitivity_resistance_pct", matrix_values(&c.sensitivity_r_pct, 2));
+    put(&mut o, "reference_sensitivity_inductance_pct", matrix_values(&c.sensitivity_l_pct, 2));
+    put(
+        &mut o,
+        "coarse_pitch_mm",
+        c.coarse_reference.as_ref().map_or(Value::Null, |x| Value::from(round(x.pitch_nm as f64 * 1e-6, 4))),
+    );
+    put(&mut o, "reference_not_converged", strings(&c.reference_not_converged));
+    put(&mut o, "topology_disagreements", strings(&c.topology_disagreements));
+    put(&mut o, "terminals_snapped", strings(&x.terminals_snapped));
+    put(&mut o, "notes", strings(&x.notes));
+    put(&mut o, "seconds", Value::from(round(x.seconds, 1)));
+    put(
+        &mut o,
+        "definition",
+        Value::from(
+            "difference = reference minus extraction, percent: a diagonal entry of the extraction's value, an off-diagonal entry of the geometric mean of the two extraction diagonals; the reference is the DC limit (current distributed by resistance) and does not know skin effect, proximity effect or the inductive redistribution of current at frequency, so it validates the geometry (topology, copper, vias, terminals) and the mesh, not the frequency dependence; each layer is a sheet (thickness only in the conductance), which makes its inductance about 1 to 2 % higher than the thick bar's",
+        ),
+    );
+    Value::Object(o)
+}
+
 fn text_line(r: &HotLoopExtraction, closed_form_nh: Option<f64>, fullwave_nh: Option<f64>) -> String {
     let freq = |f: f64| format!("{:.0} MHz", f * 1e-6);
     let at: Vec<String> = r
@@ -322,6 +456,15 @@ fn text_line(r: &HotLoopExtraction, closed_form_nh: Option<f64>, fullwave_nh: Op
             freq(r.frequencies_hz[1.min(r.frequencies_hz.len() - 1)])
         )),
         None => text.push_str("; single mesh: no numerical sensitivity"),
+    }
+    if !r.convergence.established && r.meshes.len() > 1 {
+        text.push_str(&format!(
+            "; NOT established as convergence ({})",
+            r.convergence.reasons_not_established.join("; ")
+        ));
+    }
+    if let (Some(l), Some(rr)) = (&r.convergence.worst_l, &r.convergence.worst_r) {
+        text.push_str(&format!("; every entry of L and R judged, worst: {}; {}", l.text(), rr.text()));
     }
     if let Some(c) = closed_form_nh {
         text.push_str(&format!("; closed form {c:.2} nH"));
@@ -473,6 +616,9 @@ pub fn apply(
         hot.mesh.coarse_nm = hot.mesh.cell_nm * 5;
     }
     hot.board.switch_bar = !options.no_switch_bar;
+    if options.reference {
+        hot.reference = Some(copper_extract::reference::ReferenceOptions::default());
+    }
     hot.current_map = options.current_map;
     let mut new_coverage = Vec::new();
     let mut extracted: Vec<ExtractedConnections> = Vec::new();
@@ -742,6 +888,7 @@ mod tests {
             inductance_nh: vec![l, l * 0.95, l * 0.94],
             resistance_ohm: vec![0.01, 0.012, 0.013],
             inductance_matrix_nh: vec![vec![vec![l]], vec![vec![l * 0.95]], vec![vec![l * 0.94]]],
+            resistance_matrix_ohm: vec![vec![vec![0.01]], vec![vec![0.012]], vec![vec![0.013]]],
             dropped_bars: 0,
             gap_bars_dropped: 0,
             refine_rounds: 0,
@@ -790,10 +937,14 @@ mod tests {
             matrix_difference_pct: 0.0,
             connection_legs: false,
             synthesized_legs: Vec::new(),
+            convergence: copper_extract::convergence::assess(&[], &[], &[], 35e-6),
             unconnected_capacitors: Vec::new(),
             terminals_joining_pieces: Vec::new(),
+            reference: None,
+            reference_error: None,
             copper_components: 1,
             mesh_components: 1,
+            unmeshed_pieces: 0,
             topology_mismatches: Vec::new(),
             unresolved_gaps: Vec::new(),
             unresolved_gap_count: 0,

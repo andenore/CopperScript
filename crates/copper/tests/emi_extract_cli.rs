@@ -45,6 +45,7 @@ fn help_names_the_extract_options_and_sub_options_need_the_flag() {
         "--extract-cell",
         "--extract-single-mesh",
         "--extract-no-switch-bar",
+        "--extract-reference",
     ] {
         assert!(help.contains(option), "{option} in {help}");
     }
@@ -54,6 +55,7 @@ fn help_names_the_extract_options_and_sub_options_need_the_flag() {
         ["emi-check", BOARD, "--extract-cell", "0.2"],
         ["emi-check", BOARD, "--extract-single-mesh", "--json"],
         ["emi-check", BOARD, "--extract-no-switch-bar", "--json"],
+        ["emi-check", BOARD, "--extract-reference", "--json"],
     ] {
         assert_eq!(copper(&arguments).status.code(), Some(2), "{arguments:?}");
     }

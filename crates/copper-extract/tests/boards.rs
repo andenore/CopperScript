@@ -203,3 +203,39 @@ fn study_emi_buck_mesh_series() {
         }
     }
 }
+
+#[test]
+fn the_independent_reference_runs_on_the_layout_of_emi_buck_and_compares_with_the_extraction() {
+    let board = placed("emi_buck");
+    let mut options = HotLoopOptions { series: false, ..test_options() };
+    options.reference = Some(copper_extract::reference::ReferenceOptions { max_cells: 150_000, ..Default::default() });
+    let case = run("emi_buck", &board, &options);
+    let x = &case.extraction;
+    let c = x.reference.as_ref().unwrap_or_else(|| panic!("no comparison: {:?}", x.reference_error));
+    println!(
+        "emi_buck: reference pitch {} nm, {} cells, {} components (extraction {}); R {:?} ohm against {:?}; L {:?} nH against {:?}; differences R {:?} % L {:?} %; {:.1} s",
+        c.reference.pitch_nm,
+        c.reference.cells,
+        c.reference.components,
+        c.peec_components,
+        c.reference.resistance_ohm,
+        c.peec_r_ohm,
+        c.reference.inductance_nh,
+        c.peec_l_nh,
+        c.difference_r_pct,
+        c.difference_l_pct,
+        c.reference.seconds
+    );
+    assert_eq!(c.reference.port_open, vec![false]);
+    assert!(c.topology_disagreements.is_empty(), "{:?}", c.topology_disagreements);
+    assert_eq!(c.frequency_hz, 1e3);
+    // The DC limit of the hot loop is far above its value at 1 MHz (the return current spreads through the plane at DC):
+    // both solvers see that.
+    assert!(c.peec_l_nh[0][0] > x.inductance_nh[0] * 1.3, "{:?} vs {:?}", c.peec_l_nh, x.inductance_nh);
+    assert!(c.reference.inductance_nh[0][0] > x.inductance_nh[0] * 1.3);
+    // A deliberately coarse reference (61 um): L is within 10 % of the extraction, but R is not converged at this pitch
+    // (+15.6 % here, +8.1 % at 37 um, +0.2 % at 19 um: the pixels of the terminals' slivers and of the narrow
+    // copper decide it), which is why the command line uses a finer pitch and reports the reference's own sensitivity.
+    assert!(c.difference_l_pct[0][0].abs() < 10.0, "{c:?}");
+    assert!(c.difference_r_pct[0][0] > 0.0 && c.difference_r_pct[0][0] < 25.0, "{c:?}");
+}

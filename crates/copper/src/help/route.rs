@@ -720,6 +720,10 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--extract-no-switch-bar",
                 help: "with --extract: put the port between the facing sides of the switch pads instead of in a gap in a copper bar across the switch (the gap between the pads is then not in the extracted path)",
             },
+            Opt {
+                flag: "--extract-reference",
+                help: "with --extract: also run an independent reference solver from the same copper (raster, flood-fill topology, finite-difference DC conduction, DC inductance from the field energy; no code shared with the mesher) and compare every entry of its R and L matrices with the extraction at 1 kHz (measures.extract.reference); a disagreement beyond 10 % adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; the DC limit only: it does not validate skin or proximity redistribution",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

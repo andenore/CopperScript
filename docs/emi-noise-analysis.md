@@ -2138,6 +2138,8 @@ for the same bar along an axis (-4.4 %, converging slowly: -6.7 % at 250 um), an
 | `inductance_nh`, `resistance_mohm`, `frequencies_mhz` | `Im Z / w` and `Re Z` of the finest mesh of the series at 1, 10 and 100 MHz |
 | `closed_form_nh`, `ratio_to_closed_form`, `fullwave_nh`, `ratio_to_fullwave` | the traced closed form of the finding and, when `--fullwave` ran, its inductance, with the ratios |
 | `status`, `status_reasons` | `ok`, `indicative` with the reasons, or `error` (the meshed network does not have the connectivity of the copper; the multi-port matrix is not used). Reasons: a gap in the copper narrower than the smallest cell that the mesh did not resolve (`unresolved_gap`, listed in `topology.unresolved_gaps`), a terminal joined by its nearest node because no node lies inside it (the mesh is coarser than the terminal), vias left out, the two finest meshes more than 3 % apart at 10 MHz (`convergence_threshold_pct`), a self inductance of the port matrix moving more than 3 % between them, a single mesh (no evidence of convergence). Coarsening to the budget is a flag and a note, not a reason: it cannot coarsen below the terminals, vias and narrow copper of the loop, and the series shows what it cost |
+| `convergence` (13.10), `numerical_sensitivity_established` | the change of every entry of the L and R matrices between meshes, per frequency, the worst entry of each, the thresholds (3 % for L, 5 % for R), whether the two finest meshes are comparable and why not, the crowding length per frequency |
+| `reference` (13.11, with `--extract-reference`) | the independent reference solver's R and L matrices beside the extraction's at 1 kHz, the difference of every entry, the topology (pieces, ports open), its own pitch sensitivity, the pitch and the cell count |
 | `numerical_sensitivity_pct`, `numerical_sensitivity_earlier_pct`, `numerical_sensitivity_basis` | the difference between the two finest meshes of the series (pitch ratio 1.5) per frequency, and between the two coarser ones; `null` with `numerical_sensitivity_unavailable` for one mesh. Two meshes that agree do not bound the error: the series below still moves, and a falling step is evidence, not proof |
 | `parameter_assumptions` | what the board does not fix: assumed stack-up, copper thickness, plating, window, resistivity |
 | `not_modelled`, `flags`, `notes` | the omissions of 13.1; `assumed_stackup`, `assumed_copper_thickness`, `assumed_plating`, `coarsened`, `plane_corridor`, `merged_terminals`, `terminal_snapped`, `via_unattached`, `connection_legs`, `unresolved_gap`, `topology_mismatch`, `refinement_stopped_by_budget`; how each leg and component was drawn |
@@ -2360,3 +2362,132 @@ capacitor's row is still not used. (3) The resistance of the interconnect and th
 components' own parasitics (ESL, ESR) stay as they were: the matrix is read at 10 MHz and used as a constant inductance
 over 150 kHz to 30 MHz. A FastHenry input deck of a mesh is written by `copper_extract::fasthenry::deck` and an ignored
 test runs `fasthenry` when it is on the PATH; none is installed here, so no comparison with FastHenry exists.
+
+### 13.10 Convergence across the whole matrix
+
+The mesh series (the finest mesh and two coarser by 1.5 in pitch) is judged on **every entry of the L matrix and of the R matrix at
+every frequency**, not on the hot loop's self inductance alone (`copper-extract/src/convergence.rs`,
+`measures.extract.convergence`; the old keys `numerical_sensitivity_pct` and `_earlier_pct` stay). The change of an entry
+between two meshes is, in percent, a diagonal entry relative to itself and an off-diagonal entry (a mutual can be near zero)
+relative to the geometric mean of the two diagonal entries of the finer mesh. `finest_vs_next` is the two finest meshes,
+`next_vs_earlier` the two coarser ones; `worst_l` and `worst_r` name the entry (matrix, ports by label, frequency, change) that
+moved most between the two finest. `ok` needs every entry of L within 3 % and every entry of R within 5 % at every frequency;
+otherwise the status is `indicative` and the reason names the worst entry ("R of hot loop at 100 MHz changes by 12.3 %").
+
+**Why 5 % for R, and what it costs.** The extraction models each layer as one filament across the thickness, so the current
+crowds laterally to the edges of the copper over the length `(rho / t) / (2 pi f mu0)` (the crowding length: 62 um at 1 MHz,
+6 um at 10 MHz, 0.6 um at 100 MHz for 35 um copper; printed per frequency as `crowding_length_um`), and a pitch that is large
+against it cannot resolve the crowding: R rises with every refinement. The analytic two coupled bars of
+`tests/convergence.rs` (0.6 mm wide, 62.5 / 125 / 250 um) show it: between the two finest meshes R of a bar changes by 0.18 %
+at 1 MHz, 2.4 % at 10 MHz and 20.6 % at 100 MHz, while L changes by 0.03, 0.03 and 0.27 % and the mutual L by 0.003 %. 5 % is
+about twice the 10 MHz value of that case and is applied at every frequency; it was not chosen to make a board pass. On the
+boards it means that R at 100 MHz (and at 10 MHz) is reported as not converged: `emi_buck`: L changes 0.5 / 1.4 / 1.7 % but R
+0.4 / 8.0 / 12.3 % at 1 / 10 / 100 MHz between the two finest meshes (0.04 / 3.5 / 3.9 % between the two coarser), so its status is
+`indicative` (it was `ok` while only L at 10 MHz was judged); the 4.140 / 3.901 / 3.883 nH are unchanged. R at 100 MHz of this
+model is a lower bound that rises with refinement.
+
+**A change that grows with refinement.** A small change between the two finest meshes is an error estimate only when the
+changes shrink from step to step. Where both steps are comparable, the worst entry of each matrix whose change between the two
+finest meshes is larger than between the two coarser ones (and above a third of its threshold, below which both are noise) is
+named in `not_contracting` and is a status reason, even when it is under the threshold. On the analytic bars R contracts at
+10 MHz (9.4 % then 2.4 %) and grows at 100 MHz (16.7 % then 20.6 %); L contracts at every frequency. On `emi_buck` both grow:
+L of the hot loop 0.5 % then 1.7 % at 100 MHz (0.16 then 0.52 % at 1 MHz, 0.47 then 1.44 % at 10 MHz) and R 3.9 % then
+12.3 %. Its L is therefore within 3 % between the two finest meshes but **not shown to be converging**; the finest mesh is the
+only one of the three with a round of local refinement, which may be what moves it (not separated).
+
+**Comparability.** A series whose meshes are not comparable does not report a clean figure: the sensitivity is `established:
+false` with reasons when the filament ratio of the two meshes is below 1.10 (same density squeezed against one budget: the
+8998 and 8999 filaments of CopperOrgan at the default budget), when their fine pitches differ by less than 1.2, when one
+mesh's refinement was cut short by the budget and the other's was not, or when they leave different numbers of gaps unresolved or
+see different numbers of copper pieces. Then the status is `indicative` with `mesh convergence is not established: ...`. A local
+refinement that finished in one mesh and was not needed in the other is not a difference (emi_buck's finest mesh has one round).
+CopperOrgan at the default budget: L changes 2.3 / 2.4 / 2.7 % and R 3.0 / 0.4 / 5.1 % at the hot loop between its two finest
+meshes, but the series is **not established** (filament ratio 1.00, 31 against 23 unresolved gaps), and the second step is not
+comparable either (refined against not refined, 14 against 11 copper pieces).
+
+### 13.11 The independent reference solver (`--extract-reference`)
+
+`copper-extract/src/reference.rs` is a second, independent opinion on the same physical geometry. It starts from the `Layout`
+(the copper polygons per layer and net, heights and thicknesses, vias, terminals, shorts, ports) and shares nothing with
+`mesh.rs`, `network.rs` or `partial.rs` (not the mesher, not the Hoer-Love partial elements): only the polygon library, the
+radix-2 FFT of `copper-emi` and the `Layout` type. It exports no mesh, so it cannot validate a mesher by repeating its mistakes.
+
+* **Raster and topology.** A uniform raster of every layer (pixel centres inside the net's polygons, the pitch from a budget of
+  1.6 million pixels; two nets that overlap in a layer get a slot each at the same height); connectivity by flood fill on
+  4-neighbours, vias joining between layers the pixels of their net inside the contact circle (drill radius plus plating, an
+  equipotential: a single pixel would add a spreading resistance that grows with the logarithm of the pitch), terminals as
+  the pixels under their region (an equipotential; a sliver thinner than a pixel takes the net's pixels within one to three
+  pixels, of the one piece of copper nearest its centre only), shorts joining terminals. It
+  counts the connected components and says for every port whether it is open. Components of four pixels or fewer and slivers in
+  the outermost row or column of the window (which the mesher clips away) are not counted as pieces of copper in the comparison.
+* **DC conduction.** Sheet conductance `sigma t` between neighbouring pixels, via barrels as tube conductances, terminals and shorts as
+  one unknown, one conjugate-gradient solve per port (1 A in, 1 A out): `R_ij` and the current on every edge. A solve that
+  does not reach a residual of 1e-10 fails the reference (`reference.status: failed`, a status reason) instead of returning
+  a value.
+* **DC inductance from the field energy.** `L_ij = (mu0 / 4 pi) sum I_a I_b (1 / h^2) integral integral 1 / |r - r'|` over the current
+  cells (the edges between neighbouring pixels, each a cell `h x h` with the uniform sheet current `I / h`), evaluated per pair
+  of layers by FFT convolution with the exact kernel (the same-cell self term `2.9732 h`, Gauss-Legendre for the next cells, the
+  point formula beyond; the via barrels as filaments with the exact parallel-filament integral and the tube radius as the self
+  distance). Each layer is a sheet at its height: the thickness enters the conductance only, which makes the inductance of a
+  bar about `ln((w + t) / w)` of the logarithm higher than the bar's, 1 to 2 %.
+* **It is the DC limit** (current distributed by resistance): it does not know skin effect, proximity effect or the inductive
+  redistribution of current with frequency. It validates the copper (topology, vias, terminals, window clipping) and the mesh at
+  low frequency; it does not validate the frequency dependence. The extraction at 1 kHz is the comparison (100 Hz gives the same
+  to 1e-4: `w L` is far below `R`).
+
+**Validation of the reference itself** (`tests/reference.rs`, `tests/reference_topology.rs`, all pass in under a second to a few
+seconds):
+
+| Case | Reference | Closed form or other | Difference |
+| --- | --- | --- | --- |
+| straight bar 10 x 1 x 0.035 mm, pitch 200 / 100 / 50 um, R | 4.4229 / 4.6686 / 4.7914 mohm (the length between the pixels of its terminals) | `rho l / (w t)` | < 1e-6 (exact) |
+| the same, L | 6.1655 / 6.6059 / 6.8296 nH | `self_inductance_bar` of the same length | +1.00 / +0.96 / +0.97 % |
+| rectangular loop 10 x 6 mm, trace 0.5 mm, pitch 250 / 125 / 62.5 um | 20.699 / 20.757 / 20.791 nH | partial-inductance closed form 20.629 nH | +0.34 / +0.62 / +0.79 %; the change per halving falls 0.058 to 0.034 nH |
+| two such loops 2 mm apart (125 um), mutual L | -0.5468 nH | -0.5460 nH | +0.15 % |
+| the same, self L; mutual R | 20.757 nH; 0 | 20.629 nH; no shared copper | +0.62 %; exact |
+| two bars 10 x 0.6 mm, 1.5 mm apart (50 um), L matrix | [[7.107, 2.497], [2.497, 7.107]] nH | PEEC at 1 kHz [[6.957, 2.475], [2.475, 6.957]] nH | +2.15 % / +0.88 % |
+| the same, R | 7.412 mohm | PEEC 7.371 mohm | +0.55 % |
+
+The trace over a plane with its return (the loop over a plane of `tests/analytic.rs`) has no closed form here: at DC the return
+current spreads through the plane by resistance instead of lying under the trace, so the image-plane result does not apply; the
+DC comparison with the extraction is the check (the boards below).
+
+**Topology cases** (the cases of `tests/topology.rs`, the reference's pitch half the gap so that a pixel centre falls in it):
+slots of 0.03, 0.1, 0.2, 0.4 and 1.0 mm between two rectangles: open for both, two pieces for both; a 0.15 and a 0.25 mm neck:
+connected for both, one piece, the reference R 8.389 / 5.612 mohm against the extraction's 7.816 / 5.161 mohm (the extraction
+7 and 8 % lower at its default mesh); a terminal at a gap of 10, 20, 30 and 50 um: open across the gap, connected on its own island,
+for both; a via 0.7 mm beside an island: joins nothing for both, and joins it when it stands on it. Every verdict agrees.
+
+**Board comparison** (the hot-loop layout of the extraction, same window and ports; `measures.extract.reference`; differences are
+reference minus extraction at 1 kHz, a diagonal entry of the extraction's value, an off-diagonal one of the geometric mean of the
+two diagonals; the limit for a status reason, flag `reference_disagrees`, is 10 %):
+
+| Board | Pitch, pixels, time | R (mohm), reference / extraction, difference | L (nH), reference / extraction, difference |
+| --- | --- | --- | --- |
+| `emi_buck` | 18.8 um, 381 000 copper pixels, 38 s | 7.510 / 7.586, -1.0 % | 6.905 / 6.763, +2.1 % |
+| CopperOrgan, hot loop | 38.7 um, 826 000 copper pixels, 6 slots, 273 s | 16.86 / 18.61, -9.4 % | 10.32 / 10.45, -1.2 % |
+| CopperOrgan, mutual hot loop - C_BIN2 | | 3.200 / 3.327, -1.2 % | 1.587 / 1.612, -0.5 % |
+| CopperOrgan, C_BIN2 | | 5.451 / 5.906, -7.7 % | 2.823 / 2.864, -1.4 % |
+
+What the comparison establishes, and what it does not:
+
+* **Topology agrees** on both boards (no port open, the same number of pieces of copper after the stated exclusions: one
+  sliver on `emi_buck`, one component of one pixel on CopperOrgan). The exclusion rule was written after seeing those two
+  extra components; it has not been tried on other boards.
+* **L agrees within 2.1 % in every entry**, self and mutual, on both boards. The reference's sheets make its L 1 to 2 % high
+  by construction; the reference's own L moves 3.3 % (`emi_buck`) and at most 2.3 % (CopperOrgan) when its pitch is doubled.
+* **R agrees only to about 10 %, and that figure is not established more tightly.** The reference's own R moves 8.2 % on
+  `emi_buck` and 5.3 / 2.9 / 7.9 % on CopperOrgan when its pitch is doubled (the port terminals are slivers 10 um thick, and
+  three of CopperOrgan's terminals are thinner than a pixel and are taken at the nearest copper), and R depends on how a via
+  meets the copper: with the via on a single pixel instead of its contact circle the same runs read +0.2 % (`emi_buck`), -4.4 %
+  (CopperOrgan hot loop) and +7.6 % (C_BIN2), a swing of 5 to 15 %. The contact circle is the model kept (a single pixel adds a
+  spreading resistance that grows as the pitch falls). With it the extraction's R at 1 kHz is 8 to 9 % above the reference on
+  CopperOrgan, just inside the 10 % limit; which of the two is closer to the truth is not decided here.
+* The necks of the topology cases show the same sign: the extraction's R is 7 to 8 % below the reference there at its default
+  mesh. Not investigated.
+* The command also runs the reference at twice its pitch and prints the sensitivity per entry
+  (`reference_sensitivity_*_pct`); an entry that moves by more than the limit, or a coarse run that fails, makes the
+  comparison not established (flag `reference_not_converged`, a status reason). On `emi_buck` at a coarse pitch the reference's
+  R is far off (+15.6 % at 61 um, the case of `tests/boards.rs`).
+* A disagreement beyond 10 % in an entry is a status reason (flag `reference_disagrees`). A topology disagreement (a port open for the reference and solved by
+the extraction, or different numbers of pieces of copper) makes the status `error` and the flag `reference_topology_disagrees`.

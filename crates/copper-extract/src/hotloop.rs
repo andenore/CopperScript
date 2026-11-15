@@ -15,6 +15,7 @@ use crate::current::CurrentMap;
 use crate::extract::{Extraction, extract};
 use crate::layout::Layout;
 use crate::mesh::MeshSpec;
+use crate::reference::{ReferenceOptions, ReferenceResult};
 
 /// The two finest meshes of the series differing by more than this at the second frequency (10 MHz) make the result
 /// `indicative`, percent.
@@ -36,6 +37,9 @@ pub struct HotLoopOptions {
     /// frequencies, else the highest) in [`HotLoopExtraction::currents`] (default off: the branch currents of the
     /// finest mesh are solved anyway, so this only arranges them).
     pub current_map: bool,
+    /// Also run the independent reference solver (`crate::reference`) on the same layout and compare its DC limit
+    /// with the PEEC extraction at a low frequency (default off).
+    pub reference: Option<ReferenceOptions>,
 }
 
 impl Default for HotLoopOptions {
@@ -46,8 +50,154 @@ impl Default for HotLoopOptions {
             frequencies_hz: DEFAULT_FREQUENCIES_HZ.to_vec(),
             series: true,
             current_map: false,
+            reference: None,
         }
     }
+}
+
+/// The frequency of the PEEC extraction the reference is compared with, Hz: low enough for the DC limit (the port
+/// impedance is `R + j w L` with `w L` far below `R`; 100 Hz gives the same numbers).
+pub const REFERENCE_COMPARISON_HZ: f64 = 1e3;
+
+/// The largest difference, percent, between the reference and the PEEC extraction in any entry of `R` or `L` before
+/// the comparison is a reason (flag `reference_disagrees`): the sheet-against-bar thickness correction (1 to 2 %), the
+/// reference's pitch and the mesh sensitivity of the extraction add up to a few percent on the analytic cases.
+pub const REFERENCE_LIMIT_PCT: f64 = 10.0;
+
+/// The independent reference's DC limit beside the PEEC extraction at [`REFERENCE_COMPARISON_HZ`].
+#[derive(Clone, Debug)]
+pub struct ReferenceComparison {
+    pub reference: ReferenceResult,
+    /// The same reference at a pitch twice as coarse (a quarter of the pixels): its own pitch sensitivity.
+    pub coarse_reference: Option<ReferenceResult>,
+    /// The finer reference against the coarser one per entry, percent (normalised like the other differences).
+    pub sensitivity_r_pct: Vec<Vec<f64>>,
+    pub sensitivity_l_pct: Vec<Vec<f64>>,
+    pub frequency_hz: f64,
+    /// The extraction's `R` (ohm) and `L` (nH) matrices at that frequency, finest mesh.
+    pub peec_r_ohm: Vec<Vec<f64>>,
+    pub peec_l_nh: Vec<Vec<f64>>,
+    /// Reference minus PEEC per entry, percent: a diagonal entry of the PEEC value, an off-diagonal entry of the
+    /// geometric mean of the two PEEC diagonals.
+    pub difference_r_pct: Vec<Vec<f64>>,
+    pub difference_l_pct: Vec<Vec<f64>>,
+    /// Pieces of copper of the extraction's topology check: those with mesh nodes plus those without any.
+    pub peec_components: usize,
+    pub limit_pct: f64,
+    /// Entries beyond the limit, one line each.
+    pub disagreements: Vec<String>,
+    /// Topology differences: a port open for one and not for the other, different numbers of copper pieces.
+    pub topology_disagreements: Vec<String>,
+    /// Entries in which the reference itself moves by more than the limit between its pitch and twice it: the
+    /// comparison with the extraction is then not established.
+    pub reference_not_converged: Vec<String>,
+}
+
+/// Difference of `a` against `b` entry by entry, percent (see [`ReferenceComparison`]).
+fn signed_differences(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    (0..b.len())
+        .map(|i| {
+            (0..b.len())
+                .map(|j| {
+                    let scale = if i == j { b[i][i].abs() } else { (b[i][i] * b[j][j]).abs().sqrt() };
+                    if scale > 0.0 { 100.0 * (a[i][j] - b[i][j]) / scale } else { f64::NAN }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[allow(clippy::needless_range_loop)]
+fn compare_with_reference(
+    layout: &Layout,
+    base: &MeshSpec,
+    options: &ReferenceOptions,
+    labels: &[String],
+    peec_components: usize,
+) -> Result<ReferenceComparison, String> {
+    let reference = crate::reference::solve(layout, options)?;
+    let coarse_options = ReferenceOptions { pitch_nm: Some(reference.pitch_nm * 2), ..options.clone() };
+    let coarse_reference = crate::reference::solve(layout, &coarse_options).ok();
+    let x = mesh_with(layout, base, &[REFERENCE_COMPARISON_HZ], false)?;
+    let n = x.solutions[0].z.len();
+    let peec_r_ohm: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.resistance(0, i, j)).collect()).collect();
+    let peec_l_nh: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.inductance(0, i, j) * 1e9).collect()).collect();
+    let (sensitivity_r_pct, sensitivity_l_pct) = match &coarse_reference {
+        Some(c) => (
+            signed_differences(&c.resistance_ohm, &reference.resistance_ohm),
+            signed_differences(&c.inductance_nh, &reference.inductance_nh),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    let difference_r_pct = signed_differences(&reference.resistance_ohm, &peec_r_ohm);
+    let difference_l_pct = signed_differences(&reference.inductance_nh, &peec_l_nh);
+    let label = |i: usize| labels.get(i).map_or_else(|| format!("port {i}"), Clone::clone);
+    let mut disagreements = Vec::new();
+    for (name, d) in [("R", &difference_r_pct), ("L", &difference_l_pct)] {
+        for i in 0..n {
+            for j in i..n {
+                let v = d[i][j];
+                if v.is_nan() || v.abs() > REFERENCE_LIMIT_PCT {
+                    disagreements.push(format!(
+                        "{name} {}: the reference differs from the extraction at {:.0} Hz by {v:+.1} % (limit {REFERENCE_LIMIT_PCT} %)",
+                        if i == j { label(i) } else { format!("{} - {}", label(i), label(j)) },
+                        REFERENCE_COMPARISON_HZ
+                    ));
+                }
+            }
+        }
+    }
+    let mut topology_disagreements = Vec::new();
+    for (p, open) in reference.port_open.iter().enumerate() {
+        if *open {
+            topology_disagreements.push(format!(
+                "the reference finds port {} open (its terminals are in different pieces of copper) where the extraction solved it",
+                label(p)
+            ));
+        }
+    }
+    if reference.components - reference.edge_slivers != peec_components {
+        topology_disagreements.push(format!(
+            "the reference counts {} connected piece(s) of copper and the extraction's topology check {} (meshed pieces and pieces without a mesh node, each counted once)",
+            reference.components - reference.edge_slivers, peec_components
+        ));
+    }
+    // The reference's own pitch sensitivity: a comparison against a reference that moves by more than the limit between
+    // two pitches is not established, whatever it says of the extraction.
+    let mut not_converged = Vec::new();
+    for (name, d) in [("R", &sensitivity_r_pct), ("L", &sensitivity_l_pct)] {
+        for i in 0..d.len() {
+            for j in i..d.len() {
+                if d[i][j].abs() > REFERENCE_LIMIT_PCT {
+                    not_converged.push(format!(
+                        "{name} {}: the reference moves by {:+.1} % between its pitch and twice it",
+                        if i == j { label(i) } else { format!("{} - {}", label(i), label(j)) },
+                        d[i][j]
+                    ));
+                }
+            }
+        }
+    }
+    if coarse_reference.is_none() {
+        not_converged
+            .push("the reference could not be run at twice its pitch: its own pitch sensitivity is unknown".to_owned());
+    }
+    Ok(ReferenceComparison {
+        sensitivity_r_pct,
+        sensitivity_l_pct,
+        coarse_reference,
+        reference,
+        frequency_hz: REFERENCE_COMPARISON_HZ,
+        peec_r_ohm,
+        peec_l_nh,
+        difference_r_pct,
+        difference_l_pct,
+        peec_components,
+        limit_pct: REFERENCE_LIMIT_PCT,
+        disagreements,
+        topology_disagreements,
+        reference_not_converged: not_converged,
+    })
 }
 
 /// One mesh that was run.
@@ -79,6 +229,8 @@ pub struct MeshRun {
     /// Inductance (nH) and resistance (ohm) at each frequency.
     pub inductance_nh: Vec<f64>,
     pub resistance_ohm: Vec<f64>,
+    /// The whole resistance matrix of the ports (`Re Z`), ohm: `[frequency][row][column]`.
+    pub resistance_matrix_ohm: Vec<Vec<Vec<f64>>>,
     /// The whole inductance matrix of the ports, nH: `[frequency][row][column]`.
     pub inductance_matrix_nh: Vec<Vec<Vec<f64>>>,
     pub seconds: f64,
@@ -151,13 +303,21 @@ pub struct HotLoopExtraction {
     /// connected components of the network, and one line for every mismatch; empty when they agree.
     pub copper_components: usize,
     pub mesh_components: usize,
+    /// Polygons of copper with no mesh node (too small for the mesh).
+    pub unmeshed_pieces: usize,
     pub topology_mismatches: Vec<String>,
     /// Gaps the finest mesh could not resolve (a slot or gap in the copper narrower than the smallest cell), as
     /// `layer, net, x, y: what`, at most 20 listed; the number of them. Never bridged.
     pub unresolved_gaps: Vec<String>,
     pub unresolved_gap_count: usize,
+    /// The mesh series judged on every entry of the L and R matrices at every frequency.
+    pub convergence: crate::convergence::Convergence,
     /// Terminals whose region overlaps several pieces of copper (equipotentials that join them): name and number of pieces.
     pub terminals_joining_pieces: Vec<(String, usize)>,
+    /// The independent reference solver's DC limit beside the extraction (`HotLoopOptions::reference`).
+    pub reference: Option<Box<ReferenceComparison>>,
+    /// The reference solver failed (message) when it was asked for.
+    pub reference_error: Option<String>,
     /// The current distribution of the hot loop's port (`HotLoopOptions::current_map`).
     pub currents: Option<Box<HotLoopCurrents>>,
 }
@@ -178,7 +338,7 @@ fn mesh_with(layout: &Layout, spec: &MeshSpec, frequencies: &[f64], currents: bo
     extract(layout, spec, frequencies, currents).map_err(|e| e.to_string())
 }
 
-fn run_info(role: &'static str, x: &Extraction) -> MeshRun {
+pub fn run_info(role: &'static str, x: &Extraction) -> MeshRun {
     MeshRun {
         role,
         cell_nm: x.mesh.stats.cell_nm,
@@ -199,6 +359,12 @@ fn run_info(role: &'static str, x: &Extraction) -> MeshRun {
         topology_mismatches: x.mesh.stats.topology.mismatches.len(),
         inductance_nh: (0..x.frequencies.len()).map(|f| x.inductance(f, 0, 0) * 1e9).collect(),
         resistance_ohm: (0..x.frequencies.len()).map(|f| x.resistance(f, 0, 0)).collect(),
+        resistance_matrix_ohm: (0..x.frequencies.len())
+            .map(|f| {
+                let n = x.solutions[f].z.len();
+                (0..n).map(|i| (0..n).map(|j| x.resistance(f, i, j)).collect()).collect()
+            })
+            .collect(),
         inductance_matrix_nh: (0..x.frequencies.len())
             .map(|f| {
                 let n = x.solutions[f].z.len();
@@ -331,27 +497,19 @@ pub fn extract_hot_loop(
             stats.refine_rounds, stats.refinements_applied, stats.refinements_skipped, stats.gap_bars_dropped
         ));
     }
-    if mesh_difference_pct.is_empty() {
+    let convergence = crate::convergence::assess(
+        &runs,
+        freqs,
+        &layout.port_labels,
+        layout.layout.layers.first().map_or(35e-6, |l| l.thickness_m),
+    );
+    if runs.len() < 2 {
         reasons.push("a single mesh: no evidence of convergence".to_owned());
     } else {
-        let at = 1.min(freqs.len() - 1);
-        if mesh_difference_pct[at] > CONVERGENCE_THRESHOLD_PCT {
-            reasons.push(format!(
-                "the two finest meshes differ by {:.1} % at {:.0} MHz (more than {CONVERGENCE_THRESHOLD_PCT} %)",
-                mesh_difference_pct[at],
-                freqs[at] * 1e-6
-            ));
-        }
+        reasons.extend(convergence.status_reasons());
     }
-    if !options.board.capacitor_ports.is_empty() {
-        if connection_legs {
-            flags.push("connection_legs".to_owned());
-        }
-        if !mesh_difference_pct.is_empty() && matrix_difference_pct > CONVERGENCE_THRESHOLD_PCT {
-            reasons.push(format!(
-                "a self inductance of the port matrix moves {matrix_difference_pct:.1} % between the two finest meshes (more than {CONVERGENCE_THRESHOLD_PCT} %)"
-            ));
-        }
+    if !options.board.capacitor_ports.is_empty() && connection_legs {
+        flags.push("connection_legs".to_owned());
     }
     flags.sort();
     flags.dedup();
@@ -390,8 +548,55 @@ pub fn extract_hot_loop(
     } else {
         None
     };
-    // A mesh that does not have the copper's connectivity is not a measurement of the board: status `error`.
-    let status = if !stats.topology.mismatches.is_empty() {
+    let (reference, reference_error) = match &options.reference {
+        None => (None, None),
+        Some(reference_options) => {
+            match compare_with_reference(
+                &layout.layout,
+                &base,
+                reference_options,
+                &layout.port_labels,
+                stats.topology.copper_components + stats.topology.unmeshed_pieces,
+            ) {
+                Ok(c) => (Some(Box::new(c)), None),
+                Err(e) => (None, Some(e)),
+            }
+        }
+    };
+    if let Some(c) = &reference {
+        if !c.reference_not_converged.is_empty() {
+            flags.push("reference_not_converged".to_owned());
+            reasons.push(format!(
+                "the independent reference solver is not converged with its own pitch ({} entry(ies); first: {}): its comparison with the extraction is not established",
+                c.reference_not_converged.len(),
+                c.reference_not_converged[0]
+            ));
+        }
+        if !c.disagreements.is_empty() {
+            flags.push("reference_disagrees".to_owned());
+            reasons.push(format!(
+                "the independent reference solver (the DC limit from the same copper) disagrees with the extraction at {:.0} Hz by more than {} % in {} entry(ies): {}",
+                c.frequency_hz,
+                c.limit_pct,
+                c.disagreements.len(),
+                c.disagreements[0]
+            ));
+        }
+        if !c.topology_disagreements.is_empty() {
+            flags.push("reference_topology_disagrees".to_owned());
+            reasons.push(format!(
+                "the independent reference solver and the mesher disagree on the topology: {}",
+                c.topology_disagreements.join("; ")
+            ));
+        }
+    }
+    if let Some(e) = &reference_error {
+        reasons.push(format!("the independent reference solver failed: {e}"));
+    }
+    // A mesh that does not have the copper's connectivity is not a measurement of the board: status `error`; so is a
+    // topology on which the independent reference and the mesher disagree.
+    let reference_topology_disagrees = reference.as_ref().is_some_and(|c| !c.topology_disagreements.is_empty());
+    let status = if !stats.topology.mismatches.is_empty() || reference_topology_disagrees {
         "error"
     } else if reasons.is_empty() {
         "ok"
@@ -438,8 +643,12 @@ pub fn extract_hot_loop(
         synthesized_legs: layout.synthesized_legs.clone(),
         unconnected_capacitors: unconnected,
         terminals_joining_pieces: stats.terminals_joining_pieces.clone(),
+        reference,
+        reference_error,
+        convergence,
         copper_components: stats.topology.copper_components,
         mesh_components: stats.topology.mesh_components,
+        unmeshed_pieces: stats.topology.unmeshed_pieces,
         topology_mismatches: stats.topology.mismatches.clone(),
         unresolved_gaps: stats.unresolved_gaps.clone(),
         unresolved_gap_count: stats.unresolved_gap_count,
