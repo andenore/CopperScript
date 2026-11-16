@@ -1,6 +1,6 @@
 # EMI: fast digital signals and cable common mode — implementation plan
 
-Status: plan, not started; revised three times on 2026-11-16 after three
+Status: plan, not started; revised four times on 2026-11-16 after four
 reviews (see
 "Changes from the reviews" at the end). Implementation is on hold until the revised plan is
 accepted. Base: `main` at `842112a`. This plan
@@ -346,12 +346,28 @@ of P1 gives, as a list of elements from driver to observation plane:
 **Estimate: propagate the two leg amplitudes through the cascade.** State
 `(V_p, V_n)`, starting at `(V_diff,in / 2, -V_diff,in / 2)`.
 
+*One normalization for the whole cascade.* The state is the pair of **forward
+(incident) voltage waves** on the legs, already launched into the line:
+`V_diff,in` is the loaded voltage at the driver's pins, not an open-circuit
+source voltage. One differential reference impedance `Z_d,ref` and one
+common-mode reference impedance `Z_c,ref` hold from the driver to the
+observation plane (the pair's modal impedances from the stack-up). Every
+element is a transmission of incident to transmitted wave in that reference, so
+an element that does nothing has a transfer of exactly 1.
+
 - A routed section multiplies each leg by its own complex gain,
   `g_p = (1 + a) exp(-j 2 pi f t_p)`, `g_n = (1 - a) exp(-j 2 pi f t_n)`.
 - A modal element converts to `(V_diff, V_cm)`, multiplies the differential
   part by its `T_dd(f)` and the common part by its `T_cc(f)`, and converts back.
-  `T_cc` of a choke is the P4a series network in the common-mode circuit with a
-  stated common-mode impedance on each side.
+  For a series common-mode impedance `Z_cmc` (a choke or ferrite) in the
+  common-mode reference `Z_c,ref`, the transmission of the incident wave is
+  `T_cc = 2 Z_c,ref / (2 Z_c,ref + Z_cmc)`: 1 for `Z_cmc = 0`, 1/2 for
+  `Z_cmc = 2 Z_c,ref`, tending to zero for a large choke. It is **not** the
+  open-circuit divider `Z / (Z + Z_cmc + Z)`, which gives 1/2 for a choke of
+  zero impedance and would charge every element an artificial 6 dB; that
+  divider belongs to a Thévenin source driving a load (P4a fixture 3) and the
+  two agree once the source's own loading is accounted for (`V_inc = V_oc / 2`
+  for a matched source).
 - `V_cm,out` and `V_diff,out` are read from the state at the observation plane.
 
 Assumption, stated in the finding: a matched cascade without reflections
@@ -381,10 +397,13 @@ choke is upstream or downstream of it. Lane-to-lane skew of a match group is
   amplitude only and both together (including `a = sin(pi f Δt) = 0.1`), and the
   two ratios (`/ V_diff,in` and `/ V_diff,out`) told apart at `f Δt = 0.25`;
 - **order fixtures:** two channels with identical total skew and the same
-  choke (`T_cc = 0.1`), one with the choke after the skewed section and one
+  choke (`T_cc = 0.1`, that is `Z_cmc = 18 Z_c,ref`), one with the choke after the skewed section and one
   with it before. The first reads 20 dB below the unfiltered conversion at the
   connector, the second reads the unfiltered conversion; a third with the skew
   split evenly on both sides reads between them, as the cascade gives it;
+- **identity fixture:** inserting any number of zero-impedance modal elements
+  and zero-length routed sections anywhere in a channel leaves every reported
+  quantity unchanged, to rounding;
 - a synthetic pair with a known length skew on a routed board; zero skew and
   zero imbalance give no conversion.
 
@@ -426,12 +445,20 @@ instead of against themselves.
    makes it equal to the pair's common-mode current.
 2. *Source and load impedance.* The divider for a given source, series and load
    impedance, complex, across frequency.
-3. *Choke traversal.* A series common-mode impedance `Z_cmc` between a source
-   `V_source` with `Z_source` and a load `Z_load`:
-   `I = V_source / (Z_source + Z_cmc + Z_load)`, voltage at the load
-   `V_source · Z_load / (Z_source + Z_cmc + Z_load)`. Three cases: no choke;
-   equal impedances (`Z_source = 0`, `Z_cmc = Z_load`: half the voltage, not
-   double); a choke far larger than the load (voltage tends to zero).
+3. *Choke traversal, in both representations.* A series common-mode impedance
+   `Z_cmc` in a reference `Z_ref`.
+   (a) *Incident wave*, the cascade's representation:
+   `T = 2 Z_ref / (2 Z_ref + Z_cmc)`. Cases: no choke (`T = 1`, exactly);
+   `Z_cmc = 2 Z_ref` (`T = 1/2`); a choke far larger than the reference (`T`
+   tends to zero).
+   (b) *Thévenin source*, open-circuit voltage `V_oc` with `Z_source` into a
+   load `Z_load`: `I = V_oc / (Z_source + Z_cmc + Z_load)`, load voltage
+   `V_oc · Z_load / (Z_source + Z_cmc + Z_load)`.
+   (c) *The two agree:* for `Z_source = Z_load = Z_ref` the load voltage of (b)
+   equals `(V_oc / 2) · T`, the incident wave of a matched source times the
+   transmission of (a), for every `Z_cmc` including zero.
+   (d) *Identity:* any number of zero-impedance elements in series leaves the
+   result unchanged in both representations.
 4. *Simultaneous imbalance.* The two-leg network of P3 with gain and delay
    mismatch together, against P3's expression.
 5. *Choke in the signal lines only.* A choke that carries the pair but not the
@@ -440,8 +467,9 @@ instead of against themselves.
 6. *Choke position.* The order fixtures of P3 (the same total skew with the
    choke before and after the skewed section), solved as a network of two legs
    and a common-mode series impedance by the nodal solver, against the cascade.
-7. *Ground-noise transfer.* The two-loop network defined below: `V_B = Z_BA I_A`
-   with `Z_BA` from a numerical Neumann integral over the two loops' filaments
+7. *Ground-noise transfer.* The network defined below:
+   `V_B = sum of Z_Bk I_k` over the driven conductors, with each `Z_Bk` from a
+   numerical Neumann integral over that conductor's loop and loop B
    (written in the test, sharing no code with `copper-emi`'s closed forms or
    with `copper-extract`), against whatever closed form P4 uses for the same
    geometry; and the sign cases listed below.
@@ -451,16 +479,27 @@ instead of against themselves.
 corridor rule of P4 only selects which sources are considered, it does not give
 their coupling.
 
-- *Driven loop A.* One per source: from the driver pin along the routed copper
-  to the load (or the connector pin), back through the reference plane under
-  the route to the driver's reference pin. Its current is
-  `I_A(f) = V_source(f) / (Z_source + Z_A)`, with `V_source` the P1 spectrum,
-  `Z_source` the driver's output impedance and `Z_A` what the loop presents: the
-  line's characteristic impedance (from the stack-up, as `si-check` computes
-  it) while the edge travels on a terminated or long line, or the declared load.
-  `Z_source` is a new optional pin attribute (`output_impedance`); without it,
-  or without a characteristic impedance for the route, `I_A` is **not**
-  estimated (see the fallback).
+- *Driven loop A.* One per source conductor: from the driver pin along the
+  routed copper to the load (or the connector pin), back through the reference
+  plane under the route to the driver's reference pin. `Z_A` is what the loop
+  presents to the pin: the line's characteristic impedance (from the stack-up,
+  as `si-check` computes it) while the edge travels on a terminated or long
+  line, or the declared load. The current follows from **one** of two source
+  representations, never a mixture:
+  - *Loaded pin voltage* (the default, and what `signal_swing` and P3's
+    `V_diff,in` mean: the voltage at the pin while it drives the line):
+    `I_A = V_pin / Z_A`. The source impedance does not appear, because its
+    loading is already in `V_pin`. A 1 V launched signal on a matched 50 ohm
+    line is 20 mA.
+  - *Thévenin source* (only when a part declares an open-circuit swing and an
+    `output_impedance`): `V_pin = V_oc · Z_A / (Z_source + Z_A)` and
+    `I_A = V_oc / (Z_source + Z_A)`.
+  Dividing a loaded pin voltage by `Z_source + Z_A` applies the source loading
+  twice (10 mA instead of 20 mA in the example, 6 dB low) and is the error this
+  definition excludes. Test: a source declared both ways (`V_oc`, `Z_source`
+  and the `V_pin` they imply) gives identical `V_pin`, `I_A` and `V_B`.
+  Without a characteristic impedance or declared load for the route, `I_A` is
+  **not** estimated (see the fallback).
 - *Observation loop B.* The loop whose voltage is the ground-noise voltage at
   the connector: from the connector's ground pins through the reference plane
   to the source's reference pin, closed by a stated sense path. The sense path
@@ -469,28 +508,40 @@ their coupling.
   straight return at a stated height above the reference plane, a scenario
   parameter with a band, and the finding reports how much the result moves
   across that band.
-- *Transfer.* `V_B = Z_BA I_A`, `Z_BA = j omega M_BA` plus the resistance of the
-  copper the two loops share. `M_BA` is the mutual inductance of loops A and B;
-  "`L_gnd`" in this plan means `M_BA` and nothing else.
-- *Signed contributions.* Currents add as complex numbers with their direction.
-  A differential pair contributes through its common-mode current
-  `I_p + I_n` only (equal and opposite leg currents under one reference cancel
-  in `M_BA` to the extent the legs share geometry, and the fixture checks that
-  they do); several sources are summed as phasors only when they are harmonics
-  of one clock, otherwise as powers.
+- *Transfer, per conductor.* Each driven conductor `k` has its own loop and its
+  own signed transfer to loop B: `Z_Bk = j omega M_Bk` plus the resistance of
+  the copper the two loops share, with `M_Bk` the mutual inductance of that
+  conductor's loop and loop B, sign included. "`L_gnd`" in this plan means such
+  an `M_Bk` and nothing else.
+- *Signed contributions: couple first, then sum.*
+  `V_B = sum over k of Z_Bk I_k`. For a differential pair,
+  `V_B = j omega (M_Bp I_p + M_Bn I_n)`. The leg currents are **not** added
+  before the coupling is applied: with `I_p = -I_n` the summed current is zero,
+  but the voltage is `j omega (M_Bp - M_Bn) I_p`, which is not zero whenever the
+  two legs couple differently to loop B (one leg nearer the connector's ground
+  path, or over a gap). Example: `+1 mA` and `-1 mA` with `M_Bp = 2 nH` and
+  `M_Bn = 1 nH` give about 628 µV at 100 MHz with zero summed current. In modal
+  terms `V_B = j omega [ (M_Bp + M_Bn) I_cm + (M_Bp - M_Bn) I_dm ]` with
+  `I_cm = (I_p + I_n) / 2`, `I_dm = (I_p - I_n) / 2`: the common-mode current
+  couples through the sum of the mutuals and the differential current through
+  their difference, and both terms are kept. Several independent sources are
+  summed as phasors only when they are harmonics of one clock, otherwise as
+  powers.
 
 *Sign and cancellation cases for fixture 7:* a single loop A beside B; A moved
-away (the transfer falls); an ideal pair with equal and opposite currents (the
-transfer cancels to the geometric difference of the legs); the same pair with a
-common-mode current (the transfer follows `I_p + I_n`); the sense height varied
-across its band.
+away (the transfer falls); **symmetric cancellation**: a pair whose legs have
+equal mutuals to B and equal and opposite currents gives zero; **asymmetric
+residual**: the same currents with `M_Bp = 2 nH`, `M_Bn = 1 nH` give
+`omega · 1 nH · 1 mA` (628 µV at 100 MHz), not zero; a pair with a common-mode
+current added (the extra voltage follows `(M_Bp + M_Bn) I_cm`); the sense height
+varied across its band.
 
-*Fallback, binding for P4.* Where `Z_source`, the route's characteristic
-impedance or the geometry of either loop is not available, or where the result
+*Fallback, binding for P4.* Where the route's characteristic impedance (or
+declared load) or the geometry of any of the loops is not available, or where the result
 moves by more than 6 dB across the sense-path band, no ground-noise voltage is
 published for that source. It is ranked by geometry instead: corridor overlap
 with the connector's ground path, distance, and any P2 slot between them.
-Extraction of `M_BA` from the real copper stays deferred (P5); the definition
+Extraction of the `M_Bk` from the real copper stays deferred (P5); the definition
 does not.
 
 **Accept.** The definitions are in the docs, including the ground-noise
@@ -531,7 +582,7 @@ stays unused by the report.
 |---|---|---|
 | pin | `emi_role = shield` | A connector pin bonded to the cable's shield or shell (new `EmiRole::Shield`, a victim-side role, not an aggressor) |
 | pin | `passes_to` | from P1: the pin this pin passes a signal to, for parts with more than two pins |
-| pin | `output_impedance` | from P4a: a driver pin's output impedance, needed for the ground-noise current; without it that source is ranked by geometry only |
+| pin | `output_impedance` | from P4a: a driver pin's output impedance, used only together with a declared open-circuit swing (the Thévenin representation); not needed when `signal_swing` is the loaded pin voltage |
 | part | `cable_shielded` | bool: the cable the connector takes is shielded |
 | part | `common_mode_impedance` | complex or magnitude impedance of a common-mode choke or ferrite at `common_mode_impedance_frequency`; may be given at several frequencies |
 | `emission` constraint | `cable_length` | already exists; recorded in the finding (it sets the quarter-wave frequency above which the cable is resonant) |
@@ -549,14 +600,18 @@ the board reference at the connector, with its network from P4a.
    the connector's own breakout) is not. The finding shows the two parts
    separately: common mode arriving from upstream of the last choke, and common
    mode generated after it.
-   The choke's common-mode transfer `T_cc(f)` is the P4a series network,
-   `Z_after / (Z_before + Z_cmc + Z_after)`, complex and a function of
-   frequency, with the common-mode impedances on either side stated. On the
-   board side that is a board quantity; when the choke is the last element
-   before the connector, `Z_after` is the cable's pair-to-return common-mode
-   impedance and the far-end termination, which are not on the board: a stated
-   scenario value with a band, and the result is labelled as a scenario
-   quantity beside the voltage before the choke.
+   The choke's common-mode transfer is the cascade's incident-wave
+   transmission, `T_cc(f) = 2 Z_c,ref / (2 Z_c,ref + Z_cmc(f))`, complex and a
+   function of frequency, in the cascade's one common-mode reference impedance
+   (P3; P4a fixture 3a). A choke of zero impedance changes nothing.
+   What the cable does to the wave that arrives at the connector is a separate,
+   final step and not part of any element: the voltage on a far-side
+   common-mode impedance `Z_cable` (the cable's pair-to-return common-mode
+   impedance with its far-end termination) is
+   `V_inc · 2 Z_cable / (Z_c,ref + Z_cable)`. `Z_cable` is not on the board: it
+   is a stated scenario value with a band, and that voltage is labelled a
+   scenario quantity beside the incident `V_cm,out`, which is the board
+   quantity.
    *Applicability of the declared impedance.* A choke's impedance is strongly
    frequency dependent and changes from inductive to resistive to capacitive.
    One declared magnitude at one frequency supports an attenuation **at that
@@ -564,7 +619,7 @@ the board reference at the connector, with its network from P4a.
    interpolated on log axes; nothing is extrapolated beyond the declared range,
    and outside it the choke is reported as present with its attenuation
    `not_modelled`. With magnitudes only (no phase), the series sum is bounded
-   by `| |Z_cmc| - |Z_before + Z_after| |` and `|Z_cmc| + |Z_before + Z_after|`
+   by `| |Z_cmc| - 2 Z_c,ref |` and `|Z_cmc| + 2 Z_c,ref`
    and the result is that band, not a single value.
 2. *Single-ended signals leaving on the cable.* Their swing is **not** taken as
    common-mode voltage: a signal whose return is in the same cable is not
@@ -572,7 +627,7 @@ the board reference at the connector, with its network from P4a.
    driven by their own return current, and a ranking-only entry lists them with
    edge time and swing. Signal-to-return imbalance inside the cable is
    `not_modelled`.
-3. *Ground noise (current-driven).* The voltage `V_B = Z_BA I_A` of P4a's
+3. *Ground noise (current-driven).* The voltage `V_B = sum of Z_Bk I_k` of P4a's
    ground-noise network: driven loop, observation loop with its sense path,
    source and load impedances and signed contributions are defined there, and
    P4 uses that definition unchanged. This is the driver that acts on the
@@ -586,9 +641,11 @@ the board reference at the connector, with its network from P4a.
      the same reference plane; otherwise it is listed as `not_counted` with the
      distance.
    - *When a voltage is published.* Only when P4a's inputs exist for that source
-     (`output_impedance`, a characteristic impedance for the route, both loops'
-     geometry) and the result stays within 6 dB across the sense-path band.
-     `M_BA` is then a closed form for the two loops over the plane: name the
+     (a characteristic impedance or declared load for the route, the geometry
+     of each conductor's loop and of the observation loop) and the result stays within 6 dB across the sense-path band.
+     Each `M_Bk` is then a closed form for the two loops over the plane, one
+     per driven conductor (for a pair: `M_Bp` and `M_Bn`, never one value for
+     the pair): name the
      published form, state its validity range, and it must agree with P4a's
      fixture 7 for the test geometries. A slot from P2 between the loops is not
      in the closed form: it makes the source ranking-only, with the slot named.
@@ -627,7 +684,11 @@ declared at one frequency gives an attenuation at that frequency and
 `not_modelled` elsewhere; the same total skew with the choke before and after
 the skewed section, through the real code path, against P3's order fixtures; a
 ground-noise source with all P4a inputs gives a voltage that matches fixture 7,
-one without `output_impedance` gives a geometry ranking and no voltage; a single-ended line on a cable produces no voltage
+one without a characteristic impedance gives a geometry ranking and no voltage;
+a pair routed symmetrically about the connector's ground path gives a
+ground-noise voltage near zero and the same pair routed with one leg nearer
+gives the residual of fixture 7; a channel with a zero-impedance choke reads
+the same as the channel without it; a single-ended line on a cable produces no voltage
 from its swing; the corridor rule on a net that does and one that does not
 share the connector's reference path; a shielded cable gives the bond report.
 
@@ -658,7 +719,7 @@ one at the connector's ground pins, both against the plane") does not exist in
 in a spike before any product code:
 
 1. **Definition.** (The network itself, driven loop, observation loop, sense
-   path and transfer `Z_BA`, is now defined in P4a and is not postponed to this
+   path and the per-conductor transfers `Z_Bk`, is now defined in P4a and is not postponed to this
    phase; what remains here is how to realise it in the extraction.) The
    extraction's ports are loops: two terminals on copper,
    closed through the network. The voltage along a plane between two points is
@@ -807,6 +868,24 @@ pass, plan the product phase then (`--fullwave-signals`, cost stated by
    decision recorded in this file.
 
 ## Changes from the reviews (2026-11-16)
+
+Fourth review (errors in the newly specified calculations):
+
+- **One cascade normalization.** The cascade carries incident voltage waves in
+  one reference impedance per mode; a series common-mode impedance transmits
+  `2 Z_ref / (2 Z_ref + Z_cmc)`, so a zero-impedance element is exactly 1 (the
+  open-circuit divider used before cost 6 dB per element). The Thévenin divider
+  stays as a separate fixture and the two are required to agree; an identity
+  fixture requires that zero-impedance elements change nothing.
+- **Source loading applied once.** The ground-noise current is
+  `I_A = V_pin / Z_A` for the loaded pin voltage that `signal_swing` declares,
+  or follows from an explicitly declared Thévenin source; the two must give
+  identical results in a test.
+- **Coupling before summing.** Each leg of a pair has its own signed transfer
+  to the observation loop: `V_B = j omega (M_Bp I_p + M_Bn I_n)`. The
+  differential current couples through the difference of the mutuals and is no
+  longer cancelled by summing currents first; fixtures for symmetric
+  cancellation and asymmetric residual.
 
 Third review (remaining contracts):
 
