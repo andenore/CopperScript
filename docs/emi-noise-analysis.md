@@ -2486,8 +2486,11 @@ What the comparison establishes, and what it does not:
 * The necks of the topology cases show the same sign: the extraction's R is 7 to 8 % below the reference there at its default
   mesh. Not investigated.
 * The command also runs the reference at twice its pitch and prints the sensitivity per entry
-  (`reference_sensitivity_*_pct`); an entry that moves by more than the limit, or a coarse run that fails, makes the
-  comparison not established (flag `reference_not_converged`, a status reason). On `emi_buck` at a coarse pitch the reference's
+  (`reference_sensitivity_*_pct`). The comparison is not established (flag `reference_not_converged`, a status reason
+  naming each cause) when an entry moves by more than the limit, when an entry has no finite value at one of the two
+  pitches (an open port gives no value, and a missing value is a failure, not a pass), when a port is open at one pitch
+  and connected at the other, when the two pitches count different numbers of pieces of copper, or when the coarse run
+  fails. A neck of 120 um is the test: a 100 um raster connects it and a 200 um raster cuts it. On `emi_buck` at a coarse pitch the reference's
   R is far off (+15.6 % at 61 um, the case of `tests/boards.rs`).
 * A disagreement beyond 10 % in an entry is a status reason (flag `reference_disagrees`). A topology disagreement (a port open for the reference and solved by
 the extraction, or different numbers of pieces of copper) makes the status `error` and the flag `reference_topology_disagrees`.
