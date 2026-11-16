@@ -172,6 +172,7 @@ fn the_summary_is_the_return_path_map() {
     ]);
     assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
     assert!(stdout(&output).contains("return-path map of 3 findings written to"), "{}", stdout(&output));
+    assert!(stdout(&output).contains("; also 3 pages for signals and pairs"), "{}", stdout(&output));
     let svg = std::fs::read_to_string(&path).expect("the SVG");
     assert!(svg.contains("EMI-RETURN-PATH: where the return path is broken"), "the map");
     assert!(svg.contains("never a pass or a fail"));
@@ -182,8 +183,12 @@ fn the_summary_is_the_return_path_map() {
     // The gap carries its slot length and resonance; the via its distance against its threshold.
     assert!(svg.contains("slot 76 mm, resonance 1123.03 MHz"), "{svg}");
     assert!(svg.contains("nearest return path 7.16 mm, threshold 2 mm"), "{svg}");
-    // No cell page: the converter layout never appears.
+    // No cell page: the converter layout never appears. Each return-path subject has its own page after the map.
     assert!(!svg.contains("Screening estimate, not a compliance measurement"));
+    for subject in ["LANE_B_P", "CLK_U", "CLK_E"] {
+        assert!(svg.contains(&format!("<g class=\"summary-signal\" data-subject=\"{subject}\">")), "{subject}");
+    }
+    assert!(!svg.contains("summary-connector"), "no cable connector finding on this board");
 }
 
 #[test]
@@ -194,7 +199,7 @@ fn a_board_without_cells_or_findings_still_refuses_the_summary() {
     let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--plot-summary", path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(2), "{}{}", stdout(&output), stderr(&output));
     assert!(
-        stdout(&output).contains("no switching cell and no return-path finding to summarise"),
+        stdout(&output).contains("no switching cell and no return-path, mode-conversion or cable finding to summarise"),
         "{}",
         stdout(&output)
     );

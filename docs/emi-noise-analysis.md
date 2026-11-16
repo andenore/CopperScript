@@ -599,8 +599,8 @@ each with the missing input when skipped.
   frequency, for the absolute estimates only (`EMI-HOT-LOOP` differential mode,
   `EMI-CONDUCTED` for the harmonics that are detector readings: every harmonic of an isolated-line finding, the harmonics read by
   the receiver emulation otherwise); the common-mode score has none.
-  Nothing is printed as pass or fail. The `cable_length` of the constraint is read but no
-  cable estimate uses it yet.
+  Nothing is printed as pass or fail. The `cable_length` of the constraint is used only for the quarter-wave
+  frequency that `EMI-CABLE-COMMON-MODE` reports (section 18); no cable current or field estimate uses it.
 
 Estimators (module `copper_emi::estimate`, all SI, all documented with their
 source):
@@ -627,8 +627,13 @@ quasi-static extraction of the real filled copper beside the closed form (sectio
 
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
-node copper is counted, not traced), `EMI-DECOUPLING-PATH`
-and current-driven common mode on cables.
+node copper is counted, not traced) and `EMI-DECOUPLING-PATH`. The checks that
+now exist for signals and cables are `EMI-RETURN-PATH` (section 15),
+`EMI-MODE-CONVERSION` (section 16) and `EMI-CABLE-COMMON-MODE` / `EMI-CABLE-SHIELD` (section 18): voltages, ratios and
+rankings. Three further steps of the signal and cable plan are **not implemented and not committed work**, each starting
+with a written definition or a spike: the net current of a cable bundle for a defined termination and environment
+(P4b; the voltages of section 18 are not a current and no field follows from them), the ground transfer inductance by
+quasi-static extraction (P5) and the full-wave mixed-mode region (P6).
 
 **In the run report, `copper issues` and `copper view`.** The findings are
 screening evidence and are read from the run report, `route-report.json`, which
@@ -665,8 +670,10 @@ stays the single file of a run (there is no sidecar):
   read-only. Nothing checks that the board in `RUN` is the one the report
   describes beyond the references of the design.
 - *`copper issues RUN`* lists the section as stage `emi`, ids `M1`, `M2`, ...,
-  findings grouped by cell and in the report's ranking inside a cell (findings
-  with no cell, such as `EMI-RETURN-PATH`, follow the cells in report order). The title
+  findings grouped by subject kind: the converter cells in the section's order and the report's ranking inside a
+  cell, then the signals and pairs (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION`: no cell), then the cable connectors
+  (`EMI-CABLE-COMMON-MODE`, `EMI-CABLE-SHIELD`), each kind in the report's own order. A board with cells only is listed
+  as before, byte for byte. The title
   starts with `screening estimate`, the details carry the estimate with its
   `numerical_sensitivity`, parameter band, `not_modelled` list, margin, tags and the scalar measures, and the text output ends
   with a line saying the issues are screening estimates, not EMC qualification.
@@ -675,7 +682,15 @@ stays the single file of a run (there is no sidecar):
   bounding box of its `loop_polygon_mm`; every other finding the pad centres of
   its objects as found on the run's board (a proximity finding: the closest pair
   of source and victim pads, the cell's own controller aside; a switch-node
-  finding: every pad of the net). `--stage emi` filters; an `error` section or
+  finding: every pad of the net); a return-path finding its located causes (section 15.12), an `EMI-MODE-CONVERSION`
+  finding the pads of its pair's nets (the `measures` of the check hold no coordinates for its sections) and a cable
+  finding the pads of its connector. `details.causes` lists, for an `EMI-MODE-CONVERSION` finding, the routed
+  sections that convert (`kind = routed_section`: lengths per leg, skew, amplitude imbalance, exposed return path), and for
+  `EMI-CABLE-COMMON-MODE` one cause per driver with its `kind` (`differential_pair`, `ground_noise`,
+  `single_ended_signal`, `switch_node_coupling`), `name`, `status`, its `quantity` label exactly as the finding gives it
+  (`common_mode_voltage_at_connector` under `matched_cable_termination`, `first_arrival_voltage` for a declared,
+  unmatched cable, `ground_noise_voltage`, or null for a driver that is ranking only) and `value_dbuv` where a voltage is
+  published (a ranking-only driver carries its `ranking_value` and `ranking_unit` instead). `--stage emi` filters; an `error` section or
   an empty one lists nothing.
 - *`copper view RUN --issue M2`* frames the window, highlights the issue's nets
   and draws the hot loop over the copper from the finding's traced path
@@ -898,11 +913,50 @@ get it). It changes no number of the report: the default `emi-check --json` is b
    conducted findings), and the exact command line of each full-size picture (the options of the run, without the plot,
    `--json`, `--write` and `--fullwave` options; `--plot-current` shows `--extract`).
 
-**No switching cell.** A board with no cell but with `EMI-RETURN-PATH` findings (section 15, `--run` given) no longer
-refuses `--plot-summary`: the picture is the return-path map alone (section 15.12), and "summary of" in the message
-becomes "return-path map of N findings". With cells, the map is added after the cell pages when return-path findings
-exist, and the pages and the message of a board without such findings are unchanged. A board with neither still exits 2
-("no switching cell and no return-path finding to summarise").
+**No switching cell, and the pages of signals, pairs and connectors.** A board with no cell but with `EMI-RETURN-PATH`,
+`EMI-MODE-CONVERSION` or cable findings (sections 15, 16 and 18, `--run` given for the routed ones) no longer refuses
+`--plot-summary`. The pages follow the subject kinds of `copper issues`: the cell pages first, unchanged; then, when return-path
+findings exist, the return-path map (section 15.12); then one page per signal or pair that has a return-path or
+mode-conversion finding; then one page per cable connector that has a finding. A board with none of these exits 2
+("no switching cell and no return-path, mode-conversion or cable finding to summarise"). The pages that exist
+without these findings are unchanged, byte for byte, except that the SVG's overall height covers the added pages.
+
+*Signal and pair page* (`<g class="summary-signal">`, about 1400 px wide): the header (the pair or signal, its nets and
+layers, "screening evidence for a signal: distances, voltage ratios and rankings, never a pass or a fail"); the key numbers
+(the mode-conversion ratio at the fundamental and its worst value, the observation plane, the converting sections with
+their lengths, skew and exposure, the parts in the channel with their `transfer_basis`, and the return path: routed
+length, uncovered length, how many gaps, reference changes and edge points, the slot ranking score as a ranking only);
+the findings of the subject with their `M` ids; what the numbers assume (the assumption sentences of the tags and the
+`input:` lines) and what is not modelled; the commands that give the located causes (`copper issues RUN --stage emi`,
+`copper view RUN --issue M<n>`). Its picture is the return-path map above and the board view of `copper view`.
+
+*Connector page* (`<g class="summary-connector">`): the header (the connector and its part, "voltages at the connector and a
+ranking of the drivers: screening evidence, never a current, a field or a pass or a fail"); the key numbers (the strongest
+pair voltage with its quantity label, a band where the inputs open one, and, for an unmatched cable, that it is the first
+wavefront and not a steady-state value; the cable: shielded, assumed unshielded or undeclared, its length, its
+quarter-wave frequency and a declared impedance; the shield bond where a shield pin is declared; one line per driver
+with its quantity label as the finding gives it, or "ranking only"); the findings of the connector; a thumbnail of the
+per-driver voltage spectra (below) or, when no driver has a published voltage, a box that says so; what the numbers
+assume and what is not modelled; and the command of the full-size picture (`--plot-spectrum`). **These pages show no
+limit line, no margin, no field and no current**: there is no field estimate to compare with a limit.
+
+**Voltage spectra at a cable connector.** `copper emi-check BOARD --run RUN --plot-spectrum OUT.svg` also draws, when
+the report has `EMI-CABLE-COMMON-MODE` findings with a published voltage (`copper_report::emi_cable_plot`, data read from
+the findings' `measures.differential_pairs[].voltage.spectrum[]` and `measures.ground_noise[].voltage.spectrum[]`), one
+picture per connector with one panel per driver that has a voltage: a log frequency axis (the decades around the
+lines), dBuV with a gridline every 10 dB over 60 dB below the strongest line, and one mark per spectrum line, with a
+stem from the axis. The continuous bound (diamond), each named data pattern's line (circle), random data in the
+resolution bandwidth (square) and a clock's lines (triangle) are separate marks and are never merged into one curve; each
+panel lists its values. The panel title carries the quantity label of the finding (`common_mode_voltage_at_connector`
+with its termination, or for a driver whose quantity is a first-arrival voltage "first_arrival_voltage: the first
+wavefront before any reflection, NOT a steady-state value", with the declared cable impedance; a ground-noise panel says it
+is a current-driven voltage between the loops). The picture says that these are voltages at the connector against the
+board reference, **not a field, with no limit line and no margin drawn**, because the board model has no net current and
+no field estimate to compare a limit with. At most twelve panels are drawn per connector (the rest are named, the
+findings hold every one); a line below the axis is drawn hollow on its bottom edge and a line with no content (an empty
+spectrum quantity) is not drawn. The conducted spectrum of the cells, when the board has any, comes first in the same file;
+a board with neither still reports "no EMI-CONDUCTED finding with harmonics to plot". The pictures were checked
+structurally by the tests (marks, labels, positions, the words that must not appear) and not by eye.
 
 For a cell with several hot loops the loop rows are repeated per loop, named by the loop; for a declared frequency
 range the page reads the first conducted finding (the lower bound), the other scenarios are in `--plot-spectrum`. The
@@ -1995,6 +2049,20 @@ Observed with `copper emi-check` (phase 1):
   fallback finds no switch pin; the cells need `emi_role` annotations in the
   library part.
 
+Boards for the signal and cable checks (synthetic, no switching converter; each has a routed state checked in under
+`routed/` because the language has no tracks, and is run with `copper emi-check BOARD --run BOARD_DIR/routed`):
+
+- `examples/emi_return_path`: a pair over a whole pour, a pair crossing a cut between two pours, two clocks with a layer
+  change (one with a ground via nearby, one with none) and a clock near the board and plane edge (section 15; `crates/copper/tests/emi_return_path_cli.rs`, and `emi_no_converter_cli.rs` for the report,
+  the issues and the summary on a board with no cell).
+- `examples/emi_mode_conversion`: four differential lanes: 10 mm of skew with no other part, no skew, 4 mm of skew
+  before a common-mode choke behind two coupling capacitors, and 6 mm after the choke (section 16; `crates/copper/tests/emi_mode_conversion_cli.rs`).
+- `examples/emi_cable_common_mode`: six lanes at an unshielded matched connector, a shielded connector with a 150 ohm
+  cable (a first-arrival voltage) and a connector with single-ended signals, two clocks and a symmetric pair for the
+  ground-noise driver (section 18; `crates/copper/tests/emi_cable_common_mode_cli.rs`, and
+  `emi_no_converter_signals_cli.rs` for the report, the issues, the summary pages and the connector spectra of a board with
+  clocks, pairs and connectors and no converter).
+
 ## 13. Quasi-static network extraction (phase 5)
 
 Status: first cut, `crates/copper-extract`, reached by `copper emi-check --extract`. Screening evidence only: nothing
@@ -2853,7 +2921,7 @@ The reporting chain no longer assumes a converter. The `emi` section of `route-r
 `EMI-RETURN-PATH` or `EMI-RETURN-PATH:<net>`; a board with none of these gets no section, byte-identical to before. A
 board with no cell has `cells: []`. `route-board` fills the zones for the check only when a net is a subject, as in 15.1.
 
-`copper issues RUN --stage emi` lists each finding as one issue (findings with no cell follow the cells). The window and
+`copper issues RUN --stage emi` lists each finding as one issue, grouped by subject kind (cells, then signals and pairs, then cable connectors; section 8). The window and
 the points of an `EMI-RETURN-PATH` issue are its located causes, read from the `measures` and listed as `details.causes`
 (`kind`, `at_mm`, `text`): `gap` (position, slot length, resonance), `reference_change_without_return_path` (via, nearest
 return path against the threshold, or "no return path found"), and `plane_edge` / `board_edge` (the point of the trace
@@ -2990,7 +3058,9 @@ connector, the observation plane's own return path (no field, no radiation effic
 `EMI-MODE-CONVERSION` is `executed` when at least one pair was examined, with an entry `EMI-MODE-CONVERSION:<P net>` per pair
 (`executed` with the numbers, or `unsupported` when no section has routed copper on both legs); `not_applicable` when a run was given and
 the board has no differential pair; `unsupported` without a run when a pair exists (it needs routed copper); no entry without a run and
-without a pair. The route report's `emi` section is kept when an `EMI-MODE-CONVERSION` entry is `executed`, like section 15.12.
+without a pair. The route report's `emi` section is kept when an `EMI-MODE-CONVERSION` entry is `executed`, like section 15.12. `copper issues` lists
+the finding in the signal group and the converting sections as `details.causes`, and `--plot-summary` draws a signal page
+(section 8); neither shows a limit, a margin or a field.
 
 ### 16.7 Defaults and their sources
 
@@ -3287,7 +3357,9 @@ The headline frequency is the fundamental (half the `data_rate`, or the `clock_f
 over a logarithmic scan of 30 MHz to 1 GHz (and below the edge corner), said so. The `EMI-MARGIN` coverage entry says cable common mode is
 reported as voltage and ranking only, and why. `has_content` of the route-report section counts an executed `EMI-CABLE-COMMON-MODE` entry (overall
 or per connector), so a board with a connector and something to report keeps its `emi` section; one with a connector and nothing to report keeps
-the bytes it had.
+the bytes it had. `copper issues` lists the finding in the connector group with one cause per driver (its quantity label as above),
+`--plot-summary` draws a connector page and `--plot-spectrum` the per-driver voltage spectra at the connector, without a limit
+line (section 8).
 
 ### 18.5 Defaults and their sources
 
