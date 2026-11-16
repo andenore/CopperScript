@@ -107,6 +107,73 @@ fn signed_differences(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+/// The reference's own pitch sensitivity: the coarser run against the finer one per entry of `R` and of `L`, percent
+/// (normalised like the other differences), and every reason the reference is not converged with its pitch. A
+/// comparison against a reference that is not converged is not established, whatever it says of the extraction.
+///
+/// Reasons: no coarser run; a port that is open at one pitch and connected at the other (the topology changed with the
+/// pitch); different numbers of pieces of copper at the two pitches; an entry that is not a finite number (an open
+/// port gives NaN, which no threshold comparison catches); an entry that moves by more than [`REFERENCE_LIMIT_PCT`].
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+pub fn reference_pitch_sensitivity(
+    fine: &ReferenceResult,
+    coarse: Option<&ReferenceResult>,
+    labels: &[String],
+) -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<String>) {
+    let label = |i: usize| labels.get(i).map_or_else(|| format!("port {i}"), Clone::clone);
+    let Some(coarse) = coarse else {
+        return (
+            Vec::new(),
+            Vec::new(),
+            vec!["the reference could not be run at twice its pitch: its own pitch sensitivity is unknown".to_owned()],
+        );
+    };
+    let r_pct = signed_differences(&coarse.resistance_ohm, &fine.resistance_ohm);
+    let l_pct = signed_differences(&coarse.inductance_nh, &fine.inductance_nh);
+    let mut reasons = Vec::new();
+    let says = |open: bool| if open { "open" } else { "connected" };
+    for p in 0..fine.port_open.len().max(coarse.port_open.len()) {
+        match (fine.port_open.get(p), coarse.port_open.get(p)) {
+            (Some(&a), Some(&b)) if a == b => {}
+            (Some(&a), Some(&b)) => reasons.push(format!(
+                "port {}: {} for the reference at its pitch and {} at twice it: the topology changes with the pitch",
+                label(p),
+                says(a),
+                says(b)
+            )),
+            _ => reasons.push(format!("port {}: missing from one of the two reference runs", label(p))),
+        }
+    }
+    let (pieces, coarse_pieces) =
+        (fine.components.saturating_sub(fine.edge_slivers), coarse.components.saturating_sub(coarse.edge_slivers));
+    if pieces != coarse_pieces {
+        reasons.push(format!(
+            "the reference counts {pieces} piece(s) of copper at its pitch and {coarse_pieces} at twice it: the topology changes with the pitch"
+        ));
+    }
+    let n = fine.port_open.len();
+    for (name, d) in [("R", &r_pct), ("L", &l_pct)] {
+        for i in 0..n {
+            for j in i..n {
+                let entry = if i == j { label(i) } else { format!("{} - {}", label(i), label(j)) };
+                match d.get(i).and_then(|row| row.get(j)) {
+                    Some(v) if v.is_finite() => {
+                        if v.abs() > REFERENCE_LIMIT_PCT {
+                            reasons.push(format!(
+                                "{name} {entry}: the reference moves by {v:+.1} % between its pitch and twice it"
+                            ));
+                        }
+                    }
+                    _ => reasons.push(format!(
+                        "{name} {entry}: no finite value at one of the two reference pitches, so its pitch sensitivity is unknown"
+                    )),
+                }
+            }
+        }
+    }
+    (r_pct, l_pct, reasons)
+}
+
 #[allow(clippy::needless_range_loop)]
 fn compare_with_reference(
     layout: &Layout,
@@ -122,13 +189,8 @@ fn compare_with_reference(
     let n = x.solutions[0].z.len();
     let peec_r_ohm: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.resistance(0, i, j)).collect()).collect();
     let peec_l_nh: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.inductance(0, i, j) * 1e9).collect()).collect();
-    let (sensitivity_r_pct, sensitivity_l_pct) = match &coarse_reference {
-        Some(c) => (
-            signed_differences(&c.resistance_ohm, &reference.resistance_ohm),
-            signed_differences(&c.inductance_nh, &reference.inductance_nh),
-        ),
-        None => (Vec::new(), Vec::new()),
-    };
+    let (sensitivity_r_pct, sensitivity_l_pct, not_converged) =
+        reference_pitch_sensitivity(&reference, coarse_reference.as_ref(), labels);
     let difference_r_pct = signed_differences(&reference.resistance_ohm, &peec_r_ohm);
     let difference_l_pct = signed_differences(&reference.inductance_nh, &peec_l_nh);
     let label = |i: usize| labels.get(i).map_or_else(|| format!("port {i}"), Clone::clone);
@@ -161,26 +223,6 @@ fn compare_with_reference(
             "the reference counts {} connected piece(s) of copper and the extraction's topology check {} (meshed pieces and pieces without a mesh node, each counted once)",
             reference.components - reference.edge_slivers, peec_components
         ));
-    }
-    // The reference's own pitch sensitivity: a comparison against a reference that moves by more than the limit between
-    // two pitches is not established, whatever it says of the extraction.
-    let mut not_converged = Vec::new();
-    for (name, d) in [("R", &sensitivity_r_pct), ("L", &sensitivity_l_pct)] {
-        for i in 0..d.len() {
-            for j in i..d.len() {
-                if d[i][j].abs() > REFERENCE_LIMIT_PCT {
-                    not_converged.push(format!(
-                        "{name} {}: the reference moves by {:+.1} % between its pitch and twice it",
-                        if i == j { label(i) } else { format!("{} - {}", label(i), label(j)) },
-                        d[i][j]
-                    ));
-                }
-            }
-        }
-    }
-    if coarse_reference.is_none() {
-        not_converged
-            .push("the reference could not be run at twice its pitch: its own pitch sensitivity is unknown".to_owned());
     }
     Ok(ReferenceComparison {
         sensitivity_r_pct,

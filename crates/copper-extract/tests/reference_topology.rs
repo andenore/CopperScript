@@ -222,3 +222,38 @@ fn a_two_port_case_with_a_mutual_agrees_between_the_reference_and_the_peec_extra
     assert!((x.inductance(0, 0, 0) / x.inductance(1, 0, 0) - 1.0).abs() < 1e-4);
     assert!(r.inductance_nh[0][1] > 2.0, "the mutual between the bars is a real coupling");
 }
+
+/// A neck the finer raster connects and a raster twice as coarse cuts: the reference is not converged with its pitch,
+/// and says so (the NaN entries of the open port are not silently skipped).
+#[test]
+fn a_port_that_opens_at_twice_the_pitch_makes_the_reference_not_converged() {
+    use copper_extract::hotloop::reference_pitch_sensitivity;
+    let mut layout = Layout::new([0, 0, 12 * MM, 6 * MM]);
+    let top = layout.add_layer("F.Cu", 0.0, T);
+    let (a, b) = ([MM, MM, 5 * MM, 5 * MM], [7 * MM, MM, 11 * MM, 5 * MM]);
+    layout.add_rect(top, "S", a);
+    layout.add_rect(top, "S", b);
+    // 120 um wide, between pixel centres of a 200 um raster and holding one of a 100 um raster.
+    layout.add_rect(top, "S", [5 * MM, 3 * MM - 80_000, 7 * MM, 3 * MM + 40_000]);
+    let ta = layout.add_terminal_rect("left", top, "S", [a[0], a[1], a[0] + MM / 2, a[3]]);
+    let tb = layout.add_terminal_rect("right", top, "S", [b[2] - MM / 2, b[1], b[2], b[3]]);
+    layout.add_port("p", ta, tb);
+    let fine = solve(&layout, &at(100.0)).expect("fine");
+    let coarse = solve(&layout, &at(200.0)).expect("coarse");
+    assert_eq!((fine.port_open[0], coarse.port_open[0]), (false, true), "{fine:?} {coarse:?}");
+    let labels = vec!["p".to_owned()];
+    let (r, l, reasons) = reference_pitch_sensitivity(&fine, Some(&coarse), &labels);
+    assert!(r[0][0].is_nan() && l[0][0].is_nan());
+    println!("{reasons:#?}");
+    assert!(reasons.iter().any(|x| x.contains("port p: connected") && x.contains("open at twice it")), "{reasons:?}");
+    assert!(reasons.iter().any(|x| x.starts_with("R p: no finite value")), "{reasons:?}");
+    assert!(reasons.iter().any(|x| x.starts_with("L p: no finite value")), "{reasons:?}");
+    assert!(reasons.iter().any(|x| x.contains("1 piece(s) of copper at its pitch and 2 at twice it")), "{reasons:?}");
+    // The same layout at two pitches that both resolve the neck well (12 and 6 pixels across) is converged; a missing
+    // coarse run is not.
+    let (finer, half) = (solve(&layout, &at(10.0)).expect("finer"), solve(&layout, &at(20.0)).expect("half"));
+    let (r, l, none) = reference_pitch_sensitivity(&finer, Some(&half), &labels);
+    println!("10 against 20 um: R {:+.2} %, L {:+.2} %", r[0][0], l[0][0]);
+    assert!(none.is_empty(), "{none:?}");
+    assert_eq!(reference_pitch_sensitivity(&fine, None, &labels).2.len(), 1);
+}
