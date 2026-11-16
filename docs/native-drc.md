@@ -39,6 +39,14 @@ Distances are edge to edge. As in KiCad, a shortfall of up to 0.5 µm
 - local pad, footprint and zone overrides;
 - custom `clearance`, `hole_clearance` and `edge_clearance` rules.
 
+Rule conditions understand `NetName`, `NetClass`, `Reference` and `Pad_Type`
+comparisons and `A.memberOfFootprint('J1')` / `B.memberOfFootprint("J1")`
+(true for the pads of that footprint, never for tracks, vias, zones or
+graphics), combined with `&&`, `||` and parentheses; this includes the rule
+CopperScript writes for a component's own non-plated holes. Any other
+function or property stops the check with an error. A matching
+`hole_clearance` rule replaces the board minimum, as in KiCad.
+
 Violation types use KiCad's names. Severities follow the project's
 `rule_severities`, with KiCad 10's defaults where it is silent: a type set to
 `ignore` is not reported, and `track_not_centered_on_via` is reported only

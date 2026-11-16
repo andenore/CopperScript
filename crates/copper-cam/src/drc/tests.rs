@@ -255,3 +255,68 @@ fn expected_open_ends_excuse_only_the_named_track_end() {
     assert_eq!(report.excuse_open_ends(&end(8.0, 5.0, "SIG", "F.Cu")), 1);
     assert_eq!(dangling(&report), before - 1);
 }
+
+/// Two connectors with the same geometry: a non-plated hole at (x, 3) and a
+/// SIG pad `gap` mm from the hole's edge. The rules apply to J1 only.
+fn connectors(gap: f64) -> String {
+    let centre = 0.5 + gap + 0.5;
+    ["J1", "K1"]
+        .iter()
+        .zip([10, 16])
+        .map(|(reference, x)| {
+            format!(
+                "(footprint \"L:C\" (layer \"F.Cu\") (at {x} 3)
+    (property \"Reference\" \"{reference}\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 1 1))))
+    (pad \"\" np_thru_hole circle (at 0 0) (size 1 1) (drill 1) (layers \"*.Cu\"))
+    (pad \"1\" smd rect (at {centre} 0) (size 1 1) (layers \"F.Cu\") (net \"SIG\")))"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+/// The rule text `copper-pcb` writes for a connector's own holes.
+fn locating_hole_rule(reference: &str, min: &str) -> String {
+    let member = format!("memberOfFootprint('{reference}')");
+    format!(
+        "(version 1)
+(rule \"{reference} hole clearance\"
+  (constraint hole_clearance (min {min}mm))
+  (condition \"A.{member} && B.{member} && (A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')\"))
+"
+    )
+}
+
+fn hole_findings(gap: f64, dru: Option<&str>) -> Vec<String> {
+    let board = parse_board(&text(&connectors(gap), false), "test").unwrap();
+    let report = check(&board, &Rules::load(PROJECT, dru).unwrap()).unwrap();
+    let mut found: Vec<String> = report
+        .violations
+        .iter()
+        .filter(|v| v.kind == "hole_clearance")
+        .map(|v| format!("{} {}", v.items.join(" "), v.description))
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn a_footprint_scoped_hole_rule_applies_to_that_footprint_only() {
+    // 0.15 mm from the hole to the pad: both connectors break the 0.25 mm
+    // board minimum, and the rule relaxes it to 0.1 mm for J1 alone.
+    let relax = locating_hole_rule("J1", "0.1");
+    let board_wide = hole_findings(0.15, None);
+    assert_eq!(board_wide.len(), 2, "{board_wide:#?}");
+    let relaxed = hole_findings(0.15, Some(&relax));
+    assert_eq!(relaxed.len(), 1, "{relaxed:#?}");
+    assert!(relaxed[0].contains("K1"), "{relaxed:#?}");
+    // 0.4 mm clears the board minimum; a rule asking for 0.6 mm catches J1 only.
+    assert!(hole_findings(0.4, None).is_empty());
+    let raise = locating_hole_rule("J1", "0.6");
+    let raised = hole_findings(0.4, Some(&raise));
+    assert_eq!(raised.len(), 1, "{raised:#?}");
+    assert!(raised[0].contains("J1") && raised[0].contains("required 0.6000 mm"), "{raised:#?}");
+}

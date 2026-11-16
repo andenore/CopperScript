@@ -55,10 +55,18 @@ A clearance is the largest applicable value of:
 - either item's local or net-class clearance;
 - the last matching `clearance` custom rule.
 
-Hole and edge clearances work the same way. Custom-rule conditions are
+Edge clearances work the same way. A matching `hole_clearance` custom rule
+replaces the board minimum hole clearance, as in KiCad (CopperScript writes
+rules that relax it for a component's own holes). Custom-rule conditions are
 understood for the subset CopperScript writes: `A.`/`B.` `NetName`,
-`NetClass` and `Reference`, compared with `==` or `!=`, combined with `&&`,
-`||` and parentheses.
+`NetClass`, `Reference` and `Pad_Type` (`SMD`, `Through-hole` or
+`NPTH, mechanical`), compared with `==` or `!=`, and
+`A.memberOfFootprint('J1')` (single or double quotes, `*`/`?` wildcards),
+combined with `&&`, `||` and parentheses. Only pads belong to a footprint:
+tracks, vias, zones and graphics are never members, so a rule that needs both
+items in a footprint never applies between a zone and a pad. Edge connector
+pads are read as SMD pads, so a `Pad_Type` test that could tell them apart
+is refused.
 
 ### Refused
 

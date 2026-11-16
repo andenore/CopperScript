@@ -23,7 +23,7 @@ use crate::fill::{Sets, board_area, flashes};
 use crate::font;
 use crate::geometry::{Point, flatten_arc, rotate, rotate_f64};
 use crate::poly;
-use crate::rules::{Item, Rules};
+use crate::rules::{Item, Rules, pad_type};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -602,6 +602,7 @@ impl<'a> Checker<'a> {
             let rule = Item {
                 net: pad.net.as_deref(),
                 reference: Some(&footprint.reference),
+                pad_type: Some(pad_type(pad.kind)),
                 local_clearance: pad.zones.clearance.or(footprint.zones.clearance),
             };
             let (area, paths, radius) = pad_geometry(pad);
@@ -685,8 +686,8 @@ impl<'a> Checker<'a> {
                 net: fill.net.as_deref(),
                 rule: Item {
                     net: fill.net.as_deref(),
-                    reference: None,
                     local_clearance: zone.and_then(|zone| zone.clearance),
+                    ..Item::default()
                 },
                 area: true,
                 paths: vec![open_path(fill.contour.flattened(ARC_ERROR))],

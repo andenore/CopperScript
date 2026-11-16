@@ -4,9 +4,11 @@
 //! `.kicad_dru`.
 //!
 //! Custom rule conditions are understood for the subset CopperScript writes:
-//! `A.`/`B.` `NetName`, `NetClass` and `Reference` compared with `==` or `!=`
-//! against quoted strings (with `*`/`?` wildcards), combined with `&&`, `||`
-//! and parentheses, and tried with A and B in both orders. A rule whose
+//! `A.`/`B.` `NetName`, `NetClass`, `Reference` and `Pad_Type` compared with
+//! `==` or `!=` against quoted strings (with `*`/`?` wildcards) and
+//! `memberOfFootprint('REF')` (a pad belongs to its footprint; tracks, vias,
+//! zones and graphics to none), combined with `&&`, `||` and parentheses, and
+//! tried with A and B in both orders. A rule whose
 //! constraint changes zone fills in a way not modelled here (physical
 //! clearances, thermal relief and zone connection constraints, layer
 //! qualifiers, unknown condition syntax) is refused; rules that do not affect
@@ -15,13 +17,15 @@
 //! A clearance is the largest applicable value: board minimum, either item's
 //! local or net-class clearance, and the last matching custom rule. KiCad lets
 //! a matching custom rule replace the net-class value; the two agree whenever
-//! rules only raise clearances, as CopperScript's do.
+//! `clearance` rules only raise clearances, as CopperScript's do. A matching
+//! `hole_clearance` rule replaces the board minimum (CopperScript writes ones
+//! that relax it for a component's own holes).
 
 use copper_json::Value;
 use copper_physical::kicad_mod::{self, List, Node};
 use indexmap::IndexMap;
 
-use crate::board::parse_nm;
+use crate::board::{PadKind, parse_nm};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -36,7 +40,18 @@ pub enum Kind {
 enum Expression {
     Or(Box<Expression>, Box<Expression>),
     And(Box<Expression>, Box<Expression>),
-    Compare { item: char, property: String, value: String, equal: bool },
+    Compare {
+        item: char,
+        property: String,
+        value: String,
+        equal: bool,
+    },
+    /// `A.memberOfFootprint('J1')`: the item belongs to a footprint whose
+    /// reference matches the pattern.
+    Member {
+        item: char,
+        pattern: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +65,12 @@ struct Rule {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Item<'a> {
     pub net: Option<&'a str>,
+    /// The reference of the footprint the item belongs to (none for tracks,
+    /// vias, zones and graphics), which is what `memberOfFootprint` tests.
     pub reference: Option<&'a str>,
+    /// KiCad's `Pad_Type` of a pad: `SMD`, `Through-hole` or
+    /// `NPTH, mechanical` (none for other items).
+    pub pad_type: Option<&'a str>,
     /// A local clearance override (pad, footprint or zone).
     pub local_clearance: Option<i64>,
 }
@@ -78,6 +98,15 @@ pub struct Rules {
     assignments: IndexMap<String, String>,
     patterns: Vec<(String, String)>,
     custom: Vec<Rule>,
+}
+
+/// KiCad's `Pad_Type` name of a pad kind.
+pub fn pad_type(kind: PadKind) -> &'static str {
+    match kind {
+        PadKind::Smd => "SMD",
+        PadKind::ThroughHole => "Through-hole",
+        PadKind::NonPlated => "NPTH, mechanical",
+    }
 }
 
 /// Case-insensitive match of `text` against a pattern with `*` and `?`.
@@ -179,8 +208,19 @@ impl Parser<'_> {
             self.index += 1;
         }
         let property = String::from_utf8_lossy(&self.text[start..self.index]).into_owned();
-        if !matches!(property.as_str(), "NetName" | "NetClass" | "Reference") {
-            return Err(format!("property {property} is not supported"));
+        if property == "memberOfFootprint" {
+            if !self.eat("(") {
+                return Err("expected ( after memberOfFootprint".to_owned());
+            }
+            let pattern = self.string()?;
+            if !self.eat(")") {
+                return Err("expected ) after the memberOfFootprint argument".to_owned());
+            }
+            return Ok(Expression::Member { item, pattern });
+        }
+        if !matches!(property.as_str(), "NetName" | "NetClass" | "Reference" | "Pad_Type") {
+            let kind = if self.eat("(") { "function" } else { "property" };
+            return Err(format!("{kind} {property} is not supported"));
         }
         let equal = if self.eat("==") {
             true
@@ -189,6 +229,17 @@ impl Parser<'_> {
         } else {
             return Err("expected == or !=".to_owned());
         };
+        let value = self.string()?;
+        // Edge connector pads are read as SMD pads, so a test that could tell
+        // them apart cannot be evaluated faithfully.
+        if property == "Pad_Type" && wildcard(&value, "Edge connector") {
+            return Err(format!("Pad_Type {value:?} is not supported: edge connector pads are not told from SMD"));
+        }
+        Ok(Expression::Compare { item, property, value, equal })
+    }
+
+    /// A single- or double-quoted string.
+    fn string(&mut self) -> Result<String> {
         self.skip();
         let quote = *self.text.get(self.index).ok_or("expected a string")?;
         if quote != b'\'' && quote != b'"' {
@@ -199,9 +250,12 @@ impl Parser<'_> {
         while self.text.get(self.index).is_some_and(|&c| c != quote) {
             self.index += 1;
         }
+        if self.index >= self.text.len() {
+            return Err("unterminated string".to_owned());
+        }
         let value = String::from_utf8_lossy(&self.text[start..self.index]).into_owned();
         self.index += 1;
-        Ok(Expression::Compare { item, property, value, equal })
+        Ok(value)
     }
 }
 
@@ -319,9 +373,14 @@ impl Rules {
                 let text = match property.as_str() {
                     "NetName" => subject.net.unwrap_or(""),
                     "NetClass" => self.net_class(subject.net),
+                    "Pad_Type" => subject.pad_type.unwrap_or(""),
                     _ => subject.reference.unwrap_or(""),
                 };
                 wildcard(value, text) == *equal
+            }
+            Expression::Member { item, pattern } => {
+                let subject = if *item == 'A' { a } else { b };
+                subject.reference.is_some_and(|reference| wildcard(pattern, reference))
             }
         }
     }
@@ -348,7 +407,9 @@ impl Rules {
     }
 
     pub fn hole_clearance(&self, zone: &Item, item: &Item) -> i64 {
-        self.hole_clearance.max(self.custom(Kind::HoleClearance, zone, item).unwrap_or(0))
+        // A matching rule replaces the board minimum, as in KiCad: CopperScript
+        // writes component hole rules that relax it.
+        self.custom(Kind::HoleClearance, zone, item).unwrap_or(self.hole_clearance)
     }
 
     pub fn edge_clearance(&self, zone: &Item) -> i64 {
@@ -465,7 +526,7 @@ mod tests {
         assert_eq!(rules.clearance(&item("GND"), &item("PWR_24V")), 500_000);
         assert_eq!(rules.clearance(&item("GND"), &item("ADC")), 200_000);
         assert_eq!(rules.clearance(&item("ADC"), &item("GND")), 200_000);
-        let zone = Item { net: Some("GND"), reference: None, local_clearance: Some(90_000) };
+        let zone = Item { net: Some("GND"), local_clearance: Some(90_000), ..Item::default() };
         assert_eq!(rules.clearance(&zone, &item("SIG")), 150_000);
         let wide = Item { local_clearance: Some(300_000), ..zone };
         assert_eq!(rules.clearance(&wide, &item("SIG")), 300_000);
@@ -479,6 +540,75 @@ mod tests {
         assert!(Rules::load(PROJECT, Some(layered)).unwrap_err().contains("layer-qualified"));
         let unknown = "(rule \"U\" (constraint clearance (min 0.3mm)) (condition \"A.Type == 'Pad'\"))";
         assert!(Rules::load(PROJECT, Some(unknown)).unwrap_err().contains("not supported"));
+    }
+
+    /// The condition `copper-pcb` writes for a connector's own holes.
+    const EXPORTED: &str = "(version 1)
+# J1: locating holes
+(rule \"J1 hole clearance\"
+  (constraint hole_clearance (min 0.1mm))
+  (condition \"A.memberOfFootprint('J1') && B.memberOfFootprint('J1') && (A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')\"))
+";
+
+    fn pad<'a>(reference: &'a str, pad_type: &'a str) -> Item<'a> {
+        Item { reference: Some(reference), pad_type: Some(pad_type), ..Item::default() }
+    }
+
+    #[test]
+    fn footprint_membership_scopes_a_rule_to_one_footprint() {
+        let rules = Rules::load(PROJECT, Some(EXPORTED)).unwrap();
+        let hole = |a: &Item, b: &Item| rules.hole_clearance(a, b);
+        let (hole_j1, pad_j1) = (pad("J1", "NPTH, mechanical"), pad("J1", "SMD"));
+        // Both items in J1 and one of them a non-plated hole: either order.
+        assert_eq!(hole(&hole_j1, &pad_j1), 100_000);
+        assert_eq!(hole(&pad_j1, &hole_j1), 100_000);
+        assert_eq!(hole(&hole_j1, &hole_j1), 100_000);
+        // No non-plated pad among them, another footprint, or a free item.
+        assert_eq!(hole(&pad_j1, &pad("J1", "Through-hole")), 250_000);
+        assert_eq!(hole(&hole_j1, &pad("J2", "SMD")), 250_000);
+        assert_eq!(hole(&pad("J2", "NPTH, mechanical"), &pad("J2", "SMD")), 250_000);
+        assert_eq!(hole(&hole_j1, &item("GND")), 250_000);
+        assert_eq!(hole(&Item::default(), &Item::default()), 250_000);
+    }
+
+    #[test]
+    fn membership_takes_either_quote_wildcards_and_both_operands() {
+        let load = |condition: &str| {
+            let text = format!("(rule \"M\" (constraint hole_clearance (min 1mm)) (condition \"{condition}\"))");
+            Rules::load(PROJECT, Some(&text))
+        };
+        let on = |rules: &Rules, a: Option<&str>, b: Option<&str>| {
+            let item = |reference| Item { reference, ..Item::default() };
+            rules.hole_clearance(&item(a), &item(b))
+        };
+        let rules = load("A.memberOfFootprint( \\\"J*\\\" ) && B.memberOfFootprint ('K1')").unwrap();
+        assert_eq!(on(&rules, Some("J7"), Some("K1")), 1_000_000);
+        assert_eq!(on(&rules, Some("K1"), Some("J7")), 1_000_000);
+        assert_eq!(on(&rules, Some("J7"), Some("J7")), 250_000);
+        assert_eq!(on(&rules, Some("J7"), None), 250_000);
+        assert_eq!(on(&rules, None, None), 250_000);
+        // Negated and combined with the existing properties.
+        let rules = load("A.memberOfFootprint('J1') && B.NetName != 'GND'").unwrap();
+        let (member, other) = (Item { reference: Some("J1"), ..Item::default() }, item("SIG"));
+        assert_eq!(rules.hole_clearance(&member, &other), 1_000_000);
+        assert_eq!(rules.hole_clearance(&member, &item("GND")), 250_000);
+    }
+
+    #[test]
+    fn unsupported_functions_and_malformed_membership_fail_loudly() {
+        let load = |condition: &str| {
+            let text = format!("(rule \"U\" (constraint hole_clearance (min 1mm)) (condition \"{condition}\"))");
+            Rules::load(PROJECT, Some(&text)).unwrap_err()
+        };
+        assert!(load("A.intersectsCourtyard('J1')").contains("function intersectsCourtyard is not supported"));
+        assert!(load("A.inDiffPair('USB')").contains("not supported"));
+        assert!(load("A.memberOfFootprint").contains("expected ("));
+        assert!(load("A.memberOfFootprint('J1'").contains("expected )"));
+        assert!(load("A.memberOfFootprint(J1)").contains("quoted string"));
+        assert!(load("A.memberOfFootprint('J1)").contains("unterminated"));
+        assert!(load("A.Pad_Type == 'Edge connector'").contains("edge connector"));
+        assert!(load("A.Pad_Type != '*'").contains("edge connector"));
+        assert!(load("A.Pad_Type == 'SMD' && B.Footprint == 'x'").contains("property Footprint is not supported"));
     }
 
     #[test]

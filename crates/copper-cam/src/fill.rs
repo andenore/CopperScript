@@ -23,7 +23,7 @@ use crate::board::{Board, Footprint, Layer, Pad, PadKind, PadShape, Shape, Track
 use crate::font;
 use crate::geometry::{Contour as Path, Edge, Point, flatten_arc, rotate_f64};
 use crate::poly::{self, Shapes};
-use crate::rules::{Item, Rules};
+use crate::rules::{Item, Rules, pad_type};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -141,7 +141,7 @@ impl<'a> Filler<'a> {
     }
 
     fn zone_item(zone: &'a Zone) -> Item<'a> {
-        Item { net: zone.net.as_deref(), reference: None, local_clearance: zone.clearance }
+        Item { net: zone.net.as_deref(), local_clearance: zone.clearance, ..Item::default() }
     }
 
     fn outline(&self, zone: &Zone) -> Shapes {
@@ -219,6 +219,7 @@ impl<'a> Filler<'a> {
             let item = Item {
                 net: pad.net.as_deref(),
                 reference: Some(&footprint.reference),
+                pad_type: Some(pad_type(pad.kind)),
                 local_clearance: pad.zones.clearance.or(footprint.zones.clearance),
             };
             if same_net(&pad.net) {
@@ -1105,6 +1106,53 @@ mod tests {
         let d = r / std::f64::consts::SQRT_2;
         assert!(at(&fill, 15.0 + d, 15.0 + d), "spoke on the diagonal");
         assert!(!at(&fill, 15.0, 15.0), "the hole itself is not filled");
+    }
+
+    /// Connectors J1 at (8, 3) and K1 at (14, 3), each a 1 mm non-plated hole
+    /// with a SIG pad 2 mm to its right, inside a GND pour.
+    fn connectors() -> Board {
+        let part = |reference: &str, x: i32| {
+            format!(
+                "(footprint \"L:C\" (layer \"F.Cu\") (at {x} 3)
+    (property \"Reference\" \"{reference}\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 1 1))))
+    (pad \"\" np_thru_hole circle (at 0 0) (size 1 1) (drill 1) (layers \"*.Cu\"))
+    (pad \"1\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net \"SIG\")))"
+            )
+        };
+        parse(&format!("{} {}", part("J1", 8), part("K1", 14)))
+    }
+
+    fn connector_fill(dru: Option<&str>) -> Shapes {
+        let rules = Rules::load(PROJECT, dru).unwrap();
+        let fills = fill_zones(&connectors(), &rules).unwrap();
+        assert_eq!(fills.len(), 1);
+        fills.into_iter().next().unwrap().shapes
+    }
+
+    #[test]
+    fn a_footprint_scoped_hole_rule_fills_and_applies_inside_that_footprint_only() {
+        let plain = connector_fill(None);
+        // Hole edge at 0.5 mm, board hole clearance 0.25 mm: 1.4 mm above the
+        // hole centre is copper, 0.7 mm is not.
+        for x in [8.0, 14.0] {
+            assert!(at(&plain, x, 4.4) && !at(&plain, x, 3.7), "x = {x}");
+        }
+        // The rule `copper-pcb` writes needs both items in the footprint, which
+        // a zone never is: the fill is unchanged instead of failing.
+        let exported = "(version 1)
+(rule \"J1 hole clearance\"
+  (constraint hole_clearance (min 0.1mm))
+  (condition \"A.memberOfFootprint('J1') && B.memberOfFootprint('J1') && (A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')\"))
+";
+        assert!(connector_fill(Some(exported)) == plain, "the fill changed");
+        // With the zone free to be the other operand, the rule applies to J1's
+        // holes (a 1.5 mm clearance reaches 2 mm from the centre) and not K1's.
+        let other_operand = "(rule \"R\" (constraint hole_clearance (min 1.5mm)) (condition \"A.memberOfFootprint('J1') && B.Pad_Type == 'Through-hole'\"))";
+        let wider = "(rule \"R\" (constraint hole_clearance (min 1.5mm)) (condition \"A.memberOfFootprint('J1')\"))";
+        assert!(connector_fill(Some(other_operand)) == plain, "a zone is no pad");
+        let fill = connector_fill(Some(wider));
+        assert!(!at(&fill, 8.0, 4.4) && at(&fill, 8.0, 5.2), "J1's hole reaches 2 mm");
+        assert!(at(&fill, 14.0, 4.4) && !at(&fill, 14.0, 3.7), "K1's hole keeps the board minimum");
     }
 
     fn parse(items: &str) -> Board {
