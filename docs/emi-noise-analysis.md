@@ -2989,3 +2989,140 @@ Reflections between elements and mode conversion inside parts; a choke's or ferr
 coupling of the legs in the common-mode reference; loss and dispersion; lane-to-lane skew of a match group; the package and connector
 breakouts; the return path of the observation plane, radiation efficiency and any field or margin; imbalance from the driver, the
 receiver termination or asymmetric loading.
+
+## 17. The cable's circuit: definitions and fixtures (P4a of the signal and cable plan)
+
+Status: **definition and test fixtures only.** Nothing in this section is reported by `emi-check`: no finding, no coverage entry, no
+estimate and no number in any output comes from it, and none of it is correlated with a measurement. It is the specification that the
+cable check of the fourth phase of [`emi-signal-cable-plan.md`](emi-signal-cable-plan.md) (`EMI-CABLE-COMMON-MODE`, voltage and ranking)
+must use unchanged: every quantity of that check is a quantity of one of the networks below, and the fixtures check the closed forms
+against an independent circuit solution instead of against themselves. The closed forms are in `crates/copper-emi/src/cable_circuit.rs`
+(and `mode_conversion::common_mode_transfer`); the independent nodal solver is in `crates/copper-emi/tests/support/nodal.rs`, shares no
+code with the estimators and has its own checks against hand calculations (a resistive divider, a series RLC at resonance, coupled
+branches, a quarter-wave line); the fixtures are in `crates/copper-emi/tests/cable_circuit_fixtures.rs`.
+
+### 17.1 Conductors and the bundle
+
+The **signal conductors** of a channel are one conductor (single-ended) or a P/N pair. The **return or ground conductor** is the
+conductor inside the same cable that carries the return current, when there is one. The **shield** is the shield, when there is one. The
+**bundle** is all conductors of the cable taken together: the cut of the cable that a current clamp around the whole cable encloses.
+
+### 17.2 Two different common modes
+
+1. **The pair's common mode** against the board reference at the connector, `V_cm` of section 16. Its current can return through the
+   ground conductor inside the same cable; in the ideal case the net current of the bundle is then zero.
+2. **The bundle's common mode**: the net current of all conductors together. It returns outside the cable, through the environment, and
+   it is what a clamp around the whole cable reads and what radiates. The published cable-radiation models drive it from a voltage
+   between the cable and the antenna's *other* conductor (the board, its ground plane, other cables) through a stated coupling path
+   (Hockanson et al.); the board model does not contain that other conductor.
+
+The two are not converted into each other here: dividing the pair's `V_cm` by a cable impedance does not give the bundle current,
+because what is missing is the circuit (the in-cable return, the antenna's other conductor), not a parameter value. The net current of
+the bundle is a quantity of a stated termination and environment scenario only, and nothing is reported for it yet.
+
+### 17.3 Reference and observation point
+
+For the pair's common mode (1): the board reference at the connector's ground pins. For the bundle's common mode (2): the clamp
+position on the cable at the connector, and the other half of the antenna.
+
+### 17.4 Source and load
+
+* **Source impedance** per driver, and the **series parts** from the channel walk (coupling capacitors, chokes), are elements of the
+  network between the driver and the observation point.
+* **The load each quantity sees** is stated with the quantity: the cascade's reference impedance, a cable load, a declared load.
+* **Incident wave and Thevenin source are two representations of one network** and are kept apart. The cascade of section 16 carries
+  incident (forward) voltage waves, and a series common-mode impedance `Z_cmc` in the common-mode reference `Z_ref` transmits
+  `T = 2 Z_ref / (2 Z_ref + Z_cmc)`: 1 for no choke, exactly; 1/2 for `Z_cmc = 2 Z_ref`; tending to zero for a choke far larger than
+  `Z_ref`. A Thevenin source `V_oc` with `Z_source` into `Z_load` through `Z_cmc` has the current `I = V_oc / (Z_source + Z_cmc +
+  Z_load)` and the load voltage `V_oc Z_load / (Z_source + Z_cmc + Z_load)`. For `Z_source = Z_load = Z_ref` the load voltage is
+  `(V_oc / 2) T` for every `Z_cmc`, zero included: `V_oc / 2` is the incident wave of a matched source. Zero-impedance elements in
+  series change nothing in either representation.
+
+### 17.5 The cable termination, and what the cascade's output means
+
+The cascade is forward only and has no reflections. Its output at the connector is the incident common-mode wave, and that equals the
+steady-state voltage there **only for a matched termination**, a cable whose common-mode impedance at the connector is `Z_ref`. A final
+multiplier `2 Z_cable / (Z_ref + Z_cable)` on the forward wave gives the **first-arrival voltage** (the first wavefront before any
+reflection returns) and does not recover the steady state: the complete relation has the load-feedback denominator the cascade does not
+carry. For 1 V incident in 50 ohm, a 900 ohm choke and a 900 ohm cable load, the multiplier gives 0.189 V and the series circuit
+0.973 V (14.2 dB apart); for an open cable the circuit gives the whole open-circuit voltage, twice the incident wave, whatever the choke
+(the multiplier 0.2 V against 2 V). The three cases are matched (the two agree), high impedance and open.
+
+The consequence for P4 is binding: an absolute connector voltage is published only for a matched cable and says so; for any other
+termination only a value labelled `first_arrival_voltage`, never a steady-state figure and never compared with one. Solving the
+terminated network with its reflections belongs to a later, scenario-defined step.
+
+### 17.6 The ground-noise network
+
+`omega L_gnd I_return` is not a calculation until the following four are stated. The corridor rule of the cable check only selects
+which sources are considered; it does not give their coupling.
+
+**Driven loop A.** One per source conductor: from the driver pin along the routed copper to the load (or the connector pin), back
+through the reference plane under the route to the driver's reference pin. `Z_A` is what the loop presents to the pin: the line's
+characteristic impedance (from the stack-up, as `si-check` computes it) while the edge travels on a terminated or long line, or the
+declared load. The current follows from **one** of two source representations, never a mixture:
+
+* *Loaded pin voltage* (the default, and what `signal_swing` and `V_diff,in` of section 16 mean: the voltage at the pin while it drives
+  the line): `I_A = V_pin / Z_A`. The source impedance does not appear, because its loading is already in `V_pin`. A 1 V launched signal
+  on a matched 50 ohm line is 20 mA.
+* *Thevenin source* (only when a part declares an open-circuit swing and an `output_impedance`): `V_pin = V_oc Z_A / (Z_source + Z_A)`
+  and `I_A = V_oc / (Z_source + Z_A)`.
+
+Dividing a loaded pin voltage by `Z_source + Z_A` applies the source loading twice (10 mA instead of 20 mA in the example, 6 dB low).
+It is the error this definition excludes. A source declared both ways (`V_oc`, `Z_source` and the `V_pin` they imply) gives identical
+`V_pin`, `I_A` and `V_B`, and a test checks it. Without a characteristic impedance or a declared load for the route, `I_A` is not
+estimated (see the fallback).
+
+**Observation loop B.** The loop whose voltage is the ground-noise voltage at the connector: from the connector's ground pins through
+the reference plane to the source's reference pin, closed by a stated sense path. The sense path is part of the definition because the
+answer depends on it (it stands for the cable leaving the board and the antenna's other conductor). Version 1 uses a straight return at
+a stated height above the reference plane, a scenario parameter with a band; the finding reports how much the result moves across that
+band.
+
+**Transfer, per conductor.** Each driven conductor `k` has its own loop and its own signed transfer to loop B,
+`Z_Bk = j omega M_Bk` plus the resistance of the copper the two loops share, with `M_Bk` the mutual inductance of that conductor's loop
+and loop B, sign included. "`L_gnd`" in the plan means such an `M_Bk` and nothing else.
+
+**Signed contributions: couple first, then sum.** `V_B = sum over k of Z_Bk I_k`. For a differential pair
+`V_B = j omega (M_Bp I_p + M_Bn I_n)`. The leg currents are **not** added before the coupling is applied: with `I_p = -I_n` the summed
+current is zero, but the voltage is `j omega (M_Bp - M_Bn) I_p`, which is not zero whenever the two legs couple differently to loop B
+(one leg nearer the connector's ground path, or over a gap). In modal terms
+`V_B = j omega [ (M_Bp + M_Bn) I_cm + (M_Bp - M_Bn) I_dm ]` with `I_cm = (I_p + I_n) / 2` and `I_dm = (I_p - I_n) / 2`: the common-mode
+current couples through the sum of the mutuals and the differential current through their difference, and both terms are kept. Example:
+`+1 mA` and `-1 mA` with `M_Bp = 2 nH` and `M_Bn = 1 nH` give `omega 1 nH 1 mA`, about 628 uV at 100 MHz, with zero summed current;
+with `I_cm = 0.5 mA` added the extra voltage is `omega (M_Bp + M_Bn) I_cm` and the total 1.571 mV. Several independent sources are
+summed as phasors only when they are harmonics of one clock, otherwise as powers.
+
+A choke that carries the signal conductors of the pair but not the ground conductor attenuates the pair's common mode (1) and leaves
+the ground-noise voltage unchanged: the ground-noise driver acts on the bundle and does not pass through it.
+
+**Fallback, binding for P4.** Where the route's characteristic impedance (or declared load) or the geometry of any of the loops is not
+available, or where the result moves by more than 6 dB across the sense-path band, no ground-noise voltage is published for that source.
+It is ranked by geometry instead: corridor overlap with the connector's ground path, distance, and any slot of section 15 between them.
+Extraction of the `M_Bk` from the real copper stays deferred; the definition does not.
+
+### 17.7 The fixtures
+
+All in `crates/copper-emi/tests/cable_circuit_fixtures.rs`, each solved by the independent nodal solver and compared with the hand
+calculation written in the test, and with the closed form where there is one. Numbered as in the plan.
+
+| # | Fixture | Hand numbers |
+|---|---|---|
+| 1 | Return-conductor cancellation: a pair with common mode and an in-cable return | 1 V, 10 ohm source, two 50 ohm conductors, 5 ohm return: 12.5 mA on each, 25 mA back, net 0; return removed, 500 ohm environment: net 1.869 mA, the pair's current; both: net 0.2478 mA |
+| 2 | Source, series and load impedance, complex, across frequency | 3.3 V, 22 / 10 / 50 ohm: 2.0122 V; 20 ohm, `+j100`, 50 ohm: 1.3517 V at -55 degrees |
+| 3 | Choke traversal in both representations: incident wave `T` (no choke, `2 Z_ref`, a large choke), Thevenin current and voltage, the two agreeing for every `Z_cmc`, identity under zero-impedance elements | `T = 1, 1/2, 1e-7`; `(V_oc / 2) T` against the divider |
+| 4 | Simultaneous gain and delay mismatch of a two-leg network against the expression of section 16 | `(1/2) sin(pi/4) = 0.35355`, `a/2 = 0.05`, `(1/2) sqrt(0.0199) = 0.07053` |
+| 5 | A choke in the signal lines only | pair 1 V to 0.1 V (-20 dB); ground conductor 0.909 mV either way (21.7 uV if the choke carried it too) |
+| 6 | Cable termination behind a 900 ohm choke, 1 V incident in 50 ohm | matched 0.1 V and 0.1 V; 900 ohm 0.189 V against 0.973 V (14.2 dB); open 0.2 V against 2 V (20 dB) |
+| 7 | Choke position: the order fixtures of section 16 as a network of two legs and a common-mode series impedance | 0.035355, 0.35355 and 0.19445 (`0.1375 + j 0.1375`) |
+| 8 | Ground-noise transfer: numerical Neumann integral of loops against the filament closed form; sign and cancellation cases | single loop, loop moved away, symmetric cancellation 0, asymmetric residual 628.3 uV, common mode added 1.571 mV, a source declared both ways 20 mA, the sense height band |
+
+The assertions of fixture 6 state the size of the disagreement in the high-impedance and open cases, so the forward-only figure cannot be
+relabelled as a steady-state voltage without a test failing.
+
+### 17.8 Not modelled
+
+Reflections between the cascade's elements and the solution of the terminated network (a scenario step); the bundle's net current of
+a real cable, the antenna's other conductor, chassis and enclosure; the shield's transfer impedance; the extraction of the `M_Bk` from
+routed copper (the fixtures use rectangular filament loops in free space for the geometry cases, and the `Z_Bk` from them are not a
+board estimate); a slot between the loops; the coupling between the driven loops themselves.
