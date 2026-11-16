@@ -799,7 +799,7 @@ fn check_differential_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) 
 }
 
 /// `return_span_covers`.
-fn return_span_covers(board: &PhysicalBoard, returned: &Via, first: CopperLayer, last: CopperLayer) -> bool {
+pub(crate) fn return_span_covers(board: &PhysicalBoard, returned: &Via, first: CopperLayer, last: CopperLayer) -> bool {
     let indexes = layer_indexes(board);
     let (Some(f), Some(l), Some(x), Some(y)) =
         (indexes.get(&first), indexes.get(&last), indexes.get(&returned.from_layer), indexes.get(&returned.to_layer))
@@ -809,6 +809,33 @@ fn return_span_covers(board: &PhysicalBoard, returned: &Via, first: CopperLayer,
     let (a, b) = (f.min(l), f.max(l));
     let (x, y) = (x.min(y), x.max(y));
     x <= a && y >= b
+}
+
+/// The single-ended return-via rule of `net` (`require_return_vias` without a differential partner); the last
+/// declared one when there are several, as `_check_single_ended_return_vias` keys them.
+pub(crate) fn single_ended_return_rule<'a>(board: &'a PhysicalBoard, net: &str) -> Option<&'a NetRoutingRule> {
+    board
+        .net_routing_rules
+        .iter()
+        .rev()
+        .find(|r| r.net == net && r.require_return_vias && r.differential_partner.is_none())
+}
+
+/// Whether `via` has a return barrel of the rule's `return_via_net` covering its span within the rule's
+/// `maximum_return_via_distance`: the test of `_check_single_ended_return_vias`, shared with `emi-check`.
+pub(crate) fn return_via_covered(board: &PhysicalBoard, via: &Via, rule: &NetRoutingRule) -> bool {
+    match (rule.maximum_return_via_distance_nm, &rule.return_via_net) {
+        (Some(limit), Some(net)) if *net != via.net => board.vias.iter().any(|other| {
+            let (dx, dy) = (
+                i128::from(other.position.x_nm - via.position.x_nm),
+                i128::from(other.position.y_nm - via.position.y_nm),
+            );
+            other.net == *net
+                && return_span_covers(board, other, via.from_layer, via.to_layer)
+                && dx * dx + dy * dy <= i128::from(limit) * i128::from(limit)
+        }),
+        _ => false,
+    }
 }
 
 /// `_check_single_ended_return_vias`.
@@ -821,18 +848,7 @@ fn check_single_ended_return_vias(board: &PhysicalBoard, findings: &mut Vec<Find
         .collect();
     for (index, via) in board.vias.iter().enumerate() {
         let Some(rule) = rules.get(via.net.as_str()) else { continue };
-        let covered = match (rule.maximum_return_via_distance_nm, &rule.return_via_net) {
-            (Some(limit), Some(net)) if *net != via.net => board.vias.iter().any(|other| {
-                let (dx, dy) = (
-                    i128::from(other.position.x_nm - via.position.x_nm),
-                    i128::from(other.position.y_nm - via.position.y_nm),
-                );
-                other.net == *net
-                    && return_span_covers(board, other, via.from_layer, via.to_layer)
-                    && dx * dx + dy * dy <= i128::from(limit) * i128::from(limit)
-            }),
-            _ => false,
-        };
+        let covered = return_via_covered(board, via, rule);
         if !covered {
             let net = rule.return_via_net.as_deref().unwrap_or("None");
             let limit = rule.maximum_return_via_distance_nm.map_or_else(|| "None".to_owned(), |v| v.to_string());

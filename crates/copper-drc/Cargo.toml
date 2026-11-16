@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+copper-cam.workspace = true
 copper-emi.workspace = true
 copper-json.workspace = true
 copper-lang.workspace = true
@@ -22,3 +23,6 @@ sha2.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+copper-fullwave.workspace = true

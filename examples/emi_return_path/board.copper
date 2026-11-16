@@ -1,0 +1,60 @@
+// Four return-path cases for `copper emi-check --run`, on a four-layer board with a declared stack-up.
+// The planes are declared here: In1.Cu is a ground plane split into two pours by a 2 mm cut, In2.Cu is whole.
+// The routed copper is not part of the source (the language has no tracks): `routed/final-board.state.json` is
+// the physical board with hand-placed tracks and vias, written by `crates/copper/tests/emi_return_path_cli.rs`.
+//
+//   copper emi-check examples/emi_return_path/board.copper --allow-proxy-footprints --run examples/emi_return_path/routed
+//
+//   (a) LANE_A_P / LANE_A_N   a pair over the left pour of In1.Cu, clear of every edge: nothing to report
+//   (b) LANE_B_P / LANE_B_N   the same pair crossing the cut between the two pours
+//   (c) CLK_S, CLK_U          a clock changing from F.Cu to B.Cu (reference In1.Cu to In2.Cu): CLK_S has a
+//                             ground via 1.5 mm from its via, CLK_U has none within the 2 mm it declares
+//   (d) CLK_E                 a clock 3 mm from the board edge and 1 mm from the edge of the plane
+//
+// The proxy footprints give the components their pads; the routed copper is a stand-in placed over the planes
+// and does not start at those pads, which the return-path check does not need.
+board EmiReturnPath {
+    import p "./parts";
+
+    mechanical {
+        outline rectangle { width = 100mm; height = 80mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric P1 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper In1.Cu { thickness = 0.035mm; }
+            dielectric C1 { thickness = 1.06mm; er = 4.6; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper In2.Cu { thickness = 0.035mm; }
+            dielectric P2 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+
+    component U1: p.Phy { footprint = "QFN-8"; }
+    component U2: p.Rx { footprint = "QFN-8"; }
+
+    supply GND { net = GND; voltage = 0V; external = true; }
+
+    net LANE_A_P { U1.AP; U2.AP; }
+    net LANE_A_N { U1.AN; U2.AN; }
+    net LANE_B_P { U1.BP; U2.BP; }
+    net LANE_B_N { U1.BN; U2.BN; }
+    net CLK_S { U1.CS; U2.CS; }
+    net CLK_U { U1.CU; U2.CU; }
+    net CLK_E { U1.CE; U2.CE; }
+    net GND { U1.GND; U2.GND; }
+
+    constraint copper_zone(GND) { id = "plane-in1-left"; layers = "In1.Cu"; polygon_mm = "2,2; 39,2; 39,78; 2,78"; island_policy = keep_all; }
+    constraint copper_zone(GND) { id = "plane-in1-right"; layers = "In1.Cu"; polygon_mm = "41,2; 98,2; 98,78; 41,78"; island_policy = keep_all; }
+    constraint copper_zone(GND) { id = "plane-in2"; layers = "In2.Cu"; polygon_mm = "2,2; 98,2; 98,78; 2,78"; island_policy = keep_all; }
+
+    constraint routing(LANE_A_P) { kind = differential; partner = LANE_A_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_A_N) { kind = differential; partner = LANE_A_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_B_P) { kind = differential; partner = LANE_B_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_B_N) { kind = differential; partner = LANE_B_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(CLK_S) { kind = clock; require_return_vias = true; return_via_net = GND; maximum_return_via_distance = 2mm; }
+    constraint routing(CLK_U) { kind = clock; require_return_vias = true; return_via_net = GND; maximum_return_via_distance = 2mm; }
+    constraint routing(CLK_E) { kind = clock; }
+
+    constraint fixed_placement(U1) { x = 6mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(U2) { x = 94mm; y = 72mm; rotation = 0; }
+}

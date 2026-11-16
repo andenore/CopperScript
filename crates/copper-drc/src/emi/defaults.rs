@@ -314,6 +314,88 @@ pub fn signal_swing_rule(differential: bool) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 7. Return paths (`docs/emi-signal-cable-plan.md`, P2)
+// ---------------------------------------------------------------------------
+
+/// The reference coverage window (`k H` each side of a trace) is a rule of thumb.
+pub const TAG_RETURN_WINDOW: &str = "rule_of_thumb_return_window";
+/// The plane-edge and board-edge distance (`k H`) is a rule of thumb.
+pub const TAG_EDGE_DISTANCE: &str = "rule_of_thumb_edge_distance";
+/// The return-via distance (a fraction of a wavelength at the knee frequency) is a rule of thumb.
+pub const TAG_RETURN_VIA: &str = "rule_of_thumb_return_via_distance";
+
+/// Reference coverage: a trace at height `H` over a plane is checked over `k H` each side of its centre line:
+/// `(nominal, low, high)` in units of `H`.
+///
+/// Derived, not looked up. A thin line current `I` at height `H` over an infinite plane (the method of images: the
+/// line and its mirror image) induces the plane current density `J(x) = I H / (pi (x^2 + H^2))` at the lateral
+/// distance `x`, the distribution the return current takes at high frequency, where it follows the path of least
+/// inductance. The fraction of `I` within `k H` of the line is therefore `(2 / pi) atan(k)`
+/// ([`return_window_fraction`]): 50 % at 1 H, 70.5 % at 2 H, 79.5 % at 3 H, 87.4 % at 5 H. The nominal 3 H is the
+/// plan's choice of "about four fifths"; the band 2 H to 5 H is the 70 % to 87 % range. The distribution assumes a
+/// plane much wider than `H` and a thin trace; a wide trace or a stripline between two planes spreads differently.
+/// This derivation, not a citation, is the source here.
+pub const RETURN_WINDOW_H: (f64, f64, f64) = (3.0, 2.0, 5.0);
+
+/// The fraction of a thin trace's return current that flows within `k` heights of its centre line over an
+/// infinite plane, `(2 / pi) atan(k)` (see [`RETURN_WINDOW_H`]).
+pub fn return_window_fraction(k: f64) -> f64 {
+    2.0 / std::f64::consts::PI * k.atan()
+}
+
+/// Plane-edge and board-edge distance, in units of `H`: `(nominal, low, high)`. The "20 H rule" of EMC design
+/// guides (Montrose, *Printed Circuit Board Design Techniques for EMC Compliance*) keeps a trace or a smaller power
+/// plane back from the edge of its reference plane by `20 H` so that about 70 % of the fringing flux stays
+/// inside; the book is quoted from memory and not checked against the text, so this is a **rule of thumb with no
+/// verified citation**. The band 10 H to 100 H brackets the 10 H and 100 H flux-containment figures quoted with it.
+pub const EDGE_DISTANCE_H: (f64, f64, f64) = (20.0, 10.0, 100.0);
+
+/// A return via within `lambda / n` of the transition at the knee frequency (`n` nominal, then the two ends of
+/// the band). Structures much shorter than a wavelength are electrically small; `lambda / 10` is the usual
+/// bound for treating a structure as lumped and `lambda / 20` is the stricter figure used here. **Rule of
+/// thumb, no published source cited**: the factor is a screening choice, not a derived limit.
+pub const RETURN_VIA_LAMBDA_FRACTION: (f64, f64, f64) = (20.0, 10.0, 40.0);
+
+/// The knee frequency of an edge, `0.35 / t_r` for a 10-90 % rise time (a single-pole bandwidth: the relation
+/// P1 uses for its edge default).
+pub fn knee_frequency(rise_time_10_90: f64) -> f64 {
+    0.35 / rise_time_10_90
+}
+
+/// The return-via distance threshold, m: `lambda / n` at the knee frequency of a `rise_time_10_90` edge in a
+/// medium of effective relative permittivity `eps_eff`, `lambda = c / (f sqrt(eps_eff))`.
+pub fn return_via_threshold(rise_time_10_90: f64, eps_eff: f64, fraction: f64) -> f64 {
+    copper_emi::C0 / (knee_frequency(rise_time_10_90) * eps_eff.sqrt() * fraction)
+}
+
+/// The rule behind [`RETURN_WINDOW_H`], for `input:` lines.
+pub fn return_window_rule() -> String {
+    format!(
+        "return current taken within {} H each side of a trace ({:.1} % of a thin trace's return current over an infinite plane; derived, band {} H to {} H)",
+        RETURN_WINDOW_H.0,
+        100.0 * return_window_fraction(RETURN_WINDOW_H.0),
+        RETURN_WINDOW_H.1,
+        RETURN_WINDOW_H.2
+    )
+}
+
+/// The rule behind [`EDGE_DISTANCE_H`], for `input:` lines.
+pub fn edge_distance_rule() -> String {
+    format!(
+        "plane and board edges kept {} H from a trace (the 20 H rule of EMC design guides; band {} H to {} H; no verified citation)",
+        EDGE_DISTANCE_H.0, EDGE_DISTANCE_H.1, EDGE_DISTANCE_H.2
+    )
+}
+
+/// The rule behind [`RETURN_VIA_LAMBDA_FRACTION`], for `input:` lines.
+pub fn return_via_rule() -> String {
+    format!(
+        "return via within lambda / {} at the knee frequency 0.35 / t_r (band lambda / {} to lambda / {}; no published source)",
+        RETURN_VIA_LAMBDA_FRACTION.0, RETURN_VIA_LAMBDA_FRACTION.1, RETURN_VIA_LAMBDA_FRACTION.2
+    )
+}
+
 #[cfg(test)]
 fn ring(l: f64, c: f64) -> f64 {
     use std::f64::consts::PI;
@@ -393,6 +475,31 @@ mod tests {
         assert!((nominal - 3.3).abs() < 1e-12 && (low - 0.8 * 3.3).abs() < 1e-12 && (high - 3.3).abs() < 1e-12);
         assert!(signal_edge_rule(true).contains("UI") && signal_edge_rule(false).contains("ns"));
         assert!(signal_swing_rule(true).contains("differential") && signal_swing_rule(false).contains("supply"));
+    }
+
+    #[test]
+    fn the_return_path_defaults_are_derived_or_say_they_have_no_source() {
+        // The share of a thin trace's return current within k heights of it, (2 / pi) atan(k): 50 % at 1 H, 79.5 % at 3 H.
+        assert!((return_window_fraction(1.0) - 0.5).abs() < 1e-12);
+        assert!((return_window_fraction(3.0) - 0.7952).abs() < 1e-4);
+        assert!(
+            return_window_fraction(2.0) < return_window_fraction(3.0)
+                && return_window_fraction(3.0) < return_window_fraction(5.0)
+        );
+        assert!(RETURN_WINDOW_H.1 < RETURN_WINDOW_H.0 && RETURN_WINDOW_H.0 < RETURN_WINDOW_H.2);
+        assert!(EDGE_DISTANCE_H.1 < EDGE_DISTANCE_H.0 && EDGE_DISTANCE_H.0 < EDGE_DISTANCE_H.2);
+        // lambda / 20 at the knee of a 1 ns edge in eps = 4: f = 350 MHz, lambda = 299792458 / (350e6 * 2) = 0.42827 m,
+        // a twentieth is 21.41 mm.
+        assert!((knee_frequency(1e-9) - 350e6).abs() < 1.0);
+        let threshold = return_via_threshold(1e-9, 4.0, RETURN_VIA_LAMBDA_FRACTION.0);
+        assert!((threshold - 0.021_413).abs() < 1e-5, "{threshold}");
+        // A ten times faster edge shortens it by ten.
+        assert!((return_via_threshold(1e-10, 4.0, 20.0) * 10.0 - threshold).abs() < 1e-12);
+        for tag in [TAG_RETURN_WINDOW, TAG_EDGE_DISTANCE, TAG_RETURN_VIA] {
+            assert!(is_rule_tag(tag), "{tag}");
+        }
+        assert!(return_window_rule().contains("derived") && edge_distance_rule().contains("no verified citation"));
+        assert!(return_via_rule().contains("no published source"));
     }
 
     #[test]

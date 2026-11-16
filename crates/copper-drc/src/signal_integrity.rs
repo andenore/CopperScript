@@ -30,7 +30,7 @@ fn differential(kind: RouteKind) -> bool {
     matches!(kind, RouteKind::Differential | RouteKind::CanBus)
 }
 
-fn needs_reference_plane(kind: RouteKind) -> bool {
+pub(crate) fn needs_reference_plane(kind: RouteKind) -> bool {
     matches!(kind, RouteKind::Differential | RouteKind::Clock | RouteKind::RfFeed)
 }
 
@@ -94,6 +94,32 @@ fn hammerstad_microstrip(width_nm: i64, thickness_nm: i64, height_nm: i64, er: &
         120.0 * PI / (effective_er.sqrt() * (effective_width + 1.393 + 0.667 * (effective_width + 1.444).ln()))
     };
     Ok((impedance, effective_er))
+}
+
+/// Effective relative permittivity of a microstrip as `hammerstad_microstrip` computes it (`er` a plain number).
+pub(crate) fn microstrip_effective_er(width_nm: i64, thickness_nm: i64, height_nm: i64, er: f64) -> Option<f64> {
+    let er = Decimal::parse(&format!("{er}")).ok()?;
+    hammerstad_microstrip(width_nm, thickness_nm, height_nm, &er).ok().map(|(_, effective)| effective)
+}
+
+/// `(structure, effective relative permittivity)` of a trace of `width_nm` on `layer`, as the impedance screening
+/// takes it from the declared stack-up: Hammerstad's effective permittivity for a microstrip (one adjacent
+/// dielectric), the plane-spacing weighted permittivity for a stripline. `None` without declared adjacent
+/// dielectrics.
+pub(crate) fn effective_permittivity(
+    stackup: &Stackup,
+    layer: CopperLayer,
+    width_nm: i64,
+) -> Option<(&'static str, f64)> {
+    let geometry = layer_geometry(stackup, layer)?;
+    let er = to_float(&geometry.relative_permittivity);
+    if geometry.microstrip {
+        let height = geometry.dielectric_height_nm();
+        let effective = microstrip_effective_er(width_nm, geometry.copper_thickness_nm, height, er)?;
+        Some((geometry.structure(), effective))
+    } else {
+        Some((geometry.structure(), er))
+    }
 }
 
 fn microstrip_impedance(width_nm: i64, thickness_nm: i64, height_nm: i64, er: &Decimal) -> Result<Estimate> {

@@ -19,13 +19,50 @@ use sha2::{Digest, Sha256};
 /// The report key of the section.
 pub const KEY: &str = "emi";
 
-/// The EMI check of `board` for `design`: `Err` when the electrical view cannot be built or the
+/// What the return-path check of `emi-check` is given for a board, owned: nothing when the board is not a
+/// routed one, the native zone fills of a routed board, or the reason they could not be made. `emi-check --run` and the
+/// section `route-board` embeds both prepare it here, so `--write` reproduces the embedded section bit for bit.
+pub enum ReturnPath {
+    NotRequested,
+    Fills(copper_drc::emi::return_path::PlaneFills),
+    Unavailable(String),
+}
+
+impl ReturnPath {
+    /// `routed`: the board carries routed copper. The zones are filled only when a net is a subject of the check,
+    /// since a fill is not instant.
+    pub fn prepare(board: &PhysicalBoard, model: &copper_lang::emi::EmiModel, routed: bool) -> ReturnPath {
+        if !routed {
+            ReturnPath::NotRequested
+        } else if !copper_drc::emi::return_path::has_subjects(board, model) {
+            ReturnPath::Fills(copper_drc::emi::return_path::PlaneFills::default())
+        } else {
+            match copper_fullwave::fill::zone_fill_set(board) {
+                Ok(set) => ReturnPath::Fills(set.plane_fills()),
+                Err(reason) => ReturnPath::Unavailable(reason),
+            }
+        }
+    }
+
+    pub fn input(&self) -> copper_drc::emi::return_path::ReturnPathInput<'_> {
+        use copper_drc::emi::return_path::ReturnPathInput;
+        match self {
+            ReturnPath::NotRequested => ReturnPathInput::NotRequested,
+            ReturnPath::Fills(fills) => ReturnPathInput::Fills(fills),
+            ReturnPath::Unavailable(reason) => ReturnPathInput::Unavailable(reason.clone()),
+        }
+    }
+}
+
+/// The EMI check of the routed `board` for `design` (with the return-path check, which fills the zones when a net is a
+/// subject): `Err` when the electrical view cannot be built or the
 /// check panics (a screening aid must never stop a route).
 pub fn check(design: &Design, board: &PhysicalBoard) -> Result<copper_drc::emi::EmiCheckReport, String> {
     catch_unwind(AssertUnwindSafe(|| {
         let view = copper_lang::elaborate::elaborate(&design.electrical).map_err(|message| message.to_string())?;
         let model = copper_lang::emi::analyze(&view);
-        Ok(copper_drc::emi::emi_check(board, &view, &model))
+        let return_path = ReturnPath::prepare(board, &model, true);
+        Ok(copper_drc::emi::emi_check_with_return_path(board, &view, &model, &return_path.input()))
     }))
     .unwrap_or_else(|_| Err("the EMI check stopped on an internal error".to_owned()))
 }

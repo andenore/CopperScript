@@ -1,0 +1,12 @@
+// The receiving end of the same links.
+part Rx {
+    category = "interface.serdes";
+    pin AP { number = "1"; domains = "digital"; directions = "input"; }
+    pin AN { number = "2"; domains = "digital"; directions = "input"; }
+    pin BP { number = "3"; domains = "digital"; directions = "input"; }
+    pin BN { number = "4"; domains = "digital"; directions = "input"; }
+    pin CS { number = "5"; domains = "clock"; directions = "input"; }
+    pin CU { number = "6"; domains = "clock"; directions = "input"; }
+    pin CE { number = "7"; domains = "clock"; directions = "input"; }
+    pin GND { number = "8"; domains = "ground"; directions = "input"; }
+}

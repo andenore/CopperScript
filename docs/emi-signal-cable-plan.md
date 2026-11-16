@@ -2,8 +2,8 @@
 
 Status: plan revised five times on 2026-11-16 after five
 reviews (see
-"Changes from the reviews" at the end). **P1 is implemented (uncommitted, under review)**; see section 14 of
-`emi-noise-analysis.md`. P0 and P2 onward are not started. Base: `main` at `842112a`. This plan
+"Changes from the reviews" at the end). **P1 is implemented (commit 18c1453); P2 is implemented**; see sections 14 and 15 of
+`emi-noise-analysis.md`. P0 and P3 onward are not started. Base: `main` at `842112a`. This plan
 extends `copper emi-check` and the EMI specification in
 [`emi-noise-analysis.md`](emi-noise-analysis.md); read sections 1–8 of that
 document first, because every convention there applies here unchanged.

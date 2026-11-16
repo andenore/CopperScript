@@ -344,7 +344,8 @@ Writing one is the way to analyse a board routed by other tools.
 The checks use the copper the `PhysicalBoard` carries (tracks, arcs, vias,
 polygons, zones, and the copper of hard macros moved to the pose their cluster
 anchor gives). `physicalize` itself produces none, so without `--run` only a
-hard macro contributes copper.
+hard macro contributes copper. With `--run`, and a board that has a subject net, the command also fills the zones of the routed board natively and
+runs `EMI-RETURN-PATH` (section 15); the option list is unchanged.
 
 A finding is the `copper_drc::Finding` shape (code, severity, message,
 objects, nets, layers, `required_nm`, `measured_nm`) plus
@@ -363,13 +364,13 @@ cluster: its geometry is fixed, the cluster's position is not).
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
 | `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the levels are detector readings**: `measures.detector_applicability` is `isolated_lines` for every harmonic, or `receiver_emulation` for the harmonics the receiver model read), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where neither holds the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
-| `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
+| `EMI-RETURN-PATH` | implemented with `--run` (section 15); coverage `unsupported` without it | Per subject net (a signal source, or a differential, clock or rf_feed routing rule; a pair is one): reference-plane coverage within 3 H of each routed segment, the gaps crossed with slot length and half-wave resonance, reference changes at vias with the nearest stitching via or decoupling capacitor and the threshold, and the distance to the plane edge and board edge against 20 H; positions in `measures`; a ranking score in dB for the worst slot (`ranking_only`, no field, no margin) | ranking score, then number of breaks; after the absolute estimates |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
 
 Every check that cannot run on the given input gets a coverage entry with
 status (`executed`, `not_applicable`, `unsupported`) and reason; nothing is
 reported as a pass for what was not measured. Standing entries:
-`EMI-RETURN-PATH` and `EMI-DECOUPLING-PATH` (unsupported),
+`EMI-RETURN-PATH` (`executed` with a per-net entry when a routed run supplies the fills and a net is a subject, `not_applicable` without a subject net, else `unsupported` with the reason; section 15) and `EMI-DECOUPLING-PATH` (unsupported),
 `EMI-COPPER-TRACE` (traced copper path: `executed` when at least one copper leg of a hot loop is traced, else `unsupported` with the reason), `EMI-CABLE-COMMON-MODE`
 (common-mode radiation from cables and attached conductors, unsupported: the board model has no cable, chassis or return structure), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
@@ -2621,3 +2622,187 @@ in this phase); jitter, pre-emphasis, de-emphasis and multi-level signalling (PA
 driver's source impedance and the loading that makes `signal_swing` a loaded voltage; any detector
 weighting; reflections inside parts on the channel; and every consequence of the channel for the board (return-path breaks, mode
 conversion and the cable are later phases).
+
+## 15. Return paths: `EMI-RETURN-PATH` (P2 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the second phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); code in `crates/copper-drc/src/emi/return_path.rs`, example in
+`examples/emi_return_path/`, tests in `crates/copper-drc/tests/emi_return_path.rs` and
+`crates/copper/tests/emi_return_path_cli.rs`. It measures where the return current of a fast signal has no reference copper
+under its trace. It reports distances, lengths, a half-wave resonance and a ranking score; it never reports a field, a
+margin, a pass or a fail.
+
+### 15.1 When it runs and what it needs
+
+The check needs the routed board and the filled reference planes. `copper emi-check BOARD --run RUN` supplies the routed
+`PhysicalBoard` (section 8); the fills come from the native zone fill of that board (`copper_fullwave::fill::zone_fill_set`,
+the same export-parse-fill the extraction and the full-wave model use, so all three see the same copper) and are passed into
+`copper_drc::emi::emi_check_with_return_path` as `ReturnPathInput::Fills`. `copper-drc` cannot fill zones itself: the fill code
+lives in `copper-cam` and is reached through `copper-fullwave` and `copper-extract`, which depend on `copper-drc`. The fill is
+made only when the board has a subject net (below), because a zone fill is not instant. Without `--run` the input is
+`NotRequested` and nothing changes: the output of `emi-check` on a board without subject nets is byte-identical to before this
+phase, and on a board with subject nets the coverage entry says so (below). `emi-check` takes no new option. The section that `route-board` embeds in its report (`emi_section::check`) prepares the same input from its final board, so `emi-check --run RUN --write` still reproduces it bit for bit; a board with a switching cell and a subject net therefore has its zones filled once more at the end of `route-board`, inside the guard that turns any failure of the check into the section's error record. On a board with a switching cell and no subject net the embedded section's `EMI-RETURN-PATH` coverage entry is now `not_applicable` instead of `unsupported`.
+
+### 15.2 Subjects
+
+Every net with a signal source (`EmiModel::signals`, section 14) and every net of a `routing` constraint of kind
+`differential`, `clock` or `rf_feed` (the set `signal_integrity::needs_reference_plane` uses). The members of a differential
+pair are one subject: one finding and one coverage entry, named after the P net, with the members listed in `nets`. A subject
+that has only a routing rule and no signal source takes its edge time from the default band (section 14.2, tag
+`rule_of_thumb_signal_edge`); with no swing it gets no ranking score.
+
+### 15.3 Reference planes
+
+A reference net is a declared supply (`supply NAME { net = ...; }`, ground included). Its filled copper on a layer is a
+reference layer. For a signal layer the reference plane is the nearest reference layer above or below it, by the
+centre-to-centre height `H` of `Stack::height` (the convention of the hot-loop estimates; the dielectric height alone is
+smaller by half the two copper thicknesses). At equal height a layer with a ground net wins, then the layer higher in the
+stack-up. The nearest reference layer on the other side of the signal layer is listed as `reference[].other_plane` with
+`evaluated: false`: a stripline is evaluated against its nearer plane only. A layer with copper and no reference layer at all
+is listed under `layers_without_reference_plane`, all of its copper counts as uncovered, and it is a finding. The reference
+copper of a layer is the union of its reference nets' fills, so the gap between a ground and a supply pour on one layer is a
+void like any other; a trace that passes from one pour to the other on one layer is not reported as a reference change (not
+modelled).
+
+### 15.4 Coverage
+
+For each routed segment (tracks as drawn, arcs as chords with 5 um sagitta) the footprint is widened by `3 H` each side
+(`defaults::RETURN_WINDOW_H`) into a strip with flush ends and swept against the reference copper with integer-nanometre
+polygon operations. The uncovered length is the length of the centre line along which that cross-section is not entirely
+covered: the stations of the strip minus the reference copper, projected on the segment. Per segment, per layer and per
+member it is reported in millimetres (`uncovered_length_mm`) and together with the routed length. The cross-section is a strip,
+not the trace alone: a trace running along the edge of a cut within `3 H` of it is uncovered for the whole run.
+
+### 15.5 Slot crossing
+
+The voids of a reference layer are the connected pieces of its bounding box with no reference copper (the window is that
+bounding box: the connected hole of the plane is clipped to it, so a cut that runs to the plane's edge ends at the window).
+Every void that the widened strip meets is a gap; both members of a pair that cross the same void are one gap with two
+`crossings`. For each gap:
+
+* the slot length `L` is the extent of the void's outer contour along the in-plane direction perpendicular to the first
+  crossing segment (`slot_length_mm`): the plan's definition, not the principal axis of the void (a slanted slot is
+  measured across the trace, not along itself);
+* the resonance is `c / (2 L sqrt(eps_eff))` (`resonance_hz`) with `eps_eff` of the trace layer as the impedance screening
+  computes it from the declared stack-up (`signal_integrity::effective_permittivity`: Hammerstad's effective permittivity of a
+  microstrip, the plane-spacing weighted permittivity of a stripline; without a declared stack-up the assumed permittivity
+  and the microstrip formula);
+* `kind` is `cut_to_plane_edge` when the void reaches the window (a cut or a notch from the plane's edge) and `enclosed_void`
+  otherwise; `via_antipads_in_void` counts the board's vias that pass through the layer inside the void. The antipads of a
+  row of vias whose clearances merge are one void, hence one slot (tested with five vias 0.8 mm apart); a single antipad of
+  another net is a gap too, with its diameter as length;
+* the antipad of the subject's own via is not a gap: it is how a layer transition looks in a plane and is examined as a
+  reference change (15.6). A void holds exactly one via, a via of the subject, and is at most three via diameters long.
+  Such a void is closed for the coverage and the gap test.
+
+### 15.6 Reference change at a via
+
+For each via of a subject net the layers where a segment of that net ends within the via's radius are taken in stack-up order;
+for each consecutive pair the reference (plane layer and, from the nearest reference-net fill at the via, its net) before and after
+is compared. Different layer or net is a change. The nearest return path:
+
+* same net on two plane layers: a via of that net whose span covers both reference layers (`return_span_covers`, the helper of
+  the native rule `require_return_vias`, now shared), by centre distance (`return_path = stitching_via`);
+* different nets: a capacitor with a pad on each net, by the distance from the via to the nearer of its pad centres
+  (`decoupling_capacitor`; `return_element` is its reference);
+* a side with no reference plane: `none`.
+
+The threshold is the net's declared `maximum_return_via_distance` when a routing rule of the subject has one
+(`threshold_source = declared maximum_return_via_distance`), else `lambda / 20` at the knee `0.35 / t_r` (`t_r` the
+shorter of the 10-90 % rise and fall times, `lambda = c / (f sqrt(eps_eff))`, the larger `eps_eff` of the two layers; tag
+`rule_of_thumb_return_via_distance`, `threshold_source = lambda_over_20_at_knee_frequency`). The native rule is
+unchanged. It stays a pass-or-fail check for single-ended nets that declare `require_return_vias`; this check runs on every
+subject, includes pairs, and reports the distance. For a via of such a net the same test (`return_via_covered`, shared) says
+whether the DRC rule fails it (`drc_rule.satisfied`); a via that fails is listed with its distance and `reported_by_drc`, and the
+message says that the rule reports it. The rule also fails vias that change no reference; this check says nothing about those.
+
+### 15.7 Plane edge and board edge
+
+Each segment is sampled every 0.25 mm at most. The distance to the outer contours of the reference copper (holes are gaps, not
+edges) and to the board outline is compared with `20 H` (`defaults::EDGE_DISTANCE_H`): the smallest distance with its position
+(`nearest_mm`, `at_mm`), the length within the limit and `within_limit`. On an outer layer, the length within `20 H` of the board
+edge with no stitched ground via on the edge side is `outer_layer_unguarded_edge_length_mm`: a guard is a via of a reference net
+whose span covers the signal layer and the reference plane, lies within `20 H` of the sample and is closer to the board edge than
+the sample is. One via guards the samples within `20 H` of it, so this is a coarse test of a ground fence, not of its pitch.
+
+### 15.8 The finding
+
+`EMI-RETURN-PATH`, warning severity, no cell, one per subject, present only when there is something to report: copper on a layer
+with no plane, uncovered length, a gap, a reference change without a return path within its threshold, or a trace within `20 H` of a
+plane or board edge. A subject with none of these has only its coverage entry, which says so ("not a pass"). `nets` lists the
+members, `subjects` the driving pins and components for `emi_accept`. `measures`:
+
+| Key | Content |
+|---|---|
+| `subject`, `members[]` | the P net; per member: routed and uncovered length, per layer the segment count, `plane_edge` and `board_edge` (`nearest_mm`, `at_mm`, `limit_mm`, `within_limit`, `length_within_limit_mm`), `outer_layer_unguarded_edge_length_mm` |
+| `routed_length_mm`, `uncovered_length_mm` | totals over the members |
+| `reference[]` | per signal layer: reference layer and nets, `height_mm`, `structure`, `effective_permittivity`, `other_plane` |
+| `gaps[]` | `nets`, `signal_layer`, `reference_layer`, `position_mm`, `kind`, `via_antipads_in_void`, `crossings[]` (net, segments, `length_mm`), `slot_length_mm`, `effective_permittivity`, `resonance_hz`, `quarter_wave_resonance_hz` (null for an `enclosed_void`) |
+| `reference_changes[]` | `net`, `via`, `position_mm`, `layers`, `reference_before`/`reference_after` (layer, net), `return_path`, `return_element`, `return_distance_mm`, `threshold_mm`, `threshold_source`, `within_threshold`, `drc_rule` (null, or rule, `satisfied`, `reported_by_drc`) |
+| `via_transitions_examined`, `drc_return_via_reported`, `thresholds` | the count of layer transitions looked at; the vias the DRC rule reports; the three factors in force |
+| `ranking` | `slot_mm`, `worst_gap_position_mm` and `spectrum` of the worst gap, or `score: null` with the reason |
+| `inputs_text` | the `input:` lines of the defaults used |
+
+Positions are `[x, y]` in millimetres in board coordinates, so CopperReview and the plots can mark them.
+
+**Ranking score.** Where a gap exists and the signal has a swing: `20 log10(V(f_res) L / (1 V * 1 mm))` for the worst gap
+(`estimate.quantity = slot_ranking_score`, unit dB, `kind = ranking_score`, tag `ranking_only`; no margin, never compared with a
+limit), with `f_res` the slot's resonance, `L` its length in mm and `V` the continuous bound of the signal's spectrum at `f_res`
+(`copper_emi::signal::continuous_bound` at the swing and the shorter edge ramp, the 10-90 % time divided by 0.8). The continuous
+bound is the headline because it is the one of the three spectrum quantities of section 14.4 that needs no assumption about
+the data pattern; `measures.ranking.spectrum` carries all three by name beside it, each with its own score: `continuous_bound`,
+`pattern_lines` (the strongest line of each named pattern within one octave around the resonance, null where a pattern has no
+line there) and `random_data_in_rbw` (120 kHz, CISPR 16-1-1 above 30 MHz) for a signal with a `data_rate`, and `clock_lines` for one with a
+`clock_frequency`. A single-ended signal with no `signal_swing` has no swing (section 14.2) and so no score. With a default edge
+or swing the estimate carries `band_db` (the score at the unfavourable and the favourable end of the bands) and `basis =
+rule_of_thumb`. `not_modelled` names slot radiation efficiency, plane-pair cavity modes, enclosure and cable coupling, the
+common-mode part of a differential pair (the score takes the whole signal, so it overstates a balanced pair; mode conversion is
+a later phase), return current outside the window and the other plane of a stripline.
+
+Tags: `rule_of_thumb_return_window` and `rule_of_thumb_edge_distance` on every finding (the `3 H` and `20 H` are used),
+`rule_of_thumb_return_via_distance` when a threshold is `lambda / 20`, `rule_of_thumb_signal_edge`/`_swing` when a default edge
+or swing feeds a number, `ranking_only` with a score. `rank` (the order among findings with no estimate) is the number of gaps
+plus the number of changes without a return path plus the uncovered length in metres.
+
+### 15.9 Coverage
+
+`EMI-RETURN-PATH` is `executed` when at least one subject was examined, with an entry `EMI-RETURN-PATH:<net>` per subject
+(`executed` with the numbers, or `unsupported` when the net has no routed copper); `not_applicable` when the board has no subject
+net and a run was given; `unsupported` otherwise, with the reason: not requested (a board with no subject net keeps the entry of
+before this phase word for word; one with subject nets says that a routed run is needed), the fills could not be made (the
+fill's own error, for example a rule the native evaluator does not support), or no subject net has routed copper.
+
+### 15.10 Defaults and their sources
+
+All in `crates/copper-drc/src/emi/defaults.rs`, section 7, each with its tag, band and a statement of its source.
+
+| Default | Value (band) | Source |
+|---|---|---|
+| Coverage window | `3 H` each side (2 H to 5 H) | derived: the plane current density of a thin line at height `H` over an infinite plane is `I H / (pi (x^2 + H^2))` (method of images), so the share within `k H` is `(2/pi) atan(k)`: 50 % at 1 H, 70.5 % at 2 H, 79.5 % at 3 H, 87.4 % at 5 H. No published citation is given because none was checked |
+| Plane and board edge | `20 H` (10 H to 100 H) | the "20 H rule" of EMC design guides (Montrose, *Printed Circuit Board Design Techniques for EMC Compliance*), from memory and **not checked against the text: no verified citation** |
+| Return via distance | `lambda / 20` (lambda / 10 to lambda / 40) at the knee `0.35 / t_r` | `0.35 / t_r` as in section 14.2; the `lambda / 20` fraction **has no published source**: a screening choice |
+| Half-wave resonance | `c / (2 L sqrt(eps_eff))` | the half-wave resonance of a slot, by definition; `eps_eff` as the impedance screening computes it |
+| Quarter-wave resonance | `c / (4 L sqrt(eps_eff))` | reported as `quarter_wave_resonance_hz` for a `cut_to_plane_edge` gap only: a notch open at the plane edge and closed at its other end resonates there, a cut through the plane does not. The void's shape does not tell the two apart, so the score keeps the half wave and the lower frequency is carried beside it |
+
+### 15.11 Validation
+
+Against hand calculations in the tests (`crates/copper-drc/tests/emi_return_path.rs`): the stack-up of the example gives `H = 0.235 mm`,
+`3 H = 0.705 mm`, `20 H = 4.7 mm` and `eps_eff = 3.0844` for the 0.12 mm lanes; a pair over the solid pour has no gap and no finding; the
+same pair across the 2 mm cut has one gap with `L = 76 mm` (the pour is 76 mm across), `f_res = c / (2 L sqrt(3.0844)) = 1.1230 GHz`, 2 mm
+uncovered per trace and the score `20 log10(0.25465 * 76) = 25.735 dB` (swing 0.4 V, ramp 0.125 ns, so the bound is
+`2 * 0.4 / pi`); an enclosed 30 mm slot gives `L = 30 mm`, `f_res = 2.845 GHz`; a row of five antipads is one void of `3.2 mm +
+one antipad diameter`; a via beside which a ground via sits 1.5 mm away passes a 2 mm threshold and one with the nearest
+stitching via at `sqrt(1.5^2 + 7^2) = 7.159 mm` does not, which is also what the native DRC rule reports; the default threshold is
+`c / (0.35 GHz sqrt(eps) 20) = 24.0 mm` for a 1 ns edge and a tenth of that for 0.1 ns; a capacitor between two supply planes is a return
+path at the distance to its nearer pad; a trace 3 mm from the board edge and 1 mm from the plane edge reports both distances against 4.7 mm and
+20 mm unguarded, and none unguarded with a fence of ground vias. The defaults module tests the derived window fraction and the threshold.
+None of this is correlated with a measurement.
+
+### 15.12 Not modelled
+
+Radiation efficiency of a slot and what feeds it; plane-pair cavity modes and the resonance of the board as a whole; the enclosure; the
+inductance of the detour around a gap and current crowding at its ends; return current beyond the window; the second plane of a
+stripline and the split of its return current; a reference net that changes inside one plane layer; vias in pads and transitions where the net's
+copper does not end on the via; the reference plane's own gaps from other layers (a plane is judged by the single reference layer chosen); the common-mode
+part of a differential pair (P3); the effect of nearby ground copper on the signal layer (a coplanar return); the effect of a
+thermal relief or a fill island of a reference net that the fill removed; and nets that are not declared supplies as references.

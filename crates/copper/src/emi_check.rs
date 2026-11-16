@@ -11,7 +11,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use copper_drc::emi::emi_check;
+use copper_drc::emi::emi_check_with_return_path;
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
 use copper_lang::footprints::FootprintResolver;
@@ -201,7 +201,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         return 2;
     }
     let model = copper_lang::emi::analyze(&view);
-    let mut report = emi_check(&physical, &view, &model);
+    // The return-path check needs the routed copper (`--run`) and the native zone fills of its board.
+    let return_path = crate::emi_section::ReturnPath::prepare(&physical, &model, parsed.value("--run").is_some());
+    let mut report = emi_check_with_return_path(&physical, &view, &model, &return_path.input());
     if let Some(options) = &fullwave {
         crate::emi_fullwave::apply(&physical, &mut report, options, err);
     }

@@ -48,6 +48,7 @@ use crate::{Coverage, CoverageStatus, Finding, Severity};
 mod conducted;
 pub mod defaults;
 mod field;
+pub mod return_path;
 pub mod signal;
 
 /// The `schema` of [`EmiCheckReport::json`].
@@ -3940,11 +3941,22 @@ pub fn emi_check_with_connections(
     model: &EmiModel,
     extracted: &[ExtractedConnections],
 ) -> EmiCheckReport {
-    emi_check_inner(board, view, model, extracted)
+    emi_check_inner(board, view, model, extracted, &return_path::ReturnPathInput::NotRequested)
+}
+
+/// [`emi_check`] with the return-path check supplied (see [`return_path::ReturnPathInput`]): the routed board is the
+/// `board` and `input` carries the native zone fills of its zones. With `NotRequested` it is [`emi_check`], bit for bit.
+pub fn emi_check_with_return_path(
+    board: &PhysicalBoard,
+    view: &FlatElectricalView,
+    model: &EmiModel,
+    input: &return_path::ReturnPathInput,
+) -> EmiCheckReport {
+    emi_check_inner(board, view, model, &[], input)
 }
 
 pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiModel) -> EmiCheckReport {
-    emi_check_inner(board, view, model, &[])
+    emi_check_inner(board, view, model, &[], &return_path::ReturnPathInput::NotRequested)
 }
 
 fn emi_check_inner(
@@ -3952,6 +3964,7 @@ fn emi_check_inner(
     view: &FlatElectricalView,
     model: &EmiModel,
     extracted: &[ExtractedConnections],
+    return_input: &return_path::ReturnPathInput,
 ) -> EmiCheckReport {
     let standard = standard_of(view);
     let connectors = cable_connectors(view, &standard);
@@ -3987,6 +4000,7 @@ fn emi_check_inner(
         switch_node(&mut cx, cell);
         proximity(&mut cx, cell);
     }
+    let return_coverage = return_path::analyze(&mut cx, return_input);
     apply_accepts(view, &mut cx.findings);
 
     match (&cx.standard.name, &cx.standard.unsupported) {
@@ -4010,11 +4024,9 @@ fn emi_check_inner(
             );
         }
     }
-    cx.cover(
-        "EMI-RETURN-PATH".to_owned(),
-        CoverageStatus::Unsupported,
-        "needs filled copper (zone fills) and traced routed copper: reference-plane gaps, plane edges and layer changes without a return via are not examined",
-    );
+    for (check, status, detail) in return_coverage {
+        cx.cover(check, status, detail);
+    }
     cx.cover(
         "EMI-DECOUPLING-PATH".to_owned(),
         CoverageStatus::Unsupported,
