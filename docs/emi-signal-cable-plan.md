@@ -1,6 +1,7 @@
 # EMI: fast digital signals and cable common mode — implementation plan
 
-Status: plan, not started; revised twice on 2026-11-16 after two reviews (see
+Status: plan, not started; revised three times on 2026-11-16 after three
+reviews (see
 "Changes from the reviews" at the end). Implementation is on hold until the revised plan is
 accepted. Base: `main` at `842112a`. This plan
 extends `copper emi-check` and the EMI specification in
@@ -300,50 +301,92 @@ existing EMI tests unchanged.
 New module `crates/copper-drc/src/emi/mode_conversion.rs`; closed forms in
 `copper-emi/src/estimate.rs` (or a new `signal.rs`).
 
-**Per differential pair**, sum the imbalance contributors as a time skew and an
-amplitude imbalance:
-- intra-pair routed length difference (reuse
-  `signal_integrity::routed_match_length_nm`; delay from the stack-up's
-  effective permittivity per layer, as `si-check` computes it);
-- via-count difference between the members;
-- asymmetric return-path breaks from P2 (one member over a gap the other does not
-  cross: amplitude imbalance from the uncovered length fraction, a rule of
-  thumb, tagged);
-- asymmetric proximity to the plane or board edge (from P2), ranking only.
+**Names, used the same way in P3, P4 and P6.** Input and output are different
+planes and never share a symbol:
 
-**Network (stated in the finding and the docs).** Two legs driven by an ideal
-odd-mode source and observed as voltages at one plane (the end of the routed
-pair, or the connector pins after the channel walk of P1), each leg against
-the board reference there, both legs terminated alike. `V_diff = V_p - V_n`,
-peak-to-peak as `signal_swing` declares it for a differential pin;
-`V_cm = (V_p + V_n) / 2`. This is a **voltage ratio at that plane**, not a
-power-normalized mixed-mode S-parameter (see P6 for the relation).
+- `V_diff,in`: the differential voltage the driver launches, `V_p - V_n` at the
+  driver's pins; its spectrum comes from the declared `signal_swing`, rate and
+  edge (P1). This is the excitation.
+- `V_p,out`, `V_n,out`: the two leg voltages at the observation plane (a named
+  point of the channel: the end of a routed section, or the connector pins),
+  each against the board reference there.
+- `V_diff,out = V_p,out - V_n,out` and `V_cm,out = (V_p,out + V_n,out) / 2`.
 
-**Estimate, from the two complex leg responses.** With leg gains `1 + a` and
-`1 - a` (amplitude imbalance `a = (|V_p| - |V_n|) / (|V_p| + |V_n|)`) and one
-leg delayed by `Δt`:
+The conversion P3 reports is `V_cm,out / V_diff,in`: common mode at the
+observation plane per unit of launched differential voltage. It is **not**
+`V_cm,out / V_diff,out`. For pure skew `Δt` the two are
 
-`V_p = (V_diff / 2)(1 + a)`, `V_n = -(V_diff / 2)(1 - a) exp(-j 2 pi f Δt)`
+- `|V_cm,out / V_diff,in| = (1/2) |sin(pi f Δt)|`
+- `|V_cm,out / V_diff,out| = (1/2) |tan(pi f Δt)|`
 
-`|V_cm| / |V_diff| = (1/2) sqrt( sin^2(pi f Δt) + a^2 cos^2(pi f Δt) )`
+(0.354 and 0.5 at `f Δt = 0.25`, a 3 dB difference; the second grows without
+bound where the skew cancels the differential signal). Both are voltage ratios,
+not power-normalized mixed-mode S-parameters (P6 gives the relation). The
+finding names the ratio and both planes.
 
-Skew alone gives `(1/2)|sin(pi f Δt)|`, imbalance alone `a / 2`. Taking the
-larger of the two is **not** used: with both terms at 0.1 it reads about 3 dB
-low. Implement the leg responses as complex numbers and form `V_cm` from them,
-so that further per-leg terms (a via, a coupling capacitor's tolerance) add to
-the legs rather than to a formula. Report the conversion
-`20 log10(|V_cm| / |V_diff|)` in dB at the fundamental and its worst value up to
-the edge corner, and the CM voltage spectrum that P4 uses, for each spectrum
-quantity of P1. Lane-to-lane skew of a match group is **not** a contributor;
-say so in the finding's notes. The skew and via-count terms are closed forms;
-the amplitude imbalance from asymmetric return-path breaks is a rule of thumb
-and is tagged as one.
+**The channel is an ordered cascade, not a sum.** Where a conversion happens
+relative to a filter decides what the filter does to it: common mode generated
+*before* a common-mode choke passes through the choke; common mode generated
+*after* it does not. With a choke whose common-mode transfer is 0.1, upstream
+conversion is suppressed by 20 dB and downstream conversion not at all, so
+adding the skews of the whole channel and applying the choke to the total can
+be wrong by the full attenuation. P3 therefore keeps the order the channel walk
+of P1 gives, as a list of elements from driver to observation plane:
 
-**Tests.** A numerical two-waveform check, independent of the formula: build
-two opposite trapezoids, scale and delay one, and compare the spectrum of their
-mean with the estimate, for delay only, amplitude only, and both together
-(including `a = sin(pi f Δt) = 0.1`); a synthetic pair with a known length
-skew; zero skew and zero imbalance give no conversion.
+- *routed sections* (between two hops, per layer): each has its own leg
+  responses, a complex gain per leg from that section's intra-pair length
+  difference (delay from the layer's effective permittivity, as `si-check`
+  computes it), via-count difference, and the amplitude imbalance from
+  asymmetric return-path breaks or edge proximity found by P2 in that section
+  (rule of thumb, tagged);
+- *series parts* from the walk: a coupling capacitor (per-leg, its tolerance an
+  amplitude imbalance), a common-mode choke or ferrite (acts on the modes, not
+  the legs).
+
+**Estimate: propagate the two leg amplitudes through the cascade.** State
+`(V_p, V_n)`, starting at `(V_diff,in / 2, -V_diff,in / 2)`.
+
+- A routed section multiplies each leg by its own complex gain,
+  `g_p = (1 + a) exp(-j 2 pi f t_p)`, `g_n = (1 - a) exp(-j 2 pi f t_n)`.
+- A modal element converts to `(V_diff, V_cm)`, multiplies the differential
+  part by its `T_dd(f)` and the common part by its `T_cc(f)`, and converts back.
+  `T_cc` of a choke is the P4a series network in the common-mode circuit with a
+  stated common-mode impedance on each side.
+- `V_cm,out` and `V_diff,out` are read from the state at the observation plane.
+
+Assumption, stated in the finding: a matched cascade without reflections
+between elements (each element sees its reference impedances); reflections and
+mode conversion inside parts are `not_modelled`.
+
+For one section with gain and delay mismatch and no modal element this reduces
+to the closed form
+
+`|V_cm,out / V_diff,in| = (1/2) sqrt( sin^2(pi f Δt) + a^2 cos^2(pi f Δt) )`
+
+(skew alone `(1/2)|sin|`, imbalance alone `a / 2`; taking the larger of the two
+would read about 3 dB low when both are 0.1, and is not used).
+
+**Finding.** `EMI-MODE-CONVERSION:<pair>`: `|V_cm,out / V_diff,in|` in dB at the
+fundamental and its worst value up to the edge corner; the `V_cm,out` spectrum
+at each observation plane P4 needs (before and after each modal element, and at
+the connector pins), for each spectrum quantity of P1; and the contribution of
+each element in order, so a reviewer sees which section converts and whether a
+choke is upstream or downstream of it. Lane-to-lane skew of a match group is
+**not** a contributor; say so in the notes.
+
+**Tests.** Independent of the estimator's formulas:
+
+- a numerical two-waveform check: two opposite trapezoids, one scaled and
+  delayed; the spectrum of their mean against the estimate for delay only,
+  amplitude only and both together (including `a = sin(pi f Δt) = 0.1`), and the
+  two ratios (`/ V_diff,in` and `/ V_diff,out`) told apart at `f Δt = 0.25`;
+- **order fixtures:** two channels with identical total skew and the same
+  choke (`T_cc = 0.1`), one with the choke after the skewed section and one
+  with it before. The first reads 20 dB below the unfiltered conversion at the
+  connector, the second reads the unfiltered conversion; a third with the skew
+  split evenly on both sides reads between them, as the cascade gives it;
+- a synthetic pair with a known length skew on a routed board; zero skew and
+  zero imbalance give no conversion.
 
 ---
 
@@ -394,9 +437,65 @@ instead of against themselves.
 5. *Choke in the signal lines only.* A choke that carries the pair but not the
    ground conductor attenuates the pair's common mode (1) and leaves a voltage
    on the ground conductor (the ground-noise driver) unchanged.
+6. *Choke position.* The order fixtures of P3 (the same total skew with the
+   choke before and after the skewed section), solved as a network of two legs
+   and a common-mode series impedance by the nodal solver, against the cascade.
+7. *Ground-noise transfer.* The two-loop network defined below: `V_B = Z_BA I_A`
+   with `Z_BA` from a numerical Neumann integral over the two loops' filaments
+   (written in the test, sharing no code with `copper-emi`'s closed forms or
+   with `copper-extract`), against whatever closed form P4 uses for the same
+   geometry; and the sign cases listed below.
 
-**Accept.** The definitions are in the docs; the fixtures pass; every formula P4
-uses is one of these networks.
+**The ground-noise network (defined here, used by P4's ground-noise driver).**
+`omega L_gnd I_return` is not a calculation until these four are stated; the
+corridor rule of P4 only selects which sources are considered, it does not give
+their coupling.
+
+- *Driven loop A.* One per source: from the driver pin along the routed copper
+  to the load (or the connector pin), back through the reference plane under
+  the route to the driver's reference pin. Its current is
+  `I_A(f) = V_source(f) / (Z_source + Z_A)`, with `V_source` the P1 spectrum,
+  `Z_source` the driver's output impedance and `Z_A` what the loop presents: the
+  line's characteristic impedance (from the stack-up, as `si-check` computes
+  it) while the edge travels on a terminated or long line, or the declared load.
+  `Z_source` is a new optional pin attribute (`output_impedance`); without it,
+  or without a characteristic impedance for the route, `I_A` is **not**
+  estimated (see the fallback).
+- *Observation loop B.* The loop whose voltage is the ground-noise voltage at
+  the connector: from the connector's ground pins through the reference plane
+  to the source's reference pin, closed by a stated sense path. The sense path
+  is part of the definition because the answer depends on it (it stands for the
+  cable leaving the board and the antenna's other conductor): v1 uses a
+  straight return at a stated height above the reference plane, a scenario
+  parameter with a band, and the finding reports how much the result moves
+  across that band.
+- *Transfer.* `V_B = Z_BA I_A`, `Z_BA = j omega M_BA` plus the resistance of the
+  copper the two loops share. `M_BA` is the mutual inductance of loops A and B;
+  "`L_gnd`" in this plan means `M_BA` and nothing else.
+- *Signed contributions.* Currents add as complex numbers with their direction.
+  A differential pair contributes through its common-mode current
+  `I_p + I_n` only (equal and opposite leg currents under one reference cancel
+  in `M_BA` to the extent the legs share geometry, and the fixture checks that
+  they do); several sources are summed as phasors only when they are harmonics
+  of one clock, otherwise as powers.
+
+*Sign and cancellation cases for fixture 7:* a single loop A beside B; A moved
+away (the transfer falls); an ideal pair with equal and opposite currents (the
+transfer cancels to the geometric difference of the legs); the same pair with a
+common-mode current (the transfer follows `I_p + I_n`); the sense height varied
+across its band.
+
+*Fallback, binding for P4.* Where `Z_source`, the route's characteristic
+impedance or the geometry of either loop is not available, or where the result
+moves by more than 6 dB across the sense-path band, no ground-noise voltage is
+published for that source. It is ranked by geometry instead: corridor overlap
+with the connector's ground path, distance, and any P2 slot between them.
+Extraction of `M_BA` from the real copper stays deferred (P5); the definition
+does not.
+
+**Accept.** The definitions are in the docs, including the ground-noise
+network and its fallback; the fixtures pass; every formula P4 uses is one of
+these networks.
 
 ---
 
@@ -432,6 +531,7 @@ stays unused by the report.
 |---|---|---|
 | pin | `emi_role = shield` | A connector pin bonded to the cable's shield or shell (new `EmiRole::Shield`, a victim-side role, not an aggressor) |
 | pin | `passes_to` | from P1: the pin this pin passes a signal to, for parts with more than two pins |
+| pin | `output_impedance` | from P4a: a driver pin's output impedance, needed for the ground-noise current; without it that source is ranked by geometry only |
 | part | `cable_shielded` | bool: the cable the connector takes is shielded |
 | part | `common_mode_impedance` | complex or magnitude impedance of a common-mode choke or ferrite at `common_mode_impedance_frequency`; may be given at several frequencies |
 | `emission` constraint | `cable_length` | already exists; recorded in the finding (it sets the quarter-wave frequency above which the cable is resonant) |
@@ -440,17 +540,23 @@ stays unused by the report.
 the board reference at the connector, with its network from P4a.
 
 1. *Differential pairs leaving on the cable.* Found by the channel walk of P1
-   (not by `NetClasses::external`, which stops after one series element):
-   `V_cm` of P3 at the connector pins, for each spectrum quantity. Coupling
-   capacitors on the channel are in the leg responses.
-   A common-mode choke on the channel is the series element of P4a's fixture 3:
-   the voltage delivered beyond it is
-   `V_source · Z_load / (Z_source + Z_cmc + Z_load)`, all complex and functions
-   of frequency. The **load** `Z_load` (the pair's common-mode termination at
-   the far end and the cable's pair-to-return common-mode impedance) is not on
-   the board: it is a stated scenario value with a band, and the finding gives
-   the voltage both before the choke (a board quantity) and beyond it (a
-   scenario quantity, labelled).
+   (not by `NetClasses::external`, which stops after one series element). The
+   voltage is `V_cm,out` of P3 at the connector pins, for each spectrum
+   quantity, taken from P3's ordered cascade. P4 applies **no** choke divider
+   of its own to it: a choke on the channel is already an element of that
+   cascade at its position, so conversion upstream of it is attenuated and
+   conversion downstream of it (the routing from the choke to the connector,
+   the connector's own breakout) is not. The finding shows the two parts
+   separately: common mode arriving from upstream of the last choke, and common
+   mode generated after it.
+   The choke's common-mode transfer `T_cc(f)` is the P4a series network,
+   `Z_after / (Z_before + Z_cmc + Z_after)`, complex and a function of
+   frequency, with the common-mode impedances on either side stated. On the
+   board side that is a board quantity; when the choke is the last element
+   before the connector, `Z_after` is the cable's pair-to-return common-mode
+   impedance and the far-end termination, which are not on the board: a stated
+   scenario value with a band, and the result is labelled as a scenario
+   quantity beside the voltage before the choke.
    *Applicability of the declared impedance.* A choke's impedance is strongly
    frequency dependent and changes from inductive to resistive to capacitive.
    One declared magnitude at one frequency supports an attenuation **at that
@@ -458,7 +564,7 @@ the board reference at the connector, with its network from P4a.
    interpolated on log axes; nothing is extrapolated beyond the declared range,
    and outside it the choke is reported as present with its attenuation
    `not_modelled`. With magnitudes only (no phase), the series sum is bounded
-   by `| |Z_cmc| - |Z_source + Z_load| |` and `|Z_cmc| + |Z_source + Z_load|`
+   by `| |Z_cmc| - |Z_before + Z_after| |` and `|Z_cmc| + |Z_before + Z_after|`
    and the result is that band, not a single value.
 2. *Single-ended signals leaving on the cable.* Their swing is **not** taken as
    common-mode voltage: a signal whose return is in the same cable is not
@@ -466,26 +572,29 @@ the board reference at the connector, with its network from P4a.
    driven by their own return current, and a ranking-only entry lists them with
    edge time and swing. Signal-to-return imbalance inside the cable is
    `not_modelled`.
-3. *Ground noise (current-driven).* The voltage along the board's reference
-   between a noise source and the connector's ground pins,
-   `V = 2 pi f L_gnd I_return` (`current_driven_cm_voltage`). This is the driver
-   that acts on the **bundle** (every conductor of the cable is referenced to
-   that ground), which is why it matters most for radiation, and a choke in the
-   signal lines does not attenuate it (P4a fixture 5). The rule for which
-   return currents count:
-   - the return current of a signal that leaves on this connector always counts;
-   - the return current of another fast net or of a switching cell counts when
-     the straight corridor between its source and load pins, widened by the
-     `3 H` of P2, overlaps the corridor between this connector's ground pins
-     and the nearest point of that net's return path on the same reference
-     plane; otherwise it is listed as `not_counted` with the distance.
-
-   `L_gnd` is a closed-form ground-plane partial inductance for the geometry:
-   name the published form, state its validity range, check it by hand in
-   tests. A slot from P2 on the path raises it by the slot's detour (rule of
-   thumb, tagged). This is the weakest number in the plan (published closed
-   forms for a finite plane differ substantially): its band says so, and its
-   place in the ranking is flagged when the band overlaps another driver's.
+3. *Ground noise (current-driven).* The voltage `V_B = Z_BA I_A` of P4a's
+   ground-noise network: driven loop, observation loop with its sense path,
+   source and load impedances and signed contributions are defined there, and
+   P4 uses that definition unchanged. This is the driver that acts on the
+   **bundle** (every conductor of the cable is referenced to that ground), and
+   a choke in the signal lines does not attenuate it (P4a fixture 5).
+   - *Which sources are considered* (selection only, not coupling): the return
+     current of a signal that leaves on this connector always; another fast net
+     or a switching cell when the straight corridor between its source and load
+     pins, widened by the `3 H` of P2, overlaps the corridor between this
+     connector's ground pins and the nearest point of that net's return path on
+     the same reference plane; otherwise it is listed as `not_counted` with the
+     distance.
+   - *When a voltage is published.* Only when P4a's inputs exist for that source
+     (`output_impedance`, a characteristic impedance for the route, both loops'
+     geometry) and the result stays within 6 dB across the sense-path band.
+     `M_BA` is then a closed form for the two loops over the plane: name the
+     published form, state its validity range, and it must agree with P4a's
+     fixture 7 for the test geometries. A slot from P2 between the loops is not
+     in the closed form: it makes the source ranking-only, with the slot named.
+   - *Otherwise: geometry ranking only* (P4a's fallback): corridor overlap,
+     distance and slots, tagged `ranking_only`, no voltage. This is expected to
+     be the common case in v1, and the finding says which input was missing.
 4. *Switch-node coupling (voltage-driven).* The island capacitance of
    `EMI-SWITCH-NODE` to the connector's shell and pins times the switch voltage
    spectrum. A score in dB like the existing `cm_coupling_score`; no voltage.
@@ -501,7 +610,8 @@ with neither attribute is treated as unshielded and tagged
 conductors and reference its voltage is between, the voltage spectrum (in
 dBµV, per spectrum quantity for data), the channel provenance (parts crossed),
 and its rank. Drivers 1 and 3 are ranked by voltage **within their own kind**
-and shown side by side; they are not summed and not converted to one figure,
+(driver 3 only for the sources that have a published voltage; the others are
+ranked by geometry beside them) and shown side by side; they are not summed and not converted to one figure,
 because they act on different conductors (pair against reference, bundle
 against the environment). Drivers 2 and 4 are ranking-only. `not_modelled`:
 the bundle's net current, cable routing and height, chassis, enclosure,
@@ -514,7 +624,10 @@ board where a pair with known skew leaves on a cable through coupling
 capacitors and a four-pin choke (channel walk → P3 → P4 end to end); the choke
 cases of fixture 3 (none, equal, large) through the real code path; a choke
 declared at one frequency gives an attenuation at that frequency and
-`not_modelled` elsewhere; a single-ended line on a cable produces no voltage
+`not_modelled` elsewhere; the same total skew with the choke before and after
+the skewed section, through the real code path, against P3's order fixtures; a
+ground-noise source with all P4a inputs gives a voltage that matches fixture 7,
+one without `output_impedance` gives a geometry ranking and no voltage; a single-ended line on a cable produces no voltage
 from its swing; the corridor rule on a net that does and one that does not
 share the connector's reference path; a shielded cable gives the bond report.
 
@@ -544,7 +657,10 @@ one at the connector's ground pins, both against the plane") does not exist in
 `copper-extract` as built, for three reasons that must be resolved on paper and
 in a spike before any product code:
 
-1. **Definition.** The extraction's ports are loops: two terminals on copper,
+1. **Definition.** (The network itself, driven loop, observation loop, sense
+   path and transfer `Z_BA`, is now defined in P4a and is not postponed to this
+   phase; what remains here is how to realise it in the extraction.) The
+   extraction's ports are loops: two terminals on copper,
    closed through the network. The voltage along a plane between two points is
    a partial-inductance quantity and depends on the path of the voltmeter (here:
    the cable). Write down the definition first, for example: port A is the
@@ -585,25 +701,34 @@ symmetric pair asymmetric unless both members lie on the grid identically.
 grid-aligned symmetric pair over a solid plane with four ports, and the same
 pair with one member lengthened by a known skew.
 
-**Quantities, specified before the spike.** Single-ended port impedance
-`Z0` (stated, real), reference planes at the port positions, all four ports
-terminated in `Z0`. Mixed-mode conversion with the conventional normalization
-`Z_d = 2 Z0`, `Z_c = Z0 / 2`. Two different things are then tested separately:
+**Quantities, specified before the spike** (names as in P3). Single-ended
+port impedance `Z0` (stated, real), reference planes at the port positions, all
+four ports terminated in `Z0`; ports 1 and 3 are the near end of the P and N
+legs (input), ports 2 and 4 the far end (output). Mixed-mode conversion with
+the conventional normalization `Z_d = 2 Z0`, `Z_c = Z0 / 2`. Two different
+things are tested separately, and both have the **incident (input)
+differential** quantity in the denominator:
 
-- the **voltage ratio** `|V_cm| / |V_diff|` at the far reference plane, which
-  for an ideal matched pair with skew `Δt` is `(1/2)|sin(pi f Δt)|` (P3's
-  quantity);
-- the **mixed-mode S-parameter** `|Scd21|`, a ratio of power waves, which for
-  the same ideal fixture is `|sin(pi f Δt)|`: with `Z_d = 2 Z0` and
+- the **voltage ratio** `|V_cm,out / V_diff,in|`: common-mode voltage at the far
+  reference plane per unit of differential voltage launched at the near one.
+  For an ideal matched pair with skew `Δt` it is `(1/2)|sin(pi f Δt)|` (P3's
+  quantity). It is not `|V_cm,out / V_diff,out|`, which is
+  `(1/2)|tan(pi f Δt)|` for the same fixture; the spike computes both and
+  checks each against its own expression, so that neither can be mistaken for
+  the other.
+- the **mixed-mode S-parameter** `|Scd21|`, the common-mode wave leaving the far
+  end per incident differential wave at the near end, a ratio of power waves.
+  For the same ideal fixture it is `|sin(pi f Δt)|`: with `Z_d = 2 Z0` and
   `Z_c = Z0 / 2` the normalization contributes a factor
-  `sqrt(Z_d / Z_c) = 2` over the voltage ratio. Expecting `1/2 |sin|` for
-  `Scd21` would be 6 dB low and would fail a correct solver.
+  `sqrt(Z_d / Z_c) = 2` over the voltage ratio `V_cm,out / V_diff,in`.
+  Expecting `1/2 |sin|` for `Scd21` would be 6 dB low and would fail a correct
+  solver.
 
 **Spike acceptance, all three:**
 - the symmetric pair's `Scd21` is at least 20 dB below the skewed pair's over
   the band up to the edge corner;
-- for the skewed pair, the voltage ratio matches `(1/2)|sin(pi f Δt)|` **and**
-  `|Scd21|` matches `|sin(pi f Δt)|`, each within the two-mesh sensitivity, and
+- for the skewed pair, `|V_cm,out / V_diff,in|` matches `(1/2)|sin(pi f Δt)|`
+  **and** `|Scd21|` matches `|sin(pi f Δt)|`, each within the two-mesh sensitivity, and
   that sensitivity is below 3 dB;
 - the same holds for the pair rotated off the grid axes (45 degrees), since real
   pairs are not grid-aligned; and the run time for a pair of realistic length is
@@ -670,8 +795,11 @@ pass, plan the product phase then (`--fullwave-signals`, cost stated by
 1. P0 as its own change. P1 (independent of P0), including the channel walk.
 2. P2, the first substantial delivery: located findings without any estimate.
    The report migration of P7 lands with it, with the no-converter fixture.
-3. P3 (complex leg responses).
-4. P4a: the cable's circuit written down and its fixtures passing.
+3. P3 (ordered cascade of leg and modal responses, input and output named
+   apart). P0–P2 do not depend on the P3 and P4 contracts and can proceed while
+   those are settled.
+4. P4a: the cable's circuit and the ground-noise network written down and
+   their fixtures passing.
 5. P4 in its voltage-and-ranking scope (the `cable_common_mode_field` check
    comes first).
 6. The rest of P7 for the delivered phases.
@@ -679,6 +807,24 @@ pass, plan the product phase then (`--fullwave-signals`, cost stated by
    decision recorded in this file.
 
 ## Changes from the reviews (2026-11-16)
+
+Third review (remaining contracts):
+
+- **Choke position respected.** P3 keeps the channel as an ordered cascade of
+  routed sections and series parts and propagates the two leg amplitudes
+  through it; a choke attenuates only the common mode generated upstream of it.
+  P4 applies no divider of its own. Fixtures with identical total skew and the
+  choke before versus after the skewed section.
+- **Input and output voltages named apart** in P3, P4 and P6: `V_diff,in`,
+  `V_diff,out`, `V_cm,out`. The reported conversion is `V_cm,out / V_diff,in`
+  (`(1/2)|sin|` for pure skew), told apart from `V_cm,out / V_diff,out`
+  (`(1/2)|tan|`). `Scd21` keeps its normalization, incident differential wave
+  in the denominator.
+- **Ground-noise network defined in P4a**, not postponed to P5: driven loop,
+  observation loop and sense path, source and load impedances, signed
+  contributions, `V_B = Z_BA I_A` checked against an independent two-loop
+  fixture. Where the inputs are missing or the result depends too strongly on
+  the sense path, the source gets a geometry ranking and no voltage.
 
 Second review (numerical contracts):
 
