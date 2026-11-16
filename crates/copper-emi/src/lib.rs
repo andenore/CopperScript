@@ -9,6 +9,7 @@
 //! | [`field`] | quasi-static Biot-Savart magnetic near field of a current path (finite filament closed form, ideal ground plane by images), field maps |
 //! | [`inductance`] | partial self and mutual inductance of straight bars, loop inductance with optional ground-plane images, via barrel, trace resistance |
 //! | [`signal`] | spectra of fast digital signals: clock lines, lines of named data patterns, a pattern-independent bound on any line, random data in a resolution bandwidth |
+//! | [`mode_conversion`] | differential-to-common-mode conversion of a channel as an ordered cascade of routed sections and series elements: the forward leg waves, the closed forms for skew and amplitude imbalance, the common-mode transmission of a choke |
 //! | [`spectrum`] | complex numbers, radix-2 FFT, windows, amplitude-correct spectra |
 //! | [`lisn`] | CISPR 16-1-2 50 uH V-network impedance and noise-current to measured-voltage transfer |
 //! | [`receiver`] | EMI receiver emulation: Gaussian IF filter, peak, quasi-peak and average detectors |
@@ -38,6 +39,7 @@ pub mod field;
 pub mod harmonic;
 pub mod inductance;
 pub mod lisn;
+pub mod mode_conversion;
 pub mod receiver;
 pub mod signal;
 pub mod spectrum;

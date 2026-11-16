@@ -365,12 +365,13 @@ cluster: its geometry is fixed, the cluster's position is not).
 | `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the levels are detector readings**: `measures.detector_applicability` is `isolated_lines` for every harmonic, or `receiver_emulation` for the harmonics the receiver model read), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where neither holds the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
 | `EMI-RETURN-PATH` | implemented with `--run` (section 15); coverage `unsupported` without it | Per subject net (a signal source, or a differential, clock or rf_feed routing rule; a pair is one): reference-plane coverage within 3 H of each routed segment, the gaps crossed with slot length and half-wave resonance, reference changes at vias with the nearest stitching via or decoupling capacitor and the threshold, and the distance to the plane edge and board edge against 20 H; positions in `measures`; a ranking score in dB for the worst slot (`ranking_only`, no field, no margin) | ranking score, then number of breaks; after the absolute estimates |
+| `EMI-MODE-CONVERSION` | implemented with `--run` (section 16); coverage `unsupported` without it on a board with a differential pair | Per differential pair: the ratio `|V_cm,out / V_diff,in|` in dB at the fundamental and its worst value up to the edge corner, for the ordered cascade of routed sections (skew from length and via path, amplitude imbalance from return-path exposure) and series parts; each element's contribution in order; the common-mode spectrum at the planes around a choke and at the connector. A choke or ferrite is listed as present and not evaluated (its impedance cannot be declared yet). A voltage ratio: no field, no margin | ratio in dB (`voltage_ratio`), after the ranking scores |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
 
 Every check that cannot run on the given input gets a coverage entry with
 status (`executed`, `not_applicable`, `unsupported`) and reason; nothing is
 reported as a pass for what was not measured. Standing entries:
-`EMI-RETURN-PATH` (`executed` with a per-net entry when a routed run supplies the fills and a net is a subject, `not_applicable` without a subject net, else `unsupported` with the reason; section 15) and `EMI-DECOUPLING-PATH` (unsupported),
+`EMI-RETURN-PATH` (`executed` with a per-net entry when a routed run supplies the fills and a net is a subject, `not_applicable` without a subject net, else `unsupported` with the reason; section 15) `EMI-MODE-CONVERSION` (`executed` with a per-pair entry when a routed run is given and a differential pair exists, `not_applicable` without a pair, `unsupported` without a run when a pair exists, no entry at all without a run and without a pair; section 16) and `EMI-DECOUPLING-PATH` (unsupported),
 `EMI-COPPER-TRACE` (traced copper path: `executed` when at least one copper leg of a hot loop is traced, else `unsupported` with the reason), `EMI-CABLE-COMMON-MODE`
 (common-mode radiation from cables and attached conductors, unsupported: the board model has no cable, chassis or return structure), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
@@ -2813,7 +2814,7 @@ Radiation efficiency of a slot and what feeds it; plane-pair cavity modes and th
 inductance of the detour around a gap and current crowding at its ends; return current beyond the window; the second plane of a
 stripline and the split of its return current; a reference net that changes inside one plane layer; vias in pads and transitions where the net's
 copper does not end on the via; the reference plane's own gaps from other layers (a plane is judged by the single reference layer chosen); the common-mode
-part of a differential pair (P3); the effect of nearby ground copper on the signal layer (a coplanar return); the effect of a
+part of a differential pair (section 16); the effect of nearby ground copper on the signal layer (a coplanar return); the effect of a
 thermal relief or a fill island of a reference net that the fill removed; and nets that are not declared supplies as references.
 
 ### 15.12 Reporting without a switching cell
@@ -2838,3 +2839,153 @@ path within the threshold with its distance and threshold, a square at each plan
 point within `20 H`. Only the `measures` of the findings are used. A finding with no located cause has no mark: nothing
 was located at these thresholds, which is not a pass. The page repeats that the picture is screening evidence and lists what is not
 modelled. The `copper emi-check --help` text names the map.
+
+## 16. Mode conversion: `EMI-MODE-CONVERSION` (P3 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the third phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); closed forms in `crates/copper-emi/src/mode_conversion.rs`, the check in
+`crates/copper-drc/src/emi/mode_conversion.rs`, example in `examples/emi_mode_conversion/`, tests in
+`crates/copper-drc/tests/emi_mode_conversion.rs` and `crates/copper/tests/emi_mode_conversion_cli.rs`. It estimates how much of the
+differential voltage a driver launches appears as common mode at the end of its channel. The result is a ratio of two voltages
+inside the channel; it never reports a field, a margin, a pass or a fail, and it is not correlated with a measurement.
+
+**What the check does not evaluate.** The language cannot declare the common-mode impedance of a choke or a ferrite yet (a part
+attribute for it is planned with the cable check, P4). A four-pin common-mode choke is crossed by the channel walk along its declared
+`passes_to` pairs and appears in the finding as a part, with its position, and as the boundary of an observation plane; but it is
+**present and not evaluated**: its transfer is taken as exactly 1, so the common mode made upstream of it is not reduced, and the
+finding says so in words. The choke's attenuation, and with it the order effect of section 16.3, is demonstrated by the unit tests of the
+closed forms and of the board-facing channel with an impedance supplied by the test, not by the compiled example.
+
+### 16.1 When it runs and what it needs
+
+It needs the routed board, like section 15, and uses the same input (`ReturnPathInput`, now documented as the input of every check that
+needs routed copper; `ReturnPathInput::routed()`): `copper emi-check BOARD --run RUN`, and the section `route-board` embeds. Without
+`--run`, a board with a differential pair gets the coverage entry `EMI-MODE-CONVERSION` `unsupported` ("needs routed copper: run `copper
+emi-check BOARD --run RUN`"); a board with no differential pair gets no entry at all, so the default output of a board with no differential
+signal is byte-identical to before this phase. With `--run`, a board with no pair gets `not_applicable`. The zone fills are the ones of
+section 15 and are used only for the amplitude imbalance; if they could not be made the skew is still estimated and the coverage entry says
+the imbalance was not evaluated. `emi-check` takes no new option.
+
+### 16.2 Subjects and the channel
+
+The subjects are the differential pairs of section 15.2 (a signal source with a partner net, or a `differential` routing rule): one
+finding and one coverage entry per pair, named after the P net. Single-ended signals are not subjects. The channel of a pair is the
+ordered list the channel walk of section 14.3 gives, from the driver to the observation plane, as a cascade of elements:
+
+* a **routed section** for each net pair the walk crosses (the pair's own nets, then the nets after each part), with, for each leg, the
+  routed length of tracks and arcs and the vias' vertical path;
+* between two sections the **part** the walk crossed: a series resistor and a coupling capacitor (per-leg elements from their
+  declared `value`; a part with no value is present and transparent, and says so), a ferrite, a common-mode choke along its `passes_to`
+  pairs (present, transfer 1, not evaluated, see above) and any other series part (transparent, said so).
+
+The observation plane is the connector pins when the walk reaches a connector, else the end of the routed pair; when the walk stops
+before a connector the channel is the pair's own nets (the hops before the stop are not kept by the walk) and the finding lists where
+and why it stopped. A section with routed copper on only one leg, or none, is not examined (its skew is unknown, not zero); a pair with
+no examined section gets `unsupported`.
+
+### 16.3 The cascade and its formulas
+
+Names: `V_diff,in` is the differential voltage the driver launches (`V_p - V_n` at its pins, the loaded value `signal_swing` declares);
+`V_p,out`, `V_n,out` the leg voltages at an observation plane, `V_diff,out = V_p,out - V_n,out`, `V_cm,out = (V_p,out + V_n,out) / 2`.
+The reported ratio is `|V_cm,out / V_diff,in|`, not `V_cm,out / V_diff,out`; for pure skew `dt` they are `(1/2)|sin(pi f dt)|` and
+`(1/2)|tan(pi f dt)|` (0.354 and 0.5 at `f dt = 0.25`, 3.01 dB apart). Both are voltage ratios, not power-normalised mixed-mode
+S-parameters. The finding gives the ratio against `V_diff,out` as well, at each plane, named apart.
+
+The state is the pair of forward (incident) leg waves `(V_p, V_n)`, starting at `(V_diff,in / 2, -V_diff,in / 2)`, in one differential
+and one common-mode reference impedance for the whole cascade; every element is a transmission of incident to transmitted wave, so an
+element that does nothing has a transfer of exactly 1.
+
+* A routed section multiplies the legs by `g_p = (1 + a) exp(-j 2 pi f t_p)` and `g_n = (1 - a) exp(-j 2 pi f t_n)`. For skew `dt` and
+  imbalance `a` of one section the result is `(1/2) sqrt(sin^2(pi f dt) + a^2 cos^2(pi f dt))`; skew alone `(1/2)|sin|`, imbalance alone
+  `a / 2`. The larger of the two terms is not used: at `a = sin = 0.1` it reads 3 dB low.
+* A series impedance `Z` in each leg multiplies it by `2 Z_leg / (2 Z_leg + Z)`.
+* A series common-mode impedance `Z_cmc` converts to `(V_diff, V_cm)`, leaves the differential part alone and multiplies the common part
+  by `T_cc = 2 Z_c,ref / (2 Z_c,ref + Z_cmc)`: 1 for `Z_cmc = 0`, 1/2 for `2 Z_c,ref`, 0.1 for `18 Z_c,ref`. It is not the open-circuit
+  divider `Z / (Z + Z_cmc + Z)`, which belongs to a Thevenin source driving a load; the two agree for a matched source (`V_inc =
+  V_oc / 2`, tested).
+
+Order matters: common mode made before a choke goes through it, common mode made after it does not. With `T_cc = 0.1` and the same
+total skew (`f dt = 0.25`, unfiltered `0.35355`): the choke after the skewed section gives `0.035355` (20 dB below), the choke before it
+gives `0.35355`, and the skew split evenly on both sides gives `0.19445` (-5.19 dB), by hand `V_cm = 0.1375 + j 0.1375`.
+
+Assumption, stated in the finding: a matched cascade without reflections between elements; reflections and mode conversion inside
+parts are not modelled.
+
+### 16.4 Reading the board
+
+* **Skew.** Each leg's delay is `sum(length_layer * sqrt(eps_eff,layer)) / c` over its tracks and arcs (`eps_eff` as the impedance screening
+  takes it from the declared stack-up, `signal_integrity::effective_permittivity`; without a stack-up `(4.5 + 1) / 2` on an outer layer and
+  4.5 inside, as for the other checks) plus the vias' vertical path (`via_path_length_nm`) over `sqrt(eps_r)` of the dielectrics between the
+  outer copper layers. A section's skew is `t_p - t_n`. Lane-to-lane skew of a match group is **not** a contributor, and the finding says so.
+* **Reference impedances.** The section with the longest segment gives the layer and width; `signal_integrity::modal_impedances` (the
+  same estimate `si-check` prints) gives the single-ended and, with a declared pair gap, the differential impedance. The common-mode
+  reference is half a leg's single-ended impedance (the legs are taken as uncoupled in the common mode: the stack-up screening has no
+  even-mode estimate). With no declared stack-up: 50 ohm single-ended (tag `rule_of_thumb_pair_impedance`, no checked source). These only
+  matter to parts that act on the legs or on the common mode.
+* **Amplitude imbalance.** `a = k (e_n - e_p)`, `e` the fraction of a leg's routed length in the section that has no reference copper
+  within the coverage window of section 15.4 or lies within the edge limit of the reference copper's edge or the board edge (the longer of
+  the two per layer, at most the routed length), measured by the same code as section 15 on the section's net pair; `k = 0.1`
+  (band 0 to 0.2, tag `rule_of_thumb_leg_imbalance`). The leg with more exposure has the lower gain.
+* **Coupling capacitor.** `C (1 + tol)` in one leg and `C (1 - tol)` in the other, `tol = 0.1` (band 0 to 0.2, tag
+  `rule_of_thumb_capacitor_tolerance`); at gigahertz frequencies a 100 nF part is a gain of 1 to within 1e-8.
+
+### 16.5 The finding
+
+`EMI-MODE-CONVERSION`, warning severity, no cell, one per pair, present only when the worst ratio exceeds `1e-9` (-180 dB): a pair with no
+skew and no imbalance has only its coverage entry, which says "no conversion at these inputs (not a pass: ...)". `estimate`: quantity
+`mode_conversion_ratio`, unit dB, `kind = voltage_ratio` (a ratio of two voltages of one network; it is not an absolute field and gets
+no margin), at the fundamental (half the `data_rate`, or the `clock_frequency`; with neither, at the worst frequency, said so), with
+`band_db` and `basis = rule_of_thumb` when the imbalance or capacitor tolerance defaults shape it. `measures`:
+
+| Key | Content |
+|---|---|
+| `ratio` | the quantity named, its definition, input and output plane, `headline_db` and frequency, `at_fundamental_db`, `worst` (frequency and dB of the largest value of the nominal cascade on a logarithmic scan from 1 MHz to the edge corner `1 / (pi t_ramp)` of the shorter ramp, and at the fundamental) and `edge_corner_hz` |
+| `references` | single-ended, differential and common-mode reference impedance and where they come from |
+| `sections[]` | per section: nets, `examined`, lengths per leg, via counts and paths, delays, `skew_ps`, `amplitude_imbalance`, `return_path_exposure`, layers |
+| `parts[]` | per part: component, kind, what it acts on, per-leg values, `transfer_basis` (`not_declared_not_modelled` for a choke or ferrite) |
+| `elements_in_order[]` | per element in order from the driver: what it adds or removes of `V_cm` (`change_in_v_cm_db`) and the `V_cm` before and after, at the fundamental and at the worst frequency, so a reviewer sees which section converts and whether a choke is upstream or downstream of it |
+| `observation_planes[]` | before and after each modal part (choke, ferrite) and at the output: the ratio, the ratio against `V_diff,out`, and `V_cm,out` for each of the spectrum quantities of section 14.4 by name (`continuous_bound`, `pattern_lines`, `random_data_in_rbw`, `clock_lines`) at the fundamental and at the worst frequency |
+| `lane_to_lane_skew`, `inputs_text`, `channel_notes` | the note that a match group's lane-to-lane skew is not a contributor; the defaults used; where the walk stopped and what was not examined |
+
+`not_modelled` names: reflections and mode conversion inside parts, a choke's or ferrite's attenuation, the coupling of the legs in the
+common-mode reference, loss and dispersion of the sections, lane-to-lane skew, the geometry before the driver pins and after the
+connector, the observation plane's own return path (no field, no radiation efficiency, no margin) and imbalance from other causes.
+
+### 16.6 Coverage
+
+`EMI-MODE-CONVERSION` is `executed` when at least one pair was examined, with an entry `EMI-MODE-CONVERSION:<P net>` per pair
+(`executed` with the numbers, or `unsupported` when no section has routed copper on both legs); `not_applicable` when a run was given and
+the board has no differential pair; `unsupported` without a run when a pair exists (it needs routed copper); no entry without a run and
+without a pair. The route report's `emi` section is kept when an `EMI-MODE-CONVERSION` entry is `executed`, like section 15.12.
+
+### 16.7 Defaults and their sources
+
+In `crates/copper-drc/src/emi/defaults.rs`, section 8, each with its tag, band and a statement of its source.
+
+| Default | Value (band) | Source |
+|---|---|---|
+| Imbalance per unit exposure `k` | 0.1 (0 to 0.2) | **rule of thumb with no published source**: a screening choice |
+| Coupling capacitor tolerance | 0.1 (0 to 0.2), opposite signs on the two legs | ceramic tolerance codes K (10 %) and M (20 %), from memory and **not checked against the standard** |
+| Single-ended impedance without a stack-up | 50 ohm | the usual high-speed serial target, **not checked against a standard** |
+
+The edge and swing defaults are those of section 14.2 and are tagged when used.
+
+### 16.8 Validation
+
+Against hand calculations in the tests. Closed forms (`copper-emi`): `(1/2) sin(pi/4) = 0.35355` against `(1/2) tan(pi/4) = 0.5`; `a / 2 = 0.05`;
+`(1/2) sqrt(0.0199) = 0.07053` for `a = sin = 0.1`; a numerical check with two sampled trapezoids (one scaled and delayed) against the
+cascade at four harmonics for delay only, amplitude only and both; `T_cc = 1, 1/2, 0.1, 0.4472` for `Z_cmc = 0, 2, 18` times
+`Z_c,ref` and `j 100` ohm against 25 ohm; the Thevenin and incident-wave forms agreeing; the order fixtures (0.035355, 0.35355, 0.19445) and the
+identity fixture (zero-impedance elements and zero-length sections anywhere, several at once, change no state by more than 1e-14).
+Board (`crates/copper-drc/tests/emi_mode_conversion.rs`): with `eps_eff = 3.0844` a leg delay is 5.858 ps per mm; the 10 mm skew of lane A at
+1.25 GHz is `(1/2) sin(0.2300) = 0.1140`, -18.86 dB; the 4 mm skew of lane C (before a choke and two capacitors that evaluate to
+nothing) -26.76 dB; the 6 mm skew of lane D (after the choke) -23.25 dB; lane B, with equal legs, has no conversion and no finding; one leg
+moved to 1 mm from the plane edge and 3 mm from the board edge, with the same length, gives `a = 0.1`, `a / 2 = 0.05`, -26.02 dB with a band
+from none to -20.00 dB. None of this is correlated with a measurement.
+
+### 16.9 Not modelled
+
+Reflections between elements and mode conversion inside parts; a choke's or ferrite's attenuation (the language cannot declare it yet); the
+coupling of the legs in the common-mode reference; loss and dispersion; lane-to-lane skew of a match group; the package and connector
+breakouts; the return path of the observation plane, radiation efficiency and any field or margin; imbalance from the driver, the
+receiver termination or asymmetric loading.

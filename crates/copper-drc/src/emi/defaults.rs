@@ -396,6 +396,60 @@ pub fn return_via_rule() -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// 8. Mode conversion (`docs/emi-signal-cable-plan.md`, P3)
+// ---------------------------------------------------------------------------
+
+/// The amplitude imbalance a section's return-path exposure produces is a rule of thumb.
+pub const TAG_LEG_IMBALANCE: &str = "rule_of_thumb_leg_imbalance";
+/// The tolerance of a coupling capacitor, taken as an amplitude imbalance of the pair, is a rule of thumb.
+pub const TAG_CAPACITOR_TOLERANCE: &str = "rule_of_thumb_capacitor_tolerance";
+/// The single-ended impedance of a leg is a default (no stack-up to take it from).
+pub const TAG_PAIR_IMPEDANCE: &str = "rule_of_thumb_pair_impedance";
+
+/// Amplitude imbalance `a` (leg gains `1 + a` and `1 - a`) per unit difference of the two legs' exposure to return-path
+/// breaks along a section, `a = k (e_n - e_p)`, `e` the fraction of a leg's routed length without reference copper
+/// within the coverage window or within the edge limit: `(nominal, low, high)`. **A rule of thumb with no
+/// published source.** A leg that has lost its return reference over its whole length against a leg that has not
+/// is taken to launch an amplitude about 10 % different; the screening choice is that a few tens of per cent of
+/// impedance change over a section moves a wave by about that much. The band 0 to 0.2 is wide on purpose: 0 is a
+/// pair that is not unbalanced by the breaks, 0.2 a pair whose legs differ by 40 % in amplitude.
+pub const LEG_IMBALANCE_PER_EXPOSURE: (f64, f64, f64) = (0.1, 0.0, 0.2);
+
+/// The capacitance tolerance of a coupling capacitor, taken as legs of `C (1 + tol)` and `C (1 - tol)`:
+/// `(nominal, low, high)`. The EIA tolerance codes of ceramic capacitors are J (5 %), K (10 %) and M (20 %); the codes are
+/// quoted from memory and **not checked against the standard**, so this is a rule of thumb with no verified citation.
+/// Opposite signs on the two legs are the worst case of two parts of one reel.
+pub const CAPACITOR_TOLERANCE: (f64, f64, f64) = (0.1, 0.0, 0.2);
+
+/// The single-ended impedance of a leg when the stack-up does not give one, ohms. 50 ohm single-ended (100 ohm
+/// differential) is the usual target of high-speed serial standards; **rule of thumb, not checked against a
+/// published standard**.
+pub const PAIR_IMPEDANCE_SINGLE_ENDED: f64 = 50.0;
+
+/// The rule behind [`LEG_IMBALANCE_PER_EXPOSURE`], for `input:` lines.
+pub fn leg_imbalance_rule() -> String {
+    format!(
+        "amplitude imbalance of a section a = k (e_n - e_p), e the fraction of a leg's routed length without reference copper within the coverage window or within the edge limit, k = {} nominal, {} to {} (rule of thumb, no published source)",
+        LEG_IMBALANCE_PER_EXPOSURE.0, LEG_IMBALANCE_PER_EXPOSURE.1, LEG_IMBALANCE_PER_EXPOSURE.2
+    )
+}
+
+/// The rule behind [`CAPACITOR_TOLERANCE`], for `input:` lines.
+pub fn capacitor_tolerance_rule() -> String {
+    format!(
+        "coupling capacitor legs C (1 + tol) and C (1 - tol), tol = {} nominal, {} to {} (ceramic tolerance codes K and M, quoted from memory, not checked against the standard)",
+        CAPACITOR_TOLERANCE.0, CAPACITOR_TOLERANCE.1, CAPACITOR_TOLERANCE.2
+    )
+}
+
+/// The rule behind [`PAIR_IMPEDANCE_SINGLE_ENDED`], for `input:` lines.
+pub fn pair_impedance_rule() -> String {
+    format!(
+        "single-ended impedance of a leg {PAIR_IMPEDANCE_SINGLE_ENDED} ohm when no declared stack-up gives one (the usual high-speed serial target, not checked against a standard)"
+    )
+}
+
 #[cfg(test)]
 fn ring(l: f64, c: f64) -> f64 {
     use std::f64::consts::PI;
@@ -500,6 +554,19 @@ mod tests {
         }
         assert!(return_window_rule().contains("derived") && edge_distance_rule().contains("no verified citation"));
         assert!(return_via_rule().contains("no published source"));
+    }
+
+    #[test]
+    fn the_mode_conversion_defaults_are_bands_and_say_they_have_no_verified_source() {
+        for tag in [TAG_LEG_IMBALANCE, TAG_CAPACITOR_TOLERANCE, TAG_PAIR_IMPEDANCE] {
+            assert!(is_rule_tag(tag), "{tag}");
+        }
+        for (nominal, low, high) in [LEG_IMBALANCE_PER_EXPOSURE, CAPACITOR_TOLERANCE] {
+            assert!(low <= nominal && nominal <= high);
+        }
+        assert!(leg_imbalance_rule().contains("no published source"));
+        assert!(capacitor_tolerance_rule().contains("not checked"));
+        assert!(pair_impedance_rule().contains("not checked"));
     }
 
     #[test]

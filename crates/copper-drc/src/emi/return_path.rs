@@ -40,7 +40,7 @@ pub const NOT_REQUESTED_REASON: &str = "needs filled copper (zone fills) and tra
 
 /// Resolution bandwidth of the radiated-emission receiver above 30 MHz (CISPR 16-1-1), Hz: the bandwidth in which
 /// random data is evaluated.
-const RBW: f64 = 120e3;
+pub(super) const RBW: f64 = 120e3;
 /// Longest step of the samples along a segment for distances to edges, nm.
 const SAMPLE_STEP_NM: f64 = 250_000.0;
 /// Sagitta bound of a flattened arc, nm.
@@ -84,7 +84,7 @@ pub struct PlaneFills {
     pub fills: Vec<PlaneFill>,
 }
 
-/// What the caller supplies for the return-path check.
+/// What the caller supplies for the checks that need the routed board (the return-path and the mode-conversion check).
 #[derive(Clone, Debug)]
 pub enum ReturnPathInput<'a> {
     /// No routed board and fills were asked for (the default run): the check stays `unsupported`.
@@ -95,19 +95,26 @@ pub enum ReturnPathInput<'a> {
     Unavailable(String),
 }
 
+impl ReturnPathInput<'_> {
+    /// Whether the routed board was supplied (with or without usable fills): the checks that need routed copper
+    /// (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION`) run only then.
+    pub fn routed(&self) -> bool {
+        !matches!(self, ReturnPathInput::NotRequested)
+    }
+}
 // ---------------------------------------------------------------------------
 // Subjects
 // ---------------------------------------------------------------------------
 
-struct Subject<'a> {
+pub(super) struct Subject<'a> {
     /// The first member (the P net of a pair).
-    name: String,
+    pub(super) name: String,
     /// P net first.
-    nets: Vec<String>,
-    source: Option<&'a SignalSource>,
+    pub(super) nets: Vec<String>,
+    pub(super) source: Option<&'a SignalSource>,
 }
 
-fn subjects<'a>(board: &PhysicalBoard, model: &'a EmiModel) -> Vec<Subject<'a>> {
+pub(super) fn subjects<'a>(board: &PhysicalBoard, model: &'a EmiModel) -> Vec<Subject<'a>> {
     let mut groups: Vec<Vec<String>> = Vec::new();
     let mut add = |members: Vec<String>| {
         let found: Vec<usize> = groups
@@ -165,7 +172,7 @@ pub fn has_subjects(board: &PhysicalBoard, model: &EmiModel) -> bool {
 }
 
 /// A source with nothing declared, for a subject that only has a routing rule: every number comes from the defaults.
-fn bare_source(subject: &Subject) -> SignalSource {
+pub(super) fn bare_source(subject: &Subject) -> SignalSource {
     SignalSource {
         net: subject.name.clone(),
         kind: if subject.nets.len() == 2 { SignalKind::Differential } else { SignalKind::SingleEnded },
@@ -334,16 +341,16 @@ fn choose(stack: &Stack, planes: &[PlaneLayer], layer: CopperLayer) -> Option<Ch
 
 /// One straight piece of routed copper.
 #[derive(Clone, Copy)]
-struct Seg {
+pub(super) struct Seg {
     member: usize,
-    layer: CopperLayer,
+    pub(super) layer: CopperLayer,
     a: [f64; 2],
     b: [f64; 2],
-    width: f64,
+    pub(super) width: f64,
 }
 
 impl Seg {
-    fn length(&self) -> f64 {
+    pub(super) fn length(&self) -> f64 {
         dist(self.a, self.b)
     }
 
@@ -594,7 +601,7 @@ impl Outcome {
 // The measurement
 // ---------------------------------------------------------------------------
 
-fn flatten(board: &PhysicalBoard, net: &str, member: usize) -> Vec<Seg> {
+pub(super) fn flatten(board: &PhysicalBoard, net: &str, member: usize) -> Vec<Seg> {
     let mut result = Vec::new();
     for track in board.tracks.iter().filter(|t| t.net == net) {
         result.push(Seg {
@@ -1009,16 +1016,16 @@ fn nearest_capacitor(env: &Env, a: &str, b: &str, at: [f64; 2]) -> Option<(Strin
 // ---------------------------------------------------------------------------
 
 /// The three spectrum quantities of `copper_emi::signal` at one frequency, each separately.
-struct Levels {
-    frequency: f64,
+pub(super) struct Levels {
+    pub(super) frequency: f64,
     /// Upper bound on any single line of any two-level waveform (always defined).
-    continuous: f64,
+    pub(super) continuous: f64,
     /// For each named pattern the strongest line within an octave centred on the frequency (`None`: no line there).
-    patterns: Vec<(&'static str, Option<(f64, f64)>)>,
+    pub(super) patterns: Vec<(&'static str, Option<(f64, f64)>)>,
     /// Random NRZ data in the receiver's resolution bandwidth.
-    random: Option<f64>,
+    pub(super) random: Option<f64>,
     /// The strongest clock line within the octave.
-    clock: Option<Option<(f64, f64)>>,
+    pub(super) clock: Option<Option<(f64, f64)>>,
 }
 
 fn strongest(lines: Vec<spectra::Line>, frequency: f64) -> Option<(f64, f64)> {
@@ -1029,7 +1036,7 @@ fn strongest(lines: Vec<spectra::Line>, frequency: f64) -> Option<(f64, f64)> {
         .max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-fn levels(signal: &ResolvedSignal, swing: f64, rise: f64, fall: f64, frequency: f64) -> Levels {
+pub(super) fn levels(signal: &ResolvedSignal, swing: f64, rise: f64, fall: f64, frequency: f64) -> Levels {
     let continuous = spectra::continuous_bound(swing, rise.min(fall), frequency);
     let top = frequency * SQRT_2;
     let (patterns, random) = match signal.data_rate.filter(|rate| *rate > 0.0) {
@@ -1569,6 +1576,63 @@ fn subject_detail(subject: &Subject, outcome: &Outcome, finding: bool) -> String
 
 /// Run the check and add its findings to `cx`; the returned coverage entries (the overall `EMI-RETURN-PATH` entry
 /// first, then one per subject) are added by the caller where the coverage list holds the entry.
+fn env_of<'c>(cx: &'c Context<'_>, fills: &PlaneFills) -> Env<'c> {
+    Env {
+        board: cx.layout.board,
+        view: cx.layout.view,
+        stack: &cx.stack,
+        layout: &cx.layout,
+        planes: build_planes(cx.layout.board, cx.layout.view, fills),
+        references: cx.layout.view.supplies.iter().map(|supply| supply.net.clone()).collect(),
+        ring: cx.layout.ring().into_iter().map(|p| [p[0] * 1e9, p[1] * 1e9]).collect(),
+    }
+}
+
+/// How much of one leg's routed copper lacks its return reference, for the amplitude imbalance of
+/// `EMI-MODE-CONVERSION`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct LegExposure {
+    /// Routed length of the leg, nm.
+    pub(super) routed: f64,
+    /// Length with no reference copper within the coverage window, plus the longer of the lengths within the edge limit
+    /// of the reference copper's edge and of the board edge (per layer), at most the routed length, nm.
+    pub(super) exposed: f64,
+}
+
+impl LegExposure {
+    /// The exposed fraction of the routed length (0 for an unrouted leg).
+    pub(super) fn fraction(&self) -> f64 {
+        if self.routed > 0.0 { (self.exposed / self.routed).clamp(0.0, 1.0) } else { 0.0 }
+    }
+}
+
+/// The exposure of both legs of each `(P net, N net)` section to return-path breaks, measured as the return-path
+/// check measures a pair (same fills, same coverage window and edge limit). `None` for a section with no routed
+/// copper on either leg.
+pub(super) fn leg_exposures(
+    cx: &Context<'_>,
+    fills: &PlaneFills,
+    sections: &[(String, String)],
+) -> Vec<Option<[LegExposure; 2]>> {
+    let env = env_of(cx, fills);
+    sections
+        .iter()
+        .map(|(p, n)| {
+            let subject = Subject { name: p.clone(), nets: vec![p.clone(), n.clone()], source: None };
+            let resolved = signals::resolve(&bare_source(&subject), None);
+            let outcome = examine(&env, &subject, &resolved)?;
+            let leg = |member: &MemberResult| {
+                let edges: f64 = member.layers.iter().map(|l| l.plane_edge.within.max(l.board_edge.within)).sum();
+                LegExposure { routed: member.routed, exposed: (member.uncovered + edges).min(member.routed) }
+            };
+            match outcome.members.as_slice() {
+                [first, second] => Some([leg(first), leg(second)]),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 pub(super) fn analyze(cx: &mut Context, input: &ReturnPathInput) -> Vec<(String, CoverageStatus, String)> {
     const CHECK: &str = "EMI-RETURN-PATH";
     let model = cx.model;
@@ -1607,15 +1671,7 @@ pub(super) fn analyze(cx: &mut Context, input: &ReturnPathInput) -> Vec<(String,
     }
     let mut results: Vec<(Option<EmiFinding>, (CoverageStatus, String))> = Vec::new();
     {
-        let env = Env {
-            board: cx.layout.board,
-            view: cx.layout.view,
-            stack: &cx.stack,
-            layout: &cx.layout,
-            planes: build_planes(cx.layout.board, cx.layout.view, fills),
-            references: cx.layout.view.supplies.iter().map(|supply| supply.net.clone()).collect(),
-            ring: cx.layout.ring().into_iter().map(|p| [p[0] * 1e9, p[1] * 1e9]).collect(),
-        };
+        let env = env_of(cx, fills);
         for subject in &list {
             let resolved = signals::resolve(&subject.source.map_or_else(|| bare_source(subject), Clone::clone), None);
             match examine(&env, subject, &resolved) {

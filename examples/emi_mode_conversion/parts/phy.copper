@@ -1,0 +1,13 @@
+// A transmitter with four differential lanes, annotated for `copper emi-check`.
+part Phy {
+    category = "interface.serdes";
+    pin AP { number = "1"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin AN { number = "2"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin BP { number = "3"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin BN { number = "4"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin CP { number = "5"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin CN { number = "6"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin DP { number = "7"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin DN { number = "8"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin GND { number = "9"; domains = "ground"; directions = "input"; }
+}

@@ -1,0 +1,9 @@
+// The receiving end of lanes A and B.
+part Rx {
+    category = "interface.serdes";
+    pin AP { number = "1"; domains = "digital"; directions = "input"; }
+    pin AN { number = "2"; domains = "digital"; directions = "input"; }
+    pin BP { number = "3"; domains = "digital"; directions = "input"; }
+    pin BN { number = "4"; domains = "digital"; directions = "input"; }
+    pin GND { number = "5"; domains = "ground"; directions = "input"; }
+}

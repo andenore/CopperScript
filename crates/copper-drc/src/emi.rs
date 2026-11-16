@@ -48,6 +48,7 @@ use crate::{Coverage, CoverageStatus, Finding, Severity};
 mod conducted;
 pub mod defaults;
 mod field;
+mod mode_conversion;
 pub mod return_path;
 pub mod signal;
 
@@ -122,6 +123,9 @@ pub enum EstimateKind {
     Absolute,
     /// A relative ranking score: not a field, never compared with a limit, never given a margin.
     RankingScore,
+    /// A ratio of two voltages of one network in dB (`EMI-MODE-CONVERSION`: common mode at an observation plane per
+    /// unit of launched differential voltage): not a field, never compared with a limit, never given a margin.
+    VoltageRatio,
 }
 
 impl EstimateKind {
@@ -129,6 +133,7 @@ impl EstimateKind {
         match self {
             EstimateKind::Absolute => "absolute_screening",
             EstimateKind::RankingScore => "ranking_score",
+            EstimateKind::VoltageRatio => "voltage_ratio",
         }
     }
 }
@@ -3855,16 +3860,17 @@ fn si_frequency(hertz: f64) -> String {
 /// between cells in different scenarios compares an estimate with a worst case as numbers (said in the report's
 /// notes, see [`radiated_ranking_notes`]); ties break by loop area, larger first. Then conducted estimates (dBuV at
 /// a LISN, a different quantity that is never compared with them) by margin when margins exist, else by level;
-/// then the ranking scores (dB, relative: compared only with each other) by score; then findings without an
-/// estimate; `EMI-ACCEPT-UNUSED` last.
+/// then the ranking scores (dB, relative: compared only with each other) by score; then voltage ratios (dB, a
+/// different quantity again, compared only with each other) by ratio; then findings without an estimate; `EMI-ACCEPT-UNUSED` last.
 fn compare_findings(a: &EmiFinding, b: &EmiFinding) -> std::cmp::Ordering {
     let key = |f: &EmiFinding| {
         if f.finding.code == "EMI-ACCEPT-UNUSED" {
-            (4, 0.0)
+            (5, 0.0)
         } else {
             match f.estimate.as_ref() {
-                None => (3, 0.0),
+                None => (4, 0.0),
                 Some(e) if e.kind == EstimateKind::RankingScore => (2, -e.value),
+                Some(e) if e.kind == EstimateKind::VoltageRatio => (3, -e.value),
                 Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
                 Some(e) => (0, -e.value),
             }
@@ -4001,6 +4007,7 @@ fn emi_check_inner(
         proximity(&mut cx, cell);
     }
     let return_coverage = return_path::analyze(&mut cx, return_input);
+    let conversion_coverage = mode_conversion::analyze(&mut cx, return_input);
     apply_accepts(view, &mut cx.findings);
 
     match (&cx.standard.name, &cx.standard.unsupported) {
@@ -4024,7 +4031,7 @@ fn emi_check_inner(
             );
         }
     }
-    for (check, status, detail) in return_coverage {
+    for (check, status, detail) in return_coverage.into_iter().chain(conversion_coverage) {
         cx.cover(check, status, detail);
     }
     cx.cover(

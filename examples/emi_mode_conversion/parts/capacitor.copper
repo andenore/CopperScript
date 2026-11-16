@@ -1,0 +1,6 @@
+// An AC-coupling capacitor in series with a signal leg.
+part Cap {
+    category = "passive.capacitor";
+    pin A { number = "1"; domains = "digital"; directions = "passive"; }
+    pin B { number = "2"; domains = "digital"; directions = "passive"; }
+}

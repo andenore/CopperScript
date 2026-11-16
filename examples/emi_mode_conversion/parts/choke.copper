@@ -1,0 +1,10 @@
+// A four-pin common-mode choke: the walk of the channel crosses it along the declared pin pairs IN1 to OUT1 and
+// IN2 to OUT2. The language cannot declare its common-mode impedance yet, so the check reports it present with
+// its attenuation not modelled.
+part Choke {
+    category = "passive.inductor.common_mode";
+    pin IN1 { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
+    pin IN2 { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
+    pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin OUT2 { number = "3"; domains = "digital"; directions = "passive"; }
+}

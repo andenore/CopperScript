@@ -1,0 +1,78 @@
+// Four differential lanes for `copper emi-check --run` (the mode-conversion check), on a four-layer board with a
+// declared stack-up and a whole ground plane on In1.Cu and In2.Cu. The routed copper is not part of the source (the
+// language has no tracks): `routed/final-board.state.json` is the physical board with hand-placed tracks, written
+// by `crates/copper/tests/emi_mode_conversion_cli.rs`.
+//
+//   copper emi-check examples/emi_mode_conversion/board.copper --allow-proxy-footprints --run examples/emi_mode_conversion/routed
+//
+//   (a) LANE_A_P / LANE_A_N   driver to receiver, P 30 mm and N 40 mm of 0.12 mm microstrip: a skew of 10 mm
+//   (b) LANE_B_P / LANE_B_N   the same pair with both legs 30 mm: no skew, no conversion
+//   (c) LANE_C_P / LANE_C_N   driver, two 100 nF coupling capacitors, a four-pin common-mode choke, connector; the
+//                             legs differ by 4 mm in the first section, before the choke
+//   (d) LANE_D_P / LANE_D_N   driver, the same choke, connector; the legs differ by 6 mm in the section after the
+//                             choke
+//
+// The proxy footprints give the components their pads; the routed copper is a stand-in placed over the planes and
+// does not start at those pads.
+board EmiModeConversion {
+    import p "./parts";
+
+    mechanical {
+        outline rectangle { width = 100mm; height = 80mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric P1 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper In1.Cu { thickness = 0.035mm; }
+            dielectric C1 { thickness = 1.06mm; er = 4.6; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper In2.Cu { thickness = 0.035mm; }
+            dielectric P2 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+
+    component U1: p.Phy { footprint = "QFN-9"; }
+    component U2: p.Rx { footprint = "QFN-5"; }
+    component C1: p.Cap { value = 100nF; footprint = "C_0402"; }
+    component C2: p.Cap { value = 100nF; footprint = "C_0402"; }
+    component L1: p.Choke { footprint = "CMC_4"; }
+    component L2: p.Choke { footprint = "CMC_4"; }
+    component J1: p.Conn { footprint = "PinHeader_1x04"; }
+
+    supply GND { net = GND; voltage = 0V; external = true; }
+
+    net LANE_A_P { U1.AP; U2.AP; }
+    net LANE_A_N { U1.AN; U2.AN; }
+    net LANE_B_P { U1.BP; U2.BP; }
+    net LANE_B_N { U1.BN; U2.BN; }
+    net LANE_C_P { U1.CP; C1.A; }
+    net LANE_C_N { U1.CN; C2.A; }
+    net LANE_C_P_CAP { C1.B; L1.IN1; }
+    net LANE_C_N_CAP { C2.B; L1.IN2; }
+    net LANE_C_P_OUT { L1.OUT1; J1.A; }
+    net LANE_C_N_OUT { L1.OUT2; J1.B; }
+    net LANE_D_P { U1.DP; L2.IN1; }
+    net LANE_D_N { U1.DN; L2.IN2; }
+    net LANE_D_P_OUT { L2.OUT1; J1.C; }
+    net LANE_D_N_OUT { L2.OUT2; J1.D; }
+    net GND { U1.GND; U2.GND; }
+
+    constraint copper_zone(GND) { id = "plane-in1"; layers = "In1.Cu"; polygon_mm = "2,2; 98,2; 98,78; 2,78"; island_policy = keep_all; }
+    constraint copper_zone(GND) { id = "plane-in2"; layers = "In2.Cu"; polygon_mm = "2,2; 98,2; 98,78; 2,78"; island_policy = keep_all; }
+
+    constraint routing(LANE_A_P) { kind = differential; partner = LANE_A_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_A_N) { kind = differential; partner = LANE_A_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_B_P) { kind = differential; partner = LANE_B_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_B_N) { kind = differential; partner = LANE_B_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_C_P) { kind = differential; partner = LANE_C_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_C_N) { kind = differential; partner = LANE_C_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_D_P) { kind = differential; partner = LANE_D_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_D_N) { kind = differential; partner = LANE_D_P; width = 0.12mm; pair_gap = 0.15mm; }
+
+    constraint fixed_placement(U1) { x = 6mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(U2) { x = 94mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 20mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(C2) { x = 24mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(L1) { x = 40mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(L2) { x = 40mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(J1) { x = 70mm; y = 66mm; rotation = 0; }
+}

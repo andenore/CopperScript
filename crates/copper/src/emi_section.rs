@@ -76,12 +76,14 @@ pub fn error_section(message: &str) -> Value {
 }
 
 /// Whether `report` has anything to put in the route report: a switching cell, a finding, or an executed
-/// signal check (`EMI-RETURN-PATH` and `EMI-RETURN-PATH:<net>`, which also say "nothing to report" for a subject).
+/// signal check (`EMI-RETURN-PATH` and `EMI-MODE-CONVERSION`, with their `:<net>` entries, which also say "nothing to
+/// report" for a subject).
 fn has_content(report: &copper_drc::emi::EmiCheckReport) -> bool {
     !report.cells.is_empty()
         || !report.findings.is_empty()
         || report.coverage.iter().any(|entry| {
-            entry.status == copper_drc::CoverageStatus::Executed && entry.check.starts_with("EMI-RETURN-PATH")
+            entry.status == copper_drc::CoverageStatus::Executed
+                && (entry.check.starts_with("EMI-RETURN-PATH") || entry.check.starts_with("EMI-MODE-CONVERSION"))
         })
 }
 

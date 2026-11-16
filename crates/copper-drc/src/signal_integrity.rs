@@ -122,6 +122,20 @@ pub(crate) fn effective_permittivity(
     }
 }
 
+/// `(structure, single-ended ohms, differential ohms)` of a trace of `width_nm` on `layer` as the impedance screening
+/// estimates them from the declared stack-up (`gap_nm`: the pair gap; without one there is no differential figure).
+/// `None` without declared adjacent dielectrics or when the geometry cannot be screened.
+pub(crate) fn modal_impedances(
+    stackup: &Stackup,
+    layer: CopperLayer,
+    width_nm: i64,
+    gap_nm: Option<i64>,
+) -> Option<(&'static str, f64, Option<f64>)> {
+    let found = estimate(stackup, layer, width_nm, gap_nm, &[], None, None, &decimal(0));
+    let single = found.single_ended_ohms.as_ref().map(to_float)?;
+    Some((found.structure, single, found.differential_ohms.as_ref().map(to_float)))
+}
+
 fn microstrip_impedance(width_nm: i64, thickness_nm: i64, height_nm: i64, er: &Decimal) -> Result<Estimate> {
     let (impedance, _) = hammerstad_microstrip(width_nm, thickness_nm, height_nm, er)?;
     Ok(Estimate { value: ohms(impedance), validity: vec![FIELD_SOLVER, MICROSTRIP_IGNORES] })
