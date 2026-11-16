@@ -1,0 +1,139 @@
+// Cable common mode for `copper emi-check --run`: voltages at three cable connectors and a ranking of the drivers behind
+// them. The routed copper is not part of the source (the language has no tracks): `routed/final-board.state.json` is the
+// physical board with hand-placed tracks and vias, written by `crates/copper/tests/emi_cable_common_mode_cli.rs` from
+// `crates/copper-drc/tests/support/cable_board.rs`.
+//
+//   copper emi-check examples/emi_cable_common_mode/board.copper --allow-proxy-footprints --run examples/emi_cable_common_mode/routed
+//
+// Connector J1 (unshielded, matched) takes six differential lanes of a transmitter, 2.5 Gbps unless stated, on a four-layer
+// board with a declared stack-up and a whole ground plane on In1.Cu and In2.Cu:
+//
+//   LANE_C  driver, two 100 nF coupling capacitors, a choke (ChokeA), connector; 4 mm of skew BEFORE the choke
+//   LANE_D  driver, the same choke, connector; 6 mm of skew AFTER the choke
+//   LANE_N  driver, connector; 6 mm of skew, no choke
+//   LANE_Z  driver, a choke of zero impedance (ChokeZero), connector; the same 6 mm after it: reads as LANE_N
+//   LANE_R  driver, a choke that declares one magnitude at 1.25 GHz (ChokeOne), connector; 4 mm before it
+//   LANE_S  as LANE_R at 200 Mbps: its 100 MHz fundamental is outside what ChokeOne declares
+//
+// Connector J2 (shielded, shield pin SH with three vias to the ground plane, a 150 ohm cable) takes LANE_M, the same
+// channel as LANE_D: the cable is not matched, so the voltage is a first arrival.
+//
+// Connector J3 takes the ground-noise lanes of a second driver, with a straight sense path from the driver's ground pin to
+// the connector's: SE1 (routed 2 mm beside the sense path, a published voltage), SE2 (not routed: a geometry ranking only)
+// and the pair GN (routed symmetrically 1 mm either side of the sense path: the legs' signed mutuals cancel). CLK_NEAR is a
+// clock whose corridor passes near the ground pin of J3 (counted) and CLK_FAR one far from it (listed as not counted).
+//
+// The proxy footprints give the components their pads; the routed copper is a stand-in placed over the planes and does not
+// start at those pads.
+board EmiCableCommonMode {
+    import p "./parts";
+
+    mechanical {
+        outline rectangle { width = 100mm; height = 80mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric P1 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper In1.Cu { thickness = 0.035mm; }
+            dielectric C1 { thickness = 1.06mm; er = 4.6; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper In2.Cu { thickness = 0.035mm; }
+            dielectric P2 { thickness = 0.2mm; er = 4.3; loss_tangent = 0.02; material = "prepreg"; type = prepreg; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+
+    component U1: p.Phy { footprint = "QFN-15"; }
+    component C1: p.Cap { value = 100nF; footprint = "C_0402"; }
+    component C2: p.Cap { value = 100nF; footprint = "C_0402"; }
+    component L1: p.ChokeA { footprint = "CMC_4"; }
+    component L2: p.ChokeA { footprint = "CMC_4"; }
+    component L3: p.ChokeZero { footprint = "CMC_4"; }
+    component L4: p.ChokeA { footprint = "CMC_4"; }
+    component L5: p.ChokeOne { footprint = "CMC_4"; }
+    component L6: p.ChokeOne { footprint = "CMC_4"; }
+    component J1: p.JConn { footprint = "PinHeader_2x7"; }
+    component J2: p.JShielded { footprint = "PinHeader_2x2"; }
+    component U3: p.Drv { footprint = "QFN-5"; }
+    component J3: p.JGround { footprint = "PinHeader_2x3"; }
+    component U5: p.Osc { footprint = "SOT-23-2"; }
+    component U6: p.Clk { footprint = "SOT-23-1"; }
+    component U7: p.Osc { footprint = "SOT-23-2"; }
+    component U8: p.Clk { footprint = "SOT-23-1"; }
+
+    supply GND { net = GND; voltage = 0V; external = true; }
+
+    net LANE_C_P { U1.CP; C1.A; }
+    net LANE_C_N { U1.CN; C2.A; }
+    net LANE_C_P_CAP { C1.B; L1.IN1; }
+    net LANE_C_N_CAP { C2.B; L1.IN2; }
+    net LANE_C_P_OUT { L1.OUT1; J1.CP; }
+    net LANE_C_N_OUT { L1.OUT2; J1.CN; }
+    net LANE_D_P { U1.DP; L2.IN1; }
+    net LANE_D_N { U1.DN; L2.IN2; }
+    net LANE_D_P_OUT { L2.OUT1; J1.DP; }
+    net LANE_D_N_OUT { L2.OUT2; J1.DN; }
+    net LANE_N_P { U1.NP; J1.NP; }
+    net LANE_N_N { U1.NN; J1.NN; }
+    net LANE_Z_P { U1.ZP; L3.IN1; }
+    net LANE_Z_N { U1.ZN; L3.IN2; }
+    net LANE_Z_P_OUT { L3.OUT1; J1.ZP; }
+    net LANE_Z_N_OUT { L3.OUT2; J1.ZN; }
+    net LANE_R_P { U1.RP; L5.IN1; }
+    net LANE_R_N { U1.RN; L5.IN2; }
+    net LANE_R_P_OUT { L5.OUT1; J1.RP; }
+    net LANE_R_N_OUT { L5.OUT2; J1.RN; }
+    net LANE_S_P { U1.SP; L6.IN1; }
+    net LANE_S_N { U1.SN; L6.IN2; }
+    net LANE_S_P_OUT { L6.OUT1; J1.SP; }
+    net LANE_S_N_OUT { L6.OUT2; J1.SN; }
+    net LANE_M_P { U1.MP; L4.IN1; }
+    net LANE_M_N { U1.MN; L4.IN2; }
+    net LANE_M_P_OUT { L4.OUT1; J2.MP; }
+    net LANE_M_N_OUT { L4.OUT2; J2.MN; }
+    net SE1 { U3.SE1; J3.SE1; }
+    net SE2 { U3.SE2; J3.SE2; }
+    net GN_P { U3.PP; J3.PP; }
+    net GN_N { U3.PN; J3.PN; }
+    net CLK_NEAR { U5.OUT; U6.IN; }
+    net CLK_FAR { U7.OUT; U8.IN; }
+    net GND { U1.GND; J1.GND; J2.GND; J2.SH; U3.GND; J3.GND; U5.GND; U7.GND; }
+
+    constraint copper_zone(GND) { id = "plane-in1"; layers = "In1.Cu"; polygon_mm = "2,2; 98,2; 98,78; 2,78"; island_policy = keep_all; }
+    constraint copper_zone(GND) { id = "plane-in2"; layers = "In2.Cu"; polygon_mm = "2,2; 98,2; 98,78; 2,78"; island_policy = keep_all; }
+
+    constraint emission(J1) { standard = "cispr32_class_b"; cable_length = 0.5m; }
+
+    constraint routing(LANE_C_P) { kind = differential; partner = LANE_C_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_C_N) { kind = differential; partner = LANE_C_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_D_P) { kind = differential; partner = LANE_D_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_D_N) { kind = differential; partner = LANE_D_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_N_P) { kind = differential; partner = LANE_N_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_N_N) { kind = differential; partner = LANE_N_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_Z_P) { kind = differential; partner = LANE_Z_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_Z_N) { kind = differential; partner = LANE_Z_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_R_P) { kind = differential; partner = LANE_R_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_R_N) { kind = differential; partner = LANE_R_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_S_P) { kind = differential; partner = LANE_S_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_S_N) { kind = differential; partner = LANE_S_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_M_P) { kind = differential; partner = LANE_M_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(LANE_M_N) { kind = differential; partner = LANE_M_P; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(GN_P) { kind = differential; partner = GN_N; width = 0.12mm; pair_gap = 0.15mm; }
+    constraint routing(GN_N) { kind = differential; partner = GN_P; width = 0.12mm; pair_gap = 0.15mm; }
+
+    constraint fixed_placement(U1) { x = 6mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 20mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(C2) { x = 24mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(L1) { x = 40mm; y = 62mm; rotation = 0; }
+    constraint fixed_placement(L2) { x = 40mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(L3) { x = 40mm; y = 52mm; rotation = 0; }
+    constraint fixed_placement(L4) { x = 52mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(L5) { x = 40mm; y = 42mm; rotation = 0; }
+    constraint fixed_placement(L6) { x = 40mm; y = 32mm; rotation = 0; }
+    constraint fixed_placement(J1) { x = 70mm; y = 56mm; rotation = 0; }
+    constraint fixed_placement(J2) { x = 88mm; y = 72mm; rotation = 0; }
+    constraint fixed_placement(U3) { x = 10mm; y = 12mm; rotation = 0; }
+    constraint fixed_placement(J3) { x = 88mm; y = 12mm; rotation = 0; }
+    constraint fixed_placement(U5) { x = 88mm; y = 13.75mm; rotation = 0; }
+    constraint fixed_placement(U6) { x = 93mm; y = 13.75mm; rotation = 0; }
+    constraint fixed_placement(U7) { x = 30mm; y = 22mm; rotation = 0; }
+    constraint fixed_placement(U8) { x = 50mm; y = 22mm; rotation = 0; }
+}

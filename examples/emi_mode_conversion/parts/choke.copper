@@ -1,8 +1,11 @@
 // A four-pin common-mode choke: the walk of the channel crosses it along the declared pin pairs IN1 to OUT1 and
-// IN2 to OUT2. The language cannot declare its common-mode impedance yet, so the check reports it present with
-// its attenuation not modelled.
+// IN2 to OUT2. Its common-mode impedance is declared at two frequencies (synthetic values: inductive at 100 MHz,
+// resistive, 681.5 ohm = 18 Z_c,ref of the lanes, at its 1.25 GHz resonance), so the check evaluates its transmission
+// 2 Z_c,ref / (2 Z_c,ref + Z) = 0.1 there. Delete the two declarations and it is present with its attenuation not modelled.
 part Choke {
     category = "passive.inductor.common_mode";
+    common_mode_impedance = "90+j500 ohm, 681.5+j0 ohm";
+    common_mode_impedance_frequency = "100 MHz, 1.25 GHz";
     pin IN1 { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
     pin IN2 { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
     pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }

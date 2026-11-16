@@ -136,6 +136,8 @@ fn emi_profile_value(emi: &EmiProfile) -> Value {
         ("clock_frequency", &emi.clock_frequency),
         ("signal_swing", &emi.signal_swing),
         ("spread_spectrum", &emi.spread_spectrum),
+        ("output_impedance", &emi.output_impedance),
+        ("open_circuit_swing", &emi.open_circuit_swing),
     ] {
         if let Some(quantity) = quantity {
             result.push((name, quantity_value(quantity)));
@@ -176,6 +178,30 @@ fn part_emi_value(emi: &PartEmi) -> Value {
     }
     if let Some(cable) = emi.external_cable {
         result.push(("external_cable", Value::Bool(cable)));
+    }
+    if let Some(shielded) = emi.cable_shielded {
+        result.push(("cable_shielded", Value::Bool(shielded)));
+    }
+    if let Some(impedance) = &emi.cable_common_mode_impedance {
+        result.push(("cable_common_mode_impedance", quantity_value(impedance)));
+    }
+    if !emi.common_mode_impedance.is_empty() {
+        let points = emi
+            .common_mode_impedance
+            .iter()
+            .map(|point| {
+                let mut entries = vec![("frequency", quantity_value(&point.frequency))];
+                match &point.impedance {
+                    CommonModeValue::Magnitude(magnitude) => entries.push(("magnitude", quantity_value(magnitude))),
+                    CommonModeValue::Complex { resistance, reactance } => {
+                        entries.push(("resistance", quantity_value(resistance)));
+                        entries.push(("reactance", quantity_value(reactance)));
+                    }
+                }
+                object(entries)
+            })
+            .collect();
+        result.push(("common_mode_impedance", Value::Array(points)));
     }
     object(result)
 }

@@ -422,7 +422,7 @@ Switching converters, clock drivers and their passives can carry optional EMI
 facts as flat attributes; nothing is required, and a library without them
 compiles to the same IR and produces no new diagnostics. Pins and device pads
 take `emi_role` (`switch`, `hot_supply`, `hot_return`, `bootstrap`,
-`gate_drive`, `feedback` or `sense`), `rise_time`, `fall_time`, `slew_rate`
+`gate_drive`, `feedback`, `sense` or `shield`), `rise_time`, `fall_time`, `slew_rate`
 (the switch-node dv/dt, written with a slash unit: `3V/ns`, `500V/us` or `2kV/us`),
 `current_peak`, and `current_rise_time`/`current_fall_time` (the 10-90 % time in which
 the switch current commutates, a different quantity from the voltage edge);
@@ -499,6 +499,49 @@ package-pin attribute, not a device-pad attribute. Without it the signal walk of
 part and says where and why. The serialized IR carries `data_rate`, `clock_frequency`, `signal_swing` and
 `spread_spectrum` in `profile.emi` and `passes_to` on the pin, each only when declared. Section 14 of the EMI
 specification describes what is derived from them.
+
+#### Cable common mode
+
+The cable check (`EMI-CABLE-COMMON-MODE`, section 18 of the EMI specification) reads a few more optional attributes; a design
+that declares none compiles to the IR it had before, and each key reaches the IR only when declared.
+
+| Where | Attribute | Unit | Meaning |
+|---|---|---|---|
+| pin | `emi_role = shield` | name | A connector pin bonded to the cable's shield or shell; a victim-side role (never an aggressor, it makes no switching cell) |
+| pin, device pad | `open_circuit_swing` | voltage | The open-circuit swing of a driver, the Thevenin representation of the source (`2V`); exclusive with `signal_swing` |
+| pin, device pad | `output_impedance` | `ohm`, `kohm`, `Mohm` | The impedance behind `open_circuit_swing`; used only with it, and `open_circuit_swing` needs it (`CMP130` otherwise) |
+| part | `cable_shielded` | `true` or `false` | The cable the connector takes is shielded |
+| part | `cable_common_mode_impedance` | impedance | The common-mode impedance the cable presents at the connector; without it the cable is taken as matched to the channel's common-mode reference |
+| part | `common_mode_impedance` with `common_mode_impedance_frequency` | impedance, frequency | The series impedance a common-mode current sees through a choke or ferrite, at the declared frequencies |
+
+`signal_swing` is the voltage at the pin while it drives the line, so a source is declared in one representation only: the loaded
+voltage (`signal_swing`), or the open-circuit voltage with its source impedance (`open_circuit_swing` and `output_impedance`).
+
+```copper
+part Choke {
+    category = "passive.inductor.common_mode";
+    common_mode_impedance = "90+j500 ohm, 681.5+j0 ohm";
+    common_mode_impedance_frequency = "100 MHz, 1.25 GHz";
+    pin IN1  { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
+    pin IN2  { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
+    pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin OUT2 { number = "3"; domains = "digital"; directions = "passive"; }
+}
+part Conn {
+    category = "connector.header";
+    external_cable = true;
+    cable_shielded = true;
+    pin SIG { number = "1"; domains = "digital"; directions = "passive"; }
+    pin SHELL { number = "2"; domains = "ground"; directions = "passive"; emi_role = shield; }
+}
+```
+
+One declared point is two quantities (`common_mode_impedance = 120ohm; common_mode_impedance_frequency = 100MHz;`); several are two quoted
+lists of equal length with the frequencies strictly increasing. An entry is a magnitude (`120 ohm`) or a complex value `R+jX` (inductive
+reactance positive, resistance not negative); zero is accepted. Between declared points the magnitude is interpolated on log axes and
+nothing is extrapolated: outside the declared range, or at another frequency than a single declared point, the part is present and its
+attenuation is not modelled. Errors are `CMP130`. The serialized IR carries `common_mode_impedance` as a list of `{frequency, magnitude}` or
+`{frequency, resistance, reactance}`.
 
 Invalid values are `CMP130`. `constraint emission(J1) { standard = "cispr32_class_b"; }`
 names cable connectors (`CMP131`; at most one per board) and

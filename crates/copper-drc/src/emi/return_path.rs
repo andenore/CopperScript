@@ -185,6 +185,8 @@ pub(super) fn bare_source(subject: &Subject) -> SignalSource {
         fall_time: None,
         swing: None,
         spread_spectrum: None,
+        open_circuit_swing: None,
+        output_impedance: None,
         members: Vec::new(),
     }
 }
@@ -352,6 +354,11 @@ pub(super) struct Seg {
 impl Seg {
     pub(super) fn length(&self) -> f64 {
         dist(self.a, self.b)
+    }
+
+    /// The two ends, nm.
+    pub(super) fn ends(&self) -> ([f64; 2], [f64; 2]) {
+        (self.a, self.b)
     }
 
     fn unit(&self) -> [f64; 2] {
@@ -1588,6 +1595,72 @@ fn env_of<'c>(cx: &'c Context<'_>, fills: &PlaneFills) -> Env<'c> {
     }
 }
 
+/// A void of the reference copper that a straight corridor crosses.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct SlotBetween {
+    pub(super) plane_layer: CopperLayer,
+    /// Where the void meets the corridor, nm.
+    pub(super) at: [f64; 2],
+    /// The extent of the void perpendicular to the corridor, nm.
+    pub(super) slot: f64,
+    /// The void reaches the edge of the plane (a cut or a notch).
+    pub(super) reaches_edge: bool,
+}
+
+/// The voids of the reference plane of `layer` that the straight corridor from `a` to `b` (nm), widened by `3 H` each
+/// side (H the height over the plane, as the return-path check), crosses: the slots between two loops of the
+/// ground-noise network of `EMI-CABLE-COMMON-MODE`. A void that is one via's own antipad is not a slot. `None` when
+/// the layer has no reference plane in the fills.
+pub(super) fn slots_between(
+    cx: &Context<'_>,
+    fills: &PlaneFills,
+    layer: CopperLayer,
+    a: [f64; 2],
+    b: [f64; 2],
+) -> Option<Vec<SlotBetween>> {
+    let env = env_of(cx, fills);
+    let choice = env.choice(layer)?;
+    let plane = &env.planes[choice.plane];
+    let corridor = Seg { member: 0, layer, a, b, width: 0.0 };
+    if corridor.length() <= 0.0 {
+        return Some(Vec::new());
+    }
+    let strip = corridor.strip(defaults::RETURN_WINDOW_H.0 * choice.height * 1e9);
+    let strip_bounds = bounds_of(&strip)?;
+    let board = env.board;
+    let mut found = Vec::new();
+    for void in &plane.voids {
+        if !overlap(void.bounds, strip_bounds) {
+            continue;
+        }
+        let cut = poly::intersection(&strip, &vec![void.shape.clone()]);
+        if union_length(corridor.stations(&cut)) < NEGLIGIBLE_NM {
+            continue;
+        }
+        let extent = (void.bounds[2] - void.bounds[0]).max(void.bounds[3] - void.bounds[1]) as f64;
+        let own_antipad = void.vias == 1
+            && board.vias.iter().any(|via| {
+                void.shape.first().is_some_and(|outer| {
+                    poly::contour_contains(outer, (via.position.x_nm as f64, via.position.y_nm as f64))
+                }) && extent <= OWN_ANTIPAD_DIAMETERS * via.size_nm as f64
+            });
+        if own_antipad {
+            continue;
+        }
+        let d = corridor.unit();
+        let normal = [-d[1], d[0]];
+        let (lo, hi) = void.shape.first().map_or((0.0, 0.0), |outer| {
+            outer.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |acc, p| {
+                let t = p.x as f64 * normal[0] + p.y as f64 * normal[1];
+                (acc.0.min(t), acc.1.max(t))
+            })
+        });
+        let at = bounds_of(&cut).map_or(a, |b| [(b[0] + b[2]) as f64 / 2.0, (b[1] + b[3]) as f64 / 2.0]);
+        found.push(SlotBetween { plane_layer: plane.layer, at, slot: hi - lo, reaches_edge: void.reaches_edge });
+    }
+    Some(found)
+}
+
 /// How much of one leg's routed copper lacks its return reference, for the amplitude imbalance of
 /// `EMI-MODE-CONVERSION`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1631,6 +1704,14 @@ pub(super) fn leg_exposures(
             }
         })
         .collect()
+}
+
+/// The reference plane layer and the height over it (m) of a trace on `layer`, as the return-path check chooses them
+/// from the fills (`None`: no plane layer in the fills).
+pub(super) fn reference_of(cx: &Context<'_>, fills: &PlaneFills, layer: CopperLayer) -> Option<(CopperLayer, f64)> {
+    let planes = build_planes(cx.layout.board, cx.layout.view, fills);
+    let choice = choose(&cx.stack, &planes, layer)?;
+    Some((planes[choice.plane].layer, choice.height))
 }
 
 pub(super) fn analyze(cx: &mut Context, input: &ReturnPathInput) -> Vec<(String, CoverageStatus, String)> {

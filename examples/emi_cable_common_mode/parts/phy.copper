@@ -1,0 +1,20 @@
+// A transmitter with six differential lanes, annotated for `copper emi-check` (the cable common-mode check).
+// Lane S runs at 200 Mbps so that its fundamental, 100 MHz, differs from the 1.25 GHz of the others.
+part Phy {
+    category = "interface.serdes";
+    pin CP { number = "1"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin CN { number = "2"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin DP { number = "3"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin DN { number = "4"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin NP { number = "5"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin NN { number = "6"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin ZP { number = "7"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin ZN { number = "8"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin MP { number = "9"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin MN { number = "10"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin RP { number = "11"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin RN { number = "12"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin SP { number = "13"; domains = "digital"; directions = "output"; data_rate = 200Mbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin SN { number = "14"; domains = "digital"; directions = "output"; data_rate = 200Mbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin GND { number = "15"; domains = "ground"; directions = "input"; }
+}

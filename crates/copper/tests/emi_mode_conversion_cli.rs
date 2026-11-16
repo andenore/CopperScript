@@ -115,9 +115,12 @@ fn the_cli_runs_the_mode_conversion_check_on_the_routed_example() {
     assert_eq!(text(estimate, "kind").as_deref(), Some("voltage_ratio"));
     assert_eq!(text(estimate, "unit").as_deref(), Some("dB"));
     assert!(a.get("margin_db").is_none_or(|m| matches!(m, Value::Null)), "no margin");
-    // A pair with a choke in its channel says the choke's attenuation is not modelled.
+    // A pair with a choke in its channel that declares its common-mode impedance says the choke is evaluated.
     let c = finding_of(&report, "LANE_C_P").expect("the finding of lane C");
-    assert!(text(&c, "message").unwrap().contains("L1 present but NOT evaluated"), "{c:?}");
+    assert!(
+        text(&c, "message").unwrap().contains("L1 declares its common-mode impedance and is evaluated at 1250 MHz"),
+        "{c:?}"
+    );
     // The text output lists the entries and no verdict.
     let plain = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED]));
     assert!(plain.contains("executed EMI-MODE-CONVERSION:LANE_B_P"), "{plain}");

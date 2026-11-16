@@ -3,8 +3,8 @@
 Status: plan revised five times on 2026-11-16 after five
 reviews (see
 "Changes from the reviews" at the end). **P0 is on `main` (commit 1670f86); P1, P2, P3 and P4a are implemented**; see sections 14, 15, 16 and 17 of
-`emi-noise-analysis.md`. **P7 report migration implemented**: the `emi` section, `--plot-summary`
-and `copper issues` work on a board with no switching converter (section 15.12); the rest of P7 stays open. P4 onward is
+`emi-noise-analysis.md`. **P4 implemented**: section 18 of `emi-noise-analysis.md`. **P7 report migration implemented**: the `emi` section, `--plot-summary`
+and `copper issues` work on a board with no switching converter (section 15.12); the rest of P7 stays open. P4b onward is
 not started. Base: `main` at `842112a`. This plan
 extends `copper emi-check` and the EMI specification in
 [`emi-noise-analysis.md`](emi-noise-analysis.md); read sections 1–8 of that
@@ -562,6 +562,11 @@ these networks.
 ---
 
 ## P4. `EMI-CABLE-COMMON-MODE`: voltage and ranking
+
+**Status: implemented;** the specification is section 18 of `emi-noise-analysis.md`. Two attributes
+the table below does not list were needed to make the plan's own cases declarable and are an addition to it: `open_circuit_swing` (the
+"declared open-circuit swing" of the Thevenin representation) and `cable_common_mode_impedance` (the unmatched cable of the matched-termination
+tests).
 
 New module `crates/copper-drc/src/emi/cable.rs`. One finding per cable
 connector (`cable_connectors()` in `emi.rs`: parts with `external_cable = true`

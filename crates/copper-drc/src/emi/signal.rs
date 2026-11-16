@@ -144,6 +144,8 @@ mod tests {
             fall_time: None,
             swing: None,
             spread_spectrum: None,
+            open_circuit_swing: None,
+            output_impedance: None,
             members: Vec::new(),
         }
     }

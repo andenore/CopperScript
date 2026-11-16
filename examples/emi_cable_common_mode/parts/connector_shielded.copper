@@ -1,0 +1,12 @@
+// A shielded cable connector: a shield pin bonded to the board reference, and a cable whose common-mode impedance at the
+// connector (150 ohm) is not the channel's reference, so the cable is not matched.
+part JShielded {
+    category = "connector.header";
+    external_cable = true;
+    cable_shielded = true;
+    cable_common_mode_impedance = 150ohm;
+    pin MP { number = "1"; domains = "digital"; directions = "passive"; }
+    pin MN { number = "2"; domains = "digital"; directions = "passive"; }
+    pin GND { number = "3"; domains = "ground"; directions = "passive"; }
+    pin SH { number = "4"; domains = "ground"; directions = "passive"; emi_role = shield; }
+}

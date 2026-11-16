@@ -1,0 +1,5 @@
+// A clock receiver.
+part Clk {
+    category = "interface.receiver";
+    pin IN { number = "1"; domains = "clock"; directions = "input"; }
+}

@@ -1,0 +1,12 @@
+// A four-pin common-mode choke, crossed along its declared pin pairs. Two declared points with a phase: inductive at 100 MHz,
+// resistive (681.5 ohm, which is 18 Z_c,ref of the lanes) at its 1.25 GHz resonance, so T_cc = 2 Z_c,ref / (2 Z_c,ref + Z) = 0.1 there.
+// Synthetic values.
+part ChokeA {
+    category = "passive.inductor.common_mode";
+    common_mode_impedance = "90+j500 ohm, 681.5+j0 ohm";
+    common_mode_impedance_frequency = "100 MHz, 1.25 GHz";
+    pin IN1 { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
+    pin IN2 { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
+    pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin OUT2 { number = "3"; domains = "digital"; directions = "passive"; }
+}

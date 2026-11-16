@@ -7,8 +7,11 @@
 //!
 //! * Lane A, 10 mm of skew: dt = 58.581 ps, `pi f dt = 0.230045`, `(1/2) sin = 0.114011`, -18.86 dB.
 //! * Lane C, 4 mm of skew in the section before the choke: dt = 23.432 ps, `pi f dt = 0.092018`,
-//!   `(1/2) sin = 0.045941`, -26.76 dB. The choke and the 100 nF capacitors do nothing the check can evaluate
-//!   (transfer 1, capacitor gain 1 to 1e-8), so the connector reads what the section reads.
+//!   `(1/2) sin = 0.045941`, -26.76 dB before the choke. The choke declares 681.5 + j0 ohm at 1.25 GHz, 18 `Z_c,ref` of
+//!   the lane (`Z_c,ref` = 37.86 ohm), so its common-mode transmission is `T = 2 Z_c,ref / (2 Z_c,ref + Z) = 75.72 /
+//!   757.22 = 0.09999`, -20.00 dB: the connector reads -46.76 dB. (Before the choke was declared the example read -26.76
+//!   dB: the choke was present and not evaluated, transfer exactly 1; `an_undeclared_choke_...` keeps that case.) The
+//!   100 nF capacitors have gain 1 to 1e-8.
 //! * Lane D, 6 mm of skew in the section after the choke: dt = 35.149 ps, `pi f dt = 0.138027`,
 //!   `(1/2) sin = 0.068789`, -23.25 dB.
 
@@ -24,7 +27,7 @@ use copper_fullwave::fill::zone_fill_set;
 use copper_json::Value;
 use copper_physical::CopperLayer;
 
-use board::{Loaded, load, track};
+use board::{Loaded, load, load_edited, track};
 
 const C0: f64 = 299_792_458.0;
 const EPS_LANE: f64 = 3.0844;
@@ -151,17 +154,32 @@ fn a_section_before_the_choke_and_one_after_it_are_each_an_element_of_the_cascad
     );
     let skews: Vec<f64> = sections(c).iter().map(|s| number(s.get("skew_ps").unwrap()).abs()).collect();
     assert!((skews[0] - 4.0 * 5.8581).abs() < 0.05 && skews[1] < 1e-6 && skews[2] < 1e-6, "{skews:?}");
-    // Identity: the capacitors (100 nF, gain 1 to 1e-8) and the choke (transparent) change nothing, so the connector
-    // reads what the 4 mm section reads: -26.76 dB.
+    // The capacitors (100 nF, gain 1 to 1e-8) change nothing; the choke multiplies the common mode of the 4 mm section by
+    // T = 0.09999: -26.76 - 20.00 = -46.76 dB at the connector.
     let measured = number(dig(c, &["ratio", "at_fundamental_db"]));
-    assert!((measured - hand_db(4.0, F0)).abs() < 0.02, "{measured} vs {}", hand_db(4.0, F0));
-    assert!((hand_db(4.0, F0) + 26.76).abs() < 0.01);
-    // The choke is present and not evaluated: the finding says so and the part says why.
-    assert!(c.finding.message.contains("L1 present but NOT evaluated"), "{}", c.finding.message);
+    let transmission: f64 = 2.0 * 37.86 / (2.0 * 37.86 + 681.5);
+    let hand = hand_db(4.0, F0) + 20.0 * transmission.log10();
+    assert!((measured - hand).abs() < 0.02, "{measured} vs {hand}");
+    assert!((hand_db(4.0, F0) + 26.76).abs() < 0.01 && (hand + 46.76).abs() < 0.01, "{hand}");
+    // The choke declares its impedance: the finding says it is evaluated, at which frequency and over what range.
+    assert!(
+        c.finding.message.contains(
+            "L1 declares its common-mode impedance and is evaluated at 1250 MHz (declared 100 MHz to 1250 MHz)"
+        ),
+        "{}",
+        c.finding.message
+    );
+    assert!(!c.finding.message.contains("NOT evaluated"));
     let parts = c.measures.get("parts").and_then(Value::as_array).unwrap();
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[1].get("kind").and_then(Value::as_str), Some("common_mode_choke"));
-    assert_eq!(parts[1].get("transfer_basis").and_then(Value::as_str), Some("not_declared_not_modelled"));
+    assert_eq!(parts[1].get("transfer_basis").and_then(Value::as_str), Some("declared_complex_inside_declared_range"));
+    let range = parts[1]
+        .get("declared_common_mode_impedance")
+        .and_then(|d| d.get("range_hz"))
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!((number(&range[0]), number(&range[1])), (100e6, 1.25e9));
     assert_eq!(parts[0].get("kind").and_then(Value::as_str), Some("coupling_capacitor"));
     // The planes P4 needs: before and after the choke, and the connector pins.
     let planes: Vec<&str> = c
@@ -194,6 +212,57 @@ fn a_section_before_the_choke_and_one_after_it_are_each_an_element_of_the_cascad
     for net in ["LANE_A_P", "LANE_B_P", "LANE_C_P", "LANE_D_P"] {
         assert_eq!(coverage(&report, &format!("EMI-MODE-CONVERSION:{net}")).0, CoverageStatus::Executed, "{net}");
     }
+}
+
+#[test]
+fn an_undeclared_choke_is_present_and_not_evaluated_and_changes_nothing() {
+    // The choke part with its two declarations deleted: present, transfer exactly 1 (the reading of the example before the
+    // choke declared an impedance): lane C reads the 4 mm skew's -26.76 dB, and the finding says the choke is NOT evaluated.
+    let loaded = load_edited(
+        "undeclared-choke",
+        &[(
+            "parts/choke.copper",
+            "    common_mode_impedance = \"90+j500 ohm, 681.5+j0 ohm\";\n    common_mode_impedance_frequency = \"100 MHz, 1.25 GHz\";\n",
+            "",
+        )],
+        true,
+    );
+    let report = report_of(&loaded);
+    let c = finding(&report, "LANE_C_P").expect("lane C");
+    let measured = number(dig(c, &["ratio", "at_fundamental_db"]));
+    assert!((measured - hand_db(4.0, F0)).abs() < 0.02, "{measured}");
+    assert!(c.finding.message.contains("L1 present but NOT evaluated"), "{}", c.finding.message);
+    let parts = c.measures.get("parts").and_then(Value::as_array).unwrap();
+    assert_eq!(parts[1].get("transfer_basis").and_then(Value::as_str), Some("not_declared_not_modelled"));
+    assert!(parts[1].get("declared_common_mode_impedance").is_none());
+}
+
+#[test]
+fn a_choke_declared_for_one_frequency_is_evaluated_there_and_not_modelled_elsewhere() {
+    // One declared point (|Z| = 450 ohm at 1.25 GHz, no phase) supports the fundamental of 1.25 GHz only: the headline is a
+    // band, `|T|` from 75.72 / 525.72 = 0.14403 to min(75.72 / 374.28, 1) = 0.20231, and the worst value up to the corner (at
+    // 2.546 GHz, outside what is declared) is the unfiltered one.
+    let loaded = load_edited(
+        "one-point",
+        &[
+            ("parts/choke.copper", "\"90+j500 ohm, 681.5+j0 ohm\"", "450ohm"),
+            ("parts/choke.copper", "\"100 MHz, 1.25 GHz\"", "1.25GHz"),
+        ],
+        true,
+    );
+    let report = report_of(&loaded);
+    let c = finding(&report, "LANE_C_P").expect("lane C");
+    let unfiltered = hand_db(4.0, F0);
+    let band = c.estimate.as_ref().unwrap().band_db.expect("a band");
+    assert!((band[0] - (unfiltered + 20.0 * (75.72f64 / 525.72).log10())).abs() < 0.03, "{band:?}");
+    assert!((band[1] - (unfiltered + 20.0 * (75.72f64 / 374.28).log10())).abs() < 0.03, "{band:?}");
+    // The band also rests on the coupling capacitors' tolerance rule of thumb: both are named.
+    assert_eq!(c.estimate.as_ref().unwrap().basis.as_deref(), Some("rule_of_thumb_and_declared_choke_magnitude_only"));
+    assert!(c.finding.message.contains("magnitudes only: the result is a band"), "{}", c.finding.message);
+    // Outside the declared point: no attenuation is modelled (the scan above 1.25 GHz reads the unfiltered conversion).
+    let (worst_hz, worst) =
+        (number(dig(c, &["ratio", "worst", "frequency_hz"])), number(dig(c, &["ratio", "worst", "ratio_db"])));
+    assert!(worst_hz > 1.26e9 && worst > unfiltered, "{worst_hz} {worst}");
 }
 
 #[test]

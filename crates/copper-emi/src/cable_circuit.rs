@@ -1,9 +1,9 @@
 //! The cable's circuit: small closed forms of the definitions in section 17 of `docs/emi-noise-analysis.md`
 //! (`docs/emi-signal-cable-plan.md` P4a).
 //!
-//! Definition and test fixtures only. Nothing here is called by `emi-check` and nothing is reported from it; every
-//! function is compared with an independent nodal solution of the network it stands for in
-//! `tests/cable_circuit_fixtures.rs`. None of it is correlated with a measurement.
+//! Every function is compared with an independent nodal solution of the network it stands for in
+//! `tests/cable_circuit_fixtures.rs`; `EMI-CABLE-COMMON-MODE` (`copper-drc`, P4) calls them and reports voltages and a
+//! ranking from them, never a current, a field or a margin. None of it is correlated with a measurement.
 //!
 //! * **Source and load** (fixture 3b, 2): a Thevenin source `V_oc` with `Z_source` into a series impedance and a load.
 //! * **Incident wave to connector voltage** (fixtures 3a, 3c, 6): the cascade's `T = 2 Z_ref / (2 Z_ref + Z_cmc)` is
@@ -14,6 +14,12 @@
 //!   never a mixture.
 //! * **Ground-noise transfer** (fixture 8): `V_B = sum over k of Z_Bk I_k`, each conductor coupled to loop B with its
 //!   own signed transfer before the currents are summed.
+//! * **Loop mutual** (fixture 8): [`loop_mutual`], the Neumann mutual inductance of two closed polylines as a sum of the
+//!   finite-filament mutuals of their edges, and [`return_loop`], the loop a routed polyline makes with its return
+//!   directly beneath it in the reference plane. This is the closed form of the ground-noise driver of P4.
+//! * **Declared choke impedance** (P4, "Applicability of the declared impedance"): [`impedance_at`] interpolates a
+//!   declared common-mode impedance on log axes inside the declared range and nowhere else, and
+//!   [`transmission_band`] is the band the transmission takes when only a magnitude is known.
 
 use crate::mode_conversion::common_mode_transfer;
 use crate::spectrum::Complex;
@@ -103,6 +109,131 @@ pub fn modal_currents(i_p: Complex, i_n: Complex) -> (Complex, Complex) {
     ((i_p + i_n).scale(0.5), (i_p - i_n).scale(0.5))
 }
 
+/// One declared point of a choke's common-mode impedance: at `frequency` hertz, a complex value, or a magnitude only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImpedancePoint {
+    pub frequency: f64,
+    /// `Some(Z)`: complex, `None`: only `magnitude` is known (no phase).
+    pub complex: Option<Complex>,
+    pub magnitude: f64,
+}
+
+impl ImpedancePoint {
+    pub fn magnitude_only(frequency: f64, magnitude: f64) -> Self {
+        ImpedancePoint { frequency, complex: None, magnitude }
+    }
+
+    pub fn complex(frequency: f64, z: Complex) -> Self {
+        ImpedancePoint { frequency, complex: Some(z), magnitude: z.abs() }
+    }
+}
+
+/// What a declared impedance supports at one frequency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DeclaredImpedance {
+    /// A complex value: every point of the declaration has a phase, so the interpolated value has one.
+    Complex(Complex),
+    /// A magnitude with no phase: the transmission is a band, see [`transmission_band`].
+    Magnitude(f64),
+    /// The frequency is outside the declared range (or, for one declared point, not that point): the choke is present
+    /// and its attenuation is not modelled. The declared range in hertz.
+    Outside { low: f64, high: f64 },
+}
+
+/// The relative tolerance with which a frequency counts as one declared frequency (a single declared point supports
+/// only that frequency).
+pub const POINT_TOLERANCE: f64 = 1.0e-6;
+
+/// The declared impedance at `frequency` (`points` in increasing frequency, at least one).
+///
+/// One declared point supports that frequency only (within [`POINT_TOLERANCE`]). Between two or more points the
+/// magnitude is interpolated linearly in `log |Z|` against `log f`, and a complex value also its phase linearly in
+/// `log f`; nothing is extrapolated beyond the declared range. If any point has no phase the result is a magnitude.
+pub fn impedance_at(points: &[ImpedancePoint], frequency: f64) -> DeclaredImpedance {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return DeclaredImpedance::Outside { low: 0.0, high: 0.0 };
+    };
+    let outside = DeclaredImpedance::Outside { low: first.frequency, high: last.frequency };
+    let same = |a: f64, b: f64| (a - b).abs() <= POINT_TOLERANCE * b.abs();
+    if points.len() == 1 {
+        return if same(frequency, first.frequency) { exact(first) } else { outside };
+    }
+    if frequency < first.frequency * (1.0 - POINT_TOLERANCE) || frequency > last.frequency * (1.0 + POINT_TOLERANCE) {
+        return outside;
+    }
+    if let Some(point) = points.iter().find(|p| same(frequency, p.frequency)) {
+        return exact(point);
+    }
+    let Some(k) = points.windows(2).position(|w| w[0].frequency < frequency && frequency < w[1].frequency) else {
+        return outside;
+    };
+    let (a, b) = (&points[k], &points[k + 1]);
+    let t = (frequency / a.frequency).ln() / (b.frequency / a.frequency).ln();
+    // A zero magnitude on either side interpolates to zero (log axes cannot hold it).
+    let magnitude = if a.magnitude > 0.0 && b.magnitude > 0.0 {
+        (a.magnitude.ln() + t * (b.magnitude / a.magnitude).ln()).exp()
+    } else {
+        0.0
+    };
+    match (a.complex, b.complex) {
+        (Some(za), Some(zb)) if magnitude > 0.0 => {
+            let (pa, pb) = (za.arg(), zb.arg());
+            DeclaredImpedance::Complex(Complex::from_polar(magnitude, pa + t * (pb - pa)))
+        }
+        (Some(_), Some(_)) => DeclaredImpedance::Complex(Complex::ZERO),
+        _ => DeclaredImpedance::Magnitude(magnitude),
+    }
+}
+
+fn exact(point: &ImpedancePoint) -> DeclaredImpedance {
+    match point.complex {
+        Some(z) => DeclaredImpedance::Complex(z),
+        None => DeclaredImpedance::Magnitude(point.magnitude),
+    }
+}
+
+/// The band of the common-mode transmission `T = 2 Z_ref / (2 Z_ref + Z_cmc)` when only `|Z_cmc|` is known: the
+/// denominator `|2 Z_ref + Z_cmc|` lies between `| |Z_cmc| - 2 Z_ref |` and `|Z_cmc| + 2 Z_ref`, so `|T|` lies between
+/// `2 Z_ref / (|Z_cmc| + 2 Z_ref)` and `2 Z_ref / | |Z_cmc| - 2 Z_ref |` (returned `(low, high)`; `high` is infinite for
+/// `|Z_cmc| = 2 Z_ref`, where a phase of 180 degrees would cancel the reference). A passive series impedance has a
+/// real part of at least zero, which keeps `|T|` at or below 1; the band does not use that.
+pub fn transmission_band(magnitude: f64, z_ref: f64) -> (f64, f64) {
+    let low = 2.0 * z_ref / (magnitude + 2.0 * z_ref);
+    let spread = (magnitude - 2.0 * z_ref).abs();
+    let high = if spread > 0.0 { 2.0 * z_ref / spread } else { f64::INFINITY };
+    (low, high)
+}
+
+type Point3 = [f64; 3];
+
+/// The mutual inductance (H) of two closed polylines (the last point joins the first) as the sum, over every pair of
+/// edges, of the finite-filament mutual of `crate::inductance::mutual_filaments`: the Neumann double integral of
+/// straight thin filaments in free space (closed form of Grover for parallel filaments, adaptive quadrature for
+/// skew ones; the current direction of each edge gives the sign). Valid for thin conductors whose separation is large
+/// against their width; the reference plane is not an image here, it is the bottom edge of each loop (see
+/// [`return_loop`]).
+pub fn loop_mutual(loop_a: &[Point3], loop_b: &[Point3]) -> f64 {
+    let (na, nb) = (loop_a.len(), loop_b.len());
+    let mut sum = 0.0;
+    for i in 0..na {
+        for j in 0..nb {
+            sum +=
+                crate::inductance::mutual_filaments(loop_a[i], loop_a[(i + 1) % na], loop_b[j], loop_b[(j + 1) % nb]);
+        }
+    }
+    sum
+}
+
+/// The loop of a routed polyline `path` (points `[x, y]`, metres) at `height` above the reference plane `z = 0`: out
+/// along the route at `z = height`, down at the end, back along the plane directly beneath the route and up at the
+/// start. It stands for a driven conductor and its return current under it (loop A of the ground-noise network), and,
+/// with a straight two-point path at the sense height, for the observation loop B.
+pub fn return_loop(path: &[[f64; 2]], height: f64) -> Vec<Point3> {
+    let mut points: Vec<Point3> = path.iter().map(|p| [p[0], p[1], height]).collect();
+    points.extend(path.iter().rev().map(|p| [p[0], p[1], 0.0]));
+    points
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +264,71 @@ mod tests {
         let load = CableLoad::Impedance(r(50.0));
         assert!((first_arrival_voltage(r(1.0), r(900.0), 50.0, load).re - 0.1).abs() < 1e-15);
         assert!((steady_state_voltage(r(1.0), r(900.0), 50.0, load).re - 0.1).abs() < 1e-15);
+    }
+
+    #[test]
+    fn the_declared_impedance_is_interpolated_on_log_axes_inside_the_range_only() {
+        // 30 ohm at 10 MHz and 300 ohm at 1 GHz: the geometric midpoint 100 MHz is the geometric mean of the
+        // magnitudes, sqrt(30 * 300) = 94.868 ohm.
+        let points = [ImpedancePoint::magnitude_only(10e6, 30.0), ImpedancePoint::magnitude_only(1e9, 300.0)];
+        match impedance_at(&points, 100e6) {
+            DeclaredImpedance::Magnitude(m) => assert!((m - 94.868_33).abs() < 1e-4, "{m}"),
+            other => panic!("{other:?}"),
+        }
+        // The declared points themselves, and nothing outside the range.
+        assert_eq!(impedance_at(&points, 10e6), DeclaredImpedance::Magnitude(30.0));
+        assert_eq!(impedance_at(&points, 1e9), DeclaredImpedance::Magnitude(300.0));
+        assert_eq!(impedance_at(&points, 5e6), DeclaredImpedance::Outside { low: 10e6, high: 1e9 });
+        assert_eq!(impedance_at(&points, 2e9), DeclaredImpedance::Outside { low: 10e6, high: 1e9 });
+        // One declared point supports its own frequency only.
+        let single = [ImpedancePoint::magnitude_only(100e6, 120.0)];
+        assert_eq!(impedance_at(&single, 100e6), DeclaredImpedance::Magnitude(120.0));
+        assert!(matches!(impedance_at(&single, 101e6), DeclaredImpedance::Outside { .. }));
+        // Complex points interpolate the phase linearly in log f: 10 ohm at 0 degrees to 100 ohm at 90 degrees,
+        // a decade apart, at the middle: 31.623 ohm at 45 degrees.
+        let complex = [
+            ImpedancePoint::complex(1e6, Complex::new(10.0, 0.0)),
+            ImpedancePoint::complex(1e7, Complex::new(0.0, 100.0)),
+        ];
+        match impedance_at(&complex, 10f64.powf(6.5)) {
+            DeclaredImpedance::Complex(z) => {
+                assert!((z.abs() - 31.622_78).abs() < 1e-4 && (z.arg() - std::f64::consts::FRAC_PI_4).abs() < 1e-9);
+            }
+            other => panic!("{other:?}"),
+        }
+        // One point without a phase makes the result a magnitude.
+        let mixed = [ImpedancePoint::complex(1e6, Complex::new(10.0, 0.0)), ImpedancePoint::magnitude_only(1e7, 100.0)];
+        assert!(matches!(impedance_at(&mixed, 3e6), DeclaredImpedance::Magnitude(_)));
+    }
+
+    #[test]
+    fn the_transmission_band_of_a_magnitude_is_the_two_extreme_phases() {
+        // |Z| = 90 ohm in Z_ref = 25 ohm (2 Z_ref = 50): |T| between 50 / 140 = 0.35714 and 50 / 40 = 1.25.
+        let (low, high) = transmission_band(90.0, 25.0);
+        assert!((low - 0.357_142_9).abs() < 1e-6 && (high - 1.25).abs() < 1e-12);
+        // Every complex Z of that magnitude lands inside the band.
+        for k in 0..=360 {
+            let z = Complex::from_polar(90.0, f64::from(k).to_radians());
+            let t = common_mode_transfer(z, 25.0).abs();
+            assert!(t >= low - 1e-12 && t <= high + 1e-12, "{k}");
+        }
+        // A zero magnitude is exactly 1 on both ends.
+        assert_eq!(transmission_band(0.0, 25.0), (1.0, 1.0));
+        // |Z| = 2 Z_ref: the upper end is unbounded.
+        assert_eq!(transmission_band(50.0, 25.0).1, f64::INFINITY);
+    }
+
+    #[test]
+    fn the_return_loop_of_a_straight_route_is_the_rectangle_of_the_fixture() {
+        // 20 mm route at 0.2 mm: out at z = 0.2 mm, down, back along the plane, up.
+        let loop_a = return_loop(&[[0.0, 0.002], [0.02, 0.002]], 0.2e-3);
+        assert_eq!(loop_a.len(), 4);
+        assert_eq!(loop_a[0], [0.0, 0.002, 0.2e-3]);
+        assert_eq!(loop_a[2], [0.02, 0.002, 0.0]);
+        // Reciprocity: M(A, B) = M(B, A), and a loop with itself is positive (its partial-inductance sum).
+        let loop_b = return_loop(&[[0.0, 0.0], [0.02, 0.0]], 5.0e-3);
+        assert!((loop_mutual(&loop_a, &loop_b) - loop_mutual(&loop_b, &loop_a)).abs() < 1e-18);
+        assert!(loop_mutual(&loop_a, &loop_b) > 0.0);
     }
 
     #[test]

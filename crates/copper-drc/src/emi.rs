@@ -45,6 +45,7 @@ use crate::emi_trace::{StepKind, TraceArc, TraceCopper, TraceGraph, TracePad, Tr
 use crate::signal_integrity::copper_layer_depths_nm;
 use crate::{Coverage, CoverageStatus, Finding, Severity};
 
+mod cable;
 mod conducted;
 pub mod defaults;
 mod field;
@@ -126,6 +127,9 @@ pub enum EstimateKind {
     /// A ratio of two voltages of one network in dB (`EMI-MODE-CONVERSION`: common mode at an observation plane per
     /// unit of launched differential voltage): not a field, never compared with a limit, never given a margin.
     VoltageRatio,
+    /// A common-mode voltage in dBuV at a cable connector against the board reference there
+    /// (`EMI-CABLE-COMMON-MODE`): not a current, not a field, never compared with a limit, never given a margin.
+    Voltage,
 }
 
 impl EstimateKind {
@@ -134,6 +138,7 @@ impl EstimateKind {
             EstimateKind::Absolute => "absolute_screening",
             EstimateKind::RankingScore => "ranking_score",
             EstimateKind::VoltageRatio => "voltage_ratio",
+            EstimateKind::Voltage => "common_mode_voltage",
         }
     }
 }
@@ -3861,16 +3866,18 @@ fn si_frequency(hertz: f64) -> String {
 /// notes, see [`radiated_ranking_notes`]); ties break by loop area, larger first. Then conducted estimates (dBuV at
 /// a LISN, a different quantity that is never compared with them) by margin when margins exist, else by level;
 /// then the ranking scores (dB, relative: compared only with each other) by score; then voltage ratios (dB, a
-/// different quantity again, compared only with each other) by ratio; then findings without an estimate; `EMI-ACCEPT-UNUSED` last.
+/// different quantity again, compared only with each other) by ratio; then common-mode voltages at a connector (dBuV,
+/// compared only with each other) by level; then findings without an estimate; `EMI-ACCEPT-UNUSED` last.
 fn compare_findings(a: &EmiFinding, b: &EmiFinding) -> std::cmp::Ordering {
     let key = |f: &EmiFinding| {
         if f.finding.code == "EMI-ACCEPT-UNUSED" {
-            (5, 0.0)
+            (6, 0.0)
         } else {
             match f.estimate.as_ref() {
-                None => (4, 0.0),
+                None => (5, 0.0),
                 Some(e) if e.kind == EstimateKind::RankingScore => (2, -e.value),
                 Some(e) if e.kind == EstimateKind::VoltageRatio => (3, -e.value),
+                Some(e) if e.kind == EstimateKind::Voltage => (4, -e.value),
                 Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
                 Some(e) => (0, -e.value),
             }
@@ -4008,6 +4015,7 @@ fn emi_check_inner(
     }
     let return_coverage = return_path::analyze(&mut cx, return_input);
     let conversion_coverage = mode_conversion::analyze(&mut cx, return_input);
+    let cable_coverage = cable::analyze(&mut cx, return_input);
     apply_accepts(view, &mut cx.findings);
 
     match (&cx.standard.name, &cx.standard.unsupported) {
@@ -4025,7 +4033,7 @@ fn emi_check_inner(
                 "EMI-MARGIN".to_owned(),
                 CoverageStatus::Executed,
                 format!(
-                    "margin against the {name} radiated line ({source}) at {} m for the differential-mode hot-loop field only, never a pass or fail; the common-mode coupling-risk score of EMI-SWITCH-NODE is a ranking score and gets no margin; EMI-CONDUCTED margins (dBuV at the LISN) use the CISPR 32 mains-port quasi-peak and average lines for cispr32_class_a and cispr32_class_b only and only where the isolated-line detector assumption holds",
+                    "margin against the {name} radiated line ({source}) at {} m for the differential-mode hot-loop field only, never a pass or fail; the common-mode coupling-risk score of EMI-SWITCH-NODE is a ranking score and gets no margin; cable common mode (EMI-CABLE-COMMON-MODE) is reported as voltages at the connector and a ranking only, with no current, no field and no margin, because a field needs the bundle's net current, which needs the cable's return conductor, its far-end termination and the antenna's other conductor, none of which the board model has; EMI-CONDUCTED margins (dBuV at the LISN) use the CISPR 32 mains-port quasi-peak and average lines for cispr32_class_a and cispr32_class_b only and only where the isolated-line detector assumption holds",
                     cx.standard.distance
                 ),
             );
@@ -4064,14 +4072,20 @@ fn emi_check_inner(
         };
         cx.cover("EMI-COPPER-TRACE".to_owned(), CoverageStatus::Unsupported, reason);
     }
-    cx.cover(
-        "EMI-CABLE-COMMON-MODE".to_owned(),
-        CoverageStatus::Unsupported,
-        format!(
-            "common-mode radiation from cables and attached conductors (cable_length {} m) is not estimated: the board model has no cable, chassis or return structure, so EMI-SWITCH-NODE reports a coupling-risk score, not a field",
-            cx.standard.cable_length
-        ),
-    );
+    if cable_coverage.is_empty() {
+        // No cable connector: the entry is what it was before the check existed.
+        cx.cover(
+            "EMI-CABLE-COMMON-MODE".to_owned(),
+            CoverageStatus::Unsupported,
+            format!(
+                "common-mode radiation from cables and attached conductors (cable_length {} m) is not estimated: the board model has no cable, chassis or return structure, so EMI-SWITCH-NODE reports a coupling-risk score, not a field",
+                cx.standard.cable_length
+            ),
+        );
+    }
+    for (check, status, detail) in cable_coverage {
+        cx.cover(check, status, detail);
+    }
 
     let mut findings = std::mem::take(&mut cx.findings);
     findings.sort_by(compare_findings);

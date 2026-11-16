@@ -76,14 +76,16 @@ pub fn error_section(message: &str) -> Value {
 }
 
 /// Whether `report` has anything to put in the route report: a switching cell, a finding, or an executed
-/// signal check (`EMI-RETURN-PATH` and `EMI-MODE-CONVERSION`, with their `:<net>` entries, which also say "nothing to
-/// report" for a subject).
+/// signal check (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION` and `EMI-CABLE-COMMON-MODE`, with their `:<net>` and
+/// `:<connector>` entries, which also say "nothing to report" for a subject).
 fn has_content(report: &copper_drc::emi::EmiCheckReport) -> bool {
     !report.cells.is_empty()
         || !report.findings.is_empty()
         || report.coverage.iter().any(|entry| {
             entry.status == copper_drc::CoverageStatus::Executed
-                && (entry.check.starts_with("EMI-RETURN-PATH") || entry.check.starts_with("EMI-MODE-CONVERSION"))
+                && (entry.check.starts_with("EMI-RETURN-PATH")
+                    || entry.check.starts_with("EMI-MODE-CONVERSION")
+                    || entry.check.starts_with("EMI-CABLE-COMMON-MODE"))
         })
 }
 
@@ -223,6 +225,14 @@ mod tests {
         // An executed return-path check (overall or per net) is something to say, finding or not.
         assert!(has_content(&report(vec![entry("EMI-RETURN-PATH", CoverageStatus::Executed)])));
         assert!(has_content(&report(vec![entry("EMI-RETURN-PATH:CLK", CoverageStatus::Executed)])));
+        // An executed cable common-mode entry (overall or per connector) is something to say as well; one that is not
+        // executed is not (the entry a board with a cable connector and nothing to report gets).
+        assert!(has_content(&report(vec![entry("EMI-CABLE-COMMON-MODE", CoverageStatus::Executed)])));
+        assert!(has_content(&report(vec![entry("EMI-CABLE-COMMON-MODE:J1", CoverageStatus::Executed)])));
+        assert!(!has_content(&report(vec![
+            entry("EMI-CABLE-COMMON-MODE", CoverageStatus::NotApplicable),
+            entry("EMI-CABLE-COMMON-MODE:J1", CoverageStatus::Unsupported),
+        ])));
     }
 
     #[test]

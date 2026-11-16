@@ -1,0 +1,19 @@
+// A cable connector with six differential lanes and one ground pin; no shield pin and no `cable_shielded`: the cable is
+// taken as unshielded and matched.
+part JConn {
+    category = "connector.header";
+    external_cable = true;
+    pin CP { number = "1"; domains = "digital"; directions = "passive"; }
+    pin CN { number = "2"; domains = "digital"; directions = "passive"; }
+    pin DP { number = "3"; domains = "digital"; directions = "passive"; }
+    pin DN { number = "4"; domains = "digital"; directions = "passive"; }
+    pin NP { number = "5"; domains = "digital"; directions = "passive"; }
+    pin NN { number = "6"; domains = "digital"; directions = "passive"; }
+    pin ZP { number = "7"; domains = "digital"; directions = "passive"; }
+    pin ZN { number = "8"; domains = "digital"; directions = "passive"; }
+    pin RP { number = "9"; domains = "digital"; directions = "passive"; }
+    pin RN { number = "10"; domains = "digital"; directions = "passive"; }
+    pin SP { number = "11"; domains = "digital"; directions = "passive"; }
+    pin SN { number = "12"; domains = "digital"; directions = "passive"; }
+    pin GND { number = "13"; domains = "ground"; directions = "passive"; }
+}

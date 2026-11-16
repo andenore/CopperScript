@@ -204,10 +204,21 @@ pub fn current_driven_cm_score_db(v_cm: f64) -> f64 {
 }
 
 /// Field of a common-mode current `i_cm` on a cable of length `cable_length`:
-/// `E = mu0 f l I / r` = `1.257e-6 f l I / r` (Paul Sec. 8.2; Ott Sec. 15).
-/// Includes the factor 2 from the ground-plane reflection; valid for
-/// `l << lambda` and the far field. It needs the common-mode current `i_cm`,
-/// which the board model does not provide.
+/// `E = mu0 f l I / r` = `1.257e-6 f l I / r` (the form of Paul Sec. 8.2 and Ott Sec. 15 as remembered; no book
+/// was checked for this comment, the derivation below stands on its own).
+///
+/// **Derivation of the constant.** A short current element (`l << lambda`) carrying a uniform current `I` radiates in
+/// the far field `E = eta0 k I l sin(theta) / (4 pi r)` (the Hertzian dipole). Broadside (`theta = 90 degrees`) with
+/// `k = 2 pi / lambda` this is `E_free = eta0 I l / (2 lambda r)`. With `lambda = c / f` and `eta0 / c = mu0` it is
+///
+/// `E_free = mu0 f l I / (2 r)`.
+///
+/// So the function's `mu0 f l I / r` is **twice** the free-space value of the same current element, and the factor 2
+/// is the ground-plane reflection of a radiated-emission test: over a reflecting ground the receiving antenna is
+/// raised to the height at which the direct and the reflected wave add in phase, which doubles the amplitude at most.
+/// The function therefore describes the maximised field over a ground plane, an upper envelope, not the free-space
+/// field; for the free-space value halve the result. Valid for `l << lambda` and the far field. It needs the
+/// common-mode current `i_cm`, which the board model does not provide, and it is not called by the report.
 pub fn cable_common_mode_field(i_cm: f64, frequency: f64, cable_length: f64, distance: f64) -> f64 {
     MU0 * frequency * cable_length * i_cm / distance
 }
@@ -402,6 +413,19 @@ mod tests {
         // mu0 = 1.257e-6 form: 5 uA at 100 MHz on 1 m, at 3 m.
         let e = cable_common_mode_field(5e-6, 100e6, 1.0, 3.0);
         assert!((e - 1.257e-6 * 1e8 * 5e-6 / 3.0).abs() / e < 1e-3);
+        // The constant, derived (see the doc comment): the Hertzian dipole's broadside far field is
+        // eta0 I l / (2 lambda r) = mu0 f l I / (2 r) in free space; mu0 f l I / r is twice that, the factor 2 of the
+        // ground reflection of a test site. Hand value for 5 uA, 100 MHz, 1 m, 3 m: mu0 * 1e8 * 5e-6 / 3 = 2.0944e-4
+        // V/m (46.4 dBuV/m) over ground, 1.0472e-4 V/m in free space.
+        let eta0 = MU0 * C0;
+        let (f, l, i, r) = (100e6, 1.0, 5e-6, 3.0);
+        let lambda = C0 / f;
+        let free_space = eta0 * i * l / (2.0 * lambda * r);
+        assert!((free_space - MU0 * f * l * i / (2.0 * r)).abs() / free_space < 1e-12);
+        assert!((free_space - 1.0472e-4).abs() / free_space < 1e-4, "{free_space}");
+        assert!((e / free_space - 2.0).abs() < 1e-12, "{}", e / free_space);
+        assert!((e - 2.0944e-4).abs() / e < 1e-4, "{e}");
+        assert!((vpm_to_dbuvpm(e) - 46.42).abs() < 0.01, "{}", vpm_to_dbuvpm(e));
     }
 
     #[test]

@@ -150,6 +150,10 @@ pub struct SignalSource {
     /// `signal_swing`: the loaded voltage at the driver's pins (differential: peak-to-peak).
     pub swing: Option<SignalNumber>,
     pub spread_spectrum: Option<SignalNumber>,
+    /// The Thevenin representation of the source (`open_circuit_swing` with `output_impedance`), when a driving pin
+    /// declares it instead of the loaded `signal_swing`: the open-circuit swing and the impedance behind it.
+    pub open_circuit_swing: Option<SignalNumber>,
+    pub output_impedance: Option<SignalNumber>,
     /// P member first, then N.
     pub members: Vec<SignalMember>,
 }
@@ -238,6 +242,7 @@ fn signal_data(emi: &EmiProfile) -> bool {
     emi.data_rate.is_some()
         || emi.clock_frequency.is_some()
         || emi.signal_swing.is_some()
+        || emi.open_circuit_swing.is_some()
         || emi.spread_spectrum.is_some()
 }
 
@@ -298,6 +303,8 @@ fn build(
         fall_time: None,
         swing: None,
         spread_spectrum: None,
+        open_circuit_swing: None,
+        output_impedance: None,
         members: Vec::new(),
     };
     for name in &nets {
@@ -317,6 +324,8 @@ fn build(
             first(&mut source.fall_time, emi.fall());
             first(&mut source.swing, emi.signal_swing.as_ref());
             first(&mut source.spread_spectrum, emi.spread_spectrum.as_ref());
+            first(&mut source.open_circuit_swing, emi.open_circuit_swing.as_ref());
+            first(&mut source.output_impedance, emi.output_impedance.as_ref());
             if declared {
                 drivers.push(endpoint);
             }
@@ -518,7 +527,7 @@ fn end_value(end: &ChannelEnd) -> Value {
 
 /// The JSON form of one source (an element of `signals` in `EmiModel::to_value`).
 pub fn signal_value(source: &SignalSource) -> Value {
-    object(vec![
+    let mut entries = vec![
         ("net", Value::from(source.net.as_str())),
         ("kind", Value::from(source.kind.value())),
         ("partner", source.partner.as_deref().map_or(Value::Null, Value::from)),
@@ -530,25 +539,31 @@ pub fn signal_value(source: &SignalSource) -> Value {
         ("fall_time", number_value(source.fall_time.as_ref())),
         ("signal_swing", number_value(source.swing.as_ref())),
         ("spread_spectrum", number_value(source.spread_spectrum.as_ref())),
-        (
-            "members",
-            Value::Array(
-                source
-                    .members
-                    .iter()
-                    .map(|member| {
-                        object(vec![
-                            ("net", Value::from(member.net.as_str())),
-                            (
-                                "drivers",
-                                Value::Array(member.drivers.iter().map(|pin| Value::from(pin.to_string())).collect()),
-                            ),
-                            ("channel", Value::Array(member.channel.iter().map(hop_value).collect())),
-                            ("end", end_value(&member.end)),
-                        ])
-                    })
-                    .collect(),
-            ),
+    ];
+    // The Thevenin source is listed only when declared, so that the query of an unannotated board is unchanged.
+    if source.open_circuit_swing.is_some() {
+        entries.push(("open_circuit_swing", number_value(source.open_circuit_swing.as_ref())));
+        entries.push(("output_impedance", number_value(source.output_impedance.as_ref())));
+    }
+    entries.push((
+        "members",
+        Value::Array(
+            source
+                .members
+                .iter()
+                .map(|member| {
+                    object(vec![
+                        ("net", Value::from(member.net.as_str())),
+                        (
+                            "drivers",
+                            Value::Array(member.drivers.iter().map(|pin| Value::from(pin.to_string())).collect()),
+                        ),
+                        ("channel", Value::Array(member.channel.iter().map(hop_value).collect())),
+                        ("end", end_value(&member.end)),
+                    ])
+                })
+                .collect(),
         ),
-    ])
+    ));
+    object(entries)
 }

@@ -1,0 +1,10 @@
+// A cable connector for the ground-noise lanes: two single-ended signals and a pair, one ground pin.
+part JGround {
+    category = "connector.header";
+    external_cable = true;
+    pin SE1 { number = "1"; domains = "digital"; directions = "passive"; }
+    pin SE2 { number = "2"; domains = "digital"; directions = "passive"; }
+    pin PP { number = "3"; domains = "digital"; directions = "passive"; }
+    pin PN { number = "4"; domains = "digital"; directions = "passive"; }
+    pin GND { number = "5"; domains = "ground"; directions = "passive"; }
+}

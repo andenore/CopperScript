@@ -16,16 +16,21 @@
 //! * **Amplitude imbalance of a section.** `a = k (e_n - e_p)` with `e` each leg's exposure to return-path breaks along
 //!   the section as the return-path check measures it (uncovered length and length within the edge limits) and `k` a
 //!   rule of thumb (tag `rule_of_thumb_leg_imbalance`).
-//! * **Parts.** A series resistor and a coupling capacitor are per-leg elements from their declared values; a common-mode
-//!   choke, a ferrite and any other part whose common-mode impedance the language cannot yet declare is present with a
-//!   transfer of exactly 1 and is reported as such (its attenuation is `not_modelled`, never silently taken as passing).
+//! * **Parts.** A series resistor and a coupling capacitor are per-leg elements from their declared values. A common-mode
+//!   choke or ferrite that declares `common_mode_impedance` is a modal element with the incident-wave transmission
+//!   `T_cc = 2 Z_c,ref / (2 Z_c,ref + Z_cmc(f))` at the frequency it is evaluated at: inside the declared range only
+//!   (log-axis interpolation, nothing extrapolated), and as a band when only magnitudes are declared. One that declares
+//!   none, and one evaluated outside its declared range, is present with a transfer of exactly 1 and is reported as
+//!   such (its attenuation is `not_modelled`, never silently taken as passing).
 //!
 //! The finding reports the ratio `|V_cm,out / V_diff,in|` in dB, a voltage ratio inside the channel: no field, no margin,
 //! no pass or fail. It is screening evidence, not correlated with a measurement.
 
+use copper_emi::cable_circuit::{DeclaredImpedance, ImpedancePoint, impedance_at, transmission_band};
 use copper_emi::mode_conversion::{self as cascade, Element, Series};
+use copper_emi::spectrum::Complex;
 use copper_lang::emi_signals::{ChannelEnd, ChannelHop, HopKind, SignalKind};
-use copper_lang::model::ComponentValue;
+use copper_lang::model::{CommonModeValue, ComponentValue};
 use copper_units::Dimension;
 
 use super::return_path::{self, LegExposure, PlaneFills, ReturnPathInput, Subject};
@@ -39,13 +44,13 @@ const NEGLIGIBLE_RATIO: f64 = 1e-9;
 /// The level floor of a ratio in dB, so that a conversion of exactly zero has a number (-200 dB).
 const FLOOR_DB: f64 = -200.0;
 /// The lowest frequency of the scan for the worst conversion, Hz.
-const SCAN_LOW_HZ: f64 = 1e6;
+pub(super) const SCAN_LOW_HZ: f64 = 1e6;
 /// Points of the logarithmic scan for the worst conversion.
 const SCAN_POINTS: usize = 600;
 
 const NOT_MODELLED: [&str; 8] = [
     "reflections between elements and mode conversion inside parts: the cascade is matched and forward only (every element sees the reference impedances), so the ratio is the incident common-mode wave per unit of launched differential wave, not a steady-state voltage of a terminated line",
-    "the attenuation of a common-mode choke or ferrite: the language cannot declare its common-mode impedance yet, so such a part is reported as present with a transfer of exactly 1 (its attenuation is not modelled, and the conversion upstream of it is therefore not reduced)",
+    "the attenuation of a common-mode choke or ferrite that declares no common_mode_impedance, and of one evaluated outside its declared frequency range (a choke's impedance changes from inductive to resistive to capacitive, so one declared point supports its own frequency only and nothing is extrapolated): such a part is reported as present with a transfer of exactly 1, and the conversion upstream of it is therefore not reduced",
     "coupling of the two legs in the common-mode reference: the legs are taken as uncoupled, so the common-mode reference impedance is half a leg's single-ended impedance (the stack-up screening has no even-mode estimate)",
     "frequency-dependent loss and dispersion of the routed sections (a delay per leg from the effective permittivity, no loss)",
     "lane-to-lane skew of a match group (a skew between pairs is not a contributor to the conversion of a pair)",
@@ -62,30 +67,30 @@ const DEFINITION: &str = "|V_cm,out / V_diff,in| in dB, a ratio of voltages: V_d
 
 /// One routed section of the channel: the copper of a net pair between two hops.
 #[derive(Clone, Debug)]
-struct Section {
+pub(super) struct Section {
     /// `[P, N]` net of the section.
-    nets: [String; 2],
+    pub(super) nets: [String; 2],
     /// Where the section starts and ends, for the report.
-    from: String,
-    to: String,
+    pub(super) from: String,
+    pub(super) to: String,
     /// Routed length of each leg, m.
-    length: [f64; 2],
+    pub(super) length: [f64; 2],
     /// Vertical via path of each leg, m, and the number of vias.
-    via: [f64; 2],
-    vias: [usize; 2],
+    pub(super) via: [f64; 2],
+    pub(super) vias: [usize; 2],
     /// Delay of each leg, s.
-    delay: [f64; 2],
+    pub(super) delay: [f64; 2],
     /// Routed length per layer `(layer, [P, N])`, m.
-    layers: Vec<(CopperLayer, [f64; 2])>,
+    pub(super) layers: Vec<(CopperLayer, [f64; 2])>,
     /// Exposure of each leg to return-path breaks (`None`: not measured).
-    exposure: Option<[LegExposure; 2]>,
+    pub(super) exposure: Option<[LegExposure; 2]>,
     /// Both legs have routed copper: the section's skew is measured.
-    examined: bool,
-    note: Option<String>,
+    pub(super) examined: bool,
+    pub(super) note: Option<String>,
 }
 
 impl Section {
-    fn skew(&self) -> f64 {
+    pub(super) fn skew(&self) -> f64 {
         self.delay[0] - self.delay[1]
     }
 
@@ -100,42 +105,107 @@ impl Section {
 
 /// What a part does to the channel.
 #[derive(Clone, Debug, PartialEq)]
-enum PartKind {
+pub(super) enum PartKind {
     /// A series resistor in each leg, ohms (`None`: no value declared).
     Resistor([Option<f64>; 2]),
     /// A coupling capacitor in each leg, farads (`None`: no value declared).
     Capacitor([Option<f64>; 2]),
-    /// A series common-mode impedance (`None`: the language cannot declare it, so it is present and not modelled).
+    /// A series common-mode impedance (`None`: none is declared, so it is present and not modelled).
     CommonMode(Option<Series>),
+    /// A choke or ferrite that declares `common_mode_impedance` (a function of frequency).
+    Declared(ChokeModel),
     /// Anything else the walk crossed.
     Unknown,
 }
 
+/// The declared common-mode impedance of a choke or ferrite.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ChokeModel {
+    /// The declared points in increasing frequency.
+    pub(super) points: Vec<ImpedancePoint>,
+    /// The factor between the declared impedance and the series impedance the common-mode current sees: 1 for a part
+    /// both legs cross (its declared common-mode impedance), 1/2 for one ferrite of the same part in each leg (the two
+    /// in parallel for the common-mode current).
+    pub(super) factor: f64,
+}
+
+/// Which end of the transmission band of a magnitude-only choke an evaluation takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChokeEnd {
+    /// The most attenuating end: `|T| = 2 Z_ref / (|Z| + 2 Z_ref)` (a resistive impedance).
+    Low,
+    /// The least attenuating end, `min(2 Z_ref / | |Z| - 2 Z_ref |, 1)`: the plan's band, limited to 1 because a passive
+    /// series impedance does not amplify.
+    High,
+}
+
+impl ChokeModel {
+    /// The declared impedance at `frequency`, with the factor applied.
+    pub(super) fn at(&self, frequency: f64) -> DeclaredImpedance {
+        match impedance_at(&self.points, frequency) {
+            DeclaredImpedance::Complex(z) => DeclaredImpedance::Complex(z.scale(self.factor)),
+            DeclaredImpedance::Magnitude(m) => DeclaredImpedance::Magnitude(m * self.factor),
+            outside => outside,
+        }
+    }
+
+    /// The element of the cascade at `frequency`, in the common-mode reference `z_ref`.
+    pub(super) fn element(&self, frequency: f64, z_ref: f64, end: ChokeEnd) -> Element {
+        match self.at(frequency) {
+            DeclaredImpedance::Complex(z) => Element::CommonMode { z: Series::Fixed(z), z_ref },
+            DeclaredImpedance::Magnitude(magnitude) => {
+                let (low, high) = transmission_band(magnitude, z_ref);
+                let t = match end {
+                    ChokeEnd::Low => low,
+                    ChokeEnd::High => high.min(1.0),
+                };
+                // The series impedance whose transmission is `t`: 2 Z_ref (1 / t - 1).
+                let z = if t > 0.0 { 2.0 * z_ref * (1.0 / t - 1.0) } else { 0.0 };
+                Element::CommonMode { z: Series::Fixed(Complex::new(z, 0.0)), z_ref }
+            }
+            DeclaredImpedance::Outside { .. } => Element::Transparent,
+        }
+    }
+
+    /// Whether any declared point is a magnitude only (the transmission is then a band).
+    pub(super) fn magnitude_only(&self) -> bool {
+        self.points.iter().any(|p| p.complex.is_none())
+    }
+
+    pub(super) fn range(&self) -> (f64, f64) {
+        (self.points.first().map_or(0.0, |p| p.frequency), self.points.last().map_or(0.0, |p| p.frequency))
+    }
+
+    pub(super) fn supports(&self, frequency: f64) -> bool {
+        !matches!(self.at(frequency), DeclaredImpedance::Outside { .. })
+    }
+}
+
 /// A part between two sections.
 #[derive(Clone, Debug)]
-struct Part {
+pub(super) struct Part {
     /// The component of each leg (one for a part both legs cross).
-    components: Vec<String>,
+    pub(super) components: Vec<String>,
     /// `series_part`, `coupling_capacitor` or `declared_pair` (the channel walk's name for it).
-    hop: &'static str,
-    kind: PartKind,
+    pub(super) hop: &'static str,
+    pub(super) kind: PartKind,
     /// A common-mode choke or ferrite: the observation planes of P4 are before and after it.
-    modal: bool,
-    swaps_polarity: bool,
-    note: Option<String>,
+    pub(super) modal: bool,
+    pub(super) swaps_polarity: bool,
+    pub(super) note: Option<String>,
 }
 
 impl Part {
-    fn name(&self) -> String {
+    pub(super) fn name(&self) -> String {
         self.components.join("/")
     }
 
-    fn label(&self) -> &'static str {
+    pub(super) fn label(&self) -> &'static str {
         match self.kind {
             PartKind::Resistor(_) => "series_resistor",
             PartKind::Capacitor(_) => "coupling_capacitor",
-            PartKind::CommonMode(_) if self.hop == "declared_pair" => "common_mode_choke",
-            PartKind::CommonMode(_) => "ferrite",
+            PartKind::CommonMode(_) | PartKind::Declared(_) if self.hop == "declared_pair" => "common_mode_choke",
+            PartKind::CommonMode(_) | PartKind::Declared(_) => "ferrite",
             PartKind::Unknown => "series_part",
         }
     }
@@ -143,55 +213,70 @@ impl Part {
 
 /// The reference impedances of the cascade, ohms.
 #[derive(Clone, Debug, PartialEq)]
-struct References {
+pub(super) struct References {
     /// A leg's single-ended impedance.
-    single_ended: f64,
+    pub(super) single_ended: f64,
     /// The differential reference `Z_d,ref` (the stack-up's differential impedance, else twice the single-ended).
-    differential: f64,
+    pub(super) differential: f64,
     /// The common-mode reference `Z_c,ref`: half a leg's single-ended impedance.
-    common_mode: f64,
+    pub(super) common_mode: f64,
     /// Where they come from.
-    basis: String,
-    defaulted: bool,
+    pub(super) basis: String,
+    pub(super) defaulted: bool,
 }
 
 #[derive(Clone, Debug)]
-struct Channel {
-    sections: Vec<Section>,
+pub(super) struct Channel {
+    pub(super) sections: Vec<Section>,
     /// `parts[k]` lies between `sections[k]` and `sections[k + 1]`.
-    parts: Vec<Part>,
-    references: References,
+    pub(super) parts: Vec<Part>,
+    pub(super) references: References,
     /// The driver pins and the observation plane, for the report.
-    driver: String,
-    end: String,
-    notes: Vec<String>,
+    pub(super) driver: String,
+    pub(super) end: String,
+    pub(super) notes: Vec<String>,
 }
 
 /// The rule-of-thumb inputs of one evaluation: the imbalance per unit exposure and the capacitor tolerance.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Scenario {
-    k: f64,
-    tolerance: f64,
+pub(super) struct Scenario {
+    pub(super) k: f64,
+    pub(super) tolerance: f64,
+    /// The end of the transmission band a magnitude-only choke takes (a choke with a phase, or none, has one value).
+    pub(super) choke: ChokeEnd,
 }
 
 impl Scenario {
-    const NOMINAL: Scenario =
-        Scenario { k: defaults::LEG_IMBALANCE_PER_EXPOSURE.0, tolerance: defaults::CAPACITOR_TOLERANCE.0 };
-    const LOW: Scenario =
-        Scenario { k: defaults::LEG_IMBALANCE_PER_EXPOSURE.1, tolerance: defaults::CAPACITOR_TOLERANCE.1 };
-    const HIGH: Scenario =
-        Scenario { k: defaults::LEG_IMBALANCE_PER_EXPOSURE.2, tolerance: defaults::CAPACITOR_TOLERANCE.2 };
+    pub(super) const NOMINAL: Scenario = Scenario {
+        k: defaults::LEG_IMBALANCE_PER_EXPOSURE.0,
+        tolerance: defaults::CAPACITOR_TOLERANCE.0,
+        choke: ChokeEnd::High,
+    };
+    pub(super) const LOW: Scenario = Scenario {
+        k: defaults::LEG_IMBALANCE_PER_EXPOSURE.1,
+        tolerance: defaults::CAPACITOR_TOLERANCE.1,
+        choke: ChokeEnd::High,
+    };
+    pub(super) const HIGH: Scenario = Scenario {
+        k: defaults::LEG_IMBALANCE_PER_EXPOSURE.2,
+        tolerance: defaults::CAPACITOR_TOLERANCE.2,
+        choke: ChokeEnd::High,
+    };
+
+    pub(super) fn with_choke(self, choke: ChokeEnd) -> Scenario {
+        Scenario { choke, ..self }
+    }
 }
 
 /// What each element of the cascade is, in order.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Slot {
+pub(super) enum Slot {
     Section(usize),
     Part(usize),
 }
 
 impl Channel {
-    fn slots(&self) -> Vec<Slot> {
+    pub(super) fn slots(&self) -> Vec<Slot> {
         let mut slots = Vec::new();
         for index in 0..self.sections.len() {
             slots.push(Slot::Section(index));
@@ -202,8 +287,16 @@ impl Channel {
         slots
     }
 
-    /// The elements of the cascade for one scenario.
+    /// The elements of the cascade for one scenario, with the frequency-independent parts only (a declared choke is
+    /// evaluated at frequency 0, which no declaration supports: transparent).
+    #[cfg(test)]
     fn elements(&self, scenario: Scenario) -> Vec<Element> {
+        self.elements_at(scenario, 0.0)
+    }
+
+    /// The elements of the cascade for one scenario at `frequency` hertz: a declared choke has the impedance of that
+    /// frequency (transparent outside its declared range).
+    pub(super) fn elements_at(&self, scenario: Scenario, frequency: f64) -> Vec<Element> {
         let z = &self.references;
         self.slots()
             .into_iter()
@@ -233,14 +326,23 @@ impl Channel {
                         z_leg: z.single_ended,
                     },
                     PartKind::CommonMode(Some(series)) => Element::CommonMode { z: *series, z_ref: z.common_mode },
+                    PartKind::Declared(model) => model.element(frequency, z.common_mode, scenario.choke),
                     _ => Element::Transparent,
                 },
             })
             .collect()
     }
 
+    /// Whether a choke evaluated at `frequency` declares magnitudes only there (its transmission is a band).
+    pub(super) fn has_magnitude_band(&self, frequency: f64) -> bool {
+        self.parts.iter().any(|p| {
+            matches!(&p.kind, PartKind::Declared(model) if model.magnitude_only()
+                && matches!(model.at(frequency), DeclaredImpedance::Magnitude(_)))
+        })
+    }
+
     /// Whether a rule-of-thumb input shapes the ratio (an exposure-driven imbalance or a coupling capacitor's tolerance).
-    fn uses_rules(&self) -> (bool, bool) {
+    pub(super) fn uses_rules(&self) -> (bool, bool) {
         let imbalance = self
             .sections
             .iter()
@@ -265,7 +367,7 @@ impl Channel {
 // Evaluation
 // ---------------------------------------------------------------------------
 
-fn db(ratio: f64) -> f64 {
+pub(super) fn db(ratio: f64) -> f64 {
     if ratio > 0.0 { (20.0 * ratio.log10()).max(FLOOR_DB) } else { FLOOR_DB }
 }
 
@@ -275,30 +377,94 @@ fn ratio_at(elements: &[Element], frequency: f64) -> f64 {
 }
 
 /// The worst `|V_cm,out / V_diff,in|` at the output over the logarithmic scan from [`SCAN_LOW_HZ`] to `corner`
-/// (and over `extra` frequencies): `(frequency, ratio)`.
-fn worst_over_band(elements: &[Element], corner: f64, extra: &[f64]) -> (f64, f64) {
+/// (and over `extra` frequencies): `(frequency, ratio)`. `elements` gives the cascade at one frequency (a declared choke
+/// has the impedance of that frequency).
+fn worst_over_band(elements: &dyn Fn(f64) -> Vec<Element>, corner: f64, extra: &[f64]) -> (f64, f64) {
     let low = SCAN_LOW_HZ.min(corner / 100.0);
     let step = (corner / low).ln() / (SCAN_POINTS - 1) as f64;
     (0..SCAN_POINTS)
         .map(|i| low * (step * i as f64).exp())
         .chain(extra.iter().copied().filter(|f| *f > 0.0 && *f <= corner))
-        .map(|f| (f, ratio_at(elements, f)))
+        .map(|f| (f, ratio_at(&elements(f), f)))
         .fold((corner, 0.0), |best, item| if item.1 > best.1 { item } else { best })
 }
 
+/// The common-mode wave at the end of a channel, split at the last modal element (`EMI-CABLE-COMMON-MODE`, P4).
+///
+/// The cascade is linear in the pair of leg waves, so the output is the sum of two parts: the common mode that arrives
+/// at the last choke from upstream (it passes the choke and every later section), and the common mode generated after
+/// it by the differential wave that leaves the choke (conversion downstream of a choke is not attenuated by it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CmSplit {
+    /// `V_cm,out / V_diff,in` at the end of the channel.
+    pub(super) total: Complex,
+    /// The part that came from upstream of the last choke and the part generated after it (`None` without a choke).
+    pub(super) parts: Option<(Complex, Complex)>,
+}
+
+impl Channel {
+    /// The common-mode wave at the output per unit of launched differential voltage at `frequency`, in one scenario.
+    pub(super) fn cm_split(&self, scenario: Scenario, frequency: f64) -> CmSplit {
+        let elements = self.elements_at(scenario, frequency);
+        let states = cascade::trace(&elements, frequency);
+        let total = states.last().map_or(Complex::ZERO, cascade::State::cm);
+        let slots = self.slots();
+        let Some(last) = slots.iter().rposition(|slot| matches!(slot, Slot::Part(i) if self.parts[*i].modal)) else {
+            return CmSplit { total, parts: None };
+        };
+        let after = states[last + 1];
+        let (cm, diff) = (after.cm(), after.diff());
+        let run = |mut state: cascade::State| {
+            for element in &elements[last + 1..] {
+                state = cascade::apply(element, frequency, state);
+            }
+            state.cm()
+        };
+        let upstream = run(cascade::State { p: cm, n: cm });
+        let downstream = run(cascade::State { p: diff.scale(0.5), n: -diff.scale(0.5) });
+        CmSplit { total, parts: Some((upstream, downstream)) }
+    }
+
+    /// The parts of the channel that act on the common mode, in order.
+    pub(super) fn modal_parts(&self) -> Vec<&Part> {
+        self.parts.iter().filter(|p| p.modal).collect()
+    }
+
+    /// Whether any declared choke (or none) makes the output a band at `frequency`.
+    pub(super) fn is_band_at(&self, frequency: f64) -> bool {
+        self.has_magnitude_band(frequency)
+    }
+}
+
+/// The channel and the resolved signal of a differential pair for the cable check, `None` when the pair is not
+/// differential or no section has routed copper on both legs.
+pub(super) fn pair_channel(
+    cx: &Context<'_>,
+    subject: &Subject<'_>,
+    fills: Option<&PlaneFills>,
+) -> Option<(Channel, ResolvedSignal)> {
+    if subject.nets.len() != 2 || subject.source.is_some_and(|s| s.kind != SignalKind::Differential) {
+        return None;
+    }
+    let signal =
+        signals::resolve(&subject.source.map_or_else(|| return_path::bare_source(subject), Clone::clone), None);
+    let channel = channel_of(cx, subject, fills);
+    channel.sections.iter().any(|s| s.examined).then_some((channel, signal))
+}
+
 /// The frequency of the signal's fundamental: half the data rate (the alternating pattern) or the clock frequency.
-fn fundamental(signal: &ResolvedSignal) -> Option<f64> {
+pub(super) fn fundamental(signal: &ResolvedSignal) -> Option<f64> {
     signal.data_rate.filter(|r| *r > 0.0).map(|r| r / 2.0).or(signal.clock_frequency.filter(|f| *f > 0.0))
 }
 
 /// The corner of the edge: `1 / (pi t)` of the shorter ramp (0-100 %), where the continuous spectrum bound rolls off.
-fn corner_of(signal: &ResolvedSignal) -> f64 {
+pub(super) fn corner_of(signal: &ResolvedSignal) -> f64 {
     cascade::edge_corner(signal.rise_ramp().min(signal.fall_ramp()))
 }
 
 /// Everything measured and computed for one pair.
 struct Evaluation {
-    elements: Vec<Element>,
+    channel: Channel,
     fundamental: Option<f64>,
     corner: f64,
     /// The worst ratio over the scan and where.
@@ -311,17 +477,35 @@ struct Evaluation {
     headline: [f64; 3],
 }
 
+impl Evaluation {
+    /// The nominal cascade at `frequency`.
+    fn elements_at(&self, frequency: f64) -> Vec<Element> {
+        self.channel.elements_at(Scenario::NOMINAL, frequency)
+    }
+}
+
 fn evaluate(channel: &Channel, signal: &ResolvedSignal) -> Evaluation {
-    let elements = channel.elements(Scenario::NOMINAL);
     let f0 = fundamental(signal);
     let corner = corner_of(signal);
-    let worst = worst_over_band(&elements, corner, f0.as_slice());
+    let nominal = |f: f64| channel.elements_at(Scenario::NOMINAL, f);
+    let worst = worst_over_band(&nominal, corner, f0.as_slice());
     let headline_frequency = f0.unwrap_or(worst.0);
-    let at = |scenario: Scenario| ratio_at(&channel.elements(scenario), headline_frequency);
-    let headline = [at(Scenario::LOW), at(Scenario::NOMINAL), at(Scenario::HIGH)];
+    let at = |scenario: Scenario| ratio_at(&channel.elements_at(scenario, headline_frequency), headline_frequency);
+    // The rule-of-thumb band is the spread over the low, nominal and high end of the inputs; a choke that declares
+    // magnitudes only adds the low and the high end of its transmission band to it (the nominal value is the high end).
+    let mut headline = [at(Scenario::LOW), at(Scenario::NOMINAL), at(Scenario::HIGH)];
+    if channel.has_magnitude_band(headline_frequency) {
+        let low_end = |scenario: Scenario| at(scenario.with_choke(ChokeEnd::Low));
+        let ends = [low_end(Scenario::LOW), low_end(Scenario::NOMINAL), low_end(Scenario::HIGH)];
+        let (lo, hi) = (
+            ends.iter().chain(headline.iter()).copied().fold(f64::INFINITY, f64::min),
+            ends.iter().chain(headline.iter()).copied().fold(f64::NEG_INFINITY, f64::max),
+        );
+        headline = [lo, headline[1], hi];
+    }
     Evaluation {
-        at_fundamental: f0.map(|f| ratio_at(&elements, f)),
-        elements,
+        at_fundamental: f0.map(|f| ratio_at(&nominal(f), f)),
+        channel: channel.clone(),
         fundamental: f0,
         corner,
         worst,
@@ -351,6 +535,40 @@ fn category_of<'v>(view: &'v FlatElectricalView, reference: &str) -> &'v str {
     component_of(view, reference).and_then(|c| view.library.get(&c.part)).map_or("", |part| part.category.as_str())
 }
 
+/// The declared common-mode impedance of a component's part as cascade points (`None`: none declared).
+fn declared_points(view: &FlatElectricalView, reference: &str) -> Option<Vec<ImpedancePoint>> {
+    let component = component_of(view, reference)?;
+    let emi = view.library.get(&component.part)?.emi.as_ref()?;
+    if emi.common_mode_impedance.is_empty() {
+        return None;
+    }
+    let hertz = |q: &copper_units::Quantity| quantity(q);
+    Some(
+        emi.common_mode_impedance
+            .iter()
+            .map(|point| match &point.impedance {
+                CommonModeValue::Magnitude(m) => ImpedancePoint::magnitude_only(hertz(&point.frequency), quantity(m)),
+                CommonModeValue::Complex { resistance, reactance } => ImpedancePoint::complex(
+                    hertz(&point.frequency),
+                    Complex::new(quantity(resistance), quantity(reactance)),
+                ),
+            })
+            .collect(),
+    )
+}
+
+/// The common-mode model of the part(s) a hop crosses: the declared impedance of a part both legs cross as it is, and of
+/// one ferrite in each leg (two components of one part) at half, the two in parallel for the common-mode current. Any
+/// other case (one leg only, two different parts) is not evaluated.
+fn choke_model(view: &FlatElectricalView, p: &ChannelHop, n: &ChannelHop) -> Option<ChokeModel> {
+    let first = declared_points(view, &p.component)?;
+    if p.component == n.component {
+        return Some(ChokeModel { points: first, factor: 1.0 });
+    }
+    let second = declared_points(view, &n.component)?;
+    (first == second).then_some(ChokeModel { points: first, factor: 0.5 })
+}
+
 /// The part both legs cross at one hop.
 fn part_of_hops(view: &FlatElectricalView, p: &ChannelHop, n: &ChannelHop) -> Part {
     let mut components = vec![p.component.clone()];
@@ -369,11 +587,14 @@ fn part_of_hops(view: &FlatElectricalView, p: &ChannelHop, n: &ChannelHop) -> Pa
             });
             (PartKind::Capacitor(values), false, note)
         }
-        HopKind::DeclaredPair => (
-            PartKind::CommonMode(None),
-            true,
-            Some("a part crossed along declared pin pairs (a common-mode choke) has no declared common-mode impedance yet: it is present with a transfer of exactly 1, its attenuation is not modelled".to_owned()),
-        ),
+        HopKind::DeclaredPair => match choke_model(view, p, n) {
+            Some(model) => (PartKind::Declared(model), true, None),
+            None => (
+                PartKind::CommonMode(None),
+                true,
+                Some("a part crossed along declared pin pairs (a common-mode choke) declares no common_mode_impedance: it is present with a transfer of exactly 1, its attenuation is not modelled".to_owned()),
+            ),
+        },
         HopKind::SeriesPart => {
             let resistance = both(Dimension::Resistance);
             if category.starts_with("passive.resistor") || resistance.iter().all(Option::is_some) && !category.starts_with("passive.ferrite") {
@@ -382,11 +603,14 @@ fn part_of_hops(view: &FlatElectricalView, p: &ChannelHop, n: &ChannelHop) -> Pa
                 });
                 (PartKind::Resistor(resistance), false, note)
             } else if category.starts_with("passive.ferrite") {
-                (
-                    PartKind::CommonMode(None),
-                    true,
-                    Some("a ferrite has no declared common-mode impedance yet: it is present with a transfer of exactly 1, its attenuation is not modelled".to_owned()),
-                )
+                match choke_model(view, p, n) {
+                    Some(model) => (PartKind::Declared(model), true, None),
+                    None => (
+                        PartKind::CommonMode(None),
+                        true,
+                        Some("a ferrite declares no common_mode_impedance (or the two legs' ferrites are not the same part): it is present with a transfer of exactly 1, its attenuation is not modelled".to_owned()),
+                    ),
+                }
             } else {
                 (
                     PartKind::Unknown,
@@ -489,7 +713,7 @@ fn references_of(cx: &Context<'_>, nets: &[String; 2]) -> References {
 
 /// The channel of `subject`: sections and parts in order. `fills`: the zone fills for the legs' exposure
 /// (`None`: the exposure is not measured).
-fn channel_of(cx: &Context<'_>, subject: &Subject<'_>, fills: Option<&PlaneFills>) -> Channel {
+pub(super) fn channel_of(cx: &Context<'_>, subject: &Subject<'_>, fills: Option<&PlaneFills>) -> Channel {
     let view = cx.layout.view;
     let (p_net, n_net) = (subject.nets[0].clone(), subject.nets[1].clone());
     let mut notes = Vec::new();
@@ -727,11 +951,13 @@ fn part_value(part: &Part, index: usize, channel: &Channel) -> Value {
         },
         match &part.kind {
             PartKind::CommonMode(Some(_)) => "declared",
+            PartKind::Declared(model) if model.magnitude_only() => "declared_magnitude_band_inside_declared_range",
+            PartKind::Declared(_) => "declared_complex_inside_declared_range",
             PartKind::CommonMode(None) => "not_declared_not_modelled",
             _ => "per_leg",
         },
     );
-    object(vec![
+    let mut entries = vec![
         ("part", Value::from(index as i64)),
         ("component", Value::from(part.name())),
         ("kind", Value::from(part.label())),
@@ -742,6 +968,50 @@ fn part_value(part: &Part, index: usize, channel: &Channel) -> Value {
         ("between_sections", Value::Array(vec![Value::from(index as i64), Value::from(index as i64 + 1)])),
         ("common_mode_reference_ohm", num(channel.references.common_mode, 3)),
         ("note", part.note.as_deref().map_or(Value::Null, Value::from)),
+    ];
+    // Listed only for a part that declares it, so that a design that declares none reports what it reported before.
+    if matches!(part.kind, PartKind::Declared(_)) {
+        entries.insert(entries.len() - 1, ("declared_common_mode_impedance", declared_value(part)));
+    }
+    object(entries)
+}
+
+/// The declared points of a part, as the report states them (`null` when none is declared).
+pub(super) fn declared_value(part: &Part) -> Value {
+    let PartKind::Declared(model) = &part.kind else { return Value::Null };
+    let points = model
+        .points
+        .iter()
+        .map(|point| {
+            let mut entry = Object::new();
+            put(&mut entry, "frequency_hz", num(point.frequency, 0));
+            put(&mut entry, "magnitude_ohm", num(point.magnitude * model.factor, 4));
+            if let Some(z) = point.complex {
+                put(&mut entry, "resistance_ohm", num(z.re * model.factor, 4));
+                put(&mut entry, "reactance_ohm", num(z.im * model.factor, 4));
+            }
+            Value::Object(entry)
+        })
+        .collect();
+    let (low, high) = model.range();
+    object(vec![
+        ("points", Value::Array(points)),
+        ("range_hz", Value::Array(vec![num(low, 0), num(high, 0)])),
+        ("phase_declared", Value::Bool(!model.magnitude_only())),
+        (
+            "factor",
+            Value::from(if model.factor == 1.0 {
+                "as declared, the part both legs cross"
+            } else {
+                "one half: one ferrite of the same part in each leg, the two in parallel for the common-mode current"
+            }),
+        ),
+        (
+            "applicability",
+            Value::from(
+                "the impedance is interpolated on log axes between the declared points and nothing is extrapolated: outside the declared range the part is present and its attenuation is not modelled (a choke's impedance changes from inductive to resistive to capacitive; one declared point supports its own frequency only)",
+            ),
+        ),
     ])
 }
 
@@ -770,10 +1040,10 @@ fn planes(channel: &Channel) -> Vec<Plane> {
 }
 
 fn plane_value(plane: &Plane, evaluation: &Evaluation, signal: &ResolvedSignal) -> Value {
-    let elements = &evaluation.elements;
     let at = |frequency: f64| {
-        let ratio = |f: f64| cascade::trace(elements, f).get(plane.state).map_or(0.0, cascade::conversion);
-        let state = cascade::trace(elements, frequency).get(plane.state).copied();
+        let ratio =
+            |f: f64| cascade::trace(&evaluation.elements_at(f), f).get(plane.state).map_or(0.0, cascade::conversion);
+        let state = cascade::trace(&evaluation.elements_at(frequency), frequency).get(plane.state).copied();
         let mut entry = Object::new();
         put(&mut entry, "frequency_hz", num(frequency, 0));
         put(&mut entry, "ratio_db", db_value(ratio(frequency)));
@@ -799,7 +1069,6 @@ fn plane_value(plane: &Plane, evaluation: &Evaluation, signal: &ResolvedSignal) 
 }
 
 fn contributions(channel: &Channel, evaluation: &Evaluation) -> Value {
-    let elements = &evaluation.elements;
     let names = channel.names();
     let slots = channel.slots();
     let mut frequencies = vec![("at_worst", evaluation.worst.0)];
@@ -807,7 +1076,7 @@ fn contributions(channel: &Channel, evaluation: &Evaluation) -> Value {
         frequencies.insert(0, ("at_fundamental", f));
     }
     let traces: Vec<(&str, Vec<cascade::State>)> =
-        frequencies.iter().map(|(n, f)| (*n, cascade::trace(elements, *f))).collect();
+        frequencies.iter().map(|(n, f)| (*n, cascade::trace(&evaluation.elements_at(*f), *f))).collect();
     Value::Array(
         slots
             .iter()
@@ -878,9 +1147,31 @@ fn make_finding(
         channel.parts.iter().filter(|p| matches!(p.kind, PartKind::CommonMode(None))).map(Part::name).collect();
     if !unmodelled.is_empty() {
         message.push_str(&format!(
-            "; {} present but NOT evaluated: its common-mode impedance cannot be declared yet, so it is taken as transparent (transfer exactly 1) and the conversion made upstream of it is not reduced",
+            "; {} present but NOT evaluated: it declares no common_mode_impedance, so it is taken as transparent (transfer exactly 1) and the conversion made upstream of it is not reduced",
             unmodelled.join(", ")
         ));
+    }
+    for part in &channel.parts {
+        let PartKind::Declared(model) = &part.kind else { continue };
+        let (low, high) = model.range();
+        if model.supports(evaluation.headline_frequency) {
+            message.push_str(&format!(
+                "; {} declares its common-mode impedance and is evaluated at {} (declared {} to {}{})",
+                part.name(),
+                frequency_text(evaluation.headline_frequency),
+                frequency_text(low),
+                frequency_text(high),
+                if model.magnitude_only() { ", magnitudes only: the result is a band" } else { "" }
+            ));
+        } else {
+            message.push_str(&format!(
+                "; {} declares its common-mode impedance from {} to {} but the headline frequency {} is outside it: present, attenuation NOT modelled there (transfer exactly 1)",
+                part.name(),
+                frequency_text(low),
+                frequency_text(high),
+                frequency_text(evaluation.headline_frequency)
+            ));
+        }
     }
     message.push_str("; a voltage ratio inside the channel (no field, no margin)");
     let mut finding = EmiFinding {
@@ -906,7 +1197,8 @@ fn make_finding(
     finding.subjects.extend(subject.nets.iter().cloned());
     finding.subjects.extend(channel.parts.iter().flat_map(|p| p.components.iter().cloned()));
     dedup(&mut finding.subjects);
-    let band = (imbalance_rule || tolerance_rule)
+    let choke_band = channel.has_magnitude_band(evaluation.headline_frequency);
+    let band = (imbalance_rule || tolerance_rule || choke_band)
         .then(|| {
             let values = evaluation.headline.map(db);
             let (low, high) = (
@@ -948,7 +1240,14 @@ fn make_finding(
         not_modelled: NOT_MODELLED.iter().map(|m| (*m).to_owned()).collect(),
         frequency_hz: Some(rounded(evaluation.headline_frequency, 0)),
         band_db: band.map(|b| [rounded(b[0], 2), rounded(b[1], 2)]),
-        basis: band.map(|_| defaults::BASIS.to_owned()),
+        basis: band.map(|_| {
+            match (imbalance_rule || tolerance_rule, choke_band) {
+                (true, true) => "rule_of_thumb_and_declared_choke_magnitude_only",
+                (true, false) => defaults::BASIS,
+                _ => "declared_choke_magnitude_only",
+            }
+            .to_owned()
+        }),
     });
     let measures = &mut finding.measures;
     put(measures, "subject", Value::from(subject.name.as_str()));
@@ -1081,7 +1380,7 @@ fn detail_of(subject: &Subject<'_>, channel: &Channel, evaluation: &Evaluation, 
         if finding {
             "see the EMI-MODE-CONVERSION finding"
         } else {
-            "no conversion at these inputs (not a pass: reflections, a choke's attenuation, the return path beyond the legs' own exposure and radiation are not modelled)"
+            "no conversion at these inputs (not a pass: reflections, the attenuation of a choke with no declared impedance, the return path beyond the legs' own exposure and radiation are not modelled)"
         },
         if unexamined > 0 {
             format!("; {unexamined} section(s) with copper on at most one leg are not examined")
@@ -1166,7 +1465,7 @@ pub(super) fn analyze(cx: &mut Context, input: &ReturnPathInput) -> Vec<(String,
         (
             CoverageStatus::Executed,
             format!(
-                "{examined} of {} differential pair(s) examined on the routed board: |V_cm,out / V_diff,in| of the ordered cascade of routed sections (skew from length and via path over the stack-up's effective permittivity, amplitude imbalance from return-path exposure) and series parts (resistors and coupling capacitors by their declared values; a common-mode choke or ferrite is present with its attenuation not modelled); a voltage ratio inside the channel, never a field, a margin, a pass or a fail; reflections and radiation are not modelled; screening evidence, not correlated with a measurement",
+                "{examined} of {} differential pair(s) examined on the routed board: |V_cm,out / V_diff,in| of the ordered cascade of routed sections (skew from length and via path over the stack-up's effective permittivity, amplitude imbalance from return-path exposure) and series parts (resistors and coupling capacitors by their declared values; a common-mode choke or ferrite by its declared common_mode_impedance inside the declared frequency range, as a band when only magnitudes are declared, and present with its attenuation not modelled otherwise); a voltage ratio inside the channel, never a field, a margin, a pass or a fail; reflections and radiation are not modelled; screening evidence, not correlated with a measurement",
                 pairs.len()
             ),
         )
@@ -1253,6 +1552,8 @@ mod tests {
             fall_time: Some(number(Dimension::Time, "0.1", "ns")),
             swing: Some(number(Dimension::Voltage, "400", "mV")),
             spread_spectrum: None,
+            open_circuit_swing: None,
+            output_impedance: None,
             members: Vec::new(),
         };
         signals::resolve(&source, None)
@@ -1312,7 +1613,7 @@ mod tests {
             z_ref,
         );
         let evaluation = evaluate(&channel, &signal());
-        let elements = &evaluation.elements;
+        let elements = &evaluation.elements_at(1e9);
         let (before, after, output) = (db_at(elements, 1, 1e9), db_at(elements, 2, 1e9), db_at(elements, 3, 1e9));
         // Before the choke the conversion is the skew's; after it, 20 dB lower; the output is the one after.
         assert!((before + 9.0309).abs() < 1e-3 && (after + 29.0309).abs() < 1e-3 && (output - after).abs() < 1e-12);
@@ -1351,7 +1652,10 @@ mod tests {
                 // The output plane reads what the bare skewed section reads.
                 let output = planes(&longer).pop().expect("the output plane");
                 assert!(
-                    (db_at(&evaluation.elements, output.state, 1e9) - db_at(&reference.elements, 1, 1e9)).abs() < 1e-9
+                    (db_at(&evaluation.elements_at(1e9), output.state, 1e9)
+                        - db_at(&reference.elements_at(1e9), 1, 1e9))
+                    .abs()
+                        < 1e-9
                 );
             }
         }

@@ -122,13 +122,15 @@ text_enum!(
         GateDrive = "gate_drive",
         Feedback = "feedback",
         Sense = "sense",
+        Shield = "shield",
     }
 );
 
 impl EmiRole {
-    /// Whether the role makes the pin a noise source (otherwise a victim).
+    /// Whether the role makes the pin a noise source (otherwise a victim). `shield` marks a connector pin bonded to
+    /// the cable's shield or shell: a victim-side role, never an aggressor.
     pub fn is_aggressor(self) -> bool {
-        !matches!(self, EmiRole::Feedback | EmiRole::Sense)
+        !matches!(self, EmiRole::Feedback | EmiRole::Sense | EmiRole::Shield)
     }
 }
 
@@ -325,6 +327,12 @@ pub struct EmiProfile {
     pub signal_swing: Option<Quantity>,
     /// Down-spread fraction of a spread clock; recorded, not modelled.
     pub spread_spectrum: Option<Quantity>,
+    /// Output impedance of a driver pin, used only with `open_circuit_swing` (the Thevenin representation of the
+    /// source); `signal_swing` is the loaded pin voltage and needs none.
+    pub output_impedance: Option<Quantity>,
+    /// Open-circuit swing of a driver pin behind `output_impedance` (the Thevenin representation; exclusive with
+    /// `signal_swing`).
+    pub open_circuit_swing: Option<Quantity>,
 }
 
 impl EmiProfile {
@@ -340,6 +348,8 @@ impl EmiProfile {
             && self.clock_frequency.is_none()
             && self.signal_swing.is_none()
             && self.spread_spectrum.is_none()
+            && self.output_impedance.is_none()
+            && self.open_circuit_swing.is_none()
     }
 
     /// The fall time, which defaults to the rise time.
@@ -384,6 +394,30 @@ pub struct PartEmi {
     pub self_resonance: Option<Quantity>,
     pub output_capacitance: Option<Quantity>,
     pub external_cable: Option<bool>,
+    /// The cable the connector takes is shielded (`cable_shielded`).
+    pub cable_shielded: Option<bool>,
+    /// The common-mode impedance the cable presents at the connector (`cable_common_mode_impedance`); absent: the
+    /// cable is taken as matched to the channel's common-mode reference.
+    pub cable_common_mode_impedance: Option<Quantity>,
+    /// The common-mode impedance of a choke or ferrite at the declared frequencies (`common_mode_impedance` with
+    /// `common_mode_impedance_frequency`), in increasing frequency; empty when none is declared.
+    pub common_mode_impedance: Vec<CommonModePoint>,
+}
+
+/// One declared point of a part's common-mode impedance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommonModePoint {
+    pub frequency: Quantity,
+    pub impedance: CommonModeValue,
+}
+
+/// A declared common-mode impedance: a magnitude only (no phase), or a complex value `R + jX`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommonModeValue {
+    /// `|Z|` in ohms, the phase unknown.
+    Magnitude(Quantity),
+    /// Resistance (not negative) and reactance (signed, inductive positive), ohms.
+    Complex { resistance: Quantity, reactance: Quantity },
 }
 
 impl PartEmi {

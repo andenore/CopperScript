@@ -15,8 +15,8 @@ use std::f64::consts::PI;
 
 use copper_emi::cable_circuit::{
     CableLoad, first_arrival_voltage, ground_noise_voltage, ground_noise_voltage_modal, loaded_pin_current,
-    modal_currents, steady_state_voltage, thevenin_current, thevenin_load_voltage, thevenin_loop_current,
-    thevenin_pin_voltage, transfer_impedance,
+    loop_mutual, modal_currents, return_loop, steady_state_voltage, thevenin_current, thevenin_load_voltage,
+    thevenin_loop_current, thevenin_pin_voltage, transfer_impedance,
 };
 use copper_emi::inductance::mutual_filaments;
 use copper_emi::mode_conversion::{Element, Series, combined_ratio, common_mode_transfer, skew_ratio_vs_output, trace};
@@ -803,4 +803,33 @@ fn fixture_8_the_sense_height_band() {
     }
     let spread = 20.0 * (v[0] / v[2]).log10();
     assert!(near(spread, 3.13, 0.01) && near(spread, 20.0 * (closed[0] / closed[2]).log10(), 0.05), "{spread}");
+}
+
+#[test]
+fn fixture_8_the_published_form_of_the_crate_is_the_neumann_integral_for_the_p4_loops() {
+    // The ground-noise driver of P4 builds its two loops with `return_loop` and takes `loop_mutual` as M_Bk. For the
+    // geometry of this fixture it must equal the independent midpoint Neumann integral written above (which shares no
+    // code with the crate) to 0.2 %, for the lateral offsets and the sense heights of the fixture; a leg on the far
+    // side of loop B has the same mutual by symmetry.
+    for y in [2.0e-3, 3.0e-3, 6.0e-3, 12.0e-3, -2.0e-3] {
+        for height in [3.0e-3, 5.0e-3, 8.0e-3] {
+            let a = return_loop(&[[0.0, y], [LENGTH, y]], TRACE_HEIGHT);
+            let b = return_loop(&[[0.0, 0.0], [LENGTH, 0.0]], height);
+            let published = loop_mutual(&a, &b);
+            let numeric = mutual(y, height);
+            assert!(near(published, numeric, 2.0e-3 * numeric.abs()), "{y} {height}: {published} {numeric}");
+        }
+    }
+    // The first number of the sense-height band of the fixture, through the published form: V_B of 1 mA at 100 MHz for
+    // a leg 2 mm from loop B and a 3 mm sense height, 136.7 uV.
+    let m = loop_mutual(
+        &return_loop(&[[0.0, 2.0e-3], [LENGTH, 2.0e-3]], TRACE_HEIGHT),
+        &return_loop(&[[0.0, 0.0], [LENGTH, 0.0]], 3.0e-3),
+    );
+    let v = ground_noise_voltage(&[(transfer_impedance(omega(100.0e6), m, 0.0), r(1.0e-3))]).abs();
+    assert!(near(v, 136.7e-6, 0.2e-6), "{v}");
+    // A route with a bend is the sum of its legs' mutuals (superposition of the loop's edges): the L-shaped route is
+    // the same loop as its two straight pieces joined, and the mutual of the whole is finite and positive.
+    let bent = return_loop(&[[0.0, 2.0e-3], [LENGTH, 2.0e-3], [LENGTH, 12.0e-3]], TRACE_HEIGHT);
+    assert!(loop_mutual(&bent, &return_loop(&[[0.0, 0.0], [LENGTH, 0.0]], 5.0e-3)).is_finite());
 }

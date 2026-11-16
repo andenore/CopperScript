@@ -450,6 +450,65 @@ pub fn pair_impedance_rule() -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// 9. Cable common mode (`docs/emi-signal-cable-plan.md`, P4)
+// ---------------------------------------------------------------------------
+
+/// The height of the sense path of the ground-noise network over the reference plane is a scenario parameter with a band.
+pub const TAG_SENSE_HEIGHT: &str = "rule_of_thumb_sense_height";
+/// The radius within which a via counts as bonding a connector's shield pin to ground is a rule of thumb.
+pub const TAG_SHIELD_BOND_RADIUS: &str = "rule_of_thumb_shield_bond_radius";
+/// A connector with neither `cable_shielded` nor a `shield` pin is treated as taking an unshielded cable (a name of the
+/// plan, not a rule of thumb).
+pub const TAG_ASSUMED_UNSHIELDED: &str = "assumed_unshielded_cable";
+/// The absolute connector voltage assumes a cable whose common-mode impedance at the connector is the channel's
+/// common-mode reference impedance (a name of the plan).
+pub const TAG_MATCHED_CABLE: &str = "matched_cable_termination";
+
+/// Height of the straight sense path of loop B over the reference plane, mm: `(nominal, low, high)`.
+///
+/// The sense path stands for the cable leaving the board and the antenna's other conductor, which the board model does
+/// not contain, so its height is a scenario parameter and the result is published only where it stays within
+/// [`SENSE_BAND_LIMIT_DB`] across the band. **A rule of thumb with no published source**: 3 to 8 mm is the order of the
+/// height of a connector's body and shield over the board; the numbers are the ones the independent fixture 8 of the
+/// plan uses (136.7, 115.0 and 95.35 uV for a leg 2 mm from the loop at 100 MHz and 1 mA).
+pub const SENSE_HEIGHT_MM: (f64, f64, f64) = (5.0, 3.0, 8.0);
+
+/// The result of a ground-noise voltage may move by at most this many dB across the sense-height band for it to be
+/// published (the plan's fallback; a decision of the plan, not a rule of thumb).
+pub const SENSE_BAND_LIMIT_DB: f64 = 6.0;
+
+/// A pair's ground-noise voltage that is more than this many dB below the larger of its two legs' terms is a
+/// cancellation (symmetric legs): it is published as it is without the sense-band test, which would only measure the
+/// rounding of a difference of two nearly equal numbers. A choice of this implementation.
+pub const CANCELLATION_DB: f64 = 30.0;
+
+/// Radius, mm, within which a via on a shield pin's net counts as bonding the pin to the reference: `(nominal, low,
+/// high)`. **A rule of thumb with no published source**: the bond is the via nearest the pin, and one within a few
+/// millimetres shares the pin's current.
+pub const SHIELD_VIA_RADIUS_MM: (f64, f64, f64) = (5.0, 2.0, 10.0);
+
+/// Distance of the ground pins of a connector to another net's corridor, in units of `3 H` each side, below which the
+/// net is considered for the ground-noise driver: the two corridors (each widened by the 3 H of the return-path
+/// check) overlap. The 3 H of P2 ([`RETURN_WINDOW_H`]).
+pub const CORRIDOR_WIDENING_H: f64 = 3.0;
+
+/// The rule behind [`SENSE_HEIGHT_MM`], for `input:` lines.
+pub fn sense_height_rule() -> String {
+    format!(
+        "sense path of the ground-noise network: a straight return {} mm over the reference plane, band {} to {} mm (a scenario parameter standing for the cable leaving the board; rule of thumb, no published source; the result is published only where it stays within {SENSE_BAND_LIMIT_DB} dB across the band)",
+        SENSE_HEIGHT_MM.0, SENSE_HEIGHT_MM.1, SENSE_HEIGHT_MM.2
+    )
+}
+
+/// The rule behind [`SHIELD_VIA_RADIUS_MM`], for `input:` lines.
+pub fn shield_bond_rule() -> String {
+    format!(
+        "a via on the shield pin's net within {} mm of the pin counts as its bond to the reference (rule of thumb, no published source; {} to {} mm)",
+        SHIELD_VIA_RADIUS_MM.0, SHIELD_VIA_RADIUS_MM.1, SHIELD_VIA_RADIUS_MM.2
+    )
+}
+
 #[cfg(test)]
 fn ring(l: f64, c: f64) -> f64 {
     use std::f64::consts::PI;
@@ -459,6 +518,20 @@ fn ring(l: f64, c: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cable_defaults_are_bands_with_their_tags_and_say_they_have_no_verified_source() {
+        assert!(is_rule_tag(TAG_SENSE_HEIGHT) && is_rule_tag(TAG_SHIELD_BOND_RADIUS));
+        assert!(!is_rule_tag(TAG_ASSUMED_UNSHIELDED) && !is_rule_tag(TAG_MATCHED_CABLE));
+        let (nominal, low, high) = SENSE_HEIGHT_MM;
+        assert!(low < nominal && nominal < high);
+        let (nominal, low, high) = SHIELD_VIA_RADIUS_MM;
+        assert!(low < nominal && nominal < high);
+        assert!(
+            sense_height_rule().contains("no published source") && shield_bond_rule().contains("no published source")
+        );
+        assert!(sense_height_rule().contains("6 dB"));
+    }
 
     #[test]
     fn the_edge_follows_the_slew_rate() {
