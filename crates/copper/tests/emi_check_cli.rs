@@ -363,3 +363,99 @@ fn query_emi_prints_the_operating_point_the_current_transitions_and_the_capacita
     assert_eq!(plain_cin.get("capacitance_at_bias"), Some(&Value::Null));
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// A differential driver, coupling capacitors and a four-pin choke to a cable connector, in a scratch project.
+fn signal_project(name: &str) -> PathBuf {
+    let target = std::env::temp_dir().join(format!("copper-emi-signals-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::create_dir_all(target.join("parts")).unwrap();
+    let pin = |name: &str, number: &str, extra: &str| {
+        format!(
+            "    pin {name} {{ number = \"{number}\"; domains = \"digital\"; directions = \"passive\"; {extra} }}\n"
+        )
+    };
+    let parts = [
+        (
+            "phy",
+            "part Phy {\n    category = \"interface.serdes\";\n    pin TXP { number = \"1\"; domains = \"digital\"; directions = \"output\"; data_rate = 2.5Gbps; rise_time = 0.1ns; signal_swing = 400mV; }\n    pin TXN { number = \"2\"; domains = \"digital\"; directions = \"output\"; data_rate = 2.5Gbps; rise_time = 0.1ns; }\n}\n"
+                .to_owned(),
+        ),
+        ("cap", format!("part Cap {{\n    category = \"passive.capacitor\";\n{}{}}}\n", pin("A", "1", ""), pin("B", "2", ""))),
+        (
+            "choke",
+            format!(
+                "part Choke {{\n    category = \"passive.inductor.common_mode\";\n{}{}{}{}}}\n",
+                pin("IN1", "1", "passes_to = OUT1;"),
+                pin("IN2", "2", "passes_to = OUT2;"),
+                pin("OUT1", "4", ""),
+                pin("OUT2", "3", "")
+            ),
+        ),
+        (
+            "conn",
+            format!(
+                "part Conn {{\n    category = \"connector.header\";\n    external_cable = true;\n{}{}}}\n",
+                pin("A", "1", ""),
+                pin("B", "2", "")
+            ),
+        ),
+    ];
+    for (file, text) in parts {
+        std::fs::write(target.join("parts").join(format!("{file}.copper")), text).unwrap();
+    }
+    let board = "board Lane {\n    import p \"./parts\";\n    component U1: p.Phy;\n    component C1: p.Cap { value = 100nF; }\n    component C2: p.Cap { value = 100nF; }\n    component L1: p.Choke;\n    component J1: p.Conn;\n    net TX_P { U1.TXP; C1.A; }\n    net TX_N { U1.TXN; C2.A; }\n    net AC_P { C1.B; L1.IN1; }\n    net AC_N { C2.B; L1.IN2; }\n    net LINK_P { L1.OUT1; J1.A; }\n    net LINK_N { L1.OUT2; J1.B; }\n    constraint routing(TX_P) { kind = differential; partner = TX_N; }\n    constraint routing(TX_N) { kind = differential; partner = TX_P; }\n}\n";
+    std::fs::write(target.join("board.copper"), board).unwrap();
+    target
+}
+
+#[test]
+fn query_emi_lists_signal_sources_with_numbers_provenance_and_channel_only_when_there_are_any() {
+    let directory = signal_project("query");
+    let board = directory.join("board.copper");
+    let board = board.to_str().unwrap();
+    let output = copper(&["query", board, "emi", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
+    let Ok(Value::Object(model)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
+    let signals = model.get("signals").and_then(Value::as_array).expect("signals");
+    let Some(Value::Object(source)) = signals.first() else { panic!("a signal source") };
+    assert_eq!(signals.len(), 1);
+    assert_eq!(source.get("net").and_then(Value::as_str), Some("TX_P"));
+    assert_eq!(source.get("partner").and_then(Value::as_str), Some("TX_N"));
+    assert_eq!(source.get("kind").and_then(Value::as_str), Some("differential"));
+    let Some(Value::Object(rate)) = source.get("data_rate") else { panic!("data_rate") };
+    assert_eq!(rate.get("declared_on").and_then(Value::as_str), Some("U1.TXP"));
+    let Some(Value::Object(value)) = rate.get("value") else { panic!("a quantity") };
+    assert_eq!(value.get("base_value").and_then(Value::as_str), Some("2500000000"));
+    assert_eq!(source.get("clock_frequency"), Some(&Value::Null));
+    let members = source.get("members").and_then(Value::as_array).expect("members");
+    let Some(Value::Object(positive)) = members.first() else { panic!("a member") };
+    let hops: Vec<&str> = positive
+        .get("channel")
+        .and_then(Value::as_array)
+        .expect("channel")
+        .iter()
+        .filter_map(|hop| hop.as_object()?.get("component")?.as_str())
+        .collect();
+    assert_eq!(hops, ["C1", "L1"]);
+    let Some(Value::Object(end)) = positive.get("end") else { panic!("an end") };
+    assert_eq!(end.get("kind").and_then(Value::as_str), Some("connector"));
+    assert_eq!(end.get("component").and_then(Value::as_str), Some("J1"));
+    // The text form prints the same facts.
+    let text = stdout(&copper(&["query", board, "emi"]));
+    for needle in [
+        "\"signals\"",
+        "\"declared_on\": \"U1.TXP\"",
+        "\"kind\": \"declared_pair\"",
+        "\"kind\": \"coupling_capacitor\"",
+    ] {
+        assert!(text.contains(needle), "{needle} in {text}");
+    }
+    // A board that declares no signal data lists none: the key is absent from both forms.
+    for form in [
+        &["query", "examples/emi_buck/board.copper", "emi", "--json"][..],
+        &["query", "examples/emi_buck/board.copper", "emi"][..],
+    ] {
+        assert!(!stdout(&copper(form)).contains("signals"));
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}

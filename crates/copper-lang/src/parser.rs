@@ -883,6 +883,17 @@ impl Parser {
             .ok_or_else(|| self.error_at("PAR010", format!("expected number, found {}", repr(&token.text)), token))
     }
 
+    /// Whether the current token is the unit of the number just read: an
+    /// identifier, or an adjacent `%` (the only unit that is not an identifier).
+    fn at_unit(&self) -> bool {
+        let token = self.current();
+        match token.kind {
+            TokenKind::Identifier => true,
+            TokenKind::Symbol => token.text == "%" && token.location.offset == self.previous(1).end_offset,
+            _ => false,
+        }
+    }
+
     /// The unit identifier after a number. A slew-rate unit is written with an
     /// adjacent slash (`3V/ns`): `V/ns`, `V/us` and `kV/us` are the only
     /// compound units, joined here so that no other `/` is affected.
@@ -912,7 +923,7 @@ impl Parser {
             let sign = self.advance().text;
             let token = self.expect(TokenKind::Number, "number after sign")?;
             let number = format!("{sign}{}", token.text);
-            if self.current().kind == TokenKind::Identifier {
+            if self.at_unit() {
                 return Ok(Scalar::Quantity { value: number, unit: self.quantity_unit() });
             }
             return self.number_at(&number, &token);
@@ -921,7 +932,7 @@ impl Parser {
             TokenKind::String => Ok(Scalar::Str(self.advance().text)),
             TokenKind::Number => {
                 let token = self.advance();
-                if self.current().kind == TokenKind::Identifier {
+                if self.at_unit() {
                     return Ok(Scalar::Quantity { value: token.text, unit: self.quantity_unit() });
                 }
                 self.number_at(&token.text, &token)

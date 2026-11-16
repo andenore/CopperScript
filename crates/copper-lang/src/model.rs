@@ -317,6 +317,14 @@ pub struct EmiProfile {
     /// 10-90 % time of the current commutation of the switch (di/dt), distinct from the voltage edge.
     pub current_rise_time: Option<Quantity>,
     pub current_fall_time: Option<Quantity>,
+    /// Bits per second of the pin's signal (NRZ assumed).
+    pub data_rate: Option<Quantity>,
+    /// Fundamental of a clock output.
+    pub clock_frequency: Option<Quantity>,
+    /// Loaded signal voltage at the pin: single-ended swing, or differential peak-to-peak.
+    pub signal_swing: Option<Quantity>,
+    /// Down-spread fraction of a spread clock; recorded, not modelled.
+    pub spread_spectrum: Option<Quantity>,
 }
 
 impl EmiProfile {
@@ -328,6 +336,10 @@ impl EmiProfile {
             && self.current_peak.is_none()
             && self.current_rise_time.is_none()
             && self.current_fall_time.is_none()
+            && self.data_rate.is_none()
+            && self.clock_frequency.is_none()
+            && self.signal_swing.is_none()
+            && self.spread_spectrum.is_none()
     }
 
     /// The fall time, which defaults to the rise time.
@@ -458,6 +470,8 @@ pub struct PackagePinDefinition {
     pub required_net_traits: BTreeSet<String>,
     /// A manufacturer-permitted external power-output tie for this instance.
     pub parallel_power_group: Option<String>,
+    /// The pin of the same part this pin passes a signal to (`passes_to`), for parts with more than two pins.
+    pub passes_to: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

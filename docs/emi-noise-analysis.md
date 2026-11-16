@@ -34,6 +34,14 @@ Accepted on `pin` in a `part` and on `pad` in a `device`:
 | `current_peak` | current | Peak pulsed current through the pin (switch current limit or rated peak) |
 | `current_rise_time` | time | 10-90 % time in which the switch current commutates (turn-on, set by loop inductance and drive; not the voltage edge) |
 | `current_fall_time` | time | 10-90 % current commutation time at turn-off; defaults to `current_rise_time` when only one is given |
+| `data_rate` | data rate | Bits per second of the pin's signal, NRZ assumed (`2.5Gbps`); see section 14 |
+| `clock_frequency` | frequency | The fundamental of a clock output (`24MHz`); see section 14 |
+| `signal_swing` | voltage | The loaded voltage at the driver's pins; for a differential pin the differential peak-to-peak (`400mV`); see section 14 |
+| `spread_spectrum` | ratio | Down-spread fraction of a spread clock (`0.5%`); recorded, not modelled |
+
+`passes_to = <pin>` (pins of parts with more than two pins only, not device pads) is described with the signal walk in
+section 14. `data_rate` takes `bps`, `kbps`, `Mbps` or `Gbps` (`Dimension::DataRate`); `spread_spectrum` takes `%` only
+(`Dimension::Ratio`, base value the fraction), and the parser accepts `%` as a unit only directly after a number.
 
 `emi_role` values:
 
@@ -2494,3 +2502,122 @@ What the comparison establishes, and what it does not:
   R is far off (+15.6 % at 61 um, the case of `tests/boards.rs`).
 * A disagreement beyond 10 % in an entry is a status reason (flag `reference_disagrees`). A topology disagreement (a port open for the reference and solved by
 the extraction, or different numbers of pieces of copper) makes the status `error` and the flag `reference_topology_disagrees`.
+
+## 14. Signal sources, channels and spectra (P1 of the signal and cable plan)
+
+Status: implemented, uncommitted, under review. This section is the specification of the first phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); nothing here finds a return-path break, converts a mode or
+estimates a cable current (phases P2 and later). It describes what `EmiModel::signals` holds, how a signal's channel to the
+cable connector is walked, which defaults fill a missing edge or swing, and the three different spectrum quantities of
+a data signal. Every number is screening evidence.
+
+### 14.1 What is a signal source
+
+`EmiModel::signals` (`crates/copper-lang/src/emi_signals.rs`, key `signals` of `copper query BOARD emi`, present only when
+there are sources) has one entry per fast net, or per differential pair keyed by its P net (`partner` is the N net). A net is
+a signal source when it has the `fast_edge` class (a driving pin with `rise_time` or `fall_time` below 2 ns, or a routing
+constraint `kind = clock`) or when a driving pin on it declares `data_rate`, `clock_frequency`, `signal_swing` or
+`spread_spectrum`. A *driving pin* is an output or bidirectional pin without an `emi_role` (the pins of switching
+cells are not signal sources). The net classes themselves do not change: a net that only declares a rate is a source but
+not a `fast_edge` net, and `fast_edge` in the entry says which.
+
+A pair comes from `constraint routing(NET) { kind = differential; partner = OTHER; }` on either member. The pair is
+dropped (both nets stay single-ended) when the partner names a different net or a third net names either member. The P
+net is the one whose name has `P` or `+` where the two names first differ, against `N`, `M` or `-` (`USB_DP`/`USB_DM`,
+`TX_P`/`TX_N`, `A+`/`A-`); when the names do not say, the first in name order.
+
+Each number (`data_rate`, `clock_frequency`, `rise_time`, `fall_time`, `signal_swing`, `spread_spectrum`) is the first one
+declared by a driving pin of the source, P net first, with that pin as its provenance (`declared_on`). `rise_time` and
+`fall_time` default to each other as for any pin. Nothing is invented in the model: a missing number is `null`.
+
+### 14.2 Defaults
+
+`crates/copper-drc/src/emi/defaults.rs` and `crates/copper-drc/src/emi/signal.rs` fill a missing number when a phase needs it
+(declared values always win; a default carries a `rule_of_thumb_*` tag, its band and its rule):
+
+| Number | Default | Tag |
+|---|---|---|
+| Edge, source declares `data_rate` | 0.25 UI nominal, band 0.2 to 0.35 UI (10-90 %) | `rule_of_thumb_signal_edge` |
+| Edge, no rate (a clock) | 1 ns nominal, band 0.3 to 3 ns | `rule_of_thumb_signal_edge` |
+| Swing, differential | 0.2 V nominal, band 0.1 to 0.4 V (peak-to-peak) | `rule_of_thumb_signal_swing` |
+| Swing, single-ended | 1.0 of the driver's supply, band 0.8 to 1.0; none without a supply voltage | `rule_of_thumb_signal_swing` |
+
+The only published relation used is `B = 0.35 / t_r` between a 10-90 % rise time and a single-pole bandwidth (Johnson and Graham,
+*High-Speed Digital Design*, 1993; Bogatin, *Signal and Power Integrity - Simplified*). The 0.2 to 0.35 UI band, the clock band and
+the swing bands have no published source known to the author (the differential swing band is on the scale of the LVDS
+and MIPI D-PHY output levels, as remembered and unverified), and the doc comments say so. In this phase no model code supplies the driver's supply
+voltage, so a single-ended signal with no `signal_swing` stays without a swing.
+
+### 14.3 The channel walk
+
+A signal is one channel from its driver pin to the first cable connector, not one net. `external_connectors` (used for the
+net classes and the existing checks) reaches a connector directly or through one resistor or ferrite and is unchanged. The
+channel walk is a separate function used only by signals. Starting at each member net it follows, breadth first (the fewest
+parts, nets and parts in board order):
+
+* two-pin series parts, any number in a row: resistors, ferrites and `dc_power_path` parts as `is_series_element` recognises
+  them (kind `series_part`), and capacitors in series with the signal (kind `coupling_capacitor`, AC coupling);
+* parts with more than two pins across their declared `passes_to` pairs only (kind `declared_pair`); an entry pin of a pair
+  passes to its partner whichever side declared the pair;
+* never into a declared supply rail or a net with a ground pin. A capacitor to such a net is a shunt: it is not a hop and
+  not a refusal. A resistor, ferrite or declared pair into one is refused and recorded;
+* it stops at the first net that has a connector (a part with `external_cable = true`, or named by an `emission` constraint)
+  and records the connector pin.
+
+Two-pin parts that are none of these (inductors, diodes, ...) are not followed. One that is in series with the channel (its
+other pin on a signal net) is recorded as a stop, `unsupported_series_part`; one to a supply or ground net is a shunt (a
+protection diode) and is not recorded. Every entry of
+`channel` is a hop (`component`, `kind`, the pins and nets crossed, `swaps_polarity`), in order from the driver. When no
+connector is reached the member's `end` is `open` with the list of `stops`: each refusal with the pin, the net and the
+reason (`no_passes_to`: a part with more than two pins and no declared pair for the pin the walk arrived on, which is
+every receiver IC on the way; `supply_rail`; `reference_net`; `unsupported_series_part`). An open end with no stops means the nets simply end.
+Stops are listed only when nothing was reached.
+
+P and N identity: each member is walked on its own, so P stays P across every declared pair by construction. A part
+swaps polarity when the net the P member leaves it on is, by name, the pair's N net (the same name rule as for the key,
+applied to the two nets at the same hop). Both members' hops are flagged `swaps_polarity`. Pairs whose net names do not
+say P from N are never flagged; a physical swap in the wiring is therefore reported only as far as the names reveal it. The
+ordered hops are what the later phases use for coupling capacitors and chokes.
+
+### 14.4 Spectrum of a signal
+
+`crates/copper-emi/src/signal.rs`. Conventions: `swing` is the peak-to-peak value of a signal that sits at `+-swing/2`;
+amplitudes are single-sided peaks (a sine of amplitude `a` has power `a^2/2`); an edge is a linear 0-100 % ramp centred on the bit
+boundary. Declared `rise_time` and `fall_time` are 10-90 % times; the ramp passed to these functions is the 10-90 % time
+divided by 0.8 (`ResolvedSignal::rise_ramp` / `fall_ramp` in `crates/copper-drc/src/emi/signal.rs`), the same conversion the
+conducted model applies to a switch's edge times.
+
+A **clock** has lines at multiples of `clock_frequency` from `trapezoid_harmonic` (`clock_lines`); `trapezoid_envelope` is a
+continuous envelope over those lines, not a line spectrum. A **data signal** has three different quantities, each labelled;
+none is a bound on another:
+
+1. **`pattern_lines`**: the exact line spectrum of one named repeating pattern: alternating (`1010`, lines at odd multiples
+   of `data_rate / 2`) and the square patterns with runs of 2, 4 and 5 bits. Each boundary with a change contributes a ramp of
+   height `+-swing`, so `c_m = (1 / (j w P)) sum_k a_k sinc(pi f t_k) e^{-j w k T}` and the line is `2 |c_m|`. A longer pattern has
+   lines where a shorter one has none: at 2.5 Gbps `11110000` has a line at 312.5 MHz where `1010` has none (its lowest is 1.25 GHz), so
+   no pattern bounds the others and a finding lists which patterns were evaluated.
+2. **`continuous_bound`**: `(2 swing / pi) min(1, 1 / (pi f t_e))`, an upper bound on any single line of any periodic
+   two-level waveform with that swing and edge time. (a) With `|x| <= swing/2` a component along `cos(w t + phi)` is largest for
+   `x = (swing/2) sign(cos(...))`, giving `swing / pi` and a line of `2 swing / pi`, reached by the square wave of that frequency. (b) A
+   linear edge is a step smoothed by a rectangle of width `t_e`, so for equal rise and fall every line is multiplied by
+   `sinc(pi f t_e)`, and `|sinc x| <= min(1, 1/|x|)`. The proof is for equal rise and fall times; for unequal edges the bound uses the
+   shorter edge, which the tests check on random sequences but which is not proved. It is loose by construction: it is
+   not reached by one pattern at every frequency and says nothing about how many lines there are. It holds for a
+   periodic extension of any record, not for a spectral density.
+3. **`random_data_in_rbw`**: random NRZ data has a continuous power spectrum, not lines. The two-sided density is
+   `(swing/2)^2 T sinc^2(pi f T) sinc^2(pi f t_e)`; the power in a resolution bandwidth `B` expressed as the amplitude of a sine of equal power
+   is `swing sqrt(B / data_rate) |sinc(pi f / data_rate)| |sinc(pi f t_e)|`. At 2.5 Gbps in 120 kHz this is `sqrt(120 kHz / 2.5 GHz)`, 43.2 dB
+   below the alternating pattern's lines at any swing and edge time. `B` is a rectangular power bandwidth much narrower than the
+   data rate; the Gaussian IF filter's noise bandwidth (about 1.06 times its 6 dB bandwidth) and the detector are not applied.
+
+Checked in the tests against an independent numerical spectrum: a long sampled waveform written directly in the
+time domain and transformed by the DFT of `copper_emi::spectrum`, for the named patterns (line by line), the clock lines, the bound (named patterns
+and 30 random sequences of 16 to 512 bits at seven edge settings, equal and unequal) and random data (band power of a 65536-bit sequence).
+
+### 14.5 Not modelled
+
+Whether a link scrambles its data (unscrambled data repeat and put power into lines, scrambled data tend to the random case: not declared
+in this phase); jitter, pre-emphasis, de-emphasis and multi-level signalling (PAM4); spread-spectrum clocking (`spread_spectrum` is recorded only); a
+driver's source impedance and the loading that makes `signal_swing` a loaded voltage; any detector
+weighting; reflections inside parts on the channel; and every consequence of the channel for the board (return-path breaks, mode
+conversion and the cable are later phases).

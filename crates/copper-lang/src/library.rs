@@ -62,6 +62,7 @@ fn pin(
         connection_policy: ConnectionPolicy::Normal,
         required_net_traits: Default::default(),
         parallel_power_group: None,
+        passes_to: None,
     }
 }
 

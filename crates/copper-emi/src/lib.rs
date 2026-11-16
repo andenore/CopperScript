@@ -8,6 +8,7 @@
 //! | [`estimate`] | trapezoid spectrum and envelope, small-loop and common-mode radiation estimators, ringing, island capacitance, dB helpers, [`estimate::limits`] tables |
 //! | [`field`] | quasi-static Biot-Savart magnetic near field of a current path (finite filament closed form, ideal ground plane by images), field maps |
 //! | [`inductance`] | partial self and mutual inductance of straight bars, loop inductance with optional ground-plane images, via barrel, trace resistance |
+//! | [`signal`] | spectra of fast digital signals: clock lines, lines of named data patterns, a pattern-independent bound on any line, random data in a resolution bandwidth |
 //! | [`spectrum`] | complex numbers, radix-2 FFT, windows, amplitude-correct spectra |
 //! | [`lisn`] | CISPR 16-1-2 50 uH V-network impedance and noise-current to measured-voltage transfer |
 //! | [`receiver`] | EMI receiver emulation: Gaussian IF filter, peak, quasi-peak and average detectors |
@@ -38,6 +39,7 @@ pub mod harmonic;
 pub mod inductance;
 pub mod lisn;
 pub mod receiver;
+pub mod signal;
 pub mod spectrum;
 
 /// Vacuum permeability, H/m (pre-2019 exact value `4 pi 1e-7`; the 2019 SI

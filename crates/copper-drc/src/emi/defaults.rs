@@ -222,6 +222,98 @@ pub const DEFAULT_ESR: f64 = 5e-3;
 pub const PACKAGE_ESL: [(&str, f64); 5] =
     [("0402", 0.4e-9), ("0603", 0.5e-9), ("0805", 0.6e-9), ("1206", 0.8e-9), ("1210", 0.9e-9)];
 
+// ---------------------------------------------------------------------------
+// 6. Fast digital signals (`docs/emi-signal-cable-plan.md`, P1)
+// ---------------------------------------------------------------------------
+
+/// The edge time of a fast signal is a default band (no `rise_time`/`fall_time` declared on the driver).
+pub const TAG_SIGNAL_EDGE: &str = "rule_of_thumb_signal_edge";
+/// The swing of a fast signal is a default band (no `signal_swing` declared on the driver).
+pub const TAG_SIGNAL_SWING: &str = "rule_of_thumb_signal_swing";
+
+/// Edge time of a data signal as a fraction of the unit interval: `(nominal, fast, slow)`.
+///
+/// Basis. A 10-90 % rise time `t_r` and the -3 dB bandwidth `B` of a single-pole system are related by
+/// `B = 0.35 / t_r` (Johnson and Graham, *High-Speed Digital Design: A Handbook of Black Magic*, Prentice Hall,
+/// 1993, ch. 1; Bogatin, *Signal and Power Integrity - Simplified*, 3rd ed., ch. 2). With that relation 0.2 to
+/// 0.35 UI is a driver bandwidth of 1.75 down to 1 times the bit rate. **The band itself is a rule of thumb:
+/// no published source for the 0.2 to 0.35 UI figures is known to the author**, and drivers of the same rate
+/// differ widely (standards specify a minimum transition time, not a typical one). Pass the 10-90 % time as the
+/// ramp duration, as [`copper_emi::estimate::trapezoid_harmonic`] does.
+pub const SIGNAL_EDGE_UI: (f64, f64, f64) = (0.25, 0.20, 0.35);
+/// Edge time of a clock or other signal with no declared rate, seconds: `(nominal, fast, slow)`.
+/// Rule of thumb for an on-board CMOS clock driver of a few ns down to a few hundred ps; **no published source
+/// is cited for these three numbers**.
+pub const SIGNAL_EDGE_CLOCK: (f64, f64, f64) = (1.0e-9, 0.3e-9, 3.0e-9);
+
+/// The default edge band of a fast signal, `(nominal, fast, slow)` seconds: a fraction of the unit interval when
+/// the driver declares a `data_rate`, else [`SIGNAL_EDGE_CLOCK`].
+pub fn signal_edge_band(data_rate: Option<f64>) -> (f64, f64, f64) {
+    match data_rate {
+        Some(rate) if rate > 0.0 => {
+            let (nominal, fast, slow) = SIGNAL_EDGE_UI;
+            (nominal / rate, fast / rate, slow / rate)
+        }
+        _ => SIGNAL_EDGE_CLOCK,
+    }
+}
+
+/// The rule behind [`signal_edge_band`], for `input:` lines.
+pub fn signal_edge_rule(data_rate: bool) -> String {
+    if data_rate {
+        format!(
+            "data signal, t(10-90 %) = {} UI nominal, {} UI fast bound, {} UI slow bound (B = 0.35 / t_r)",
+            SIGNAL_EDGE_UI.0, SIGNAL_EDGE_UI.1, SIGNAL_EDGE_UI.2
+        )
+    } else {
+        format!(
+            "clock or undeclared rate, t(10-90 %) = {} ns nominal, {} ns fast bound, {} ns slow bound",
+            SIGNAL_EDGE_CLOCK.0 * 1e9,
+            SIGNAL_EDGE_CLOCK.1 * 1e9,
+            SIGNAL_EDGE_CLOCK.2 * 1e9
+        )
+    }
+}
+
+/// Differential peak-to-peak swing band, volts: `(nominal, low, high)`.
+///
+/// Scale. LVDS (TIA/EIA-644-A) specifies a differential output voltage of 247 to 454 mV (350 mV nominal) into 100
+/// ohm, and MIPI D-PHY high-speed transmitters 140 to 270 mV (200 mV nominal); both as remembered, to be checked
+/// against the standards. Those are differential output voltages, not peak-to-peak values, and multi-gigabit
+/// serial standards (PCIe, USB 3) use larger swings, so this band is a rule of thumb for **small-swing
+/// differential links only** and **not a published figure**: declare `signal_swing` for anything else.
+pub const SIGNAL_SWING_DIFFERENTIAL: (f64, f64, f64) = (0.2, 0.1, 0.4);
+/// A single-ended driver's loaded swing as a fraction of its supply: `(nominal, low, high)`. A CMOS output
+/// swings close to rail to rail; the 0.8 low bound allows for load and drive strength. Rule of thumb, **no
+/// published source cited**.
+pub const SIGNAL_SWING_SUPPLY_FRACTION: (f64, f64, f64) = (1.0, 0.8, 1.0);
+
+/// The default swing band, `(nominal, low, high)` volts. A differential pair gets [`SIGNAL_SWING_DIFFERENTIAL`];
+/// a single-ended signal needs the driver's supply voltage and has no default without it (`None`).
+pub fn signal_swing_band(differential: bool, supply: Option<f64>) -> Option<(f64, f64, f64)> {
+    if differential {
+        return Some(SIGNAL_SWING_DIFFERENTIAL);
+    }
+    let supply = supply.filter(|volts| *volts > 0.0)?;
+    let (nominal, low, high) = SIGNAL_SWING_SUPPLY_FRACTION;
+    Some((nominal * supply, low * supply, high * supply))
+}
+
+/// The rule behind [`signal_swing_band`], for `input:` lines.
+pub fn signal_swing_rule(differential: bool) -> String {
+    if differential {
+        format!(
+            "small-swing differential link, {} V nominal, {} to {} V (LVDS and D-PHY scale; not a published figure)",
+            SIGNAL_SWING_DIFFERENTIAL.0, SIGNAL_SWING_DIFFERENTIAL.1, SIGNAL_SWING_DIFFERENTIAL.2
+        )
+    } else {
+        format!(
+            "single-ended CMOS output, {} to {} of the driver's supply",
+            SIGNAL_SWING_SUPPLY_FRACTION.1, SIGNAL_SWING_SUPPLY_FRACTION.2
+        )
+    }
+}
+
 #[cfg(test)]
 fn ring(l: f64, c: f64) -> f64 {
     use std::f64::consts::PI;
@@ -281,6 +373,26 @@ mod tests {
     fn the_ripple_band_brackets_the_nominal_and_the_rule_says_where_it_comes_from() {
         assert!(RIPPLE_RATIO.1 < RIPPLE_RATIO.0 && RIPPLE_RATIO.0 < RIPPLE_RATIO.2);
         assert!(ripple_rule().contains("power inductor"));
+    }
+
+    #[test]
+    fn signal_defaults_are_bands_around_a_nominal_and_carry_rule_tags() {
+        assert!(is_rule_tag(TAG_SIGNAL_EDGE) && is_rule_tag(TAG_SIGNAL_SWING));
+        // Data signal: fractions of the unit interval of 2.5 Gbps (400 ps).
+        let (nominal, fast, slow) = signal_edge_band(Some(2.5e9));
+        assert!(fast < nominal && nominal < slow);
+        assert!((fast - 0.2 * 400e-12).abs() < 1e-15 && (slow - 0.35 * 400e-12).abs() < 1e-15);
+        let (nominal, fast, slow) = signal_edge_band(None);
+        assert!(fast < nominal && nominal < slow);
+        assert_eq!(signal_edge_band(Some(0.0)), SIGNAL_EDGE_CLOCK);
+        let (nominal, low, high) = signal_swing_band(true, None).unwrap();
+        assert!(low < nominal && nominal < high);
+        // Single-ended: only with a supply.
+        assert_eq!(signal_swing_band(false, None), None);
+        let (nominal, low, high) = signal_swing_band(false, Some(3.3)).unwrap();
+        assert!((nominal - 3.3).abs() < 1e-12 && (low - 0.8 * 3.3).abs() < 1e-12 && (high - 3.3).abs() < 1e-12);
+        assert!(signal_edge_rule(true).contains("UI") && signal_edge_rule(false).contains("ns"));
+        assert!(signal_swing_rule(true).contains("differential") && signal_swing_rule(false).contains("supply"));
     }
 
     #[test]

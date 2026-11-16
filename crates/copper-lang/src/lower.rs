@@ -3,7 +3,7 @@
 //! Every check, its order and its diagnostic follow the Python compiler, so
 //! the first error a source produces is the same in both implementations.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use copper_json::{python_isspace, python_str_repr as repr};
 use copper_units::{Decimal, Dimension, Quantity, Rounding};
@@ -545,8 +545,8 @@ fn emi_name<T>(
     })
 }
 
-/// `emi_role`, `rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time` and `current_fall_time`;
-/// `None` when none is declared.
+/// `emi_role`, `rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time`, `current_fall_time`,
+/// `data_rate`, `clock_frequency`, `signal_swing` and `spread_spectrum`; `None` when none is declared.
 fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<EmiProfile>> {
     let role = attributes
         .get("emi_role")
@@ -571,6 +571,10 @@ fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<Em
         current_peak: quantity_of("current_peak", Dimension::Current)?,
         current_rise_time: quantity_of("current_rise_time", Dimension::Time)?,
         current_fall_time: quantity_of("current_fall_time", Dimension::Time)?,
+        data_rate: quantity_of("data_rate", Dimension::DataRate)?,
+        clock_frequency: quantity_of("clock_frequency", Dimension::Frequency)?,
+        signal_swing: quantity_of("signal_swing", Dimension::Voltage)?,
+        spread_spectrum: quantity_of("spread_spectrum", Dimension::Ratio)?,
     };
     Ok((!profile.is_empty()).then_some(profile))
 }
@@ -827,6 +831,10 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "current_peak",
                         "current_rise_time",
                         "current_fall_time",
+                        "data_rate",
+                        "clock_frequency",
+                        "signal_swing",
+                        "spread_spectrum",
                         "io_supply",
                         "vih",
                         "vil",
@@ -1276,6 +1284,11 @@ pub fn compile_part(
                         "current_peak",
                         "current_rise_time",
                         "current_fall_time",
+                        "data_rate",
+                        "clock_frequency",
+                        "signal_swing",
+                        "spread_spectrum",
+                        "passes_to",
                         "io_supply",
                         "vih",
                         "vil",
@@ -1316,6 +1329,10 @@ pub fn compile_part(
                     "current_peak",
                     "current_rise_time",
                     "current_fall_time",
+                    "data_rate",
+                    "clock_frequency",
+                    "signal_swing",
+                    "spread_spectrum",
                     "io_supply",
                     "vih",
                     "vil",
@@ -1370,6 +1387,13 @@ pub fn compile_part(
                         parallel_power_group: match parallel {
                             Some(Scalar::Str(text)) => Some(text.clone()),
                             _ => None,
+                        },
+                        passes_to: match attributes.get("passes_to") {
+                            None => None,
+                            Some(Scalar::Str(text)) => Some(text.clone()),
+                            Some(_) => {
+                                return Err(error("CMP130", "passes_to must name a pin of the same part", location));
+                            }
                         },
                     },
                 );
@@ -1497,6 +1521,7 @@ pub fn compile_part(
             }
         }
     }
+    validate_passes_to(&pins, location)?;
     if pins.is_empty() {
         return Err(error("CMP050", "part must declare at least one pin", location));
     }
@@ -1548,6 +1573,55 @@ pub fn compile_part(
         part.metadata.insert(PART_HEIGHT_KEY.to_owned(), nm.to_string());
     }
     Ok(part)
+}
+
+/// `passes_to` (`CMP130`): the named pin exists, is another pin, the part has more than two pins, and both
+/// directions of a declared pair agree. A pin may be the target of one pin only.
+fn validate_passes_to(pins: &IndexMap<String, PackagePinDefinition>, location: &Location) -> Result<()> {
+    let mut targeted: BTreeMap<&str, &str> = BTreeMap::new();
+    for pin in pins.values() {
+        let Some(target) = &pin.passes_to else { continue };
+        if pins.len() <= 2 {
+            return Err(error(
+                "CMP130",
+                format!("pin {} declares passes_to, which is for parts with more than two pins", repr(&pin.name)),
+                location,
+            ));
+        }
+        let Some(other) = pins.get(target) else {
+            return Err(error(
+                "CMP130",
+                format!("pin {} passes_to unknown pin {}", repr(&pin.name), repr(target)),
+                location,
+            ));
+        };
+        if other.name == pin.name {
+            return Err(error("CMP130", format!("pin {} passes_to itself", repr(&pin.name)), location));
+        }
+        if let Some(back) = &other.passes_to
+            && *back != pin.name
+        {
+            return Err(error(
+                "CMP130",
+                format!(
+                    "pin {} passes_to {} but {} passes_to {}; a declared pair must agree in both directions",
+                    repr(&pin.name),
+                    repr(target),
+                    repr(target),
+                    repr(back)
+                ),
+                location,
+            ));
+        }
+        if targeted.insert(target.as_str(), pin.name.as_str()).is_some() {
+            return Err(error(
+                "CMP130",
+                format!("pin {} is the target of more than one passes_to", repr(target)),
+                location,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `model_sha256`, `model_license` and `model_redistributable`: required and

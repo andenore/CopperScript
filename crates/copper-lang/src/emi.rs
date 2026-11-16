@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use copper_json::{Dumps, Object, Value};
 use copper_units::{Decimal, Dimension, Quantity};
 
+use crate::emi_signals::{SignalSource, signal_value};
 use crate::erc::{Context, Diagnostic, build_context};
 use crate::lower::{CAPACITANCE_AT_BIAS, LOAD_CURRENT, SWITCHING_FREQUENCY, parse_quantity_text};
 use crate::model::*;
@@ -225,6 +226,8 @@ pub struct EmiModel {
     pub cells: Vec<SwitchingCell>,
     /// Only nets with at least one class, by name.
     pub nets: BTreeMap<String, NetClasses>,
+    /// The fast signals (single-ended nets and differential pairs), keyed by net (a pair by its P net).
+    pub signals: BTreeMap<String, SignalSource>,
 }
 
 impl EmiModel {
@@ -239,11 +242,15 @@ impl EmiModel {
 
     /// The deterministic JSON form (`copperscript.emi-model/v0.1`).
     pub fn to_value(&self) -> Value {
-        object(vec![
+        let mut entries = vec![
             ("schema", Value::from(SCHEMA)),
             ("cells", Value::Array(self.cells.iter().map(cell_value).collect())),
             ("nets", Value::Array(self.nets.iter().map(|(name, classes)| net_value(name, classes)).collect())),
-        ])
+        ];
+        if !self.signals.is_empty() {
+            entries.push(("signals", Value::Array(self.signals.values().map(signal_value).collect())));
+        }
+        object(entries)
     }
 
     /// [`Self::to_value`] as indented text with sorted keys and a trailing newline.
@@ -252,7 +259,7 @@ impl EmiModel {
     }
 }
 
-fn object(entries: Vec<(&str, Value)>) -> Value {
+pub(crate) fn object(entries: Vec<(&str, Value)>) -> Value {
     Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect::<Object>())
 }
 
@@ -268,7 +275,7 @@ fn optional_endpoint(value: Option<&Endpoint>) -> Value {
     value.map_or(Value::Null, |value| Value::from(value.to_string()))
 }
 
-fn optional_quantity(value: Option<&Quantity>) -> Value {
+pub(crate) fn optional_quantity(value: Option<&Quantity>) -> Value {
     value.map_or(Value::Null, quantity_value)
 }
 
@@ -376,7 +383,8 @@ pub fn analyze(view: &FlatElectricalView) -> EmiModel {
 pub fn analyze_context(context: &Context) -> EmiModel {
     let cells = cells(context);
     let nets = net_classes(context, &cells);
-    EmiModel { cells, nets }
+    let signals = crate::emi_signals::signals(context, &nets);
+    EmiModel { cells, nets, signals }
 }
 
 fn is_category(part: &PartDefinition, prefix: &str) -> bool {
@@ -388,7 +396,11 @@ fn is_capacitor(part: &PartDefinition) -> bool {
 }
 
 /// The `emi` data of a pin: its own, else its active device pads'.
-fn pin_emi(context: &Context, component: &ComponentInstance, pin: &PackagePinDefinition) -> Option<EmiProfile> {
+pub(crate) fn pin_emi(
+    context: &Context,
+    component: &ComponentInstance,
+    pin: &PackagePinDefinition,
+) -> Option<EmiProfile> {
     if let Some(emi) = pin.profile.as_ref().and_then(|profile| profile.emi.as_ref()) {
         return Some(emi.clone());
     }
@@ -404,7 +416,7 @@ fn declares_emi(context: &Context) -> bool {
         || context.board.devices.values().any(|device| device.pads.values().any(|pad| pad.profile.emi.is_some()))
 }
 
-fn net_endpoints(context: &Context, net: &str) -> Vec<Endpoint> {
+pub(crate) fn net_endpoints(context: &Context, net: &str) -> Vec<Endpoint> {
     let Some(net) = context.net(net) else { return Vec::new() };
     let mut result: Vec<Endpoint> = Vec::new();
     for endpoint in &net.endpoints {
@@ -416,7 +428,7 @@ fn net_endpoints(context: &Context, net: &str) -> Vec<Endpoint> {
     result
 }
 
-fn nets_of(context: &Context, endpoint: &Endpoint) -> Vec<String> {
+pub(crate) fn nets_of(context: &Context, endpoint: &Endpoint) -> Vec<String> {
     context.pin_to_nets.get(endpoint).cloned().unwrap_or_default()
 }
 
@@ -434,7 +446,7 @@ fn distinct_nets(context: &Context, endpoints: &[Endpoint]) -> Vec<String> {
     nets
 }
 
-fn part_of<'a>(context: &'a Context, reference: &str) -> Option<&'a PartDefinition> {
+pub(crate) fn part_of<'a>(context: &'a Context, reference: &str) -> Option<&'a PartDefinition> {
     context.component(reference).and_then(|component| context.board.library.get(&component.part))
 }
 
@@ -449,7 +461,7 @@ fn generic_value(context: &Context, reference: &str, dimension: Dimension) -> bo
 }
 
 /// A capacitor by category, or an uncategorized two-pin part with a capacitance value.
-fn capacitor_component(context: &Context, reference: &str) -> bool {
+pub(crate) fn capacitor_component(context: &Context, reference: &str) -> bool {
     part_of(context, reference).is_some_and(is_capacitor) || generic_value(context, reference, Dimension::Capacitance)
 }
 
@@ -717,7 +729,7 @@ fn declares_any_role(context: &Context, component: &ComponentInstance, part: &Pa
     part.pins.values().any(|pin| pin_emi(context, component, pin).is_some_and(|emi| emi.role.is_some()))
 }
 
-fn has_declared_supply(context: &Context, net: &str) -> bool {
+pub(crate) fn has_declared_supply(context: &Context, net: &str) -> bool {
     context.board.supplies.iter().any(|supply| supply.net == net)
 }
 
@@ -796,7 +808,7 @@ fn cells(context: &Context) -> Vec<SwitchingCell> {
     result
 }
 
-fn cable_connectors(context: &Context) -> BTreeSet<String> {
+pub(crate) fn cable_connectors(context: &Context) -> BTreeSet<String> {
     let mut connectors: BTreeSet<String> = context
         .component_names()
         .filter(|reference| {
@@ -816,7 +828,7 @@ fn cable_connectors(context: &Context) -> BTreeSet<String> {
 }
 
 /// A two-pin resistor, ferrite or `dc_power_path` part that is not an inductor.
-fn is_series_element(part: &PartDefinition) -> bool {
+pub(crate) fn is_series_element(part: &PartDefinition) -> bool {
     part.pins.len() == 2
         && (is_category(part, "passive.resistor")
             || is_category(part, "passive.ferrite")
@@ -850,11 +862,11 @@ fn external_connectors(context: &Context, connectors: &BTreeSet<String>, net: &s
     reached.into_iter().collect()
 }
 
-fn resolve_net(context: &Context, name: &str) -> String {
+pub(crate) fn resolve_net(context: &Context, name: &str) -> String {
     context.board.net_aliases.get(name).cloned().unwrap_or_else(|| name.to_owned())
 }
 
-fn text_parameter<'a>(constraint: &'a Constraint, name: &str) -> Option<&'a str> {
+pub(crate) fn text_parameter<'a>(constraint: &'a Constraint, name: &str) -> Option<&'a str> {
     match constraint.parameters.get(name) {
         Some(ParameterValue::Text(text)) => Some(text),
         _ => None,

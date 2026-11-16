@@ -25,10 +25,14 @@ pub enum Dimension {
     Charge,
     /// Voltage slew rate (switch-node dv/dt), base unit V/s.
     SlewRate,
+    /// Bits per second of a digital signal, base unit bps.
+    DataRate,
+    /// A dimensionless fraction, written as a percentage (`0.5%`); base value is the fraction itself.
+    Ratio,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 13] = [
+    pub const ALL: [Dimension; 15] = [
         Dimension::Voltage,
         Dimension::Resistance,
         Dimension::Capacitance,
@@ -42,6 +46,8 @@ impl Dimension {
         Dimension::Energy,
         Dimension::Charge,
         Dimension::SlewRate,
+        Dimension::DataRate,
+        Dimension::Ratio,
     ];
 
     /// The Python class name.
@@ -60,6 +66,8 @@ impl Dimension {
             Dimension::Energy => "Energy",
             Dimension::Charge => "Charge",
             Dimension::SlewRate => "SlewRate",
+            Dimension::DataRate => "DataRate",
+            Dimension::Ratio => "Ratio",
         }
     }
 
@@ -85,6 +93,8 @@ impl Dimension {
             Dimension::Energy => &[("J", "1"), ("mJ", "1e-3"), ("uJ", "1e-6")],
             Dimension::Charge => &[("C", "1"), ("mC", "1e-3"), ("uC", "1e-6")],
             Dimension::SlewRate => &[("V/s", "1"), ("V/us", "1e6"), ("kV/us", "1e9"), ("V/ns", "1e9")],
+            Dimension::DataRate => &[("bps", "1"), ("kbps", "1e3"), ("Mbps", "1e6"), ("Gbps", "1e9")],
+            Dimension::Ratio => &[("%", "0.01")],
         }
     }
 
@@ -186,6 +196,19 @@ impl fmt::Display for Quantity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_rate_and_ratio_units() {
+        let rate = Quantity::of(Dimension::DataRate, &Decimal::parse("2.5").unwrap(), "Gbps").unwrap();
+        assert_eq!(rate.to_string(), "2.5 Gbps");
+        assert_eq!(rate.in_unit("Mbps").unwrap().decimal_text(), "2500");
+        assert_eq!(rate.in_unit("bps").unwrap().decimal_text(), "2500000000");
+        let spread = Quantity::of(Dimension::Ratio, &Decimal::parse("0.5").unwrap(), "%").unwrap();
+        assert_eq!(spread.to_string(), "0.5 %");
+        assert_eq!(spread.base_value().decimal_text(), "0.005");
+        assert!(Quantity::of(Dimension::Ratio, &Decimal::parse("1").unwrap(), "ppm").is_err());
+        assert_eq!(Dimension::from_name("DataRate"), Some(Dimension::DataRate));
+    }
 
     #[test]
     fn formats_like_pcbir() {

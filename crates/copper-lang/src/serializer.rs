@@ -132,6 +132,10 @@ fn emi_profile_value(emi: &EmiProfile) -> Value {
         ("current_peak", &emi.current_peak),
         ("current_rise_time", &emi.current_rise_time),
         ("current_fall_time", &emi.current_fall_time),
+        ("data_rate", &emi.data_rate),
+        ("clock_frequency", &emi.clock_frequency),
+        ("signal_swing", &emi.signal_swing),
+        ("spread_spectrum", &emi.spread_spectrum),
     ] {
         if let Some(quantity) = quantity {
             result.push((name, quantity_value(quantity)));
@@ -210,6 +214,9 @@ pub fn part_value(part: &PartDefinition) -> Value {
             ];
             if let Some(group) = &pin.parallel_power_group {
                 entries.push(("parallel_power_group", text(group)));
+            }
+            if let Some(target) = &pin.passes_to {
+                entries.push(("passes_to", text(target)));
             }
             object(entries)
         })

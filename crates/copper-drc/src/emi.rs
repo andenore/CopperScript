@@ -48,6 +48,7 @@ use crate::{Coverage, CoverageStatus, Finding, Severity};
 mod conducted;
 pub mod defaults;
 mod field;
+pub mod signal;
 
 /// The `schema` of [`EmiCheckReport::json`].
 pub const SCHEMA: &str = "copperscript-emi-check/v0.1";

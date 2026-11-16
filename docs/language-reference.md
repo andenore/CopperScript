@@ -464,6 +464,42 @@ rule-of-thumb defaults of `copper emi-check` (see the EMI specification, section
 10.1): declared values always win, a default is tagged and printed with its
 rule, and a result that rests on one is reported as a band.
 
+#### Fast digital signals
+
+A driver of a fast signal says what it drives with four more optional pin and device-pad attributes, beside
+`rise_time` and `fall_time` (which now also describe a signal edge):
+
+| Attribute | Unit | Meaning |
+|---|---|---|
+| `data_rate` | `bps`, `kbps`, `Mbps`, `Gbps` | Bits per second of the pin's signal, NRZ assumed (`2.5Gbps`) |
+| `clock_frequency` | frequency | The fundamental of a clock output (`24MHz`) |
+| `signal_swing` | voltage | The loaded voltage at the driver's pins (not an open-circuit voltage): the swing of a single-ended signal, or the differential peak-to-peak of a pair (`400mV`) |
+| `spread_spectrum` | `%` | Down-spread fraction of a spread clock (`0.5%`); recorded, not modelled |
+
+All must be positive values with the units shown; `%` is the unit of a ratio and must follow the number without
+a space (`CMP130` otherwise, also for a bare number). A pin with only `rise_time` is still accepted: it sets the
+edge and leaves the rate unknown.
+
+A part with more than two pins that a signal can cross (a four-pin common-mode choke) declares its pin pairs with the
+pin attribute `passes_to = <pin>`:
+
+```copper
+part Choke {
+    category = "passive.inductor.common_mode";
+    pin IN1  { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
+    pin IN2  { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
+    pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin OUT2 { number = "3"; domains = "digital"; directions = "passive"; }
+}
+```
+
+One side of a pair is enough; if both sides declare it they must name each other. The named pin must exist, must be a
+different pin, may be the target of one pin only, and the part must have more than two pins (`CMP130`). `passes_to` is a
+package-pin attribute, not a device-pad attribute. Without it the signal walk of `copper query BOARD emi` stops at the
+part and says where and why. The serialized IR carries `data_rate`, `clock_frequency`, `signal_swing` and
+`spread_spectrum` in `profile.emi` and `passes_to` on the pin, each only when declared. Section 14 of the EMI
+specification describes what is derived from them.
+
 Invalid values are `CMP130`. `constraint emission(J1) { standard = "cispr32_class_b"; }`
 names cable connectors (`CMP131`; at most one per board) and
 `constraint emi_accept(U1.SW) { code = "..."; reason = "..."; }` acknowledges a
