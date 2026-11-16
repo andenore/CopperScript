@@ -597,7 +597,7 @@ quasi-static extraction of the real filled copper beside the closed form (sectio
 
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
-node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`
+node copper is counted, not traced), `EMI-DECOUPLING-PATH`
 and current-driven common mode on cables.
 
 **In the run report, `copper issues` and `copper view`.** The findings are
@@ -618,8 +618,10 @@ stays the single file of a run (there is no sidecar):
   elaboration of the design and one pass over the cells, and never fails a
   route: an elaboration error or a panic is recorded as
   `emi: { "evidence_grade": "screening", "error": "..." }`. A design without a
-  switching cell gets no `emi` key, so its report is byte-identical to what it
-  was before.
+  switching cell, no finding and no executed signal check (`EMI-RETURN-PATH`,
+  section 15) gets no `emi` key, so its report is byte-identical to what it was
+  before; a board with no cell but a return-path finding or an executed
+  return-path coverage entry keeps the section (`cells` empty).
 - *`copper emi-check BOARD --run RUN --write`* adds or replaces the section of an
   existing run. `RUN` is the run directory (or a state file in it, or its
   `checkpoint/` directory) and must hold the `route-report.json` of a finished run
@@ -633,7 +635,8 @@ stays the single file of a run (there is no sidecar):
   read-only. Nothing checks that the board in `RUN` is the one the report
   describes beyond the references of the design.
 - *`copper issues RUN`* lists the section as stage `emi`, ids `M1`, `M2`, ...,
-  findings grouped by cell and in the report's ranking inside a cell. The title
+  findings grouped by cell and in the report's ranking inside a cell (findings
+  with no cell, such as `EMI-RETURN-PATH`, follow the cells in report order). The title
   starts with `screening estimate`, the details carry the estimate with its
   `numerical_sensitivity`, parameter band, `not_modelled` list, margin, tags and the scalar measures, and the text output ends
   with a line saying the issues are screening estimates, not EMC qualification.
@@ -864,6 +867,12 @@ get it). It changes no number of the report: the default `emi-check --json` is b
    in the report"), what is not modelled (the first words of each `estimate.not_modelled` entry of the cell's hot-loop and
    conducted findings), and the exact command line of each full-size picture (the options of the run, without the plot,
    `--json`, `--write` and `--fullwave` options; `--plot-current` shows `--extract`).
+
+**No switching cell.** A board with no cell but with `EMI-RETURN-PATH` findings (section 15, `--run` given) no longer
+refuses `--plot-summary`: the picture is the return-path map alone (section 15.12), and "summary of" in the message
+becomes "return-path map of N findings". With cells, the map is added after the cell pages when return-path findings
+exist, and the pages and the message of a board without such findings are unchanged. A board with neither still exits 2
+("no switching cell and no return-path finding to summarise").
 
 For a cell with several hot loops the loop rows are repeated per loop, named by the loop; for a declared frequency
 range the page reads the first conducted finding (the lower bound), the other scenarios are in `--plot-spectrum`. The
@@ -2506,7 +2515,7 @@ the extraction, or different numbers of pieces of copper) makes the status `erro
 
 ## 14. Signal sources, channels and spectra (P1 of the signal and cable plan)
 
-Status: implemented, uncommitted, under review. This section is the specification of the first phase of
+Status: implemented. This section is the specification of the first phase of
 [`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); nothing here finds a return-path break, converts a mode or
 estimates a cable current (phases P2 and later). It describes what `EmiModel::signals` holds, how a signal's channel to the
 cable connector is walked, which defaults fill a missing edge or swing, and the three different spectrum quantities of
@@ -2806,3 +2815,26 @@ stripline and the split of its return current; a reference net that changes insi
 copper does not end on the via; the reference plane's own gaps from other layers (a plane is judged by the single reference layer chosen); the common-mode
 part of a differential pair (P3); the effect of nearby ground copper on the signal layer (a coplanar return); the effect of a
 thermal relief or a fill island of a reference net that the fill removed; and nets that are not declared supplies as references.
+
+### 15.12 Reporting without a switching cell
+
+The reporting chain no longer assumes a converter. The `emi` section of `route-report.json` (written by `route-board`, or by
+`emi-check --run RUN --write`; section 8) is kept when the report has a cell, a finding, or an `executed` coverage entry of
+`EMI-RETURN-PATH` or `EMI-RETURN-PATH:<net>`; a board with none of these gets no section, byte-identical to before. A
+board with no cell has `cells: []`. `route-board` fills the zones for the check only when a net is a subject, as in 15.1.
+
+`copper issues RUN --stage emi` lists each finding as one issue (findings with no cell follow the cells). The window and
+the points of an `EMI-RETURN-PATH` issue are its located causes, read from the `measures` and listed as `details.causes`
+(`kind`, `at_mm`, `text`): `gap` (position, slot length, resonance), `reference_change_without_return_path` (via, nearest
+return path against the threshold, or "no return path found"), and `plane_edge` / `board_edge` (the point of the trace
+nearest to the edge, where it is within the limit). A finding with no located cause falls back to the pads of its nets.
+`copper explain EMI-RETURN-PATH` says what was measured, that it is screening evidence and never a pass or a fail, and what is
+not modelled (the list of 15.8).
+
+`--plot-summary` draws the return-path map (`copper_report::emi_return_path`): the board in its coordinates (millimetres, y
+down as the layout), the outline and the traces of the subject nets when the board scene exists, and a mark at each cause
+listed above: a circle at each gap with its slot length and resonance, a diamond at each reference change without a return
+path within the threshold with its distance and threshold, a square at each plane-edge point and a triangle at each board-edge
+point within `20 H`. Only the `measures` of the findings are used. A finding with no located cause has no mark: nothing
+was located at these thresholds, which is not a pass. The page repeats that the picture is screening evidence and lists what is not
+modelled. The `copper emi-check --help` text names the map.

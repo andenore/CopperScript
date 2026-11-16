@@ -3,7 +3,9 @@
 Status: plan revised five times on 2026-11-16 after five
 reviews (see
 "Changes from the reviews" at the end). **P1 is implemented (commit 18c1453); P2 is implemented**; see sections 14 and 15 of
-`emi-noise-analysis.md`. P0 and P3 onward are not started. Base: `main` at `842112a`. This plan
+`emi-noise-analysis.md`. **P7 report migration implemented**: the `emi` section, `--plot-summary`
+and `copper issues` work on a board with no switching converter (section 15.12); the rest of P7 stays open. P0 and P3 onward are
+not started. Base: `main` at `842112a`. This plan
 extends `copper emi-check` and the EMI specification in
 [`emi-noise-analysis.md`](emi-noise-analysis.md); read sections 1–8 of that
 document first, because every convention there applies here unchanged.
@@ -828,6 +830,15 @@ pass, plan the product phase then (`--fullwave-signals`, cost stated by
 ---
 
 ## P7. Report, plots, issues and documentation
+
+**Status: the migration bullet below is implemented for `EMI-RETURN-PATH`; the rest of P7 stays open.**
+Done: the section is kept when the report has a cell, a finding or an executed `EMI-RETURN-PATH` coverage entry (a board with none
+of these keeps the bytes it had); `--plot-summary` on a board with no cell draws the return-path map in place of the cell
+pages (and after them when there are cells); `copper issues` locates each return-path finding at its gaps, unreturned vias and
+edge points and lists them as `details.causes`; the `EMI-RETURN-PATH` explain text is rewritten; the end-to-end fixture is
+`crates/copper/tests/emi_no_converter_cli.rs` on `examples/emi_return_path`. Still open: a grouping by subject kind for signals,
+pairs and connectors (only the return-path group exists), the signal and connector page layout of the summary, the clock,
+pair and connector parts of the end-to-end fixture (they need P3 and P4), and the other items below.
 
 - **Migration away from converter-only reporting (do this with P2, not at the
   end).** The report integration and the plots assume switching cells today:

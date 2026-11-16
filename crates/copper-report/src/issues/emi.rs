@@ -156,7 +156,17 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         let accepted = finding.get("accepted").and_then(|a| a.get("reason")).and_then(Value::as_str);
         let measures = finding.get("measures");
         let outline = if code == "EMI-HOT-LOOP" { polygon(measures) } else { Vec::new() };
-        let points = if outline.is_empty() { locus(&code, &cell, &objects, &nets, scene) } else { outline.clone() };
+        let causes = if code == "EMI-RETURN-PATH" { crate::emi_return_path::causes(finding) } else { Vec::new() };
+        // A return-path finding is located at each of its causes; one with none located falls back to its nets' pads.
+        let points = if !outline.is_empty() {
+            outline.clone()
+        } else if !causes.is_empty() {
+            let mut at = Vec::new();
+            push_unique(&mut at, causes.iter().map(|c| c.at));
+            at
+        } else {
+            locus(&code, &cell, &objects, &nets, scene)
+        };
         // The message names its cell ("U1: ..."); say it only when it does not.
         let cell_label = if cell.is_empty() || message.starts_with(&format!("{cell}:")) {
             String::new()
@@ -181,6 +191,26 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         details.insert("estimate".to_owned(), finding.get("estimate").cloned().unwrap_or(Value::Null));
         details.insert("margin_db".to_owned(), finding.get("margin_db").cloned().unwrap_or(Value::Null));
         details.insert("measures".to_owned(), scalar_measures(measures));
+        if code == "EMI-RETURN-PATH" {
+            details.insert(
+                "causes".to_owned(),
+                Value::Array(
+                    causes
+                        .iter()
+                        .map(|cause| {
+                            Value::Object(Object::from([
+                                ("kind".to_owned(), Value::from(cause.kind.name())),
+                                (
+                                    "at_mm".to_owned(),
+                                    Value::Array(vec![Value::Float(cause.at.0), Value::Float(cause.at.1)]),
+                                ),
+                                ("text".to_owned(), Value::from(cause.text.as_str())),
+                            ]))
+                        })
+                        .collect(),
+                ),
+            );
+        }
         let mut issue = RunIssue::new(format!("M{}", index + 1), "emi", code.as_str(), title)
             .count(i64::from(accepted.is_none()))
             .nets(nets.iter().map(|n| Value::from(n.as_str())).collect())
@@ -289,6 +319,25 @@ mod tests {
         let issues = emi_issues(&report, Some(&scene()));
         assert!(issues[0].outline.is_empty());
         assert_eq!(issues[0].points, [(10.0, 10.0), (12.0, 10.0)]);
+    }
+
+    #[test]
+    fn a_return_path_finding_is_located_at_each_cause_and_lists_them() {
+        let report = copper_json::parse(
+            r#"{"emi":{"cells":[],"findings":[
+              {"code":"EMI-RETURN-PATH","message":"CLK: return path: 1 gap","objects":["CLK"],"nets":["CLK"],"layers":["F.Cu"],"tags":[],
+               "measures":{"subject":"CLK","gaps":[{"position_mm":[40.0,41.0],"slot_length_mm":76.0,"resonance_hz":1123000000.0,"kind":"enclosed_void"}],
+                "reference_changes":[{"via":"via:2","position_mm":[25.0,62.0],"return_distance_mm":7.0,"threshold_mm":2.0,"within_threshold":false}],
+                "members":[]}}]}}"#,
+        )
+        .unwrap();
+        let issues = emi_issues(&report, Some(&scene()));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].points, [(40.0, 41.0), (25.0, 62.0)]);
+        let causes = issues[0].details.get("causes").and_then(Value::as_array).unwrap();
+        assert_eq!(causes.len(), 2);
+        assert_eq!(causes[0].get("kind").and_then(Value::as_str), Some("gap"));
+        assert_eq!(causes[1].get("kind").and_then(Value::as_str), Some("reference_change_without_return_path"));
     }
 
     #[test]

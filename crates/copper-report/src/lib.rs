@@ -13,6 +13,7 @@ pub mod emi_current;
 pub mod emi_field;
 pub mod emi_impedance;
 pub mod emi_plot;
+pub mod emi_return_path;
 pub mod emi_summary;
 pub mod explain;
 pub mod issues;

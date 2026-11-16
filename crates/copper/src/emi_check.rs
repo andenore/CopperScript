@@ -77,7 +77,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
              inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run 
-             --plot-summary OUT.svg draws the one-page summary of each cell (key numbers, findings, four thumbnails of the other pictures, assumptions and the commands for the full-size pictures), the picture to open first"
+             --plot-summary OUT.svg draws the one-page summary of each cell (key numbers, findings, four thumbnails of the other pictures, assumptions and the commands for the full-size pictures), the picture to open first; with EMI-RETURN-PATH findings (--run) it adds a return-path map of the gaps, reference changes without a return path and edge points, and on a board with no switching cell that map is the whole picture"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -588,7 +588,9 @@ fn command_base(parsed: &option_parser::Parsed, board: &str) -> String {
     words.join(" ")
 }
 
-/// `--plot-summary`: one page per cell, the key numbers, the findings and four thumbnails of the other pictures.
+/// `--plot-summary`: one page per cell, the key numbers, the findings and four thumbnails of the other pictures;
+/// when the report has `EMI-RETURN-PATH` findings, the return-path map after them (and, on a board with no switching
+/// cell, in place of them).
 fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
     use copper_report::emi_summary::{CellThumbnails, Context, Thumb};
     let document = input.report.to_value();
@@ -599,8 +601,9 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
         .iter()
         .filter_map(|c| c.get("controller").and_then(copper_json::Value::as_str).map(str::to_owned))
         .collect();
-    if cells.is_empty() {
-        return Err("--plot-summary: no switching cell to summarise".to_owned());
+    let return_paths = copper_report::emi_return_path::findings(&document).len();
+    if cells.is_empty() && return_paths == 0 {
+        return Err("--plot-summary: no switching cell and no return-path finding to summarise".to_owned());
     }
     let state = copper_route::state_codec::encode_board(input.physical);
     let scene = copper_report::scene::scene_from_physical(&state).map_err(|error| error.message.clone());
@@ -682,11 +685,26 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
         impedance_file: "emi-impedance.svg",
         current_file: "emi-current.svg",
     };
-    let pages = copper_report::emi_summary::summary_pages(&document, &context, &thumbnails);
+    let mut pages = copper_report::emi_summary::summary_pages(&document, &context, &thumbnails);
+    let cell_pages = pages.len();
+    pages.extend(copper_report::emi_return_path::return_path_picture(&document, scene.as_ref().ok()));
     write_plot(path, &copper_report::emi_summary::summary_svg(&input.report.board, &pages))?;
+    let map = match (cell_pages, return_paths) {
+        (_, 0) => String::new(),
+        (0, found) => {
+            format!("return-path map of {}", copper_report::emi_impedance::counted(found, "finding", "findings"))
+        }
+        (_, found) => format!(
+            " and the return-path map of {}",
+            copper_report::emi_impedance::counted(found, "finding", "findings")
+        ),
+    };
+    if cell_pages == 0 {
+        return Ok(format!("{map} written to {path} (screening estimate, not EMC qualification)"));
+    }
     Ok(format!(
-        "summary of {} written to {path} (screening estimate, not EMC qualification)",
-        copper_report::emi_impedance::counted(pages.len(), "cell", "cells")
+        "summary of {}{map} written to {path} (screening estimate, not EMC qualification)",
+        copper_report::emi_impedance::counted(cell_pages, "cell", "cells")
     ))
 }
 

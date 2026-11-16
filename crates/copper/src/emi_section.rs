@@ -75,11 +75,22 @@ pub fn error_section(message: &str) -> Value {
     ]))
 }
 
-/// The section `route-board` embeds: `None` for a design without a switching cell (its report keeps
-/// the bytes it had before the section existed), the check document otherwise, or the error record.
+/// Whether `report` has anything to put in the route report: a switching cell, a finding, or an executed
+/// signal check (`EMI-RETURN-PATH` and `EMI-RETURN-PATH:<net>`, which also say "nothing to report" for a subject).
+fn has_content(report: &copper_drc::emi::EmiCheckReport) -> bool {
+    !report.cells.is_empty()
+        || !report.findings.is_empty()
+        || report.coverage.iter().any(|entry| {
+            entry.status == copper_drc::CoverageStatus::Executed && entry.check.starts_with("EMI-RETURN-PATH")
+        })
+}
+
+/// The section `route-board` embeds: `None` for a design with no switching cell, no finding and no executed
+/// signal check (its report keeps the bytes it had before the section existed), the check document otherwise, or
+/// the error record.
 pub fn for_route_report(design: &Design, board: &PhysicalBoard) -> Option<Value> {
     match check(design, board) {
-        Ok(report) if report.cells.is_empty() => None,
+        Ok(report) if !has_content(&report) => None,
         Ok(report) => Some(report.to_value()),
         Err(message) => Some(error_section(&message)),
     }
@@ -179,6 +190,37 @@ mod tests {
         dump(
             &copper_json::parse(r#"{"schema":"copperscript-route-board/v0.1","status":"routed","z":[1,2.5]}"#).unwrap(),
         )
+    }
+
+    #[test]
+    fn the_section_is_kept_for_a_cell_a_finding_or_an_executed_signal_check_only() {
+        use copper_drc::{Coverage, CoverageStatus};
+        let entry =
+            |check: &str, status| Coverage { check: check.to_owned(), status, required: false, detail: String::new() };
+        let report = |coverage: Vec<Coverage>| copper_drc::emi::EmiCheckReport {
+            board: "b".to_owned(),
+            cells: Vec::new(),
+            findings: Vec::new(),
+            coverage,
+            limits: copper_drc::emi::Limits {
+                validation: String::new(),
+                standard: None,
+                limit_source: None,
+                distance_m: 3.0,
+                band_hz: (30e6, 1e9),
+                notes: Vec::new(),
+            },
+        };
+        // Nothing to say: no section, as before.
+        assert!(!has_content(&report(Vec::new())));
+        assert!(!has_content(&report(vec![
+            entry("EMI-RETURN-PATH", CoverageStatus::NotApplicable),
+            entry("EMI-RETURN-PATH", CoverageStatus::Unsupported),
+            entry("EMI-HOT-LOOP", CoverageStatus::Executed),
+        ])));
+        // An executed return-path check (overall or per net) is something to say, finding or not.
+        assert!(has_content(&report(vec![entry("EMI-RETURN-PATH", CoverageStatus::Executed)])));
+        assert!(has_content(&report(vec![entry("EMI-RETURN-PATH:CLK", CoverageStatus::Executed)])));
     }
 
     #[test]

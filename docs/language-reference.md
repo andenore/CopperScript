@@ -2623,7 +2623,7 @@ copper of each layer that carries loop current, direction arrows, the vias sized
 the loop's pads and the port, with the loop inductance and the division between the vias beside it; it is made from
 the extraction of the same run and is not stored in the report. Both are screening estimates; see
 [the EMI specification](emi-noise-analysis.md).
-`--plot-summary OUT.svg` writes the picture to open first, one page per switching cell (stacked for several), about 1400 px
+`--plot-summary OUT.svg` writes the picture to open first, one page per switching cell (stacked for several; a board with `EMI-RETURN-PATH` findings gets the return-path map after them, or alone when it has no switching cell), about 1400 px
 wide: the converter, its switching frequency, input voltage and current scenario in a sentence; the key numbers (the hot-loop
 inductance by method, the closed form always, the quasi-static extraction with `--extract` and the full wave with
 `--fullwave`, with their status and the cross-check of the two; the loop area and path; the worst conducted harmonic with
