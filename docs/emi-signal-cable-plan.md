@@ -1,6 +1,6 @@
 # EMI: fast digital signals and cable common mode — implementation plan
 
-Status: plan, not started; revised four times on 2026-11-16 after four
+Status: plan, not started; revised five times on 2026-11-16 after five
 reviews (see
 "Changes from the reviews" at the end). Implementation is on hold until the revised plan is
 accepted. Base: `main` at `842112a`. This plan
@@ -464,10 +464,19 @@ instead of against themselves.
 5. *Choke in the signal lines only.* A choke that carries the pair but not the
    ground conductor attenuates the pair's common mode (1) and leaves a voltage
    on the ground conductor (the ground-noise driver) unchanged.
-6. *Choke position.* The order fixtures of P3 (the same total skew with the
+6. *Cable termination.* The cascade's connector voltage against the nodal
+   solver's steady-state voltage for three loads behind a choke: **matched**
+   (`Z_cable = Z_ref`: they agree); **high impedance** (the 50 / 900 / 900 ohm
+   example: the forward-only multiplier reads 0.189 V, the circuit 0.973 V);
+   **open** (the circuit gives the full open-circuit voltage, twice the
+   incident wave, whatever the choke). The test asserts agreement in the
+   matched case and asserts the *size of the disagreement* in the other two,
+   so that the forward-only figure can never be relabelled as a steady-state
+   voltage without a test failing.
+7. *Choke position.* The order fixtures of P3 (the same total skew with the
    choke before and after the skewed section), solved as a network of two legs
    and a common-mode series impedance by the nodal solver, against the cascade.
-7. *Ground-noise transfer.* The network defined below:
+8. *Ground-noise transfer.* The network defined below:
    `V_B = sum of Z_Bk I_k` over the driven conductors, with each `Z_Bk` from a
    numerical Neumann integral over that conductor's loop and loop B
    (written in the test, sharing no code with `copper-emi`'s closed forms or
@@ -528,7 +537,7 @@ their coupling.
   summed as phasors only when they are harmonics of one clock, otherwise as
   powers.
 
-*Sign and cancellation cases for fixture 7:* a single loop A beside B; A moved
+*Sign and cancellation cases for fixture 8:* a single loop A beside B; A moved
 away (the transfer falls); **symmetric cancellation**: a pair whose legs have
 equal mutuals to B and equal and opposite currents gives zero; **asymmetric
 residual**: the same currents with `M_Bp = 2 nH`, `M_Bn = 1 nH` give
@@ -604,14 +613,27 @@ the board reference at the connector, with its network from P4a.
    transmission, `T_cc(f) = 2 Z_c,ref / (2 Z_c,ref + Z_cmc(f))`, complex and a
    function of frequency, in the cascade's one common-mode reference impedance
    (P3; P4a fixture 3a). A choke of zero impedance changes nothing.
-   What the cable does to the wave that arrives at the connector is a separate,
-   final step and not part of any element: the voltage on a far-side
-   common-mode impedance `Z_cable` (the cable's pair-to-return common-mode
-   impedance with its far-end termination) is
-   `V_inc · 2 Z_cable / (Z_c,ref + Z_cable)`. `Z_cable` is not on the board: it
-   is a stated scenario value with a band, and that voltage is labelled a
-   scenario quantity beside the incident `V_cm,out`, which is the board
-   quantity.
+   *What the connector voltage means, and its limit.* The cascade is forward
+   only: it has no reflections. Its output at the connector is the incident
+   common-mode wave, and that equals the steady-state voltage there **only for
+   a matched termination**, a cable whose common-mode impedance at the
+   connector is `Z_c,ref`. That is the one case for which v1 publishes an
+   absolute connector voltage, and the finding states the assumption
+   (`matched_cable_termination`).
+   For any other termination the wave reflected by the cable returns to the
+   choke and is reflected again, and a final multiplier
+   `2 Z_cable / (Z_c,ref + Z_cable)` on the forward wave does not recover the
+   steady state: the complete relation has the load-feedback denominator
+   `1 - S22 Gamma_load`, which the cascade does not carry. Example, all
+   resistive: 1 V incident in 50 ohm, a 900 ohm choke, a 900 ohm cable load.
+   The multiplier gives 0.189 V; the series circuit gives 0.973 V; the
+   multiplier is 14.2 dB low. So v1 does **not** publish a steady-state cable
+   voltage for an unmatched cable. It may publish the multiplier's result only
+   under the name `first_arrival_voltage` (the first wavefront at the cable
+   before any reflection returns), labelled as not a steady-state value, and
+   never ranked against or compared with a steady-state quantity. Solving the
+   terminated network with reflections is a later step and belongs with P4b's
+   defined scenario.
    *Applicability of the declared impedance.* A choke's impedance is strongly
    frequency dependent and changes from inductive to resistive to capacitive.
    One declared magnitude at one frequency supports an attenuation **at that
@@ -647,7 +669,7 @@ the board reference at the connector, with its network from P4a.
      per driven conductor (for a pair: `M_Bp` and `M_Bn`, never one value for
      the pair): name the
      published form, state its validity range, and it must agree with P4a's
-     fixture 7 for the test geometries. A slot from P2 between the loops is not
+     fixture 8 for the test geometries. A slot from P2 between the loops is not
      in the closed form: it makes the source ranking-only, with the slot named.
    - *Otherwise: geometry ranking only* (P4a's fallback): corridor overlap,
      distance and slots, tagged `ranking_only`, no voltage. This is expected to
@@ -683,12 +705,14 @@ cases of fixture 3 (none, equal, large) through the real code path; a choke
 declared at one frequency gives an attenuation at that frequency and
 `not_modelled` elsewhere; the same total skew with the choke before and after
 the skewed section, through the real code path, against P3's order fixtures; a
-ground-noise source with all P4a inputs gives a voltage that matches fixture 7,
+ground-noise source with all P4a inputs gives a voltage that matches fixture 8,
 one without a characteristic impedance gives a geometry ranking and no voltage;
 a pair routed symmetrically about the connector's ground path gives a
 ground-noise voltage near zero and the same pair routed with one leg nearer
-gives the residual of fixture 7; a channel with a zero-impedance choke reads
-the same as the channel without it; a single-ended line on a cable produces no voltage
+gives the residual of fixture 8; a channel with a zero-impedance choke reads
+the same as the channel without it; the connector voltage is published as
+absolute only with the matched-termination assumption, and an unmatched
+scenario yields `first_arrival_voltage` and no steady-state figure; a single-ended line on a cable produces no voltage
 from its swing; the corridor rule on a net that does and one that does not
 share the connector's reference path; a shielded cable gives the bond report.
 
@@ -868,6 +892,16 @@ pass, plan the product phase then (`--fullwave-signals`, cost stated by
    decision recorded in this file.
 
 ## Changes from the reviews (2026-11-16)
+
+Fifth review (cable termination):
+
+- **Connector voltage restricted to a matched termination.** The forward-only
+  cascade cannot give the steady-state voltage on an unmatched cable (a final
+  load multiplier was 14.2 dB low in a 50 / 900 / 900 ohm example). v1
+  publishes an absolute connector voltage only for a matched cable; for an
+  unmatched one only a labelled first-arrival value, never a steady-state
+  figure. Matched, high-impedance and open-load fixtures against the
+  independent circuit solver.
 
 Fourth review (errors in the newly specified calculations):
 
