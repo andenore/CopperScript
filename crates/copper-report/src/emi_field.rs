@@ -1125,7 +1125,8 @@ pub fn field_svg(title: &str, pictures: &[FieldPicture]) -> String {
     crate::emi_figure::stacked_with_footer(
         &format!("{} magnetic near field of the hot loop (screening estimate)", escape(title)),
         pictures,
-        940.0,
+        // The map is narrow: the page keeps the map's width and the footer wraps under it.
+        0.0,
     )
 }
 
@@ -1326,10 +1327,10 @@ mod tests {
         assert!(svg.contains("fill=\"#ffffff\"/>"));
         assert!(svg.matches("<rect x=").count() > 16);
         assert!(map.grid.nx <= MAX_CELLS && map.grid.ny <= MAX_CELLS);
-        // One legend row of two entries here; one footer line ends the document.
+        // One legend row of two entries here; the one footer ends the document, wrapped under the narrow map.
         assert_eq!(picture.content.matches("class=\"legend-entry\"").count(), 2);
         assert!(text.contains("hot loop") && text.contains("sensitive pad"));
-        assert_eq!(svg.matches("class=\"footer\"").count(), 1);
+        assert!((1..=3).contains(&svg.matches("class=\"footer\"").count()));
         crate::emi_figure::check::assert_simple(&picture.content, picture.width, 20, "near field");
         assert_eq!(svg, field_svg("EmiBuck", &[field_picture(&map)]));
     }

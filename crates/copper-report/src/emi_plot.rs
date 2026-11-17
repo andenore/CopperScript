@@ -602,6 +602,10 @@ fn panel_svg(panel: &SpectrumPanel, out: &mut Vec<String>, id: usize, compact: b
             (-1.0, 4.0),
             (1.0, -40.0),
             (-1.0, -40.0),
+            (1.0, 20.0),
+            (-1.0, 20.0),
+            (1.0, -56.0),
+            (-1.0, -56.0),
         ] {
             let lx = x + side * 12.0;
             let (left_edge, right_edge) = if side > 0.0 { (lx, lx + widest) } else { (lx - widest, lx) };
@@ -629,7 +633,8 @@ fn panel_svg(panel: &SpectrumPanel, out: &mut Vec<String>, id: usize, compact: b
                                 + (w[1].1 - w[0].1) * (f.log10() - w[0].0.log10()) / (w[1].0.log10() - w[0].0.log10())
                         })
                     });
-                    level.is_some_and(|l| py(l) > first - 14.0 && py(l) < first + 4.0)
+                    // The text box with a margin: a limit line under the baseline or over the cap height also reads as crossing it.
+                    level.is_some_and(|l| py(l) > first - 18.0 && py(l) < first + 8.0)
                 })
                 .count() as f64;
             let cost = on_marks * 10.0 + crossings;

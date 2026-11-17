@@ -492,16 +492,18 @@ fn scale_of(p: &FieldPicture) -> f64 {
     (THUMB_W / p.width).min(MAX_THUMB_HEIGHT / p.height).clamp(MIN_SCALE, 1.0)
 }
 
-/// The picture at `(x, y)` at scale `s` in a frame; returns its drawn height.
-fn draw_thumb(out: &mut Vec<String>, x: f64, y: f64, p: &FieldPicture, s: f64) -> f64 {
+/// The picture at scale `s`, centred in the card of its slot: the card starts at `(slot_x, y)`, is one slot wide and
+/// `card_h` tall, so the cards of a page share their edges whatever the pictures' own sizes. Returns the card's height.
+fn draw_thumb(out: &mut Vec<String>, slot_x: f64, y: f64, card_h: f64, p: &FieldPicture, s: f64) -> f64 {
     let (w, h) = (p.width * s, p.height * s);
     out.push(format!(
-        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{GRID}\" stroke-width=\"1\"/>",
-        n(x),
+        "<rect class=\"card\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{GRID}\" stroke-width=\"1\"/>",
+        n(slot_x),
         n(y),
-        n(w),
-        n(h)
+        n(THUMB_W),
+        n(card_h)
     ));
+    let (x, y) = (slot_x + (THUMB_W - w) / 2.0, y + (card_h - h) / 2.0);
     out.push(format!(
         "<svg class=\"thumbnail\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" overflow=\"hidden\">",
         n(x),
@@ -513,21 +515,22 @@ fn draw_thumb(out: &mut Vec<String>, x: f64, y: f64, p: &FieldPicture, s: f64) -
     ));
     out.push(p.content.clone());
     out.push("</svg>".to_owned());
-    h
+    card_h
 }
 
-/// One row of pictures from `y`: two at one size side by side; one centred when the row has only that one, or on its
-/// own side with the reason in the empty slot when the other could not be drawn. Returns the y below the row.
-fn picture_row(out: &mut Vec<String>, y: f64, left: &Thumb, right: &Thumb, centre_alone: bool) -> f64 {
+/// One row of pictures from `y`: two cards of one size side by side; a single picture keeps its own slot (the left
+/// one when it is alone in the row), with the reason in the other slot when that picture could not be drawn. Returns
+/// the y below the row.
+fn picture_row(out: &mut Vec<String>, y: f64, left: &Thumb, right: &Thumb) -> f64 {
     let left_x = MARGIN;
     let right_x = MARGIN + THUMB_W + MARGIN;
     match (left, right) {
         (Thumb::Picture(a), Thumb::Picture(b)) => {
             let s = scale_of(a).min(scale_of(b));
-            let (ha, hb) = (a.height * s, b.height * s);
-            draw_thumb(out, left_x + (THUMB_W - a.width * s) / 2.0, y, a, s);
-            draw_thumb(out, right_x + (THUMB_W - b.width * s) / 2.0, y, b, s);
-            y + ha.max(hb) + MARGIN
+            let card_h = (a.height * s).max(b.height * s);
+            draw_thumb(out, left_x, y, card_h, a, s);
+            draw_thumb(out, right_x, y, card_h, b, s);
+            y + card_h + MARGIN
         }
         (Thumb::Picture(p), other) | (other, Thumb::Picture(p)) => {
             let s = scale_of(p);
@@ -536,14 +539,8 @@ fn picture_row(out: &mut Vec<String>, y: f64, left: &Thumb, right: &Thumb, centr
                 Thumb::Missing(reason) if !reason.is_empty() => Some(reason.as_str()),
                 _ => None,
             };
-            let x = if centre_alone && reason.is_none() {
-                (WIDTH - p.width * s) / 2.0
-            } else if on_left {
-                left_x + (THUMB_W - p.width * s) / 2.0
-            } else {
-                right_x + (THUMB_W - p.width * s) / 2.0
-            };
-            let h = draw_thumb(out, x, y, p, s);
+            let x = if on_left { left_x } else { right_x };
+            let h = draw_thumb(out, x, y, p.height * s, p, s);
             if let Some(reason) = reason {
                 let at = if on_left { right_x } else { left_x };
                 out.push(text_el(
@@ -602,8 +599,8 @@ fn page(
         y = chips_end + 24.0;
     }
     if let Some(thumbs) = thumbs {
-        y = picture_row(&mut out, y, &thumbs.overlay, &thumbs.spectrum, false);
-        y = picture_row(&mut out, y, &thumbs.impedance, &thumbs.current, true);
+        y = picture_row(&mut out, y, &thumbs.overlay, &thumbs.spectrum);
+        y = picture_row(&mut out, y, &thumbs.impedance, &thumbs.current);
     }
     out.push("</g>".to_owned());
     FieldPicture { content: out.join("\n"), width: WIDTH, height: y + 6.0 }
@@ -1268,15 +1265,17 @@ mod tests {
     #[test]
     fn the_near_field_and_the_spectrum_are_side_by_side_at_one_size_and_the_current_has_no_placeholder() {
         let document = document(1, 0);
-        // Without an extraction: three pictures; the impedance is alone in its row, centred, and nothing stands in for
-        // the current distribution.
+        // Without an extraction: three pictures; the impedance is alone in its row, in the left slot, and nothing stands
+        // in for the current distribution. The cards are one slot wide, so their edges line up.
         let without = page_of(&document, &context(None, false), false);
         let boxes = thumbnail_boxes(&without.content);
         assert_eq!(boxes.len(), 3, "{boxes:?}");
         assert_eq!(boxes[0].1, boxes[1].1, "one size");
         assert!(boxes[0].0 < WIDTH / 2.0 && boxes[1].0 >= WIDTH / 2.0, "side by side: {boxes:?}");
-        let centre = boxes[2].0 + boxes[2].1 / 2.0;
-        assert!((centre - WIDTH / 2.0).abs() < 0.01, "the lone impedance plot is centred: {boxes:?}");
+        assert!(boxes[2].0 + boxes[2].1 <= WIDTH / 2.0, "the lone impedance plot keeps the left slot: {boxes:?}");
+        let cards = without.content.matches(&format!("class=\"card\" x=\"{}\"", n(MARGIN))).count();
+        assert_eq!(cards, 2, "two cards start at the left margin (near field, impedance)");
+        assert_eq!(without.content.matches("class=\"card\"").count(), 3);
         let text = page_text(&without.content);
         assert!(
             !without.content.contains("placeholder") && !text.contains("--extract") && !text.contains("run with"),
