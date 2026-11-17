@@ -8,6 +8,7 @@
 use copper_json::{Object, Value};
 
 use super::RunIssue;
+use crate::emi_signal::{SubjectKind, subject_kind};
 use crate::scene::{Point, Scene};
 
 /// `Value` as a float (`Int` and `Float`).
@@ -115,7 +116,8 @@ fn scalar_measures(measures: Option<&Value>) -> Value {
     Value::Object(kept)
 }
 
-/// The findings of an `emi` section in issue order: grouped by cell (report order inside a cell).
+/// The findings of an `emi` section in issue order: grouped by subject kind (converter cells in the section's order,
+/// then signals and pairs, then cable connectors), report order inside a group (and inside a cell).
 pub fn ordered_findings(section: &Value) -> Vec<&Value> {
     let Some(findings) = section.get("findings").and_then(Value::as_array) else { return Vec::new() };
     let cells: Vec<String> = section
@@ -127,10 +129,15 @@ pub fn ordered_findings(section: &Value) -> Vec<&Value> {
         .collect();
     let cell_of = |finding: &Value| finding.get("cell").and_then(Value::as_str).unwrap_or("").to_owned();
     let mut ordered: Vec<&Value> = findings.iter().filter(|f| matches!(f, Value::Object(_))).collect();
-    // Stable: findings keep the report's ranking inside a cell.
+    // Stable: findings keep the report's ranking inside a cell and inside a kind. A finding that is not of a known
+    // cell follows the cells: signals and pairs first, then connectors.
     ordered.sort_by_key(|finding| {
         let cell = cell_of(finding);
-        cells.iter().position(|known| *known == cell).unwrap_or(cells.len())
+        match cells.iter().position(|known| *known == cell) {
+            Some(position) => (0, position),
+            None if subject_kind(finding) == SubjectKind::Connector => (2, 0),
+            None => (1, 0),
+        }
     });
     ordered
 }
@@ -141,8 +148,8 @@ pub fn emi_finding<'a>(report: &'a Value, id: &str) -> Option<&'a Value> {
     ordered_findings(report.get("emi")?).get(index.checked_sub(1)?).copied()
 }
 
-/// One issue per finding of the report's `emi` section, grouped by cell (report order inside a
-/// cell), ids `M1`, `M2`, ... in that order.
+/// One issue per finding of the report's `emi` section, grouped by subject kind (cells, then signals and pairs, then
+/// cable connectors; report order inside a group), ids `M1`, `M2`, ... in that order.
 pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue> {
     let Some(section) = report.get("emi") else { return Vec::new() };
     let ordered = ordered_findings(section);
@@ -156,7 +163,40 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         let accepted = finding.get("accepted").and_then(|a| a.get("reason")).and_then(Value::as_str);
         let measures = finding.get("measures");
         let outline = if code == "EMI-HOT-LOOP" { polygon(measures) } else { Vec::new() };
-        let points = if outline.is_empty() { locus(&code, &cell, &objects, &nets, scene) } else { outline.clone() };
+        let causes = if code == "EMI-RETURN-PATH" { crate::emi_return_path::causes(finding) } else { Vec::new() };
+        // The causes of a pair's conversion and of a connector's drivers: no coordinates in their measures.
+        let listed: Option<Vec<Value>> = match code.as_str() {
+            "EMI-RETURN-PATH" => None,
+            "EMI-MODE-CONVERSION" => Some(crate::emi_signal::mode_conversion_causes(finding)),
+            "EMI-CABLE-COMMON-MODE" | "EMI-CABLE-SHIELD" => Some(crate::emi_signal::cable_causes(finding)),
+            _ => None,
+        };
+        // A return-path finding is located at each of its causes; one with none located falls back to its nets' pads.
+        let points = if !outline.is_empty() {
+            outline.clone()
+        } else if !causes.is_empty() {
+            let mut at = Vec::new();
+            push_unique(&mut at, causes.iter().map(|c| c.at));
+            at
+        } else {
+            match (code.as_str(), scene) {
+                // A pair's conversion is located at the pads of its nets, a connector's drivers at the connector's pads.
+                ("EMI-MODE-CONVERSION", Some(scene)) => {
+                    let mut at = Vec::new();
+                    push_unique(&mut at, scene.pads.iter().filter(|p| nets.contains(&p.net)).map(|p| p.center));
+                    at
+                }
+                ("EMI-CABLE-COMMON-MODE" | "EMI-CABLE-SHIELD", Some(scene)) => {
+                    let mut at = Vec::new();
+                    push_unique(
+                        &mut at,
+                        scene.pads.iter().filter(|p| objects.contains(&p.reference)).map(|p| p.center),
+                    );
+                    at
+                }
+                _ => locus(&code, &cell, &objects, &nets, scene),
+            }
+        };
         // The message names its cell ("U1: ..."); say it only when it does not.
         let cell_label = if cell.is_empty() || message.starts_with(&format!("{cell}:")) {
             String::new()
@@ -181,6 +221,29 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         details.insert("estimate".to_owned(), finding.get("estimate").cloned().unwrap_or(Value::Null));
         details.insert("margin_db".to_owned(), finding.get("margin_db").cloned().unwrap_or(Value::Null));
         details.insert("measures".to_owned(), scalar_measures(measures));
+        if code == "EMI-RETURN-PATH" {
+            details.insert(
+                "causes".to_owned(),
+                Value::Array(
+                    causes
+                        .iter()
+                        .map(|cause| {
+                            Value::Object(Object::from([
+                                ("kind".to_owned(), Value::from(cause.kind.name())),
+                                (
+                                    "at_mm".to_owned(),
+                                    Value::Array(vec![Value::Float(cause.at.0), Value::Float(cause.at.1)]),
+                                ),
+                                ("text".to_owned(), Value::from(cause.text.as_str())),
+                            ]))
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(listed) = listed {
+            details.insert("causes".to_owned(), Value::Array(listed));
+        }
         let mut issue = RunIssue::new(format!("M{}", index + 1), "emi", code.as_str(), title)
             .count(i64::from(accepted.is_none()))
             .nets(nets.iter().map(|n| Value::from(n.as_str())).collect())
@@ -289,6 +352,105 @@ mod tests {
         let issues = emi_issues(&report, Some(&scene()));
         assert!(issues[0].outline.is_empty());
         assert_eq!(issues[0].points, [(10.0, 10.0), (12.0, 10.0)]);
+    }
+
+    #[test]
+    fn a_return_path_finding_is_located_at_each_cause_and_lists_them() {
+        let report = copper_json::parse(
+            r#"{"emi":{"cells":[],"findings":[
+              {"code":"EMI-RETURN-PATH","message":"CLK: return path: 1 gap","objects":["CLK"],"nets":["CLK"],"layers":["F.Cu"],"tags":[],
+               "measures":{"subject":"CLK","gaps":[{"position_mm":[40.0,41.0],"slot_length_mm":76.0,"resonance_hz":1123000000.0,"kind":"enclosed_void"}],
+                "reference_changes":[{"via":"via:2","position_mm":[25.0,62.0],"return_distance_mm":7.0,"threshold_mm":2.0,"within_threshold":false}],
+                "members":[]}}]}}"#,
+        )
+        .unwrap();
+        let issues = emi_issues(&report, Some(&scene()));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].points, [(40.0, 41.0), (25.0, 62.0)]);
+        let causes = issues[0].details.get("causes").and_then(Value::as_array).unwrap();
+        assert_eq!(causes.len(), 2);
+        assert_eq!(causes[0].get("kind").and_then(Value::as_str), Some("gap"));
+        assert_eq!(causes[1].get("kind").and_then(Value::as_str), Some("reference_change_without_return_path"));
+    }
+
+    fn kinds_report() -> Value {
+        copper_json::parse(
+            r#"{"emi":{"cells":[{"controller":"U1"}],"findings":[
+              {"code":"EMI-CABLE-COMMON-MODE","cell":null,"message":"J1: cable","objects":["J1"],"nets":["A_P","A_N"],"layers":[],"tags":[],
+               "measures":{"connector":"J1","differential_pairs":[{"conductors":["A_P","A_N"],"status":"evaluated",
+                 "termination":{"assumption":"matched_cable_termination"},
+                 "voltage":{"quantity":"common_mode_voltage_at_connector","headline_dbuv":84.87,"spectrum":[]}}],
+                "ground_noise":[],"single_ended_signals":[{"net":"SE","status":"ranking_only","slew_v_per_ns":1.0}],"switch_node_coupling":[]}},
+              {"code":"EMI-MODE-CONVERSION","cell":null,"message":"A_P/A_N: mode conversion","objects":["A_P/A_N"],"nets":["A_P","A_N"],"layers":["F.Cu"],"tags":[],
+               "measures":{"subject":"A_P","sections":[{"section":0,"examined":true,"skew_ps":-58.6,"amplitude_imbalance":0.0,
+                 "length_p_mm":30.0,"length_n_mm":40.0,"return_path_exposure":{"exposed_fraction_p":0.0,"exposed_fraction_n":0.0}}]}},
+              {"code":"EMI-HOT-LOOP","cell":"U1","message":"U1: hot loop","objects":["U1"],"nets":["VIN"],"layers":[],"tags":[],"measures":{}},
+              {"code":"EMI-RETURN-PATH","cell":null,"message":"B_P/B_N: return path","objects":["B_P/B_N"],"nets":["B_P","B_N"],"layers":[],"tags":[],
+               "measures":{"subject":"B_P","gaps":[{"position_mm":[1.0,2.0],"slot_length_mm":5.0}]}},
+              {"code":"EMI-CABLE-SHIELD","cell":null,"message":"J2: cable_shielded = true but no pin declares emi_role = shield","objects":["J2"],"nets":[],"layers":[],"tags":[],
+               "measures":{"connector":"J2"}}
+            ]}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn findings_are_grouped_by_subject_kind_cells_then_signals_then_connectors() {
+        let report = kinds_report();
+        let section = report.get("emi").unwrap();
+        let codes: Vec<&str> =
+            ordered_findings(section).iter().map(|f| f.get("code").and_then(Value::as_str).unwrap()).collect();
+        assert_eq!(
+            codes,
+            ["EMI-HOT-LOOP", "EMI-MODE-CONVERSION", "EMI-RETURN-PATH", "EMI-CABLE-COMMON-MODE", "EMI-CABLE-SHIELD"]
+        );
+        // A report with cells only is ordered as before: by cell, report order inside a cell.
+        let cells_only = report_of_cells();
+        let order: Vec<&str> =
+            ordered_findings(&cells_only).iter().map(|f| f.get("code").and_then(Value::as_str).unwrap()).collect();
+        assert_eq!(order, ["EMI-HOT-LOOP", "EMI-PROXIMITY", "EMI-SWITCH-NODE"]);
+    }
+
+    fn report_of_cells() -> Value {
+        report().get("emi").unwrap().clone()
+    }
+
+    #[test]
+    fn a_conversion_is_located_at_the_pads_of_its_nets_and_a_connector_at_its_own_pads() {
+        let mut scene = scene();
+        scene.pads.push(pad("J1", "1", "A_P", 60.0, 5.0));
+        scene.pads.push(pad("J1", "2", "GND", 61.0, 5.0));
+        scene.pads.push(pad("U9", "1", "A_N", 5.0, 5.0));
+        scene.pads.push(pad("U9", "2", "A_P", 6.0, 5.0));
+        let issues = emi_issues(&kinds_report(), Some(&scene));
+        let by = |code: &str| issues.iter().find(|i| i.code.as_str() == Some(code)).unwrap();
+        // The measures hold no coordinates of the sections: the pair is located by the pads of its nets.
+        let conversion = by("EMI-MODE-CONVERSION");
+        assert_eq!(conversion.points, [(60.0, 5.0), (5.0, 5.0), (6.0, 5.0)]);
+        let causes = conversion.details.get("causes").and_then(Value::as_array).unwrap();
+        assert_eq!(causes.len(), 1);
+        assert_eq!(causes[0].get("kind").and_then(Value::as_str), Some("routed_section"));
+        assert!(causes[0].get("at_mm").is_none());
+        // The connector: its own pads, each driver a cause with the quantity label of the finding.
+        let cable = by("EMI-CABLE-COMMON-MODE");
+        assert_eq!(cable.points, [(60.0, 5.0), (61.0, 5.0)]);
+        let causes = cable.details.get("causes").and_then(Value::as_array).unwrap();
+        assert_eq!(causes.len(), 2);
+        assert_eq!(causes[0].get("kind").and_then(Value::as_str), Some("differential_pair"));
+        assert_eq!(causes[0].get("quantity").and_then(Value::as_str), Some("common_mode_voltage_at_connector"));
+        assert_eq!(causes[0].get("termination").and_then(Value::as_str), Some("matched_cable_termination"));
+        assert_eq!(causes[0].get("value_dbuv"), Some(&Value::Float(84.87)));
+        assert_eq!(causes[1].get("kind").and_then(Value::as_str), Some("single_ended_signal"));
+        assert_eq!(causes[1].get("quantity"), Some(&Value::Null));
+        assert_eq!(causes[1].get("ranking_value"), Some(&Value::Float(1.0)));
+        let shield = by("EMI-CABLE-SHIELD");
+        assert_eq!(shield.details.get("causes").and_then(Value::as_array).map(<[Value]>::len), Some(1));
+        // The ids follow the grouping.
+        assert_eq!(issues[0].code.as_str(), Some("EMI-HOT-LOOP"));
+        assert_eq!(issues[4].code.as_str(), Some("EMI-CABLE-SHIELD"));
+        // Without a scene nothing is located, the causes remain.
+        let bare = emi_issues(&kinds_report(), None);
+        assert!(bare.iter().find(|i| i.code.as_str() == Some("EMI-CABLE-COMMON-MODE")).unwrap().points.is_empty());
     }
 
     #[test]

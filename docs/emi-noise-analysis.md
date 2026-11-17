@@ -34,6 +34,20 @@ Accepted on `pin` in a `part` and on `pad` in a `device`:
 | `current_peak` | current | Peak pulsed current through the pin (switch current limit or rated peak) |
 | `current_rise_time` | time | 10-90 % time in which the switch current commutates (turn-on, set by loop inductance and drive; not the voltage edge) |
 | `current_fall_time` | time | 10-90 % current commutation time at turn-off; defaults to `current_rise_time` when only one is given |
+| `data_rate` | data rate | Bits per second of the pin's signal, NRZ assumed (`2.5Gbps`); see section 14 |
+| `clock_frequency` | frequency | The fundamental of a clock output (`24MHz`); see section 14 |
+| `signal_swing` | voltage | The loaded voltage at the driver's pins; for a differential pin the differential peak-to-peak (`400mV`); see section 14 |
+| `spread_spectrum` | ratio | Down-spread fraction of a spread clock (`0.5%`); recorded, not modelled |
+| `output_impedance` | impedance | The impedance behind a driver's open-circuit swing (`50ohm`); used only with `open_circuit_swing`, see section 18 |
+| `open_circuit_swing` | voltage | The driver's open-circuit swing, the Thevenin representation of the source (`2V`); exclusive with `signal_swing`, see section 18 |
+
+`passes_to = <pin>` (pins of parts with more than two pins only, not device pads) is described with the signal walk in
+section 14. A source is declared **once, in one representation**: `signal_swing` is the loaded voltage at the pin while it drives the
+line (the source impedance is already in it, and `I_A = V_pin / Z_A`), or `open_circuit_swing` with `output_impedance` is a Thevenin source
+(`V_pin = V_oc Z_A / (Z_source + Z_A)`, `I_A = V_oc / (Z_source + Z_A)`). Declaring `signal_swing` with either of the other two, or one of
+them without the other, is `CMP130`: dividing a loaded voltage by `Z_source + Z_A` would apply the source loading twice (6 dB low in the
+matched case). `data_rate` takes `bps`, `kbps`, `Mbps` or `Gbps` (`Dimension::DataRate`); `spread_spectrum` takes `%` only
+(`Dimension::Ratio`, base value the fraction), and the parser accepts `%` as a unit only directly after a number.
 
 `emi_role` values:
 
@@ -46,6 +60,7 @@ Accepted on `pin` in a `part` and on `pad` in a `device`:
 | `gate_drive` | aggressor | Gate-driver output for an external switch |
 | `feedback` | victim | High-impedance regulation input (`FB`, `VOS`, `COMP`) |
 | `sense` | victim | Low-level measurement input (current sense, Kelvin sense, reference) |
+| `shield` | victim | A connector pin bonded to the cable's shield or shell (section 18); never an aggressor, it makes no switching cell |
 
 ```copper
 part TPS54360DDAR {
@@ -103,6 +118,9 @@ quantity grammar (`quantity_dimension`) is unchanged.
 | `self_resonance` | frequency | capacitors, inductors | Self-resonant frequency |
 | `output_capacitance` | capacitance | converters, FETs, diodes | Switch-node device capacitance (Coss, Cj) used for ringing estimates |
 | `external_cable` | bool | connectors | A cable leaves the board here (antenna for common-mode current) |
+| `cable_shielded` | bool | connectors | The cable the connector takes is shielded (section 18) |
+| `cable_common_mode_impedance` | impedance | connectors | The common-mode impedance the cable presents at the connector; absent, the cable is taken as matched to the channel's common-mode reference (section 18) |
+| `common_mode_impedance`, `common_mode_impedance_frequency` | impedance, frequency | common-mode chokes, ferrites | The series impedance a common-mode current sees through the part, at the declared frequencies (below) |
 
 Validation (`CMP130`): wrong dimension, non-positive value, `min > max`, fixed
 and range frequency together, unknown `topology` or `shielding` name,
@@ -110,7 +128,22 @@ and range frequency together, unknown `topology` or `shielding` name,
 bound. The units are the ones of `copper-units`, so an ESR below 1 ohm is
 written as a decimal (`esr = 0.01ohm`).
 
-IR: `part.emi = { ... }` with only declared keys.
+`common_mode_impedance` is declared with `common_mode_impedance_frequency`, either as one point of two quantities
+(`common_mode_impedance = 120ohm; common_mode_impedance_frequency = 100MHz;`) or as several points in two quoted lists of equal length,
+the frequencies strictly increasing (`common_mode_impedance = "90+j500 ohm, 681.5+j0 ohm"; common_mode_impedance_frequency =
+"100 MHz, 1.25 GHz";`). An entry is a magnitude (`120 ohm`, the phase unknown) or a complex value `R+jX` (`X` signed, inductive
+positive; `R` not negative). Zero is accepted (a zero-impedance choke changes nothing). The impedance is the series impedance **in the
+common-mode loop**, that is, what the total common-mode current through the part sees; the datasheet's common-mode impedance of a
+four-pin choke is declared as it is, and a ferrite in each leg is declared per ferrite (the check takes the two in parallel for the common
+mode, half of one). Between two or more declared points the magnitude is interpolated on log axes (and a complex value's phase linearly in
+the logarithm of frequency); **nothing is extrapolated**, and a part evaluated outside the declared range, or at a frequency other than the
+one point it declares, is present with its attenuation not modelled. Validation (`CMP130`): `common_mode_impedance` without
+`common_mode_impedance_frequency` or the reverse, lists of different length, frequencies not strictly increasing or not positive, an entry
+that is not an impedance or has a negative magnitude or resistance, `cable_shielded` not `true` or `false`,
+`cable_common_mode_impedance` not a positive impedance.
+
+IR: `part.emi = { ... }` with only declared keys; `common_mode_impedance` is a list of `{ frequency, magnitude }` or
+`{ frequency, resistance, reactance }`.
 
 When `topology` is absent it is taken from `category`:
 `power.regulator.buck` -> `buck`, `.boost` -> `boost`, `.buck_boost` ->
@@ -336,7 +369,8 @@ Writing one is the way to analyse a board routed by other tools.
 The checks use the copper the `PhysicalBoard` carries (tracks, arcs, vias,
 polygons, zones, and the copper of hard macros moved to the pose their cluster
 anchor gives). `physicalize` itself produces none, so without `--run` only a
-hard macro contributes copper.
+hard macro contributes copper. With `--run`, and a board that has a subject net, the command also fills the zones of the routed board natively and
+runs `EMI-RETURN-PATH` (section 15); the option list is unchanged.
 
 A finding is the `copper_drc::Finding` shape (code, severity, message,
 objects, nets, layers, `required_nm`, `measured_nm`) plus
@@ -355,15 +389,20 @@ cluster: its geometry is fixed, the cluster's position is not).
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
 | `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the levels are detector readings**: `measures.detector_applicability` is `isolated_lines` for every harmonic, or `receiver_emulation` for the harmonics the receiver model read), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where neither holds the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
-| `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
+| `EMI-RETURN-PATH` | implemented with `--run` (section 15); coverage `unsupported` without it | Per subject net (a signal source, or a differential, clock or rf_feed routing rule; a pair is one): reference-plane coverage within 3 H of each routed segment, the gaps crossed with slot length and half-wave resonance, reference changes at vias with the nearest stitching via or decoupling capacitor and the threshold, and the distance to the plane edge and board edge against 20 H; positions in `measures`; a ranking score in dB for the worst slot (`ranking_only`, no field, no margin) | ranking score, then number of breaks; after the absolute estimates |
+| `EMI-MODE-CONVERSION` | implemented with `--run` (section 16); coverage `unsupported` without it on a board with a differential pair | Per differential pair: the ratio `|V_cm,out / V_diff,in|` in dB at the fundamental and its worst value up to the edge corner, for the ordered cascade of routed sections (skew from length and via path, amplitude imbalance from return-path exposure) and series parts; each element's contribution in order; the common-mode spectrum at the planes around a choke and at the connector. A choke or ferrite that declares `common_mode_impedance` is evaluated inside its declared frequency range (a band when only magnitudes are declared), one that does not is listed as present and not evaluated. A voltage ratio: no field, no margin | ratio in dB (`voltage_ratio`), after the ranking scores |
+| `EMI-CABLE-COMMON-MODE` | implemented (section 18); one finding per cable connector; the standing `unsupported` entry stays on a board with no cable connector | Per cable connector: the common-mode **voltage** (dBuV) each driver leaves at the connector against the board reference there, and a risk ranking of the drivers: differential pairs that leave on the cable (the `V_cm,out` of the section 16 cascade, an absolute value only for a matched cable, else a `first_arrival_voltage`), ground noise `V_B = sum Z_Bk I_k` (a voltage where its inputs exist and it stays within 6 dB across the sense-height band, else a geometry ranking), single-ended signals and switch-node coupling (ranking only); the shield bond where a shield pin is declared. **No current, no field, no margin, no pass or fail** | pair voltage in dBuV (`common_mode_voltage`), after the voltage ratios |
+| `EMI-CABLE-SHIELD` | implemented (section 18) | A connector declares `cable_shielded = true` and no `emi_role = shield` pin: no bond is declared | - |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
 
 Every check that cannot run on the given input gets a coverage entry with
 status (`executed`, `not_applicable`, `unsupported`) and reason; nothing is
 reported as a pass for what was not measured. Standing entries:
-`EMI-RETURN-PATH` and `EMI-DECOUPLING-PATH` (unsupported),
+`EMI-RETURN-PATH` (`executed` with a per-net entry when a routed run supplies the fills and a net is a subject, `not_applicable` without a subject net, else `unsupported` with the reason; section 15) `EMI-MODE-CONVERSION` (`executed` with a per-pair entry when a routed run is given and a differential pair exists, `not_applicable` without a pair, `unsupported` without a run when a pair exists, no entry at all without a run and without a pair; section 16) and `EMI-DECOUPLING-PATH` (unsupported),
 `EMI-COPPER-TRACE` (traced copper path: `executed` when at least one copper leg of a hot loop is traced, else `unsupported` with the reason), `EMI-CABLE-COMMON-MODE`
-(common-mode radiation from cables and attached conductors, unsupported: the board model has no cable, chassis or return structure), `EMI-MARGIN` (whether an
+(`executed` with an entry `EMI-CABLE-COMMON-MODE:<connector>` per cable connector when something is reported for at least one of them,
+`not_applicable` when no connector has anything to report; on a board with no cable connector the entry stays `unsupported` as before: the board
+model has no cable, chassis or return structure; section 18), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
 `EMI-HOT-LOOP:<cell>` (and `:radiated`, `:ringing`, `:copper`),
 `EMI-SWITCH-NODE:<net>` (and `:common_mode`), `EMI-PROXIMITY:<cell>` and
@@ -560,8 +599,8 @@ each with the missing input when skipped.
   frequency, for the absolute estimates only (`EMI-HOT-LOOP` differential mode,
   `EMI-CONDUCTED` for the harmonics that are detector readings: every harmonic of an isolated-line finding, the harmonics read by
   the receiver emulation otherwise); the common-mode score has none.
-  Nothing is printed as pass or fail. The `cable_length` of the constraint is read but no
-  cable estimate uses it yet.
+  Nothing is printed as pass or fail. The `cable_length` of the constraint is used only for the quarter-wave
+  frequency that `EMI-CABLE-COMMON-MODE` reports (section 18); no cable current or field estimate uses it.
 
 Estimators (module `copper_emi::estimate`, all SI, all documented with their
 source):
@@ -588,8 +627,13 @@ quasi-static extraction of the real filled copper beside the closed form (sectio
 
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
-node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`
-and current-driven common mode on cables.
+node copper is counted, not traced) and `EMI-DECOUPLING-PATH`. The checks that
+now exist for signals and cables are `EMI-RETURN-PATH` (section 15),
+`EMI-MODE-CONVERSION` (section 16) and `EMI-CABLE-COMMON-MODE` / `EMI-CABLE-SHIELD` (section 18): voltages, ratios and
+rankings. Three further steps of the signal and cable plan are **not implemented and not committed work**, each starting
+with a written definition or a spike: the net current of a cable bundle for a defined termination and environment
+(P4b; the voltages of section 18 are not a current and no field follows from them), the ground transfer inductance by
+quasi-static extraction (P5) and the full-wave mixed-mode region (P6).
 
 **In the run report, `copper issues` and `copper view`.** The findings are
 screening evidence and are read from the run report, `route-report.json`, which
@@ -609,8 +653,10 @@ stays the single file of a run (there is no sidecar):
   elaboration of the design and one pass over the cells, and never fails a
   route: an elaboration error or a panic is recorded as
   `emi: { "evidence_grade": "screening", "error": "..." }`. A design without a
-  switching cell gets no `emi` key, so its report is byte-identical to what it
-  was before.
+  switching cell, no finding and no executed signal check (`EMI-RETURN-PATH`,
+  section 15) gets no `emi` key, so its report is byte-identical to what it was
+  before; a board with no cell but a return-path finding or an executed
+  return-path coverage entry keeps the section (`cells` empty).
 - *`copper emi-check BOARD --run RUN --write`* adds or replaces the section of an
   existing run. `RUN` is the run directory (or a state file in it, or its
   `checkpoint/` directory) and must hold the `route-report.json` of a finished run
@@ -624,7 +670,10 @@ stays the single file of a run (there is no sidecar):
   read-only. Nothing checks that the board in `RUN` is the one the report
   describes beyond the references of the design.
 - *`copper issues RUN`* lists the section as stage `emi`, ids `M1`, `M2`, ...,
-  findings grouped by cell and in the report's ranking inside a cell. The title
+  findings grouped by subject kind: the converter cells in the section's order and the report's ranking inside a
+  cell, then the signals and pairs (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION`: no cell), then the cable connectors
+  (`EMI-CABLE-COMMON-MODE`, `EMI-CABLE-SHIELD`), each kind in the report's own order. A board with cells only is listed
+  as before, byte for byte. The title
   starts with `screening estimate`, the details carry the estimate with its
   `numerical_sensitivity`, parameter band, `not_modelled` list, margin, tags and the scalar measures, and the text output ends
   with a line saying the issues are screening estimates, not EMC qualification.
@@ -633,7 +682,15 @@ stays the single file of a run (there is no sidecar):
   bounding box of its `loop_polygon_mm`; every other finding the pad centres of
   its objects as found on the run's board (a proximity finding: the closest pair
   of source and victim pads, the cell's own controller aside; a switch-node
-  finding: every pad of the net). `--stage emi` filters; an `error` section or
+  finding: every pad of the net); a return-path finding its located causes (section 15.12), an `EMI-MODE-CONVERSION`
+  finding the pads of its pair's nets (the `measures` of the check hold no coordinates for its sections) and a cable
+  finding the pads of its connector. `details.causes` lists, for an `EMI-MODE-CONVERSION` finding, the routed
+  sections that convert (`kind = routed_section`: lengths per leg, skew, amplitude imbalance, exposed return path), and for
+  `EMI-CABLE-COMMON-MODE` one cause per driver with its `kind` (`differential_pair`, `ground_noise`,
+  `single_ended_signal`, `switch_node_coupling`), `name`, `status`, its `quantity` label exactly as the finding gives it
+  (`common_mode_voltage_at_connector` under `matched_cable_termination`, `first_arrival_voltage` for a declared,
+  unmatched cable, `ground_noise_voltage`, or null for a driver that is ranking only) and `value_dbuv` where a voltage is
+  published (a ranking-only driver carries its `ranking_value` and `ranking_unit` instead). `--stage emi` filters; an `error` section or
   an empty one lists nothing.
 - *`copper view RUN --issue M2`* frames the window, highlights the issue's nets
   and draws the hot loop over the copper from the finding's traced path
@@ -855,6 +912,51 @@ get it). It changes no number of the report: the default `emi-check --json` is b
    in the report"), what is not modelled (the first words of each `estimate.not_modelled` entry of the cell's hot-loop and
    conducted findings), and the exact command line of each full-size picture (the options of the run, without the plot,
    `--json`, `--write` and `--fullwave` options; `--plot-current` shows `--extract`).
+
+**No switching cell, and the pages of signals, pairs and connectors.** A board with no cell but with `EMI-RETURN-PATH`,
+`EMI-MODE-CONVERSION` or cable findings (sections 15, 16 and 18, `--run` given for the routed ones) no longer refuses
+`--plot-summary`. The pages follow the subject kinds of `copper issues`: the cell pages first, unchanged; then, when return-path
+findings exist, the return-path map (section 15.12); then one page per signal or pair that has a return-path or
+mode-conversion finding; then one page per cable connector that has a finding. A board with none of these exits 2
+("no switching cell and no return-path, mode-conversion or cable finding to summarise"). The pages that exist
+without these findings are unchanged, byte for byte, except that the SVG's overall height covers the added pages.
+
+*Signal and pair page* (`<g class="summary-signal">`, about 1400 px wide): the header (the pair or signal, its nets and
+layers, "screening evidence for a signal: distances, voltage ratios and rankings, never a pass or a fail"); the key numbers
+(the mode-conversion ratio at the fundamental and its worst value, the observation plane, the converting sections with
+their lengths, skew and exposure, the parts in the channel with their `transfer_basis`, and the return path: routed
+length, uncovered length, how many gaps, reference changes and edge points, the slot ranking score as a ranking only);
+the findings of the subject with their `M` ids; what the numbers assume (the assumption sentences of the tags and the
+`input:` lines) and what is not modelled; the commands that give the located causes (`copper issues RUN --stage emi`,
+`copper view RUN --issue M<n>`). Its picture is the return-path map above and the board view of `copper view`.
+
+*Connector page* (`<g class="summary-connector">`): the header (the connector and its part, "voltages at the connector and a
+ranking of the drivers: screening evidence, never a current, a field or a pass or a fail"); the key numbers (the strongest
+pair voltage with its quantity label, a band where the inputs open one, and, for an unmatched cable, that it is the first
+wavefront and not a steady-state value; the cable: shielded, assumed unshielded or undeclared, its length, its
+quarter-wave frequency and a declared impedance; the shield bond where a shield pin is declared; one line per driver
+with its quantity label as the finding gives it, or "ranking only"); the findings of the connector; a thumbnail of the
+per-driver voltage spectra (below) or, when no driver has a published voltage, a box that says so; what the numbers
+assume and what is not modelled; and the command of the full-size picture (`--plot-spectrum`). **These pages show no
+limit line, no margin, no field and no current**: there is no field estimate to compare with a limit.
+
+**Voltage spectra at a cable connector.** `copper emi-check BOARD --run RUN --plot-spectrum OUT.svg` also draws, when
+the report has `EMI-CABLE-COMMON-MODE` findings with a published voltage (`copper_report::emi_cable_plot`, data read from
+the findings' `measures.differential_pairs[].voltage.spectrum[]` and `measures.ground_noise[].voltage.spectrum[]`), one
+picture per connector with one panel per driver that has a voltage: a log frequency axis (the decades around the
+lines), dBuV with a gridline every 10 dB over 60 dB below the strongest line, and one mark per spectrum line, with a
+stem from the axis. The continuous bound (diamond), each named data pattern's line (circle), random data in the
+resolution bandwidth (square) and a clock's lines (triangle) are separate marks and are never merged into one curve; each
+panel lists its values. The panel title carries the quantity label of the finding (`common_mode_voltage_at_connector`
+with its termination, or for a driver whose quantity is a first-arrival voltage "first_arrival_voltage: the first
+wavefront before any reflection, NOT a steady-state value", with the declared cable impedance; a ground-noise panel says it
+is a current-driven voltage between the loops). The picture says that these are voltages at the connector against the
+board reference, **not a field, with no limit line and no margin drawn**, because the board model has no net current and
+no field estimate to compare a limit with. At most twelve panels are drawn per connector (the rest are named, the
+findings hold every one); a line below the axis is drawn hollow on its bottom edge and a line with no content (an empty
+spectrum quantity) is not drawn. The conducted spectrum of the cells, when the board has any, comes first in the same file;
+a board with neither still reports "no EMI-CONDUCTED finding with harmonics to plot". The pictures were checked
+structurally by the tests (marks, labels, positions, the words that must not appear) and not by eye.
 
 For a cell with several hot loops the loop rows are repeated per loop, named by the loop; for a declared frequency
 range the page reads the first conducted finding (the lower bound), the other scenarios are in `--plot-spectrum`. The
@@ -1947,6 +2049,20 @@ Observed with `copper emi-check` (phase 1):
   fallback finds no switch pin; the cells need `emi_role` annotations in the
   library part.
 
+Boards for the signal and cable checks (synthetic, no switching converter; each has a routed state checked in under
+`routed/` because the language has no tracks, and is run with `copper emi-check BOARD --run BOARD_DIR/routed`):
+
+- `examples/emi_return_path`: a pair over a whole pour, a pair crossing a cut between two pours, two clocks with a layer
+  change (one with a ground via nearby, one with none) and a clock near the board and plane edge (section 15; `crates/copper/tests/emi_return_path_cli.rs`, and `emi_no_converter_cli.rs` for the report,
+  the issues and the summary on a board with no cell).
+- `examples/emi_mode_conversion`: four differential lanes: 10 mm of skew with no other part, no skew, 4 mm of skew
+  before a common-mode choke behind two coupling capacitors, and 6 mm after the choke (section 16; `crates/copper/tests/emi_mode_conversion_cli.rs`).
+- `examples/emi_cable_common_mode`: six lanes at an unshielded matched connector, a shielded connector with a 150 ohm
+  cable (a first-arrival voltage) and a connector with single-ended signals, two clocks and a symmetric pair for the
+  ground-noise driver (section 18; `crates/copper/tests/emi_cable_common_mode_cli.rs`, and
+  `emi_no_converter_signals_cli.rs` for the report, the issues, the summary pages and the connector spectra of a board with
+  clocks, pairs and connectors and no converter).
+
 ## 13. Quasi-static network extraction (phase 5)
 
 Status: first cut, `crates/copper-extract`, reached by `copper emi-check --extract`. Screening evidence only: nothing
@@ -2494,3 +2610,791 @@ What the comparison establishes, and what it does not:
   R is far off (+15.6 % at 61 um, the case of `tests/boards.rs`).
 * A disagreement beyond 10 % in an entry is a status reason (flag `reference_disagrees`). A topology disagreement (a port open for the reference and solved by
 the extraction, or different numbers of pieces of copper) makes the status `error` and the flag `reference_topology_disagrees`.
+
+## 14. Signal sources, channels and spectra (P1 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the first phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); nothing here finds a return-path break, converts a mode or
+estimates a cable current (phases P2 and later). It describes what `EmiModel::signals` holds, how a signal's channel to the
+cable connector is walked, which defaults fill a missing edge or swing, and the three different spectrum quantities of
+a data signal. Every number is screening evidence.
+
+### 14.1 What is a signal source
+
+`EmiModel::signals` (`crates/copper-lang/src/emi_signals.rs`, key `signals` of `copper query BOARD emi`, present only when
+there are sources) has one entry per fast net, or per differential pair keyed by its P net (`partner` is the N net). A net is
+a signal source when it has the `fast_edge` class (a driving pin with `rise_time` or `fall_time` below 2 ns, or a routing
+constraint `kind = clock`) or when a driving pin on it declares `data_rate`, `clock_frequency`, `signal_swing` or
+`spread_spectrum`. A *driving pin* is an output or bidirectional pin without an `emi_role` (the pins of switching
+cells are not signal sources). The net classes themselves do not change: a net that only declares a rate is a source but
+not a `fast_edge` net, and `fast_edge` in the entry says which.
+
+A pair comes from `constraint routing(NET) { kind = differential; partner = OTHER; }` on either member. The pair is
+dropped (both nets stay single-ended) when the partner names a different net or a third net names either member. The P
+net is the one whose name has `P` or `+` where the two names first differ, against `N`, `M` or `-` (`USB_DP`/`USB_DM`,
+`TX_P`/`TX_N`, `A+`/`A-`); when the names do not say, the first in name order.
+
+Each number (`data_rate`, `clock_frequency`, `rise_time`, `fall_time`, `signal_swing`, `spread_spectrum`) is the first one
+declared by a driving pin of the source, P net first, with that pin as its provenance (`declared_on`). `rise_time` and
+`fall_time` default to each other as for any pin. Nothing is invented in the model: a missing number is `null`.
+
+### 14.2 Defaults
+
+`crates/copper-drc/src/emi/defaults.rs` and `crates/copper-drc/src/emi/signal.rs` fill a missing number when a phase needs it
+(declared values always win; a default carries a `rule_of_thumb_*` tag, its band and its rule):
+
+| Number | Default | Tag |
+|---|---|---|
+| Edge, source declares `data_rate` | 0.25 UI nominal, band 0.2 to 0.35 UI (10-90 %) | `rule_of_thumb_signal_edge` |
+| Edge, no rate (a clock) | 1 ns nominal, band 0.3 to 3 ns | `rule_of_thumb_signal_edge` |
+| Swing, differential | 0.2 V nominal, band 0.1 to 0.4 V (peak-to-peak) | `rule_of_thumb_signal_swing` |
+| Swing, single-ended | 1.0 of the driver's supply, band 0.8 to 1.0; none without a supply voltage | `rule_of_thumb_signal_swing` |
+
+The only published relation used is `B = 0.35 / t_r` between a 10-90 % rise time and a single-pole bandwidth (Johnson and Graham,
+*High-Speed Digital Design*, 1993; Bogatin, *Signal and Power Integrity - Simplified*). The 0.2 to 0.35 UI band, the clock band and
+the swing bands have no published source known to the author (the differential swing band is on the scale of the LVDS
+and MIPI D-PHY output levels, as remembered and unverified), and the doc comments say so. In this phase no model code supplies the driver's supply
+voltage, so a single-ended signal with no `signal_swing` stays without a swing.
+
+### 14.3 The channel walk
+
+A signal is one channel from its driver pin to the first cable connector, not one net. `external_connectors` (used for the
+net classes and the existing checks) reaches a connector directly or through one resistor or ferrite and is unchanged. The
+channel walk is a separate function used only by signals. Starting at each member net it follows, breadth first (the fewest
+parts, nets and parts in board order):
+
+* two-pin series parts, any number in a row: resistors, ferrites and `dc_power_path` parts as `is_series_element` recognises
+  them (kind `series_part`), and capacitors in series with the signal (kind `coupling_capacitor`, AC coupling);
+* parts with more than two pins across their declared `passes_to` pairs only (kind `declared_pair`); an entry pin of a pair
+  passes to its partner whichever side declared the pair;
+* never into a declared supply rail or a net with a ground pin. A capacitor to such a net is a shunt: it is not a hop and
+  not a refusal. A resistor, ferrite or declared pair into one is refused and recorded;
+* it stops at the first net that has a connector (a part with `external_cable = true`, or named by an `emission` constraint)
+  and records the connector pin.
+
+Two-pin parts that are none of these (inductors, diodes, ...) are not followed. One that is in series with the channel (its
+other pin on a signal net) is recorded as a stop, `unsupported_series_part`; one to a supply or ground net is a shunt (a
+protection diode) and is not recorded. Every entry of
+`channel` is a hop (`component`, `kind`, the pins and nets crossed, `swaps_polarity`), in order from the driver. When no
+connector is reached the member's `end` is `open` with the list of `stops`: each refusal with the pin, the net and the
+reason (`no_passes_to`: a part with more than two pins and no declared pair for the pin the walk arrived on, which is
+every receiver IC on the way; `supply_rail`; `reference_net`; `unsupported_series_part`). An open end with no stops means the nets simply end.
+Stops are listed only when nothing was reached.
+
+P and N identity: each member is walked on its own, so P stays P across every declared pair by construction. A part
+swaps polarity when the net the P member leaves it on is, by name, the pair's N net (the same name rule as for the key,
+applied to the two nets at the same hop). Both members' hops are flagged `swaps_polarity`. Pairs whose net names do not
+say P from N are never flagged; a physical swap in the wiring is therefore reported only as far as the names reveal it. The
+ordered hops are what the later phases use for coupling capacitors and chokes.
+
+### 14.4 Spectrum of a signal
+
+`crates/copper-emi/src/signal.rs`. Conventions: `swing` is the peak-to-peak value of a signal that sits at `+-swing/2`;
+amplitudes are single-sided peaks (a sine of amplitude `a` has power `a^2/2`); an edge is a linear 0-100 % ramp centred on the bit
+boundary. Declared `rise_time` and `fall_time` are 10-90 % times; the ramp passed to these functions is the 10-90 % time
+divided by 0.8 (`ResolvedSignal::rise_ramp` / `fall_ramp` in `crates/copper-drc/src/emi/signal.rs`), the same conversion the
+conducted model applies to a switch's edge times.
+
+A **clock** has lines at multiples of `clock_frequency` from `trapezoid_harmonic` (`clock_lines`); `trapezoid_envelope` is a
+continuous envelope over those lines, not a line spectrum. A **data signal** has three different quantities, each labelled;
+none is a bound on another:
+
+1. **`pattern_lines`**: the exact line spectrum of one named repeating pattern: alternating (`1010`, lines at odd multiples
+   of `data_rate / 2`) and the square patterns with runs of 2, 4 and 5 bits. Each boundary with a change contributes a ramp of
+   height `+-swing`, so `c_m = (1 / (j w P)) sum_k a_k sinc(pi f t_k) e^{-j w k T}` and the line is `2 |c_m|`. A longer pattern has
+   lines where a shorter one has none: at 2.5 Gbps `11110000` has a line at 312.5 MHz where `1010` has none (its lowest is 1.25 GHz), so
+   no pattern bounds the others and a finding lists which patterns were evaluated.
+2. **`continuous_bound`**: `(2 swing / pi) min(1, 1 / (pi f t_e))`, an upper bound on any single line of any periodic
+   two-level waveform with that swing and edge time. (a) With `|x| <= swing/2` a component along `cos(w t + phi)` is largest for
+   `x = (swing/2) sign(cos(...))`, giving `swing / pi` and a line of `2 swing / pi`, reached by the square wave of that frequency. (b) A
+   linear edge is a step smoothed by a rectangle of width `t_e`, so for equal rise and fall every line is multiplied by
+   `sinc(pi f t_e)`, and `|sinc x| <= min(1, 1/|x|)`. The proof is for equal rise and fall times; for unequal edges the bound uses the
+   shorter edge, which the tests check on random sequences but which is not proved. It is loose by construction: it is
+   not reached by one pattern at every frequency and says nothing about how many lines there are. It holds for a
+   periodic extension of any record, not for a spectral density.
+3. **`random_data_in_rbw`**: random NRZ data has a continuous power spectrum, not lines. The two-sided density is
+   `(swing/2)^2 T sinc^2(pi f T) sinc^2(pi f t_e)`; the power in a resolution bandwidth `B` expressed as the amplitude of a sine of equal power
+   is `swing sqrt(B / data_rate) |sinc(pi f / data_rate)| |sinc(pi f t_e)|`. At 2.5 Gbps in 120 kHz this is `sqrt(120 kHz / 2.5 GHz)`, 43.2 dB
+   below the alternating pattern's lines at any swing and edge time. `B` is a rectangular power bandwidth much narrower than the
+   data rate; the Gaussian IF filter's noise bandwidth (about 1.06 times its 6 dB bandwidth) and the detector are not applied.
+
+Checked in the tests against an independent numerical spectrum: a long sampled waveform written directly in the
+time domain and transformed by the DFT of `copper_emi::spectrum`, for the named patterns (line by line), the clock lines, the bound (named patterns
+and 30 random sequences of 16 to 512 bits at seven edge settings, equal and unequal) and random data (band power of a 65536-bit sequence).
+
+### 14.5 Not modelled
+
+Whether a link scrambles its data (unscrambled data repeat and put power into lines, scrambled data tend to the random case: not declared
+in this phase); jitter, pre-emphasis, de-emphasis and multi-level signalling (PAM4); spread-spectrum clocking (`spread_spectrum` is recorded only); a
+driver's source impedance and the loading that makes `signal_swing` a loaded voltage; any detector
+weighting; reflections inside parts on the channel; and every consequence of the channel for the board (return-path breaks, mode
+conversion and the cable are later phases).
+
+## 15. Return paths: `EMI-RETURN-PATH` (P2 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the second phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); code in `crates/copper-drc/src/emi/return_path.rs`, example in
+`examples/emi_return_path/`, tests in `crates/copper-drc/tests/emi_return_path.rs` and
+`crates/copper/tests/emi_return_path_cli.rs`. It measures where the return current of a fast signal has no reference copper
+under its trace. It reports distances, lengths, a half-wave resonance and a ranking score; it never reports a field, a
+margin, a pass or a fail.
+
+### 15.1 When it runs and what it needs
+
+The check needs the routed board and the filled reference planes. `copper emi-check BOARD --run RUN` supplies the routed
+`PhysicalBoard` (section 8); the fills come from the native zone fill of that board (`copper_fullwave::fill::zone_fill_set`,
+the same export-parse-fill the extraction and the full-wave model use, so all three see the same copper) and are passed into
+`copper_drc::emi::emi_check_with_return_path` as `ReturnPathInput::Fills`. `copper-drc` cannot fill zones itself: the fill code
+lives in `copper-cam` and is reached through `copper-fullwave` and `copper-extract`, which depend on `copper-drc`. The fill is
+made only when the board has a subject net (below), because a zone fill is not instant. Without `--run` the input is
+`NotRequested` and nothing changes: the output of `emi-check` on a board without subject nets is byte-identical to before this
+phase, and on a board with subject nets the coverage entry says so (below). `emi-check` takes no new option. The section that `route-board` embeds in its report (`emi_section::check`) prepares the same input from its final board, so `emi-check --run RUN --write` still reproduces it bit for bit; a board with a switching cell and a subject net therefore has its zones filled once more at the end of `route-board`, inside the guard that turns any failure of the check into the section's error record. On a board with a switching cell and no subject net the embedded section's `EMI-RETURN-PATH` coverage entry is now `not_applicable` instead of `unsupported`.
+
+### 15.2 Subjects
+
+Every net with a signal source (`EmiModel::signals`, section 14) and every net of a `routing` constraint of kind
+`differential`, `clock` or `rf_feed` (the set `signal_integrity::needs_reference_plane` uses). The members of a differential
+pair are one subject: one finding and one coverage entry, named after the P net, with the members listed in `nets`. A subject
+that has only a routing rule and no signal source takes its edge time from the default band (section 14.2, tag
+`rule_of_thumb_signal_edge`); with no swing it gets no ranking score.
+
+### 15.3 Reference planes
+
+A reference net is a declared supply (`supply NAME { net = ...; }`, ground included). Its filled copper on a layer is a
+reference layer. For a signal layer the reference plane is the nearest reference layer above or below it, by the
+centre-to-centre height `H` of `Stack::height` (the convention of the hot-loop estimates; the dielectric height alone is
+smaller by half the two copper thicknesses). At equal height a layer with a ground net wins, then the layer higher in the
+stack-up. The nearest reference layer on the other side of the signal layer is listed as `reference[].other_plane` with
+`evaluated: false`: a stripline is evaluated against its nearer plane only. A layer with copper and no reference layer at all
+is listed under `layers_without_reference_plane`, all of its copper counts as uncovered, and it is a finding. The reference
+copper of a layer is the union of its reference nets' fills, so the gap between a ground and a supply pour on one layer is a
+void like any other; a trace that passes from one pour to the other on one layer is not reported as a reference change (not
+modelled).
+
+### 15.4 Coverage
+
+For each routed segment (tracks as drawn, arcs as chords with 5 um sagitta) the footprint is widened by `3 H` each side
+(`defaults::RETURN_WINDOW_H`) into a strip with flush ends and swept against the reference copper with integer-nanometre
+polygon operations. The uncovered length is the length of the centre line along which that cross-section is not entirely
+covered: the stations of the strip minus the reference copper, projected on the segment. Per segment, per layer and per
+member it is reported in millimetres (`uncovered_length_mm`) and together with the routed length. The cross-section is a strip,
+not the trace alone: a trace running along the edge of a cut within `3 H` of it is uncovered for the whole run.
+
+### 15.5 Slot crossing
+
+The voids of a reference layer are the connected pieces of its bounding box with no reference copper (the window is that
+bounding box: the connected hole of the plane is clipped to it, so a cut that runs to the plane's edge ends at the window).
+Every void that the widened strip meets is a gap; both members of a pair that cross the same void are one gap with two
+`crossings`. For each gap:
+
+* the slot length `L` is the extent of the void's outer contour along the in-plane direction perpendicular to the first
+  crossing segment (`slot_length_mm`): the plan's definition, not the principal axis of the void (a slanted slot is
+  measured across the trace, not along itself);
+* the resonance is `c / (2 L sqrt(eps_eff))` (`resonance_hz`) with `eps_eff` of the trace layer as the impedance screening
+  computes it from the declared stack-up (`signal_integrity::effective_permittivity`: Hammerstad's effective permittivity of a
+  microstrip, the plane-spacing weighted permittivity of a stripline; without a declared stack-up the assumed permittivity
+  and the microstrip formula);
+* `kind` is `cut_to_plane_edge` when the void reaches the window (a cut or a notch from the plane's edge) and `enclosed_void`
+  otherwise; `via_antipads_in_void` counts the board's vias that pass through the layer inside the void. The antipads of a
+  row of vias whose clearances merge are one void, hence one slot (tested with five vias 0.8 mm apart); a single antipad of
+  another net is a gap too, with its diameter as length;
+* the antipad of the subject's own via is not a gap: it is how a layer transition looks in a plane and is examined as a
+  reference change (15.6). A void holds exactly one via, a via of the subject, and is at most three via diameters long.
+  Such a void is closed for the coverage and the gap test.
+
+### 15.6 Reference change at a via
+
+For each via of a subject net the layers where a segment of that net ends within the via's radius are taken in stack-up order;
+for each consecutive pair the reference (plane layer and, from the nearest reference-net fill at the via, its net) before and after
+is compared. Different layer or net is a change. The nearest return path:
+
+* same net on two plane layers: a via of that net whose span covers both reference layers (`return_span_covers`, the helper of
+  the native rule `require_return_vias`, now shared), by centre distance (`return_path = stitching_via`);
+* different nets: a capacitor with a pad on each net, by the distance from the via to the nearer of its pad centres
+  (`decoupling_capacitor`; `return_element` is its reference);
+* a side with no reference plane: `none`.
+
+The threshold is the net's declared `maximum_return_via_distance` when a routing rule of the subject has one
+(`threshold_source = declared maximum_return_via_distance`), else `lambda / 20` at the knee `0.35 / t_r` (`t_r` the
+shorter of the 10-90 % rise and fall times, `lambda = c / (f sqrt(eps_eff))`, the larger `eps_eff` of the two layers; tag
+`rule_of_thumb_return_via_distance`, `threshold_source = lambda_over_20_at_knee_frequency`). The native rule is
+unchanged. It stays a pass-or-fail check for single-ended nets that declare `require_return_vias`; this check runs on every
+subject, includes pairs, and reports the distance. For a via of such a net the same test (`return_via_covered`, shared) says
+whether the DRC rule fails it (`drc_rule.satisfied`); a via that fails is listed with its distance and `reported_by_drc`, and the
+message says that the rule reports it. The rule also fails vias that change no reference; this check says nothing about those.
+
+### 15.7 Plane edge and board edge
+
+Each segment is sampled every 0.25 mm at most. The distance to the outer contours of the reference copper (holes are gaps, not
+edges) and to the board outline is compared with `20 H` (`defaults::EDGE_DISTANCE_H`): the smallest distance with its position
+(`nearest_mm`, `at_mm`), the length within the limit and `within_limit`. On an outer layer, the length within `20 H` of the board
+edge with no stitched ground via on the edge side is `outer_layer_unguarded_edge_length_mm`: a guard is a via of a reference net
+whose span covers the signal layer and the reference plane, lies within `20 H` of the sample and is closer to the board edge than
+the sample is. One via guards the samples within `20 H` of it, so this is a coarse test of a ground fence, not of its pitch.
+
+### 15.8 The finding
+
+`EMI-RETURN-PATH`, warning severity, no cell, one per subject, present only when there is something to report: copper on a layer
+with no plane, uncovered length, a gap, a reference change without a return path within its threshold, or a trace within `20 H` of a
+plane or board edge. A subject with none of these has only its coverage entry, which says so ("not a pass"). `nets` lists the
+members, `subjects` the driving pins and components for `emi_accept`. `measures`:
+
+| Key | Content |
+|---|---|
+| `subject`, `members[]` | the P net; per member: routed and uncovered length, per layer the segment count, `plane_edge` and `board_edge` (`nearest_mm`, `at_mm`, `limit_mm`, `within_limit`, `length_within_limit_mm`), `outer_layer_unguarded_edge_length_mm` |
+| `routed_length_mm`, `uncovered_length_mm` | totals over the members |
+| `reference[]` | per signal layer: reference layer and nets, `height_mm`, `structure`, `effective_permittivity`, `other_plane` |
+| `gaps[]` | `nets`, `signal_layer`, `reference_layer`, `position_mm`, `kind`, `via_antipads_in_void`, `crossings[]` (net, segments, `length_mm`), `slot_length_mm`, `effective_permittivity`, `resonance_hz`, `quarter_wave_resonance_hz` (null for an `enclosed_void`) |
+| `reference_changes[]` | `net`, `via`, `position_mm`, `layers`, `reference_before`/`reference_after` (layer, net), `return_path`, `return_element`, `return_distance_mm`, `threshold_mm`, `threshold_source`, `within_threshold`, `drc_rule` (null, or rule, `satisfied`, `reported_by_drc`) |
+| `via_transitions_examined`, `drc_return_via_reported`, `thresholds` | the count of layer transitions looked at; the vias the DRC rule reports; the three factors in force |
+| `ranking` | `slot_mm`, `worst_gap_position_mm` and `spectrum` of the worst gap, or `score: null` with the reason |
+| `inputs_text` | the `input:` lines of the defaults used |
+
+Positions are `[x, y]` in millimetres in board coordinates, so CopperReview and the plots can mark them.
+
+**Ranking score.** Where a gap exists and the signal has a swing: `20 log10(V(f_res) L / (1 V * 1 mm))` for the worst gap
+(`estimate.quantity = slot_ranking_score`, unit dB, `kind = ranking_score`, tag `ranking_only`; no margin, never compared with a
+limit), with `f_res` the slot's resonance, `L` its length in mm and `V` the continuous bound of the signal's spectrum at `f_res`
+(`copper_emi::signal::continuous_bound` at the swing and the shorter edge ramp, the 10-90 % time divided by 0.8). The continuous
+bound is the headline because it is the one of the three spectrum quantities of section 14.4 that needs no assumption about
+the data pattern; `measures.ranking.spectrum` carries all three by name beside it, each with its own score: `continuous_bound`,
+`pattern_lines` (the strongest line of each named pattern within one octave around the resonance, null where a pattern has no
+line there) and `random_data_in_rbw` (120 kHz, CISPR 16-1-1 above 30 MHz) for a signal with a `data_rate`, and `clock_lines` for one with a
+`clock_frequency`. A single-ended signal with no `signal_swing` has no swing (section 14.2) and so no score. With a default edge
+or swing the estimate carries `band_db` (the score at the unfavourable and the favourable end of the bands) and `basis =
+rule_of_thumb`. `not_modelled` names slot radiation efficiency, plane-pair cavity modes, enclosure and cable coupling, the
+common-mode part of a differential pair (the score takes the whole signal, so it overstates a balanced pair; mode conversion is
+a later phase), return current outside the window and the other plane of a stripline.
+
+Tags: `rule_of_thumb_return_window` and `rule_of_thumb_edge_distance` on every finding (the `3 H` and `20 H` are used),
+`rule_of_thumb_return_via_distance` when a threshold is `lambda / 20`, `rule_of_thumb_signal_edge`/`_swing` when a default edge
+or swing feeds a number, `ranking_only` with a score. `rank` (the order among findings with no estimate) is the number of gaps
+plus the number of changes without a return path plus the uncovered length in metres.
+
+### 15.9 Coverage
+
+`EMI-RETURN-PATH` is `executed` when at least one subject was examined, with an entry `EMI-RETURN-PATH:<net>` per subject
+(`executed` with the numbers, or `unsupported` when the net has no routed copper); `not_applicable` when the board has no subject
+net and a run was given; `unsupported` otherwise, with the reason: not requested (a board with no subject net keeps the entry of
+before this phase word for word; one with subject nets says that a routed run is needed), the fills could not be made (the
+fill's own error, for example a rule the native evaluator does not support), or no subject net has routed copper.
+
+### 15.10 Defaults and their sources
+
+All in `crates/copper-drc/src/emi/defaults.rs`, section 7, each with its tag, band and a statement of its source.
+
+| Default | Value (band) | Source |
+|---|---|---|
+| Coverage window | `3 H` each side (2 H to 5 H) | derived: the plane current density of a thin line at height `H` over an infinite plane is `I H / (pi (x^2 + H^2))` (method of images), so the share within `k H` is `(2/pi) atan(k)`: 50 % at 1 H, 70.5 % at 2 H, 79.5 % at 3 H, 87.4 % at 5 H. No published citation is given because none was checked |
+| Plane and board edge | `20 H` (10 H to 100 H) | the "20 H rule" of EMC design guides (Montrose, *Printed Circuit Board Design Techniques for EMC Compliance*), from memory and **not checked against the text: no verified citation** |
+| Return via distance | `lambda / 20` (lambda / 10 to lambda / 40) at the knee `0.35 / t_r` | `0.35 / t_r` as in section 14.2; the `lambda / 20` fraction **has no published source**: a screening choice |
+| Half-wave resonance | `c / (2 L sqrt(eps_eff))` | the half-wave resonance of a slot, by definition; `eps_eff` as the impedance screening computes it |
+| Quarter-wave resonance | `c / (4 L sqrt(eps_eff))` | reported as `quarter_wave_resonance_hz` for a `cut_to_plane_edge` gap only: a notch open at the plane edge and closed at its other end resonates there, a cut through the plane does not. The void's shape does not tell the two apart, so the score keeps the half wave and the lower frequency is carried beside it |
+
+### 15.11 Validation
+
+Against hand calculations in the tests (`crates/copper-drc/tests/emi_return_path.rs`): the stack-up of the example gives `H = 0.235 mm`,
+`3 H = 0.705 mm`, `20 H = 4.7 mm` and `eps_eff = 3.0844` for the 0.12 mm lanes; a pair over the solid pour has no gap and no finding; the
+same pair across the 2 mm cut has one gap with `L = 76 mm` (the pour is 76 mm across), `f_res = c / (2 L sqrt(3.0844)) = 1.1230 GHz`, 2 mm
+uncovered per trace and the score `20 log10(0.25465 * 76) = 25.735 dB` (swing 0.4 V, ramp 0.125 ns, so the bound is
+`2 * 0.4 / pi`); an enclosed 30 mm slot gives `L = 30 mm`, `f_res = 2.845 GHz`; a row of five antipads is one void of `3.2 mm +
+one antipad diameter`; a via beside which a ground via sits 1.5 mm away passes a 2 mm threshold and one with the nearest
+stitching via at `sqrt(1.5^2 + 7^2) = 7.159 mm` does not, which is also what the native DRC rule reports; the default threshold is
+`c / (0.35 GHz sqrt(eps) 20) = 24.0 mm` for a 1 ns edge and a tenth of that for 0.1 ns; a capacitor between two supply planes is a return
+path at the distance to its nearer pad; a trace 3 mm from the board edge and 1 mm from the plane edge reports both distances against 4.7 mm and
+20 mm unguarded, and none unguarded with a fence of ground vias. The defaults module tests the derived window fraction and the threshold.
+None of this is correlated with a measurement.
+
+### 15.12 Not modelled
+
+Radiation efficiency of a slot and what feeds it; plane-pair cavity modes and the resonance of the board as a whole; the enclosure; the
+inductance of the detour around a gap and current crowding at its ends; return current beyond the window; the second plane of a
+stripline and the split of its return current; a reference net that changes inside one plane layer; vias in pads and transitions where the net's
+copper does not end on the via; the reference plane's own gaps from other layers (a plane is judged by the single reference layer chosen); the common-mode
+part of a differential pair (section 16); the effect of nearby ground copper on the signal layer (a coplanar return); the effect of a
+thermal relief or a fill island of a reference net that the fill removed; and nets that are not declared supplies as references.
+
+### 15.12 Reporting without a switching cell
+
+The reporting chain no longer assumes a converter. The `emi` section of `route-report.json` (written by `route-board`, or by
+`emi-check --run RUN --write`; section 8) is kept when the report has a cell, a finding, or an `executed` coverage entry of
+`EMI-RETURN-PATH` or `EMI-RETURN-PATH:<net>`; a board with none of these gets no section, byte-identical to before. A
+board with no cell has `cells: []`. `route-board` fills the zones for the check only when a net is a subject, as in 15.1.
+
+`copper issues RUN --stage emi` lists each finding as one issue, grouped by subject kind (cells, then signals and pairs, then cable connectors; section 8). The window and
+the points of an `EMI-RETURN-PATH` issue are its located causes, read from the `measures` and listed as `details.causes`
+(`kind`, `at_mm`, `text`): `gap` (position, slot length, resonance), `reference_change_without_return_path` (via, nearest
+return path against the threshold, or "no return path found"), and `plane_edge` / `board_edge` (the point of the trace
+nearest to the edge, where it is within the limit). A finding with no located cause falls back to the pads of its nets.
+`copper explain EMI-RETURN-PATH` says what was measured, that it is screening evidence and never a pass or a fail, and what is
+not modelled (the list of 15.8).
+
+`--plot-summary` draws the return-path map (`copper_report::emi_return_path`): the board in its coordinates (millimetres, y
+down as the layout), the outline and the traces of the subject nets when the board scene exists, and a mark at each cause
+listed above: a circle at each gap with its slot length and resonance, a diamond at each reference change without a return
+path within the threshold with its distance and threshold, a square at each plane-edge point and a triangle at each board-edge
+point within `20 H`. Only the `measures` of the findings are used. A finding with no located cause has no mark: nothing
+was located at these thresholds, which is not a pass. The page repeats that the picture is screening evidence and lists what is not
+modelled. The `copper emi-check --help` text names the map.
+
+## 16. Mode conversion: `EMI-MODE-CONVERSION` (P3 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the third phase of
+[`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); closed forms in `crates/copper-emi/src/mode_conversion.rs`, the check in
+`crates/copper-drc/src/emi/mode_conversion.rs`, example in `examples/emi_mode_conversion/`, tests in
+`crates/copper-drc/tests/emi_mode_conversion.rs` and `crates/copper/tests/emi_mode_conversion_cli.rs`. It estimates how much of the
+differential voltage a driver launches appears as common mode at the end of its channel. The result is a ratio of two voltages
+inside the channel; it never reports a field, a margin, a pass or a fail, and it is not correlated with a measurement.
+
+**The choke.** A four-pin common-mode choke is crossed by the channel walk along its declared `passes_to` pairs and appears in the finding
+as a part, with its position, and as the boundary of an observation plane. With P4 a choke or ferrite can declare its
+`common_mode_impedance` (section 3): it is then **evaluated** with the transmission `T_cc = 2 Z_c,ref / (2 Z_c,ref + Z_cmc(f))` at the frequency
+it is evaluated at, inside its declared range only (log-axis interpolation, nothing extrapolated); with magnitudes only the result is a band
+(`band_db`, `basis` naming it), the upper end of the transmission limited to 1 because a passive series impedance does not amplify. One that
+declares no impedance, or is evaluated outside its declared range, is **present and not evaluated**: its transfer is taken as exactly 1, so the
+common mode made upstream of it is not reduced, and the finding says so in words (the same words as before P4 for an undeclared part). The
+numbers of `examples/emi_mode_conversion` changed with this: its chokes now declare 681.5 + j0 ohm at 1.25 GHz (18 `Z_c,ref`, `T_cc = 0.1`),
+so lane C reads -46.76 dB (it read -26.76 dB while the choke was not evaluated) and lane D, with its skew after the choke, is unchanged at
+-23.25 dB; the tests keep the undeclared case with the declaration edited out.
+
+### 16.1 When it runs and what it needs
+
+It needs the routed board, like section 15, and uses the same input (`ReturnPathInput`, now documented as the input of every check that
+needs routed copper; `ReturnPathInput::routed()`): `copper emi-check BOARD --run RUN`, and the section `route-board` embeds. Without
+`--run`, a board with a differential pair gets the coverage entry `EMI-MODE-CONVERSION` `unsupported` ("needs routed copper: run `copper
+emi-check BOARD --run RUN`"); a board with no differential pair gets no entry at all, so the default output of a board with no differential
+signal is byte-identical to before this phase. With `--run`, a board with no pair gets `not_applicable`. The zone fills are the ones of
+section 15 and are used only for the amplitude imbalance; if they could not be made the skew is still estimated and the coverage entry says
+the imbalance was not evaluated. `emi-check` takes no new option.
+
+### 16.2 Subjects and the channel
+
+The subjects are the differential pairs of section 15.2 (a signal source with a partner net, or a `differential` routing rule): one
+finding and one coverage entry per pair, named after the P net. Single-ended signals are not subjects. The channel of a pair is the
+ordered list the channel walk of section 14.3 gives, from the driver to the observation plane, as a cascade of elements:
+
+* a **routed section** for each net pair the walk crosses (the pair's own nets, then the nets after each part), with, for each leg, the
+  routed length of tracks and arcs and the vias' vertical path;
+* between two sections the **part** the walk crossed: a series resistor and a coupling capacitor (per-leg elements from their
+  declared `value`; a part with no value is present and transparent, and says so), a ferrite, a common-mode choke along its `passes_to`
+  pairs (evaluated when it declares `common_mode_impedance`, else present with transfer 1 and not evaluated, see above) and any other
+  series part (transparent, said so).
+
+The observation plane is the connector pins when the walk reaches a connector, else the end of the routed pair; when the walk stops
+before a connector the channel is the pair's own nets (the hops before the stop are not kept by the walk) and the finding lists where
+and why it stopped. A section with routed copper on only one leg, or none, is not examined (its skew is unknown, not zero); a pair with
+no examined section gets `unsupported`.
+
+### 16.3 The cascade and its formulas
+
+Names: `V_diff,in` is the differential voltage the driver launches (`V_p - V_n` at its pins, the loaded value `signal_swing` declares);
+`V_p,out`, `V_n,out` the leg voltages at an observation plane, `V_diff,out = V_p,out - V_n,out`, `V_cm,out = (V_p,out + V_n,out) / 2`.
+The reported ratio is `|V_cm,out / V_diff,in|`, not `V_cm,out / V_diff,out`; for pure skew `dt` they are `(1/2)|sin(pi f dt)|` and
+`(1/2)|tan(pi f dt)|` (0.354 and 0.5 at `f dt = 0.25`, 3.01 dB apart). Both are voltage ratios, not power-normalised mixed-mode
+S-parameters. The finding gives the ratio against `V_diff,out` as well, at each plane, named apart.
+
+The state is the pair of forward (incident) leg waves `(V_p, V_n)`, starting at `(V_diff,in / 2, -V_diff,in / 2)`, in one differential
+and one common-mode reference impedance for the whole cascade; every element is a transmission of incident to transmitted wave, so an
+element that does nothing has a transfer of exactly 1.
+
+* A routed section multiplies the legs by `g_p = (1 + a) exp(-j 2 pi f t_p)` and `g_n = (1 - a) exp(-j 2 pi f t_n)`. For skew `dt` and
+  imbalance `a` of one section the result is `(1/2) sqrt(sin^2(pi f dt) + a^2 cos^2(pi f dt))`; skew alone `(1/2)|sin|`, imbalance alone
+  `a / 2`. The larger of the two terms is not used: at `a = sin = 0.1` it reads 3 dB low.
+* A series impedance `Z` in each leg multiplies it by `2 Z_leg / (2 Z_leg + Z)`.
+* A series common-mode impedance `Z_cmc` converts to `(V_diff, V_cm)`, leaves the differential part alone and multiplies the common part
+  by `T_cc = 2 Z_c,ref / (2 Z_c,ref + Z_cmc)`: 1 for `Z_cmc = 0`, 1/2 for `2 Z_c,ref`, 0.1 for `18 Z_c,ref`. It is not the open-circuit
+  divider `Z / (Z + Z_cmc + Z)`, which belongs to a Thevenin source driving a load; the two agree for a matched source (`V_inc =
+  V_oc / 2`, tested).
+
+Order matters: common mode made before a choke goes through it, common mode made after it does not. With `T_cc = 0.1` and the same
+total skew (`f dt = 0.25`, unfiltered `0.35355`): the choke after the skewed section gives `0.035355` (20 dB below), the choke before it
+gives `0.35355`, and the skew split evenly on both sides gives `0.19445` (-5.19 dB), by hand `V_cm = 0.1375 + j 0.1375`.
+
+Assumption, stated in the finding: a matched cascade without reflections between elements; reflections and mode conversion inside
+parts are not modelled.
+
+### 16.4 Reading the board
+
+* **Skew.** Each leg's delay is `sum(length_layer * sqrt(eps_eff,layer)) / c` over its tracks and arcs (`eps_eff` as the impedance screening
+  takes it from the declared stack-up, `signal_integrity::effective_permittivity`; without a stack-up `(4.5 + 1) / 2` on an outer layer and
+  4.5 inside, as for the other checks) plus the vias' vertical path (`via_path_length_nm`) over `sqrt(eps_r)` of the dielectrics between the
+  outer copper layers. A section's skew is `t_p - t_n`. Lane-to-lane skew of a match group is **not** a contributor, and the finding says so.
+* **Reference impedances.** The section with the longest segment gives the layer and width; `signal_integrity::modal_impedances` (the
+  same estimate `si-check` prints) gives the single-ended and, with a declared pair gap, the differential impedance. The common-mode
+  reference is half a leg's single-ended impedance (the legs are taken as uncoupled in the common mode: the stack-up screening has no
+  even-mode estimate). With no declared stack-up: 50 ohm single-ended (tag `rule_of_thumb_pair_impedance`, no checked source). These only
+  matter to parts that act on the legs or on the common mode.
+* **Amplitude imbalance.** `a = k (e_n - e_p)`, `e` the fraction of a leg's routed length in the section that has no reference copper
+  within the coverage window of section 15.4 or lies within the edge limit of the reference copper's edge or the board edge (the longer of
+  the two per layer, at most the routed length), measured by the same code as section 15 on the section's net pair; `k = 0.1`
+  (band 0 to 0.2, tag `rule_of_thumb_leg_imbalance`). The leg with more exposure has the lower gain.
+* **Coupling capacitor.** `C (1 + tol)` in one leg and `C (1 - tol)` in the other, `tol = 0.1` (band 0 to 0.2, tag
+  `rule_of_thumb_capacitor_tolerance`); at gigahertz frequencies a 100 nF part is a gain of 1 to within 1e-8.
+
+### 16.5 The finding
+
+`EMI-MODE-CONVERSION`, warning severity, no cell, one per pair, present only when the worst ratio exceeds `1e-9` (-180 dB): a pair with no
+skew and no imbalance has only its coverage entry, which says "no conversion at these inputs (not a pass: ...)". `estimate`: quantity
+`mode_conversion_ratio`, unit dB, `kind = voltage_ratio` (a ratio of two voltages of one network; it is not an absolute field and gets
+no margin), at the fundamental (half the `data_rate`, or the `clock_frequency`; with neither, at the worst frequency, said so), with
+`band_db` and `basis = rule_of_thumb` when the imbalance or capacitor tolerance defaults shape it. `measures`:
+
+| Key | Content |
+|---|---|
+| `ratio` | the quantity named, its definition, input and output plane, `headline_db` and frequency, `at_fundamental_db`, `worst` (frequency and dB of the largest value of the nominal cascade on a logarithmic scan from 1 MHz to the edge corner `1 / (pi t_ramp)` of the shorter ramp, and at the fundamental) and `edge_corner_hz` |
+| `references` | single-ended, differential and common-mode reference impedance and where they come from |
+| `sections[]` | per section: nets, `examined`, lengths per leg, via counts and paths, delays, `skew_ps`, `amplitude_imbalance`, `return_path_exposure`, layers |
+| `parts[]` | per part: component, kind, what it acts on, per-leg values, `transfer_basis` (`not_declared_not_modelled` for a choke or ferrite that declares nothing; `declared_complex_inside_declared_range` or `declared_magnitude_band_inside_declared_range` for one that does), and `declared_common_mode_impedance` (the points, the range, the applicability) only where declared |
+| `elements_in_order[]` | per element in order from the driver: what it adds or removes of `V_cm` (`change_in_v_cm_db`) and the `V_cm` before and after, at the fundamental and at the worst frequency, so a reviewer sees which section converts and whether a choke is upstream or downstream of it |
+| `observation_planes[]` | before and after each modal part (choke, ferrite) and at the output: the ratio, the ratio against `V_diff,out`, and `V_cm,out` for each of the spectrum quantities of section 14.4 by name (`continuous_bound`, `pattern_lines`, `random_data_in_rbw`, `clock_lines`) at the fundamental and at the worst frequency |
+| `lane_to_lane_skew`, `inputs_text`, `channel_notes` | the note that a match group's lane-to-lane skew is not a contributor; the defaults used; where the walk stopped and what was not examined |
+
+`not_modelled` names: reflections and mode conversion inside parts, the attenuation of a choke or ferrite that declares no impedance or is outside its declared range, the coupling of the legs in the
+common-mode reference, loss and dispersion of the sections, lane-to-lane skew, the geometry before the driver pins and after the
+connector, the observation plane's own return path (no field, no radiation efficiency, no margin) and imbalance from other causes.
+
+### 16.6 Coverage
+
+`EMI-MODE-CONVERSION` is `executed` when at least one pair was examined, with an entry `EMI-MODE-CONVERSION:<P net>` per pair
+(`executed` with the numbers, or `unsupported` when no section has routed copper on both legs); `not_applicable` when a run was given and
+the board has no differential pair; `unsupported` without a run when a pair exists (it needs routed copper); no entry without a run and
+without a pair. The route report's `emi` section is kept when an `EMI-MODE-CONVERSION` entry is `executed`, like section 15.12. `copper issues` lists
+the finding in the signal group and the converting sections as `details.causes`, and `--plot-summary` draws a signal page
+(section 8); neither shows a limit, a margin or a field.
+
+### 16.7 Defaults and their sources
+
+In `crates/copper-drc/src/emi/defaults.rs`, section 8, each with its tag, band and a statement of its source.
+
+| Default | Value (band) | Source |
+|---|---|---|
+| Imbalance per unit exposure `k` | 0.1 (0 to 0.2) | **rule of thumb with no published source**: a screening choice |
+| Coupling capacitor tolerance | 0.1 (0 to 0.2), opposite signs on the two legs | ceramic tolerance codes K (10 %) and M (20 %), from memory and **not checked against the standard** |
+| Single-ended impedance without a stack-up | 50 ohm | the usual high-speed serial target, **not checked against a standard** |
+
+The edge and swing defaults are those of section 14.2 and are tagged when used.
+
+### 16.8 Validation
+
+Against hand calculations in the tests. Closed forms (`copper-emi`): `(1/2) sin(pi/4) = 0.35355` against `(1/2) tan(pi/4) = 0.5`; `a / 2 = 0.05`;
+`(1/2) sqrt(0.0199) = 0.07053` for `a = sin = 0.1`; a numerical check with two sampled trapezoids (one scaled and delayed) against the
+cascade at four harmonics for delay only, amplitude only and both; `T_cc = 1, 1/2, 0.1, 0.4472` for `Z_cmc = 0, 2, 18` times
+`Z_c,ref` and `j 100` ohm against 25 ohm; the Thevenin and incident-wave forms agreeing; the order fixtures (0.035355, 0.35355, 0.19445) and the
+identity fixture (zero-impedance elements and zero-length sections anywhere, several at once, change no state by more than 1e-14).
+Board (`crates/copper-drc/tests/emi_mode_conversion.rs`): with `eps_eff = 3.0844` a leg delay is 5.858 ps per mm; the 10 mm skew of lane A at
+1.25 GHz is `(1/2) sin(0.2300) = 0.1140`, -18.86 dB; the 4 mm skew of lane C (before a choke and two capacitors that evaluate to
+nothing) -26.76 dB before the choke, and after it, with the choke declared at 681.5 + j0 ohm at 1.25 GHz (`T_cc = 75.72 / 757.22 = 0.09999`,
+-20.00 dB), -46.76 dB; the 6 mm skew of lane D (after the choke) -23.25 dB; lane B, with equal legs, has no conversion and no finding; one leg
+moved to 1 mm from the plane edge and 3 mm from the board edge, with the same length, gives `a = 0.1`, `a / 2 = 0.05`, -26.02 dB with a band
+from none to -20.00 dB. None of this is correlated with a measurement.
+
+### 16.9 Not modelled
+
+Reflections between elements and mode conversion inside parts; the attenuation of a choke or ferrite that declares no `common_mode_impedance` and outside its declared frequency range; the
+coupling of the legs in the common-mode reference; loss and dispersion; lane-to-lane skew of a match group; the package and connector
+breakouts; the return path of the observation plane, radiation efficiency and any field or margin; imbalance from the driver, the
+receiver termination or asymmetric loading.
+
+## 17. The cable's circuit: definitions and fixtures (P4a of the signal and cable plan)
+
+Status: **definition and test fixtures**, used unchanged by the cable check of section 18: no number in any output comes from a network
+other than these, and none of it is correlated with a measurement. It is the specification that the
+cable check of the fourth phase of [`emi-signal-cable-plan.md`](emi-signal-cable-plan.md) (`EMI-CABLE-COMMON-MODE`, voltage and ranking)
+uses: every quantity of that check is a quantity of one of the networks below, and the fixtures check the closed forms
+against an independent circuit solution instead of against themselves. The closed forms are in `crates/copper-emi/src/cable_circuit.rs`
+(and `mode_conversion::common_mode_transfer`); the independent nodal solver is in `crates/copper-emi/tests/support/nodal.rs`, shares no
+code with the estimators and has its own checks against hand calculations (a resistive divider, a series RLC at resonance, coupled
+branches, a quarter-wave line); the fixtures are in `crates/copper-emi/tests/cable_circuit_fixtures.rs`.
+
+### 17.1 Conductors and the bundle
+
+The **signal conductors** of a channel are one conductor (single-ended) or a P/N pair. The **return or ground conductor** is the
+conductor inside the same cable that carries the return current, when there is one. The **shield** is the shield, when there is one. The
+**bundle** is all conductors of the cable taken together: the cut of the cable that a current clamp around the whole cable encloses.
+
+### 17.2 Two different common modes
+
+1. **The pair's common mode** against the board reference at the connector, `V_cm` of section 16. Its current can return through the
+   ground conductor inside the same cable; in the ideal case the net current of the bundle is then zero.
+2. **The bundle's common mode**: the net current of all conductors together. It returns outside the cable, through the environment, and
+   it is what a clamp around the whole cable reads and what radiates. The published cable-radiation models drive it from a voltage
+   between the cable and the antenna's *other* conductor (the board, its ground plane, other cables) through a stated coupling path
+   (Hockanson et al.); the board model does not contain that other conductor.
+
+The two are not converted into each other here: dividing the pair's `V_cm` by a cable impedance does not give the bundle current,
+because what is missing is the circuit (the in-cable return, the antenna's other conductor), not a parameter value. The net current of
+the bundle is a quantity of a stated termination and environment scenario only, and nothing is reported for it yet.
+
+### 17.3 Reference and observation point
+
+For the pair's common mode (1): the board reference at the connector's ground pins. For the bundle's common mode (2): the clamp
+position on the cable at the connector, and the other half of the antenna.
+
+### 17.4 Source and load
+
+* **Source impedance** per driver, and the **series parts** from the channel walk (coupling capacitors, chokes), are elements of the
+  network between the driver and the observation point.
+* **The load each quantity sees** is stated with the quantity: the cascade's reference impedance, a cable load, a declared load.
+* **Incident wave and Thevenin source are two representations of one network** and are kept apart. The cascade of section 16 carries
+  incident (forward) voltage waves, and a series common-mode impedance `Z_cmc` in the common-mode reference `Z_ref` transmits
+  `T = 2 Z_ref / (2 Z_ref + Z_cmc)`: 1 for no choke, exactly; 1/2 for `Z_cmc = 2 Z_ref`; tending to zero for a choke far larger than
+  `Z_ref`. A Thevenin source `V_oc` with `Z_source` into `Z_load` through `Z_cmc` has the current `I = V_oc / (Z_source + Z_cmc +
+  Z_load)` and the load voltage `V_oc Z_load / (Z_source + Z_cmc + Z_load)`. For `Z_source = Z_load = Z_ref` the load voltage is
+  `(V_oc / 2) T` for every `Z_cmc`, zero included: `V_oc / 2` is the incident wave of a matched source. Zero-impedance elements in
+  series change nothing in either representation.
+
+### 17.5 The cable termination, and what the cascade's output means
+
+The cascade is forward only and has no reflections. Its output at the connector is the incident common-mode wave, and that equals the
+steady-state voltage there **only for a matched termination**, a cable whose common-mode impedance at the connector is `Z_ref`. A final
+multiplier `2 Z_cable / (Z_ref + Z_cable)` on the forward wave gives the **first-arrival voltage** (the first wavefront before any
+reflection returns) and does not recover the steady state: the complete relation has the load-feedback denominator the cascade does not
+carry. For 1 V incident in 50 ohm, a 900 ohm choke and a 900 ohm cable load, the multiplier gives 0.189 V and the series circuit
+0.973 V (14.2 dB apart); for an open cable the circuit gives the whole open-circuit voltage, twice the incident wave, whatever the choke
+(the multiplier 0.2 V against 2 V). The three cases are matched (the two agree), high impedance and open.
+
+The consequence for P4 is binding: an absolute connector voltage is published only for a matched cable and says so; for any other
+termination only a value labelled `first_arrival_voltage`, never a steady-state figure and never compared with one. Solving the
+terminated network with its reflections belongs to a later, scenario-defined step.
+
+### 17.6 The ground-noise network
+
+`omega L_gnd I_return` is not a calculation until the following four are stated. The corridor rule of the cable check only selects
+which sources are considered; it does not give their coupling.
+
+**Driven loop A.** One per source conductor: from the driver pin along the routed copper to the load (or the connector pin), back
+through the reference plane under the route to the driver's reference pin. `Z_A` is what the loop presents to the pin: the line's
+characteristic impedance (from the stack-up, as `si-check` computes it) while the edge travels on a terminated or long line, or the
+declared load. The current follows from **one** of two source representations, never a mixture:
+
+* *Loaded pin voltage* (the default, and what `signal_swing` and `V_diff,in` of section 16 mean: the voltage at the pin while it drives
+  the line): `I_A = V_pin / Z_A`. The source impedance does not appear, because its loading is already in `V_pin`. A 1 V launched signal
+  on a matched 50 ohm line is 20 mA.
+* *Thevenin source* (only when a part declares an open-circuit swing and an `output_impedance`): `V_pin = V_oc Z_A / (Z_source + Z_A)`
+  and `I_A = V_oc / (Z_source + Z_A)`.
+
+Dividing a loaded pin voltage by `Z_source + Z_A` applies the source loading twice (10 mA instead of 20 mA in the example, 6 dB low).
+It is the error this definition excludes. A source declared both ways (`V_oc`, `Z_source` and the `V_pin` they imply) gives identical
+`V_pin`, `I_A` and `V_B`, and a test checks it. Without a characteristic impedance or a declared load for the route, `I_A` is not
+estimated (see the fallback).
+
+**Observation loop B.** The loop whose voltage is the ground-noise voltage at the connector: from the connector's ground pins through
+the reference plane to the source's reference pin, closed by a stated sense path. The sense path is part of the definition because the
+answer depends on it (it stands for the cable leaving the board and the antenna's other conductor). Version 1 uses a straight return at
+a stated height above the reference plane, a scenario parameter with a band; the finding reports how much the result moves across that
+band.
+
+**Transfer, per conductor.** Each driven conductor `k` has its own loop and its own signed transfer to loop B,
+`Z_Bk = j omega M_Bk` plus the resistance of the copper the two loops share, with `M_Bk` the mutual inductance of that conductor's loop
+and loop B, sign included. "`L_gnd`" in the plan means such an `M_Bk` and nothing else.
+
+**Signed contributions: couple first, then sum.** `V_B = sum over k of Z_Bk I_k`. For a differential pair
+`V_B = j omega (M_Bp I_p + M_Bn I_n)`. The leg currents are **not** added before the coupling is applied: with `I_p = -I_n` the summed
+current is zero, but the voltage is `j omega (M_Bp - M_Bn) I_p`, which is not zero whenever the two legs couple differently to loop B
+(one leg nearer the connector's ground path, or over a gap). In modal terms
+`V_B = j omega [ (M_Bp + M_Bn) I_cm + (M_Bp - M_Bn) I_dm ]` with `I_cm = (I_p + I_n) / 2` and `I_dm = (I_p - I_n) / 2`: the common-mode
+current couples through the sum of the mutuals and the differential current through their difference, and both terms are kept. Example:
+`+1 mA` and `-1 mA` with `M_Bp = 2 nH` and `M_Bn = 1 nH` give `omega 1 nH 1 mA`, about 628 uV at 100 MHz, with zero summed current;
+with `I_cm = 0.5 mA` added the extra voltage is `omega (M_Bp + M_Bn) I_cm` and the total 1.571 mV. Several independent sources are
+summed as phasors only when they are harmonics of one clock, otherwise as powers.
+
+A choke that carries the signal conductors of the pair but not the ground conductor attenuates the pair's common mode (1) and leaves
+the ground-noise voltage unchanged: the ground-noise driver acts on the bundle and does not pass through it.
+
+**Fallback, binding for P4.** Where the route's characteristic impedance (or declared load) or the geometry of any of the loops is not
+available, or where the result moves by more than 6 dB across the sense-path band, no ground-noise voltage is published for that source.
+It is ranked by geometry instead: corridor overlap with the connector's ground path, distance, and any slot of section 15 between them.
+Extraction of the `M_Bk` from the real copper stays deferred; the definition does not.
+
+### 17.7 The fixtures
+
+All in `crates/copper-emi/tests/cable_circuit_fixtures.rs`, each solved by the independent nodal solver and compared with the hand
+calculation written in the test, and with the closed form where there is one. Numbered as in the plan.
+
+| # | Fixture | Hand numbers |
+|---|---|---|
+| 1 | Return-conductor cancellation: a pair with common mode and an in-cable return | 1 V, 10 ohm source, two 50 ohm conductors, 5 ohm return: 12.5 mA on each, 25 mA back, net 0; return removed, 500 ohm environment: net 1.869 mA, the pair's current; both: net 0.2478 mA |
+| 2 | Source, series and load impedance, complex, across frequency | 3.3 V, 22 / 10 / 50 ohm: 2.0122 V; 20 ohm, `+j100`, 50 ohm: 1.3517 V at -55 degrees |
+| 3 | Choke traversal in both representations: incident wave `T` (no choke, `2 Z_ref`, a large choke), Thevenin current and voltage, the two agreeing for every `Z_cmc`, identity under zero-impedance elements | `T = 1, 1/2, 1e-7`; `(V_oc / 2) T` against the divider |
+| 4 | Simultaneous gain and delay mismatch of a two-leg network against the expression of section 16 | `(1/2) sin(pi/4) = 0.35355`, `a/2 = 0.05`, `(1/2) sqrt(0.0199) = 0.07053` |
+| 5 | A choke in the signal lines only | pair 1 V to 0.1 V (-20 dB); ground conductor 0.909 mV either way (21.7 uV if the choke carried it too) |
+| 6 | Cable termination behind a 900 ohm choke, 1 V incident in 50 ohm | matched 0.1 V and 0.1 V; 900 ohm 0.189 V against 0.973 V (14.2 dB); open 0.2 V against 2 V (20 dB) |
+| 7 | Choke position: the order fixtures of section 16 as a network of two legs and a common-mode series impedance | 0.035355, 0.35355 and 0.19445 (`0.1375 + j 0.1375`) |
+| 8 | Ground-noise transfer: numerical Neumann integral of loops against the filament closed form; sign and cancellation cases | single loop, loop moved away, symmetric cancellation 0, asymmetric residual 628.3 uV, common mode added 1.571 mV, a source declared both ways 20 mA, the sense height band |
+
+The assertions of fixture 6 state the size of the disagreement in the high-impedance and open cases, so the forward-only figure cannot be
+relabelled as a steady-state voltage without a test failing.
+
+### 17.8 Not modelled
+
+Reflections between the cascade's elements and the solution of the terminated network (a scenario step); the bundle's net current of
+a real cable, the antenna's other conductor, chassis and enclosure; the shield's transfer impedance; the extraction of the `M_Bk` from
+routed copper (the fixtures use rectangular filament loops in free space for the geometry cases, and the `Z_Bk` from them are not a
+board estimate); a slot between the loops; the coupling between the driven loops themselves.
+
+## 18. Cable common mode: `EMI-CABLE-COMMON-MODE` (P4 of the signal and cable plan)
+
+Status: implemented. This section is the specification of the fourth phase of [`emi-signal-cable-plan.md`](emi-signal-cable-plan.md); the
+check is in `crates/copper-drc/src/emi/cable.rs`, the closed forms in `crates/copper-emi/src/cable_circuit.rs` (section 17) and
+`mode_conversion.rs` (section 16), the example in `examples/emi_cable_common_mode/`, the tests in
+`crates/copper-drc/tests/emi_cable_common_mode.rs`, `crates/copper/tests/emi_cable_common_mode_cli.rs`,
+`crates/copper-lang/tests/emi_cable.rs` and `crates/copper-emi/tests/cable_circuit_fixtures.rs`. It reports, for each cable connector and
+each driver, a common-mode **voltage** at the connector against the board reference there, and a **ranking** of the drivers.
+
+**It reports no current, no radiated field, no `margin_db` and no pass or fail**, and nothing in its output is correlated with a
+measurement. A field would need the net current of the whole cable (the bundle's common mode, section 17.2), and that needs what the board
+model does not have: the cable's in-cable return conductor, its far-end termination and the antenna's other conductor. Dividing the pair's
+`V_cm` by a cable impedance, however wide its band, would be a different quantity; that conversion is the planned P4b and is not here. The
+function `copper_emi::estimate::cable_common_mode_field` stays unused by the report. (Its constant `mu0 f l I / r` was checked in this
+phase: the broadside far field of a short current element is `E = eta0 I l / (2 lambda r) = mu0 f l I / (2 r)` in free space, so the
+function's value is twice the free-space field, the factor 2 being the ground reflection of a test site; no book was checked, the
+derivation is in the function's documentation and a unit test.)
+
+### 18.1 When it runs and what it needs
+
+One finding and one coverage entry per cable connector: a part with `external_cable = true` or a component named by an `emission`
+constraint. It runs on every `emi-check`: the default run lists what needs no routed copper (the ground-noise selection, the single-ended
+signals, the switch-node scores, the shield) and marks each differential pair `unsupported` ("needs routed copper: run `copper emi-check
+BOARD --run RUN`"); `--run RUN` adds the pair voltages and the ground-noise networks. A board with no cable connector keeps its previous
+`EMI-CABLE-COMMON-MODE` entry (`unsupported`, byte for byte), so its default output is unchanged. A connector with nothing to report (no pair
+or single-ended signal reaches it by the channel walk, no fast net or cell is near its ground pins, no switch-node score, no shield pin) gets
+`not_applicable` and no finding; when every connector is like that the overall entry is `not_applicable` too.
+
+### 18.2 The drivers
+
+Each is a voltage between named conductors and the board reference at the connector (the connector's ground pins: pads of the connector on a
+declared 0 V supply net), with its network from section 17.
+
+1. **Differential pairs that leave on the cable** (found by the channel walk of section 14.3, not by the net classes). The voltage is
+   `V_cm,out` of the section 16 cascade at the connector pins, for each spectrum quantity of section 14.4 by name, in dBuV (single-sided peak
+   amplitude of the line), with the band the rule-of-thumb inputs and a magnitude-only choke open. **No divider of its own is applied**: a
+   choke is an element of the cascade at its position, so common mode generated upstream of it is attenuated by `T_cc(f) = 2 Z_c,ref / (2
+   Z_c,ref + Z_cmc(f))` and common mode generated after it is not. The finding shows the two parts separately for every quantity
+   (`from_upstream_of_last_choke_dbuv`, `generated_after_last_choke_dbuv`; the cascade is linear, so the two add as phasors to the total).
+   A choke of zero impedance changes nothing (transmission exactly 1, tested through the real code path).
+   *The choke's declared impedance.* Inside the declared range the impedance is the declared one (log-axis interpolation); with a phase the
+   transmission is complex and one value; with magnitudes only it is a band, `2 Z_c,ref / (|Z| + 2 Z_c,ref)` to `2 Z_c,ref / | |Z| - 2 Z_c,ref |`
+   (the plan's band, reported as `transmission_low` and `transmission_high`, the latter unbounded for `|Z| = 2 Z_c,ref`), of which the voltage
+   uses the upper end limited to 1 (`transmission_high_used`: a passive series impedance has a real part of at least zero, which keeps the
+   transmission at or below 1). Outside the declared range, and at any frequency other than the one point a single declaration gives, the
+   choke is **present with its attenuation not modelled** (`declared_outside_range_not_modelled`, transmission null, listed in
+   `choke_not_modelled`); nothing is extrapolated.
+   *What the connector voltage means.* The cascade is forward only, so its output at the connector is the incident common-mode wave. That is the
+   steady-state voltage **only for a matched cable**, one whose common-mode impedance at the connector is `Z_c,ref`. That is the single
+   case for which an absolute connector voltage is published, as `common_mode_voltage_at_connector` with the assumption stated and the tag
+   `matched_cable_termination`: it is the case whenever the connector part declares no `cable_common_mode_impedance`, or one within 1 % of
+   `Z_c,ref`. For a declared, unmatched cable only `first_arrival_voltage` is given, the first wavefront at the cable before any reflection
+   returns (`2 Z_cable / (Z_c,ref + Z_cable)` times the incident wave), labelled as not a steady-state value, with `steady_state_voltage`
+   null, and never ranked against a steady-state quantity (the 50 / 900 / 900 ohm example of section 17.5: 0.189 V against 0.973 V, 14.2 dB).
+   The terminated network with reflections is the scenario step of P4b.
+2. **Single-ended signals that leave on the cable.** Their swing is **not** taken as common-mode voltage: a signal whose return is in the same
+   cable is not common mode by itself. A ranking-only entry lists each with its edge time, swing and slew rate; they contribute through the
+   ground-noise driver, driven by their own return current. Signal-to-return imbalance inside the cable is not modelled.
+3. **Ground noise (current driven).** The voltage `V_B = sum over the driven conductors of Z_Bk I_k` of the network of section 17.6: each
+   conductor has its own loop A and its own signed mutual `M_Bk` to the observation loop B, **coupled first and then summed** (for a pair
+   `V_B = j omega (M_Bp I_p + M_Bn I_n)`, never one value for the pair); this is the driver that acts on the bundle, and a choke in the signal
+   lines does not attenuate it (fixture 5).
+   * *The source current* from exactly one representation (section 2): `I_A = V_pin / Z_A` for the loaded pin voltage (a pair: `V_diff` over the
+     differential impedance of the stack-up, `I_n = -I_p`), or `I_A = V_oc / (Z_source + Z_A)` for a declared Thevenin source; `Z_A` is the
+     route's characteristic impedance from the stack-up as `si-check` takes it.
+   * *Loop A* of each conductor is its routed copper (chained from the end nearest the driver, per layer, each run at the height of its layer
+     over the reference plane) closed through the plane directly beneath it; *loop B* is a straight sense path from the reference pin of the
+     driving component to the connector's ground pin nearest the driver, at a stated height over the plane, closed through the plane. The
+     sense height is a scenario parameter, a band (3, 5 and 8 mm, tag `rule_of_thumb_sense_height`, no published source), and the finding gives
+     the result for all three.
+   * *The published form of `M_Bk`* is `copper_emi::cable_circuit::loop_mutual`: the Neumann mutual inductance of two closed polylines as the
+     sum over their edges of the finite-filament mutuals of `copper_emi::inductance::mutual_filaments` (Grover's closed form for parallel
+     filaments, adaptive quadrature for skew ones). Validity: thin conductors (filament separation large against width), free space with the
+     reference plane represented by the return edge of each loop directly beneath its conductor (no current spreading, no finite plane, no
+     slot). It agrees with an independent midpoint Neumann integral written in the tests (`cable_circuit_fixtures.rs` fixture 8 and
+     `emi_cable_common_mode.rs`, to 0.3 %). Positions of the loops are in `measures` (`network.loop_b`, `network.conductor_loops`).
+   * *When a voltage is published.* Only when all of these exist for the source: the characteristic impedance of the route (a routed layer
+     with a declared stack-up), the routed copper of every conductor, a swing, a reference pin and a connector ground pin, a reference plane
+     layer, **no slot** of the reference plane between the loops (the voids of the zone fills on the straight path of loop B, widened by `3 H` as
+     in section 15, named in `slots_between_the_loops`) and the result within 6 dB across the sense-height band. Where the result is more than 30 dB
+     below the larger of the legs' own terms (the legs' signed mutuals cancel) it is published as it is and `cancellation` is set: the band test
+     would only measure the rounding of a difference. Otherwise the source is ranked by geometry and `no_voltage_because` names what was missing
+     or how far the result moved. This is expected to be the common case on a board that is not laid out for it. There is no declared load in the
+     language yet, so a route without a characteristic impedance has no current.
+   * *Which sources are considered.* The signal that leaves on this connector, always. Another fast net or a switching cell is considered when
+     the straight corridor between its source and load pins, widened by `3 H`, overlaps the corridor of the connector's ground pins: the corridor
+     from the ground pins to the nearest point of that net's own return path ends on the net's corridor, so the test as implemented is the
+     distance from the connector's ground pin to the net's corridor against `2 x 3 H` (each corridor widened by `3 H`). Otherwise the source is
+     listed in `ground_noise_not_counted` with its distance and the threshold. A switching cell is selected the same way on the corridor between
+     its switch pin and its reference pin, and is ranking only (its pulsed current is the hot loop's, section 8).
+4. **Switch-node coupling (voltage driven).** The `cm_coupling_score` of `EMI-SWITCH-NODE` with the distance of that net to this connector,
+   ranking only, no voltage. The island capacitance to the connector's shell and pins themselves is not computed (the score uses the
+   capacitance to the nearest ground plane).
+
+### 18.3 Shielded cables
+
+`cable_shielded = true` with pins of `emi_role = shield` gives the **shield bond** report: the pins and their nets, the vias on the pin's net
+within 5 mm of it (tag `rule_of_thumb_shield_bond_radius`, no published source) and an estimated bond inductance, those vias in parallel, each
+`mu0 h / (2 pi) (ln(4 h / d) + 1)` over the height `h` to the nearest ground plane (the via estimate of the conducted check, expected within
+30 %; a band is given, the pin's own inductance is not included). The shield's transfer impedance is not modelled. `cable_shielded = true`
+without any shield pin is its own finding, `EMI-CABLE-SHIELD` ("no declared bond"). A connector with neither the attribute nor a shield pin is
+treated as unshielded and tagged `assumed_unshielded_cable`; one with shield pins and no attribute reports the bond and is not tagged.
+
+### 18.4 The finding
+
+`EMI-CABLE-COMMON-MODE`, warning severity, no cell, one per connector. `estimate`: the strongest pair voltage (quantity
+`common_mode_voltage_at_connector` or `first_arrival_voltage`, unit dBuV, `kind = common_mode_voltage`, the definition stated, with `band_db`
+when the rule-of-thumb inputs or a magnitude-only choke open one); none when no pair has a voltage. `measures`:
+
+| Key | Content |
+|---|---|
+| `connector`, `part` | the connector and its part |
+| `cable` | `shielded`, `shield_pins_declared`, `assumed_unshielded`, `cable_length_m` (the `emission` constraint's `cable_length`, default 1 m), `quarter_wave_frequency_hz` (above it the cable is resonant, not modelled), the declared cable impedance |
+| `shield` | the bond report of section 18.3, or null |
+| `differential_pairs[]` | per pair: `conductors`, `reference`, `voltage` (`quantity`, `headline_dbuv`, `band_dbuv`, `spectrum[]` per quantity with the two parts at the last choke), `termination`, `choke_transfer[]`, `channel_provenance[]` (the parts crossed), `choke_not_modelled`, `rank` |
+| `ground_noise[]` | per considered source: `status` (`evaluated` or `ranking_only`), `voltage` (headline, the sense band and its spread, the spectrum with `line_amplitude_v`) or null with `no_voltage_because`, `network` (impedance, mutuals for the three sense heights, the loops), `slots_between_the_loops`, `distance_to_connector_ground_pins_mm`, `rank` |
+| `ground_noise_not_counted[]` | the sources the corridor rule did not select, with the distance and the threshold |
+| `single_ended_signals[]`, `switch_node_coupling[]` | the ranking-only drivers |
+| `ranking` | the drivers ordered within their own kind: pairs by the continuous bound (or the clock line) at the headline frequency, ground noise by voltage and, beside it, by geometry (a source with a slot first, then the nearer), single-ended signals by slew rate, switch nodes by score; a note that the kinds are shown side by side and **not summed** (they act on different conductors, the pair against the reference and the bundle against the environment) |
+| `not_modelled`, `inputs_text` | what is left out (below); the defaults used |
+
+The headline frequency is the fundamental (half the `data_rate`, or the `clock_frequency`); with neither it is the frequency of the largest value
+over a logarithmic scan of 30 MHz to 1 GHz (and below the edge corner), said so. The `EMI-MARGIN` coverage entry says cable common mode is
+reported as voltage and ranking only, and why. `has_content` of the route-report section counts an executed `EMI-CABLE-COMMON-MODE` entry (overall
+or per connector), so a board with a connector and something to report keeps its `emi` section; one with a connector and nothing to report keeps
+the bytes it had. `copper issues` lists the finding in the connector group with one cause per driver (its quantity label as above),
+`--plot-summary` draws a connector page and `--plot-spectrum` the per-driver voltage spectra at the connector, without a limit
+line (section 8).
+
+### 18.5 Defaults and their sources
+
+In `crates/copper-drc/src/emi/defaults.rs`, section 9.
+
+| Default | Value (band) | Source |
+|---|---|---|
+| Sense-path height of loop B | 5 mm (3 to 8 mm), tag `rule_of_thumb_sense_height` | **rule of thumb with no published source**; the heights of the independent fixture 8 |
+| Sense-band limit for publishing a voltage | 6 dB | the plan's decision, not a rule of thumb |
+| Cancellation threshold | 30 dB below the larger leg term | a choice of this implementation |
+| Radius of a shield bond via | 5 mm (2 to 10 mm), tag `rule_of_thumb_shield_bond_radius` | **rule of thumb with no published source** |
+| Corridor widening | `3 H` each side (section 15's `RETURN_WINDOW_H`) | derived there |
+
+The edge, swing and reference-impedance defaults are those of sections 14.2 and 16.7 and are tagged when used. `matched_cable_termination` and
+`assumed_unshielded_cable` are tags of the plan, not rules of thumb.
+
+### 18.6 Validation
+
+Against hand calculations in the tests, with `Z_c,ref = 37.86 ohm` and the lanes of section 16.8. Through the real code path
+(`emi_cable_common_mode.rs`): a 6 mm skew with no choke, after a choke, or after a zero-impedance choke reads `0.254648 x 0.068789 = 17.517 mV
+= 84.87 dBuV` (the identity); a 4 mm skew before ChokeA (681.5 + j0 ohm, `T_cc = 0.1000`) reads 61.36 dBuV against 81.36 unfiltered; a choke
+of `2 Z_c,ref` reads 6.02 dB lower, one of 10 kohm 42.48 dB lower; a magnitude of 450 ohm at 1.25 GHz gives the band 64.53 to 67.48 dBuV
+(`|T|` 0.14403 to 0.20231), and the 100 MHz lane through the same part is unattenuated (59.44 dBuV, outside the declared point); the same total
+skew with the choke before and after, and split, agree with a small cascade written in the test; the 150 ohm cable of the shielded connector
+gives the first arrival `17.517 mV x 2 (150) / (37.86 + 150) = 27.97 mV = 88.94 dBuV` and no steady-state value; the three vias of the shield pin
+give 0.0336 nH. Ground noise: the three mutuals of a 60 mm route 2 mm beside the sense path agree with an independent Neumann integral to
+0.3 %, the voltage is `omega M A / Z_A`, the legs of a symmetric pair cancel to more than 100 dB below one leg's term and a pair with one leg
+nearer gives `omega (M_p - M_n) I`, the Thevenin and loaded declarations of the same source give the same voltage, a cut across the sense path
+makes the source ranking only with the slot named, and the corridor distances of the clocks (1.115 mm and 44.008 mm) are the geometry by hand.
+Language: `crates/copper-lang/tests/emi_cable.rs`. None of this is correlated with a measurement.
+
+### 18.7 Not modelled
+
+The bundle's net current, the cable's routing and height, chassis and enclosure; the far-end termination (an absolute connector voltage assumes
+a matched cable); cable resonance above the quarter-wave frequency; reflections between a choke and the cable; the shield's transfer impedance;
+signal-to-return imbalance inside the cable; the resistance of the copper two loops share and current spreading in the plane; mode conversion
+inside parts and the connector's breakout; a choke or ferrite with no declared impedance, or outside its declared range; radiation, a field and a
+margin. The extraction of the `M_Bk` from filled copper stays deferred (P5).

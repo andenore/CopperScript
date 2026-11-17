@@ -12,6 +12,7 @@ pub mod compiler;
 pub mod diagnostics;
 pub mod elaborate;
 pub mod emi;
+pub mod emi_signals;
 pub mod erc;
 mod error;
 pub mod footprints;

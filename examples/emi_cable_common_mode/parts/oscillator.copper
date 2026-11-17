@@ -1,0 +1,6 @@
+// A clock oscillator.
+part Osc {
+    category = "clock.oscillator";
+    pin OUT { number = "1"; domains = "clock"; directions = "output"; clock_frequency = 24MHz; rise_time = 1ns; signal_swing = 3.3V; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+}

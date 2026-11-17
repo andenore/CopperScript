@@ -312,6 +312,20 @@ const ASSUMPTIONS: &[(&str, &str)] = &[
     ("capacitor_branch_skipped", "A capacitor branch is left out of the model."),
     ("filter_inductor_ideal", "The filter inductor is modelled as ideal."),
     ("feed_resistance_not_modelled", "The source resistance is not modelled."),
+    (
+        "matched_cable_termination",
+        "The connector voltage assumes a cable matched to the channel's common-mode reference; no cable is modelled.",
+    ),
+    ("assumed_unshielded_cable", "The cable is assumed unshielded: the connector declares nothing."),
+    (
+        "rule_of_thumb_sense_height",
+        "The height of the ground-noise sense path is a rule-of-thumb band, not a measurement.",
+    ),
+    (
+        "rule_of_thumb_shield_bond_radius",
+        "The vias counted as the shield's bond are those within a rule-of-thumb radius.",
+    ),
+    ("rule_of_thumb_capacitor_tolerance", "Coupling-capacitor tolerances are a rule of thumb."),
 ];
 
 /// The assumption sentences of `tags` (at most [`MAX_ASSUMPTIONS`], then "+N more in the report").
@@ -884,10 +898,26 @@ pub fn spectrum_thumbnail(panel: &SpectrumPanel, id: usize) -> crate::emi_field:
 
 /// The SVG of `panels`, stacked; `title` names the board or run in the heading.
 pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
+    spectrum_svg_with(title, panels, &[])
+}
+
+/// The SVG of `panels` followed by `extra` pictures of the same width (the voltage spectra at the cable connectors,
+/// which have no limit line); with no `extra` it is [`spectrum_svg`] byte for byte.
+pub fn spectrum_svg_with(title: &str, panels: &[SpectrumPanel], extra: &[crate::emi_field::FieldPicture]) -> String {
     let mut body: Vec<String> = Vec::new();
     let mut top = 0.0;
     for (i, panel) in panels.iter().enumerate() {
         top += panel_svg(panel, top, &mut body, i, false);
+    }
+    for picture in extra {
+        body.push(format!(
+            "<g transform=\"translate(0,{})\">
+{}
+</g>",
+            n(top),
+            picture.content
+        ));
+        top += picture.height;
     }
     let height = top + FOOTER;
     let mut out: Vec<String> = Vec::new();
@@ -898,7 +928,9 @@ pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
         n(WIDTH),
         n(height)
     ));
-    out.push(format!("<title>{} conducted emission spectrum (screening estimate)</title>", escape(title)));
+    let what =
+        if panels.is_empty() { "voltage spectra at the cable connectors" } else { "conducted emission spectrum" };
+    out.push(format!("<title>{} {what} (screening estimate)</title>", escape(title)));
     out.push(format!("<rect width=\"{}\" height=\"{}\" fill=\"{BACKGROUND}\"/>", n(WIDTH), n(height)));
     out.extend(body);
     out.push(format!(
@@ -906,8 +938,15 @@ pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
         n(LEFT),
         n(height - 14.0)
     ));
-    out.push("</svg>\n".to_owned());
-    out.join("\n")
+    out.push(
+        "</svg>
+"
+        .to_owned(),
+    );
+    out.join(
+        "
+",
+    )
 }
 
 #[cfg(test)]

@@ -1,0 +1,9 @@
+// A cable connector with two differential lanes.
+part Conn {
+    category = "connector.header";
+    external_cable = true;
+    pin A { number = "1"; domains = "digital"; directions = "passive"; }
+    pin B { number = "2"; domains = "digital"; directions = "passive"; }
+    pin C { number = "3"; domains = "digital"; directions = "passive"; }
+    pin D { number = "4"; domains = "digital"; directions = "passive"; }
+}

@@ -19,13 +19,50 @@ use sha2::{Digest, Sha256};
 /// The report key of the section.
 pub const KEY: &str = "emi";
 
-/// The EMI check of `board` for `design`: `Err` when the electrical view cannot be built or the
+/// What the return-path check of `emi-check` is given for a board, owned: nothing when the board is not a
+/// routed one, the native zone fills of a routed board, or the reason they could not be made. `emi-check --run` and the
+/// section `route-board` embeds both prepare it here, so `--write` reproduces the embedded section bit for bit.
+pub enum ReturnPath {
+    NotRequested,
+    Fills(copper_drc::emi::return_path::PlaneFills),
+    Unavailable(String),
+}
+
+impl ReturnPath {
+    /// `routed`: the board carries routed copper. The zones are filled only when a net is a subject of the check,
+    /// since a fill is not instant.
+    pub fn prepare(board: &PhysicalBoard, model: &copper_lang::emi::EmiModel, routed: bool) -> ReturnPath {
+        if !routed {
+            ReturnPath::NotRequested
+        } else if !copper_drc::emi::return_path::has_subjects(board, model) {
+            ReturnPath::Fills(copper_drc::emi::return_path::PlaneFills::default())
+        } else {
+            match copper_fullwave::fill::zone_fill_set(board) {
+                Ok(set) => ReturnPath::Fills(set.plane_fills()),
+                Err(reason) => ReturnPath::Unavailable(reason),
+            }
+        }
+    }
+
+    pub fn input(&self) -> copper_drc::emi::return_path::ReturnPathInput<'_> {
+        use copper_drc::emi::return_path::ReturnPathInput;
+        match self {
+            ReturnPath::NotRequested => ReturnPathInput::NotRequested,
+            ReturnPath::Fills(fills) => ReturnPathInput::Fills(fills),
+            ReturnPath::Unavailable(reason) => ReturnPathInput::Unavailable(reason.clone()),
+        }
+    }
+}
+
+/// The EMI check of the routed `board` for `design` (with the return-path check, which fills the zones when a net is a
+/// subject): `Err` when the electrical view cannot be built or the
 /// check panics (a screening aid must never stop a route).
 pub fn check(design: &Design, board: &PhysicalBoard) -> Result<copper_drc::emi::EmiCheckReport, String> {
     catch_unwind(AssertUnwindSafe(|| {
         let view = copper_lang::elaborate::elaborate(&design.electrical).map_err(|message| message.to_string())?;
         let model = copper_lang::emi::analyze(&view);
-        Ok(copper_drc::emi::emi_check(board, &view, &model))
+        let return_path = ReturnPath::prepare(board, &model, true);
+        Ok(copper_drc::emi::emi_check_with_return_path(board, &view, &model, &return_path.input()))
     }))
     .unwrap_or_else(|_| Err("the EMI check stopped on an internal error".to_owned()))
 }
@@ -38,11 +75,26 @@ pub fn error_section(message: &str) -> Value {
     ]))
 }
 
-/// The section `route-board` embeds: `None` for a design without a switching cell (its report keeps
-/// the bytes it had before the section existed), the check document otherwise, or the error record.
+/// Whether `report` has anything to put in the route report: a switching cell, a finding, or an executed
+/// signal check (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION` and `EMI-CABLE-COMMON-MODE`, with their `:<net>` and
+/// `:<connector>` entries, which also say "nothing to report" for a subject).
+fn has_content(report: &copper_drc::emi::EmiCheckReport) -> bool {
+    !report.cells.is_empty()
+        || !report.findings.is_empty()
+        || report.coverage.iter().any(|entry| {
+            entry.status == copper_drc::CoverageStatus::Executed
+                && (entry.check.starts_with("EMI-RETURN-PATH")
+                    || entry.check.starts_with("EMI-MODE-CONVERSION")
+                    || entry.check.starts_with("EMI-CABLE-COMMON-MODE"))
+        })
+}
+
+/// The section `route-board` embeds: `None` for a design with no switching cell, no finding and no executed
+/// signal check (its report keeps the bytes it had before the section existed), the check document otherwise, or
+/// the error record.
 pub fn for_route_report(design: &Design, board: &PhysicalBoard) -> Option<Value> {
     match check(design, board) {
-        Ok(report) if report.cells.is_empty() => None,
+        Ok(report) if !has_content(&report) => None,
         Ok(report) => Some(report.to_value()),
         Err(message) => Some(error_section(&message)),
     }
@@ -142,6 +194,45 @@ mod tests {
         dump(
             &copper_json::parse(r#"{"schema":"copperscript-route-board/v0.1","status":"routed","z":[1,2.5]}"#).unwrap(),
         )
+    }
+
+    #[test]
+    fn the_section_is_kept_for_a_cell_a_finding_or_an_executed_signal_check_only() {
+        use copper_drc::{Coverage, CoverageStatus};
+        let entry =
+            |check: &str, status| Coverage { check: check.to_owned(), status, required: false, detail: String::new() };
+        let report = |coverage: Vec<Coverage>| copper_drc::emi::EmiCheckReport {
+            board: "b".to_owned(),
+            cells: Vec::new(),
+            findings: Vec::new(),
+            coverage,
+            limits: copper_drc::emi::Limits {
+                validation: String::new(),
+                standard: None,
+                limit_source: None,
+                distance_m: 3.0,
+                band_hz: (30e6, 1e9),
+                notes: Vec::new(),
+            },
+        };
+        // Nothing to say: no section, as before.
+        assert!(!has_content(&report(Vec::new())));
+        assert!(!has_content(&report(vec![
+            entry("EMI-RETURN-PATH", CoverageStatus::NotApplicable),
+            entry("EMI-RETURN-PATH", CoverageStatus::Unsupported),
+            entry("EMI-HOT-LOOP", CoverageStatus::Executed),
+        ])));
+        // An executed return-path check (overall or per net) is something to say, finding or not.
+        assert!(has_content(&report(vec![entry("EMI-RETURN-PATH", CoverageStatus::Executed)])));
+        assert!(has_content(&report(vec![entry("EMI-RETURN-PATH:CLK", CoverageStatus::Executed)])));
+        // An executed cable common-mode entry (overall or per connector) is something to say as well; one that is not
+        // executed is not (the entry a board with a cable connector and nothing to report gets).
+        assert!(has_content(&report(vec![entry("EMI-CABLE-COMMON-MODE", CoverageStatus::Executed)])));
+        assert!(has_content(&report(vec![entry("EMI-CABLE-COMMON-MODE:J1", CoverageStatus::Executed)])));
+        assert!(!has_content(&report(vec![
+            entry("EMI-CABLE-COMMON-MODE", CoverageStatus::NotApplicable),
+            entry("EMI-CABLE-COMMON-MODE:J1", CoverageStatus::Unsupported),
+        ])));
     }
 
     #[test]

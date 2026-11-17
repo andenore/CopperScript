@@ -80,6 +80,8 @@ pub struct Context<'a> {
     pub spectrum_file: &'a str,
     pub impedance_file: &'a str,
     pub current_file: &'a str,
+    /// The file name of the full-size voltage spectra at a connector, in the command of a connector page.
+    pub connector_spectrum_file: &'a str,
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
@@ -601,32 +603,34 @@ fn table(out: &mut Vec<String>, x: f64, mut y: f64, width: f64, rows: &[Row]) ->
 }
 
 /// Findings of the cell, worst severity first, then by id (the order of `copper issues`).
-fn finding_rows<'a>(data: &CellData<'a>, order: &[&'a Value]) -> Vec<(usize, &'a Value)> {
+fn finding_rows<'a>(findings: &[&'a Value], order: &[&'a Value]) -> Vec<(usize, &'a Value)> {
     let rank = |f: &Value| match f.get("severity").and_then(Value::as_str) {
         Some("error") => 0,
         Some("warning") => 1,
         _ => 2,
     };
-    let mut rows: Vec<(usize, &Value)> = data
-        .findings
-        .iter()
-        .map(|f| (order.iter().position(|o| std::ptr::eq(*o, *f)).unwrap_or(usize::MAX), *f))
-        .collect();
+    let mut rows: Vec<(usize, &Value)> =
+        findings.iter().map(|f| (order.iter().position(|o| std::ptr::eq(*o, *f)).unwrap_or(usize::MAX), *f)).collect();
     rows.sort_by_key(|(index, f)| (rank(f), *index));
     rows
 }
 
+/// The findings of one subject (`name`: its cell, signal or connector, the prefix its messages start with) as a
+/// panel; `empty` says what a subject with none is.
+#[allow(clippy::too_many_arguments)]
 fn findings_panel(
     out: &mut Vec<String>,
     x: f64,
     mut y: f64,
     width: f64,
-    data: &CellData,
+    name: &str,
+    findings: &[&Value],
+    empty: &str,
     order: &[&Value],
     ctx: &Context,
 ) -> f64 {
-    let rows = finding_rows(data, order);
-    text(out, x, y, 15.0, "bold", INK, "", "heading", &format!("Findings for {} ({})", data.controller, rows.len()));
+    let rows = finding_rows(findings, order);
+    text(out, x, y, 15.0, "bold", INK, "", "heading", &format!("Findings for {name} ({})", rows.len()));
     y += 10.0;
     out.push(format!(
         "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{RULE}\" stroke-width=\"1\"/>",
@@ -637,7 +641,7 @@ fn findings_panel(
     ));
     y += 20.0;
     if rows.is_empty() {
-        text(out, x, y, 12.0, "", MUTED, "", "", "no findings for this cell");
+        text(out, x, y, 12.0, "", MUTED, "", "", empty);
         return y + 16.0;
     }
     for (index, finding) in rows.iter().take(MAX_FINDINGS) {
@@ -666,7 +670,7 @@ fn findings_panel(
         if !location.is_empty() {
             text(out, x + width, y, 11.0, "", MUTED, "end", "finding-location", &fit(&location, 11.0, 260.0));
         }
-        let message = first_clause(finding.get("message").and_then(Value::as_str).unwrap_or(""), &data.controller);
+        let message = first_clause(finding.get("message").and_then(Value::as_str).unwrap_or(""), name);
         text(out, x, y + 15.0, 11.0, "", INK, "", "finding-message", &fit(&message, 11.0, width));
         y += 36.0;
     }
@@ -834,7 +838,17 @@ fn page(
     } else {
         table(&mut out, MARGIN, y + 30.0, left_w, &rows)
     };
-    let right_end = findings_panel(&mut out, right_x, y, right_w, &data, order, ctx);
+    let right_end = findings_panel(
+        &mut out,
+        right_x,
+        y,
+        right_w,
+        &data.controller,
+        &data.findings,
+        "no findings for this cell",
+        order,
+        ctx,
+    );
     y = left_end.max(right_end) + 14.0;
 
     // 4. The thumbnails.
@@ -959,6 +973,570 @@ pub fn summary_pages(document: &Value, ctx: &Context, thumbnails: &[CellThumbnai
         .collect()
 }
 
+// ---- Pages of signals, pairs and cable connectors -----------------------------------------------------------------
+
+/// The header of a signal or connector page: title, facts, the one-line disclaimer and a rule; returns the y below.
+fn subject_header(out: &mut Vec<String>, document: &Value, title: &str, facts: &str, disclaimer: &str) -> f64 {
+    text(out, MARGIN, 36.0, 24.0, "bold", INK, "", "title", title);
+    text(
+        out,
+        WIDTH - MARGIN,
+        36.0,
+        12.0,
+        "",
+        MUTED,
+        "end",
+        "board",
+        &format!("{} EMI summary", document.get("board").and_then(Value::as_str).unwrap_or("board")),
+    );
+    let mut y = 62.0;
+    if !facts.is_empty() {
+        y = paragraph(out, MARGIN, y, WIDTH - 2.0 * MARGIN, 15.0, INK, "facts", facts) + 4.0;
+    }
+    text(out, MARGIN, y + 4.0, 13.0, "bold", MUTED, "", "disclaimer", disclaimer);
+    y += 22.0;
+    out.push(format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{RULE}\" stroke-width=\"1.5\"/>",
+        n(MARGIN),
+        n(y),
+        n(WIDTH - MARGIN),
+        n(y)
+    ));
+    y + 28.0
+}
+
+/// A section heading with its rule, at `(x, y)`; the table or text starts 30 px below.
+fn heading(out: &mut Vec<String>, x: f64, y: f64, width: f64, title: &str) {
+    text(out, x, y, 15.0, "bold", INK, "", "heading", title);
+    out.push(format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{RULE}\" stroke-width=\"1\"/>",
+        n(x),
+        n(y + 10.0),
+        n(x + width),
+        n(y + 10.0)
+    ));
+}
+
+/// The defaults the findings used (`inputs_text`), without repeats.
+fn inputs_lines(findings: &[&Value]) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for finding in findings {
+        for line in strings(measure(finding, "inputs_text")) {
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
+/// An item of `estimate.not_modelled` cut at its first parenthesis or colon.
+fn short_item(item: &str) -> String {
+    let cut = item.split(" (").next().unwrap_or(item);
+    cut.split(": ").next().unwrap_or(cut).trim().to_owned()
+}
+
+/// The not-modelled items of `findings` (their `estimate.not_modelled`), shortened, without repeats.
+fn not_modelled_items(findings: &[&Value]) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    for finding in findings {
+        for item in strings(finding.get("estimate").and_then(|e| e.get("not_modelled"))) {
+            let short = short_item(&item);
+            if !short.is_empty() && !items.contains(&short) {
+                items.push(short);
+            }
+        }
+    }
+    items
+}
+
+fn tags_of(findings: &[&Value]) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for finding in findings {
+        for tag in strings(finding.get("tags")) {
+            if !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+/// The footer of a signal or connector page: what the numbers assume, what is not modelled, and the commands.
+fn subject_footer(
+    out: &mut Vec<String>,
+    mut y: f64,
+    findings: &[&Value],
+    fixed_not_modelled: &str,
+    commands: &[(String, String)],
+    ctx: &Context,
+) -> f64 {
+    out.push(format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{RULE}\" stroke-width=\"1\"/>",
+        n(MARGIN),
+        n(y - 8.0),
+        n(WIDTH - MARGIN),
+        n(y - 8.0)
+    ));
+    y += 14.0;
+    text(out, MARGIN, y, 13.0, "bold", INK, "", "heading", "What the numbers assume");
+    y += 18.0;
+    for line in assumption_lines(&tags_of(findings)) {
+        y = paragraph(out, MARGIN + 10.0, y, WIDTH - 2.0 * MARGIN - 10.0, 12.0, INK, "assumption", &line);
+    }
+    for line in inputs_lines(findings).iter().take(4) {
+        y = paragraph(out, MARGIN + 10.0, y, WIDTH - 2.0 * MARGIN - 10.0, 12.0, INK, "assumption", line);
+    }
+    y += 6.0;
+    let items = not_modelled_items(findings);
+    let shown: Vec<&String> = items.iter().take(5).collect();
+    let mut line = format!("Not modelled: {fixed_not_modelled}");
+    if !shown.is_empty() {
+        line.push_str(&format!(
+            " Also listed by the findings: {}.",
+            shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("; ")
+        ));
+        if items.len() > shown.len() {
+            line.push_str(&format!(" +{} more in the report.", items.len() - shown.len()));
+        }
+    }
+    y = paragraph(out, MARGIN, y, WIDTH - 2.0 * MARGIN, 12.0, INK, "not-modelled", &line) + 8.0;
+    text(out, MARGIN, y, 13.0, "bold", INK, "", "heading", "Full-size pictures and the findings");
+    y += 18.0;
+    for (what, line) in commands {
+        text(out, MARGIN + 10.0, y, 12.0, "bold", MUTED, "", "command-label", what);
+        out.push(format!(
+            "<text class=\"command\" x=\"{}\" y=\"{}\" font-size=\"12\" font-family=\"Consolas, Menlo, monospace\" fill=\"{INK}\">{}</text>",
+            n(MARGIN + 210.0),
+            n(y),
+            escape(&fit(line, 12.0 * 1.07, WIDTH - MARGIN - (MARGIN + 210.0)))
+        ));
+        y += 17.0;
+    }
+    if let Some(run) = ctx.run {
+        y += 4.0;
+        y = paragraph(
+            out,
+            MARGIN,
+            y,
+            WIDTH - 2.0 * MARGIN,
+            12.0,
+            MUTED,
+            "ids",
+            &format!(
+                "The M ids are those `copper issues {run}` lists once this result is stored in the run with --write."
+            ),
+        );
+    }
+    y += 10.0;
+    out.push(format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{RULE}\" stroke-width=\"3\"/>",
+        n(0.0),
+        n(y),
+        n(WIDTH),
+        n(y)
+    ));
+    y
+}
+
+fn signed(value: f64) -> String {
+    if value > 0.0 { format!("+{}", n(value)) } else { n(value) }
+}
+
+/// The key numbers of a signal or pair: the mode-conversion ratio, the converting sections and parts, and the
+/// return-path distances and ranking score, each only where the report holds it.
+fn signal_rows(findings: &[&Value]) -> Vec<Row> {
+    use crate::emi_return_path::CauseKind;
+    let mut rows: Vec<Row> = Vec::new();
+    for finding in findings {
+        match finding.get("code").and_then(Value::as_str).unwrap_or("") {
+            "EMI-MODE-CONVERSION" => {
+                let mut lines: Vec<String> = Vec::new();
+                if let Some(ratio) = measure(finding, "ratio") {
+                    if let Some(headline) = number(ratio.get("headline_db")) {
+                        let at = number(ratio.get("headline_frequency_hz"))
+                            .map_or_else(String::new, |f| format!(" at {}", frequency_text(f)));
+                        lines.push(format!(
+                            "{} dB{at}: |V_cm,out / V_diff,in|, a ratio of two voltages inside the channel",
+                            signed(headline)
+                        ));
+                    }
+                    if let Some(worst) = ratio.get("worst")
+                        && let Some(db) = number(worst.get("ratio_db"))
+                    {
+                        let at = number(worst.get("frequency_hz"))
+                            .map_or_else(String::new, |f| format!(" at {}", frequency_text(f)));
+                        lines.push(format!("worst {} dB{at}, up to the edge corner", signed(db)));
+                    }
+                    if let Some(plane) = ratio.get("output_plane").and_then(Value::as_str) {
+                        lines.push(format!("observed at: {plane}"));
+                    }
+                }
+                rows.extend(row("Mode conversion", lines));
+                let causes = crate::emi_signal::mode_conversion_causes(finding);
+                let mut lines: Vec<String> = causes
+                    .iter()
+                    .take(4)
+                    .filter_map(|c| c.get("text").and_then(Value::as_str).map(str::to_owned))
+                    .collect();
+                if causes.len() > lines.len() {
+                    lines.push(format!("+{} more in the finding", causes.len() - lines.len()));
+                }
+                if lines.is_empty() {
+                    lines.push(
+                        "no examined section has a skew, an amplitude imbalance or an exposed return path".to_owned(),
+                    );
+                }
+                rows.extend(row("Converting sections", lines));
+                let parts: Vec<String> = measure(finding, "parts")
+                    .and_then(Value::as_array)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| {
+                        let name = p.get("component").and_then(Value::as_str).unwrap_or("part");
+                        let kind = p.get("kind").and_then(Value::as_str).unwrap_or("");
+                        let basis = p.get("transfer_basis").and_then(Value::as_str).unwrap_or("");
+                        format!("{name} ({kind}): {basis}")
+                    })
+                    .collect();
+                let parts =
+                    if parts.is_empty() { vec!["none: the channel is routed copper only".to_owned()] } else { parts };
+                rows.extend(row("Parts in the channel", parts));
+            }
+            "EMI-RETURN-PATH" => {
+                let mut lines: Vec<String> = Vec::new();
+                if let Some(routed) = number(measure(finding, "routed_length_mm")) {
+                    let uncovered = number(measure(finding, "uncovered_length_mm"))
+                        .map_or_else(String::new, |u| format!(", {} mm with no reference copper within 3 H", n(u)));
+                    lines.push(format!("routed {} mm{uncovered}", n(routed)));
+                }
+                let causes = crate::emi_return_path::causes(finding);
+                let count = |kind: CauseKind| causes.iter().filter(|c| c.kind == kind).count();
+                lines.push(format!(
+                    "{} gap(s), {} reference change(s) without a return path within the threshold, {} plane-edge and {} board-edge point(s)",
+                    count(CauseKind::Gap),
+                    count(CauseKind::UnreturnedVia),
+                    count(CauseKind::PlaneEdge),
+                    count(CauseKind::BoardEdge)
+                ));
+                if let Some(estimate) = finding.get("estimate").filter(|e| matches!(e, Value::Object(_)))
+                    && let (Some(value), Some(unit)) =
+                        (number(estimate.get("value")), estimate.get("unit").and_then(Value::as_str))
+                {
+                    lines.push(format!("score {} {unit}, ranking only (not a field)", signed(value)));
+                }
+                rows.extend(row("Return path", lines));
+            }
+            _ => {}
+        }
+    }
+    rows
+}
+
+/// One page per signal or pair that has a finding (`EMI-RETURN-PATH`, `EMI-MODE-CONVERSION`) and no converter cell,
+/// in the order of `copper issues`.
+pub fn signal_pages(document: &Value, ctx: &Context) -> Vec<FieldPicture> {
+    let order = ordered_findings(document);
+    crate::emi_signal::signal_subjects(&order)
+        .into_iter()
+        .filter(|s| {
+            s.findings
+                .iter()
+                .any(|f| crate::emi_signal::SIGNAL_CODES.contains(&f.get("code").and_then(Value::as_str).unwrap_or("")))
+        })
+        .map(|subject| signal_page(document, &subject, ctx, &order))
+        .collect()
+}
+
+fn signal_page(
+    document: &Value,
+    subject: &crate::emi_signal::Subject,
+    ctx: &Context,
+    order: &[&Value],
+) -> FieldPicture {
+    let mut out: Vec<String> = Vec::new();
+    out.push(format!("<g class=\"summary-signal\" data-subject=\"{}\">", escape(&subject.name)));
+    let first = subject.findings.first().copied();
+    let nets = first.map(|f| strings(f.get("nets"))).unwrap_or_default();
+    let layers = first.map(|f| strings(f.get("layers"))).unwrap_or_default();
+    let kind = if nets.len() > 1 { "differential pair" } else { "signal" };
+    let mut facts = format!("{kind}; nets {}", nets.join(", "));
+    if !layers.is_empty() {
+        facts.push_str(&format!("; routed on {}", layers.join(", ")));
+    }
+    let y = subject_header(
+        &mut out,
+        document,
+        &format!("{}: {kind}", subject.display),
+        &facts,
+        "Screening evidence for a signal: distances, voltage ratios and rankings, never a pass or a fail.",
+    );
+    let left_w = 640.0;
+    let right_x = MARGIN + left_w + 32.0;
+    let right_w = WIDTH - MARGIN - right_x;
+    heading(&mut out, MARGIN, y, left_w, "Key numbers");
+    let rows = signal_rows(&subject.findings);
+    let left_end = if rows.is_empty() {
+        text(&mut out, MARGIN, y + 30.0, 12.0, "", MUTED, "", "", "the report holds no key numbers for this subject");
+        y + 46.0
+    } else {
+        table(&mut out, MARGIN, y + 30.0, left_w, &rows)
+    };
+    let right_end = findings_panel(
+        &mut out,
+        right_x,
+        y,
+        right_w,
+        &subject.display,
+        &subject.findings,
+        "no findings for this subject",
+        order,
+        ctx,
+    );
+    let y = left_end.max(right_end) + 14.0;
+    let commands: Vec<(String, String)> = match ctx.run {
+        Some(run) => vec![
+            ("located causes".to_owned(), format!("copper issues {run} --stage emi")),
+            ("one finding on the board".to_owned(), format!("copper view {run} --issue M<n>")),
+        ],
+        None => vec![("located causes".to_owned(), format!("{} --run RUN --write", ctx.command))],
+    };
+    let y = subject_footer(
+        &mut out,
+        y,
+        &subject.findings,
+        "reflections and mode conversion inside parts, an undeclared choke's attenuation, loss and dispersion, lane-to-lane skew, the geometry beyond the channel, slot radiation, enclosure and cable coupling; a ratio and a ranking are not a field.",
+        &commands,
+        ctx,
+    );
+    out.push("</g>".to_owned());
+    FieldPicture { content: out.join("\n"), width: WIDTH, height: y + 6.0 }
+}
+
+/// The key numbers of a connector.
+fn connector_rows(subject: &crate::emi_signal::Subject) -> Vec<Row> {
+    let mut rows: Vec<Row> = Vec::new();
+    for finding in &subject.findings {
+        match finding.get("code").and_then(Value::as_str).unwrap_or("") {
+            "EMI-CABLE-SHIELD" => rows.extend(row(
+                "Shield bond",
+                vec![
+                    "cable_shielded = true, but no pin declares emi_role = shield: the bond is not declared".to_owned(),
+                ],
+            )),
+            "EMI-CABLE-COMMON-MODE" => connector_finding_rows(finding, &mut rows),
+            _ => {}
+        }
+    }
+    rows
+}
+
+fn connector_finding_rows(finding: &Value, rows: &mut Vec<Row>) {
+    let mut lines: Vec<String> = Vec::new();
+    match finding.get("estimate").filter(|e| matches!(e, Value::Object(_))) {
+        Some(estimate) => {
+            let quantity = estimate.get("quantity").and_then(Value::as_str).unwrap_or("voltage");
+            let unit = estimate.get("unit").and_then(Value::as_str).unwrap_or("dBuV");
+            if let Some(value) = number(estimate.get("value")) {
+                let at = number(estimate.get("frequency_hz"))
+                    .map_or_else(String::new, |f| format!(" at {}", frequency_text(f)));
+                let band = match estimate.get("band_db").and_then(Value::as_array) {
+                    Some(pair) if pair.len() == 2 => match (number(pair.first()), number(pair.get(1))) {
+                        (Some(low), Some(high)) => format!(", band {} to {} {unit}", n(low), n(high)),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                };
+                lines.push(format!("{} {unit}: {quantity}{at}{band}", n(value)));
+            }
+            if quantity == "first_arrival_voltage" {
+                lines.push("the first wavefront before any reflection, not a steady-state value".to_owned());
+            }
+        }
+        None => lines.push("no pair voltage is published at this connector (see the drivers)".to_owned()),
+    }
+    rows.extend(row("Strongest pair voltage", lines));
+    if let Some(cable) = measure(finding, "cable") {
+        let mut lines: Vec<String> = Vec::new();
+        let shielded = match (cable.get("shielded"), cable.get("assumed_unshielded")) {
+            (Some(Value::Bool(true)), _) => "shielded",
+            (_, Some(Value::Bool(true))) => "assumed unshielded (nothing declared)",
+            (Some(Value::Bool(false)), _) => "declared unshielded",
+            _ => "shielding not declared",
+        };
+        let length = number(cable.get("cable_length_m")).map_or_else(String::new, |l| format!(", length {} m", n(l)));
+        lines.push(format!("{shielded}{length}"));
+        if let Some(f) = number(cable.get("quarter_wave_frequency_hz")) {
+            lines.push(format!(
+                "quarter-wave frequency {}: above it the cable resonates, not modelled",
+                frequency_text(f)
+            ));
+        }
+        lines.push(match number(cable.get("common_mode_impedance_ohm")) {
+            Some(ohm) => format!("declared cable common-mode impedance {} ohm", n(ohm)),
+            None => "no declared cable impedance: a matched cable is assumed".to_owned(),
+        });
+        rows.extend(row("Cable", lines));
+    }
+    if let Some(shield) = measure(finding, "shield").filter(|s| matches!(s, Value::Object(_))) {
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(vias) = number(shield.get("via_count_to_ground")) {
+            lines.push(format!("{} via(s) to ground within the bond radius", n(vias)));
+        }
+        if let Some(band) = shield.get("bond_inductance_band_nh").and_then(Value::as_array)
+            && let (Some(low), Some(high)) = (number(band.first()), number(band.get(1)))
+        {
+            lines.push(format!(
+                "estimated bond inductance {} to {} nH (the shield's transfer impedance is not modelled)",
+                n(low),
+                n(high)
+            ));
+        }
+        rows.extend(row("Shield bond", lines));
+    }
+    let drivers = crate::emi_signal::drivers(finding);
+    let mut lines: Vec<String> = drivers.iter().take(8).map(driver_line).collect();
+    if drivers.len() > 8 {
+        lines.push(format!("+{} more in the finding", drivers.len() - 8));
+    }
+    rows.extend(row("Drivers", lines));
+}
+
+/// One driver as a line of the connector page: its quantity label as the finding gives it, or ranking only.
+fn driver_line(driver: &crate::emi_signal::Driver) -> String {
+    let kind = match driver.kind {
+        "differential_pair" => "pair",
+        "ground_noise" => "ground noise",
+        "single_ended_signal" => "single-ended",
+        _ => "switch node",
+    };
+    match (&driver.quantity, driver.value_dbuv) {
+        (Some(quantity), Some(value)) => {
+            let note = match (quantity.as_str(), &driver.termination) {
+                ("first_arrival_voltage", _) => " (first wavefront, not a steady-state value)".to_owned(),
+                (_, Some(termination)) => format!(" ({termination})"),
+                _ => String::new(),
+            };
+            format!("{kind} {}: {} dBuV {quantity}{note}", driver.name, n(value))
+        }
+        _ => match driver.ranking_value {
+            Some((value, unit)) => format!("{kind} {}: ranking only ({} {unit})", driver.name, n(value)),
+            None => format!("{kind} {}: ranking only, no voltage published", driver.name),
+        },
+    }
+}
+
+/// One page per cable connector that has a finding, in the order of `copper issues`.
+pub fn connector_pages(document: &Value, ctx: &Context) -> Vec<FieldPicture> {
+    let order = ordered_findings(document);
+    crate::emi_signal::connector_subjects(&order)
+        .into_iter()
+        .map(|subject| connector_page(document, &subject, ctx, &order))
+        .collect()
+}
+
+fn connector_page(
+    document: &Value,
+    subject: &crate::emi_signal::Subject,
+    ctx: &Context,
+    order: &[&Value],
+) -> FieldPicture {
+    let mut out: Vec<String> = Vec::new();
+    out.push(format!("<g class=\"summary-connector\" data-connector=\"{}\">", escape(&subject.name)));
+    let part = subject.findings.iter().find_map(|f| measure(f, "part").and_then(Value::as_str));
+    let facts = match part {
+        Some(part) => format!("cable connector, part {part}"),
+        None => "cable connector".to_owned(),
+    };
+    let y = subject_header(
+        &mut out,
+        document,
+        &format!("{}: cable connector", subject.display),
+        &facts,
+        "Voltages at the connector and a ranking of the drivers: screening evidence, never a current, a field or a pass or a fail.",
+    );
+    let left_w = 640.0;
+    let right_x = MARGIN + left_w + 32.0;
+    let right_w = WIDTH - MARGIN - right_x;
+    heading(&mut out, MARGIN, y, left_w, "Key numbers");
+    let rows = connector_rows(subject);
+    let left_end = if rows.is_empty() {
+        text(&mut out, MARGIN, y + 30.0, 12.0, "", MUTED, "", "", "the report holds no key numbers for this connector");
+        y + 46.0
+    } else {
+        table(&mut out, MARGIN, y + 30.0, left_w, &rows)
+    };
+    let right_end = findings_panel(
+        &mut out,
+        right_x,
+        y,
+        right_w,
+        &subject.display,
+        &subject.findings,
+        "no findings for this connector",
+        order,
+        ctx,
+    );
+    let mut y = left_end.max(right_end) + 14.0;
+
+    // The voltage spectra of the drivers with a published voltage, as the thumbnail of the full-size picture.
+    let spectra: Vec<crate::emi_signal::Spectrum> = subject
+        .findings
+        .iter()
+        .filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CABLE-COMMON-MODE"))
+        .flat_map(|f| crate::emi_signal::spectra(f))
+        .collect();
+    let thumb = if spectra.is_empty() {
+        Thumb::Missing(
+            "no driver of this connector has a published voltage (each is ranking only, or needs --run RUN): there is nothing to draw; the drivers are listed in the finding"
+                .to_owned(),
+        )
+    } else {
+        Thumb::Picture(crate::emi_cable_plot::connector_picture(&subject.display, &spectra, true))
+    };
+    let height = slot_height(&thumb).max(150.0);
+    slot(&mut out, MARGIN, y, height, "Voltage spectra at the connector (dBuV)", &thumb);
+    let note_x = MARGIN + THUMB_W + MARGIN;
+    if !spectra.is_empty() {
+        let mut note_y = y + 18.0;
+        text(&mut out, note_x, note_y, 15.0, "bold", INK, "", "heading", "Reading the picture");
+        note_y += 22.0;
+        for line in [
+            "Each mark is one spectrum line of one driver, in dBuV of its single-sided peak amplitude, on a logarithmic frequency axis.",
+            "The continuous bound, each named data pattern, random data in the resolution bandwidth and a clock's lines are separate marks, never merged into one curve.",
+            "These are voltages at the connector against the board reference, not a field: no limit line is drawn, because there is no field estimate to compare with one.",
+            "A first-arrival voltage is the first wavefront at a declared, unmatched cable before any reflection returns, not a steady-state value.",
+        ] {
+            note_y = paragraph(&mut out, note_x, note_y, THUMB_W, 12.0, INK, "reading", line) + 6.0;
+        }
+    }
+    y += height + MARGIN;
+    let mut commands: Vec<(String, String)> = Vec::new();
+    if !spectra.is_empty() {
+        commands.push((
+            "voltage spectra at the connector".to_owned(),
+            command(ctx, &format!("--plot-spectrum {}", ctx.connector_spectrum_file)),
+        ));
+    }
+    commands.push((
+        "located drivers".to_owned(),
+        match ctx.run {
+            Some(run) => format!("copper issues {run} --stage emi"),
+            None => format!("{} --run RUN --write", ctx.command),
+        },
+    ));
+    let y = subject_footer(
+        &mut out,
+        y,
+        &subject.findings,
+        "the bundle's net current, the cable's routing and height, chassis and enclosure, the far-end termination (an absolute connector voltage assumes a matched cable), cable resonance above the quarter-wave frequency, the shield's transfer impedance, reflections between a choke and the cable, and radiation.",
+        &commands,
+        ctx,
+    );
+    out.push("</g>".to_owned());
+    FieldPicture { content: out.join("\n"), width: WIDTH, height: y + 6.0 }
+}
+
 /// The SVG document of `pages`, stacked; `title` names the board.
 pub fn summary_svg(title: &str, pages: &[FieldPicture]) -> String {
     crate::emi_field::stacked_svg(&format!("{} EMI summary (screening estimate)", escape(title)), pages, WIDTH)
@@ -1018,6 +1596,7 @@ mod tests {
             spectrum_file: "emi-spectrum.svg",
             impedance_file: "emi-impedance.svg",
             current_file: "emi-current.svg",
+            connector_spectrum_file: "emi-connector-spectrum.svg",
         }
     }
 
@@ -1176,5 +1755,135 @@ mod tests {
         assert!(page.contains("data-cell=\"U1\"") && page.contains("data-cell=\"U2\""));
         assert!(page.contains("no findings for this cell"));
         assert!(page.contains("not drawn"));
+    }
+
+    /// A board with no cell: a pair that converts and returns badly, and a connector with a matched pair, an unmatched
+    /// pair (first arrival) and a ranking-only driver.
+    fn cable_document() -> Value {
+        copper_json::parse(
+            r#"{"board":"cable","cells":[],"findings":[
+              {"code":"EMI-RETURN-PATH","severity":"warning","cell":null,"message":"A_P/A_N: return path: 4.00 mm of 40.00 mm routed has no reference copper; 1 gap(s)","objects":["A_P/A_N"],"nets":["A_P","A_N"],"layers":["F.Cu"],"tags":[],
+               "estimate":{"value":25.74,"unit":"dB","kind":"ranking_score"},
+               "measures":{"subject":"A_P","routed_length_mm":40.0,"uncovered_length_mm":4.0,"gaps":[{"position_mm":[40.0,40.0],"slot_length_mm":76.0,"resonance_hz":1123000000.0}]}},
+              {"code":"EMI-MODE-CONVERSION","severity":"warning","cell":null,"message":"A_P/A_N: mode conversion -18.9 dB at the fundamental","objects":["A_P/A_N"],"nets":["A_P","A_N"],"layers":["F.Cu"],"tags":[],
+               "estimate":{"value":-18.86,"unit":"dB","kind":"voltage_ratio","not_modelled":["reflections inside parts: the cascade is forward only"]},
+               "measures":{"subject":"A_P","inputs_text":["reference impedances: microstrip on F.Cu"],
+                "ratio":{"headline_db":-18.86,"headline_frequency_hz":1250000000.0,"worst":{"ratio_db":-12.92,"frequency_hz":2546479089.0},"output_plane":"end of the routed pair"},
+                "sections":[{"section":0,"examined":true,"from":"driver","to":"observation plane","layers":[{"layer":"F.Cu"}],"length_p_mm":30.0,"length_n_mm":40.0,"skew_ps":-58.58,"amplitude_imbalance":0.0,
+                  "return_path_exposure":{"exposed_fraction_p":0.0,"exposed_fraction_n":0.0}}],"parts":[]}},
+              {"code":"EMI-CABLE-COMMON-MODE","severity":"warning","cell":null,"message":"J1: cable common mode, voltages and a ranking only (no current, no field, no margin): 2 differential pair(s)","objects":["J1"],"nets":["A_P","A_N"],"layers":[],"tags":["matched_cable_termination","assumed_unshielded_cable"],
+               "estimate":{"value":88.94,"unit":"dBuV","kind":"common_mode_voltage","quantity":"first_arrival_voltage","frequency_hz":1250000000.0},
+               "measures":{"connector":"J1","part":"p.Conn","cable":{"shielded":null,"assumed_unshielded":true,"cable_length_m":0.5,"quarter_wave_frequency_hz":149896229.0,"common_mode_impedance_ohm":null},"shield":null,
+                "differential_pairs":[
+                 {"conductors":["A_P","A_N"],"status":"evaluated","termination":{"assumption":"matched_cable_termination"},
+                  "voltage":{"quantity":"common_mode_voltage_at_connector","headline_dbuv":84.87,"headline_frequency_hz":1250000000.0,"headline_quantity":"continuous_bound",
+                   "spectrum":[{"quantity":"continuous_bound","frequency_hz":1250000000.0,"voltage_dbuv":84.87},{"quantity":"pattern_lines:alternating","frequency_hz":1250000000.0,"voltage_dbuv":84.44},
+                               {"quantity":"random_data_in_rbw","frequency_hz":1250000000.0,"voltage_dbuv":41.26}]}},
+                 {"conductors":["B_P","B_N"],"status":"evaluated","termination":{"assumption":"cable_common_mode_impedance declared, not matched","cable_common_mode_impedance_ohm":150.0},
+                  "voltage":{"quantity":"first_arrival_voltage","headline_dbuv":88.94,"headline_frequency_hz":1250000000.0,"headline_quantity":"continuous_bound",
+                   "spectrum":[{"quantity":"continuous_bound","frequency_hz":1250000000.0,"voltage_dbuv":88.94}]}}],
+                "ground_noise":[{"source":"CLK","status":"ranking_only","voltage":null,"no_voltage_because":["the result moves by 8 dB across the band (limit 6 dB)"]}],
+                "single_ended_signals":[],"switch_node_coupling":[]}}]}"#,
+        )
+        .unwrap()
+    }
+
+    /// The text of every `<text>` element, joined by a space.
+    fn plain(svg: &str) -> String {
+        svg.split("<text ")
+            .skip(1)
+            .map(|part| part.split_once('>').unwrap().1.split("</text>").next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn a_pair_and_a_connector_get_their_own_pages_with_the_key_numbers_and_no_limit() {
+        let document = cable_document();
+        let context = context(Some("RUN"), false);
+        let signals = signal_pages(&document, &context);
+        let connectors = connector_pages(&document, &context);
+        assert_eq!((signals.len(), connectors.len()), (1, 1), "one subject each: the pair's two findings share a page");
+        let signal = summary_svg("cable", &signals);
+        let text = plain(&signal);
+        assert!(signal.contains("data-subject=\"A_P\""));
+        for needle in [
+            "A_P/A_N: differential pair",
+            "-18.86 dB at 1250 MHz: |V_cm,out / V_diff,in|, a ratio of two voltages inside the channel",
+            "worst -12.92 dB at 2546.48 MHz, up to the edge corner",
+            "section 0 (driver to observation plane) on F.Cu: P 30 mm, N 40 mm, skew -58.58 ps",
+            "routed 40 mm, 4 mm with no reference copper within 3 H",
+            "1 gap(s), 0 reference change(s)",
+            "score +25.74 dB, ranking only (not a field)",
+            "M1  EMI-RETURN-PATH",
+            "M2  EMI-MODE-CONVERSION",
+            "never a pass or a fail",
+            "copper issues RUN --stage emi",
+        ] {
+            assert!(text.contains(needle), "{needle} in {text}");
+        }
+        assert!(!text.contains("Screening estimate, not a compliance measurement"), "the converter layout is not used");
+        let connector = summary_svg("cable", &connectors);
+        let text = plain(&connector);
+        assert!(connector.contains("data-connector=\"J1\"") && connector.contains("class=\"thumbnail\""));
+        for needle in [
+            "J1: cable connector",
+            "88.94 dBuV: first_arrival_voltage at 1250 MHz",
+            "the first wavefront before any reflection, not a steady-state value",
+            "assumed unshielded (nothing declared), length 0.5 m",
+            "pair A_P/A_N: 84.87 dBuV common_mode_voltage_at_connector (matched_cable_termination)",
+            "pair B_P/B_N: 88.94 dBuV first_arrival_voltage (first wavefront, not a steady-state value)",
+            "ground noise CLK: ranking only, no voltage published",
+            "--plot-spectrum emi-connector-spectrum.svg",
+            "not a field: no limit line is drawn",
+        ] {
+            assert!(text.contains(needle), "{needle} in {text}");
+        }
+        // The cable and conversion pages show no limit, margin, field or current: the words only deny them.
+        for page in [&signal, &connector] {
+            let text = plain(page);
+            for word in ["limit", "margin"] {
+                for (at, _) in text.match_indices(word) {
+                    let before = &text[..at];
+                    assert!(
+                        before.ends_with("no ") || before.ends_with("or a "),
+                        "{word}: {}",
+                        &text[at.saturating_sub(40)..at + 30]
+                    );
+                }
+            }
+            assert!(!page.contains("class=\"limit"));
+        }
+        // Every text starts inside its page.
+        for (pages, svg) in [(&signals, &signal), (&connectors, &connector)] {
+            let (width, height) = (pages[0].width, pages[0].height);
+            for part in svg.split("<text ").skip(1) {
+                let value = |name: &str| -> f64 {
+                    part.split(&format!(" {name}=\"")).nth(1).unwrap().split('"').next().unwrap().parse().unwrap()
+                };
+                let (x, y) = (value("x"), value("y"));
+                assert!(x >= 0.0 && x <= width && y >= 0.0 && y <= height, "{part}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_connector_with_no_published_voltage_says_why_there_is_no_picture() {
+        let document = copper_json::parse(
+            r#"{"board":"b","cells":[],"findings":[{"code":"EMI-CABLE-COMMON-MODE","severity":"warning","cell":null,"message":"J1: cable","objects":["J1"],"nets":[],"layers":[],"tags":[],
+              "measures":{"connector":"J1","cable":{},"shield":null,"differential_pairs":[{"conductors":["A_P","A_N"],"status":"unsupported","reason":"needs routed copper","voltage":null}],
+              "ground_noise":[],"single_ended_signals":[],"switch_node_coupling":[]}}]}"#,
+        )
+        .unwrap();
+        let pages = connector_pages(&document, &context(None, false));
+        assert_eq!(pages.len(), 1);
+        let text = plain(&pages[0].content);
+        assert!(text.contains("no driver of this connector has a published voltage"), "{text}");
+        assert!(text.contains("pair A_P/A_N: ranking only, no voltage published"), "{text}");
+        assert!(!pages[0].content.contains("class=\"driver-panel\""));
+        // Without findings of these kinds there are no pages.
+        assert!(signal_pages(&document, &context(None, false)).is_empty());
+        let cells = copper_json::parse(r#"{"cells":[],"findings":[]}"#).unwrap();
+        assert!(connector_pages(&cells, &context(None, false)).is_empty());
     }
 }

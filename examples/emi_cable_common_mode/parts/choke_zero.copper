@@ -1,0 +1,10 @@
+// A choke of zero impedance at 1.25 GHz: it changes nothing.
+part ChokeZero {
+    category = "passive.inductor.common_mode";
+    common_mode_impedance = 0ohm;
+    common_mode_impedance_frequency = 1.25GHz;
+    pin IN1 { number = "1"; domains = "digital"; directions = "passive"; passes_to = OUT1; }
+    pin IN2 { number = "2"; domains = "digital"; directions = "passive"; passes_to = OUT2; }
+    pin OUT1 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin OUT2 { number = "3"; domains = "digital"; directions = "passive"; }
+}

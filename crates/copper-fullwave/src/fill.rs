@@ -69,6 +69,22 @@ impl ZoneFillSet {
     pub fn covers(&self, net: &str, layer: CopperLayer) -> bool {
         self.fills.iter().any(|f| f.layer == layer && f.net == net)
     }
+
+    /// The fills in the form `copper_drc::emi::return_path` takes (`emi-check` reads the reference planes of its
+    /// return-path check from here, so the check and the extraction see the same copper).
+    pub fn plane_fills(&self) -> copper_drc::emi::return_path::PlaneFills {
+        copper_drc::emi::return_path::PlaneFills {
+            fills: self
+                .fills
+                .iter()
+                .map(|fill| copper_drc::emi::return_path::PlaneFill {
+                    net: fill.net.clone(),
+                    layer: fill.layer,
+                    shapes: fill.shapes.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 impl FilledBoard {

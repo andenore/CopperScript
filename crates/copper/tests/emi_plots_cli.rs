@@ -528,7 +528,12 @@ fn the_summary_page_gathers_the_key_numbers_the_findings_and_four_thumbnails() {
     }
     // Three thumbnails drawn by the code of the full-size pictures, the fourth a labelled placeholder.
     assert_eq!(svg.matches("class=\"thumbnail\"").count(), 3);
-    assert_eq!(svg.matches("class=\"placeholder\"").count(), 1);
+    // The board's cable connector has a page after the cell's: its voltage spectra are a placeholder too (no pair of the
+    // board leaves on it, so no driver has a published voltage), and the cell page is the one drawn above it.
+    assert_eq!(svg.matches("class=\"placeholder\"").count(), 2);
+    assert_eq!(svg.matches("<g class=\"summary-connector\"").count(), 1);
+    assert!(svg.find("class=\"summary\"").unwrap() < svg.find("<g class=\"summary-connector\"").unwrap());
+    assert!(svg.contains("no driver of this connector has a published voltage"));
     assert!(svg.contains("magnetic near field |H|") && svg.contains("conducted spectrum at the input"));
     assert!(svg.contains("input-network impedance"));
     // No row without a number, no signed margin, nothing that was not computed.

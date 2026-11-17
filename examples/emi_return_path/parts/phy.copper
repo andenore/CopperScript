@@ -1,0 +1,12 @@
+// A transmitter with two differential lanes and three clock outputs, annotated for `copper emi-check`.
+part Phy {
+    category = "interface.serdes";
+    pin AP { number = "1"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin AN { number = "2"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin BP { number = "3"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin BN { number = "4"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin CS { number = "5"; domains = "clock"; directions = "output"; clock_frequency = 100MHz; rise_time = 1ns; signal_swing = 3.3V; }
+    pin CU { number = "6"; domains = "clock"; directions = "output"; clock_frequency = 100MHz; rise_time = 1ns; signal_swing = 3.3V; }
+    pin CE { number = "7"; domains = "clock"; directions = "output"; clock_frequency = 100MHz; rise_time = 1ns; signal_swing = 3.3V; }
+    pin GND { number = "8"; domains = "ground"; directions = "input"; }
+}

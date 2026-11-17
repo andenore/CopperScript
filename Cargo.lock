@@ -102,7 +102,9 @@ dependencies = [
 name = "copper-drc"
 version = "0.1.0"
 dependencies = [
+ "copper-cam",
  "copper-emi",
+ "copper-fullwave",
  "copper-json",
  "copper-lang",
  "copper-pcb",

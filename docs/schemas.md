@@ -76,6 +76,44 @@ older versions, as `copperscript-assembly-lock` does.
 The route report (`copperscript-route-board/v0.1`) may carry one optional
 top-level key, `emi`: a `copperscript-emi-check/v0.1` document, or
 `{ "evidence_grade", "error" }` when the check could not run. `route-board`
-writes it for designs with a switching cell and `copper emi-check BOARD --run RUN
+writes it for designs with a switching cell, a finding or an executed signal or cable check (section 15.12), and `copper emi-check BOARD --run RUN
 --write` adds it to an existing run (`copper/src/emi_section.rs`); `copper
 issues` reads it as stage `emi`. See [EMI noise analysis](emi-noise-analysis.md).
+
+### Additions to `copperscript-emi-check/v0.1` (the signal and cable checks)
+
+The return-path, mode-conversion and cable checks (sections 15, 16 and 18 of [EMI noise
+analysis](emi-noise-analysis.md)) only add values and keys to the document; no existing field changed its meaning or its
+shape, so the version stays `v0.1`. A reader that ignores unknown findings, estimate kinds, coverage entries and
+`measures` keys reads the new document as it read the old one.
+
+- **Finding codes.** `EMI-RETURN-PATH` (one per signal or pair with something to report), `EMI-MODE-CONVERSION` (one per
+  differential pair), `EMI-CABLE-COMMON-MODE` (one per cable connector with something to report) and `EMI-CABLE-SHIELD`
+  (a connector that declares `cable_shielded = true` and no shield pin). They have `cell: null`; a board with no
+  switching cell has `cells: []` and the document is still written (section 15.12).
+- **`estimate.kind`.** `ranking_score` (existing; now also the `slot_ranking_score` of `EMI-RETURN-PATH`, in dB relative to a
+  reference product, not a field), `voltage_ratio` (`mode_conversion_ratio`, dB, a ratio of two voltages of one network)
+  and `common_mode_voltage` (`common_mode_voltage_at_connector` or `first_arrival_voltage`, dBuV against the board reference at
+  the connector). None of them has a `margin_db`, and a cable or conversion finding has no field and no current. Findings
+  are ordered by kind of estimate: absolute estimates, conducted levels, ranking scores, voltage ratios, connector voltages,
+  findings with no estimate, `EMI-ACCEPT-UNUSED` last.
+- **Coverage.** The entries `EMI-RETURN-PATH`, `EMI-RETURN-PATH:<net>`, `EMI-MODE-CONVERSION`,
+  `EMI-MODE-CONVERSION:<positive net>`, `EMI-CABLE-COMMON-MODE` and `EMI-CABLE-COMMON-MODE:<connector>`, each `executed`,
+  `not_applicable` or `unsupported` with a reason (the status vocabulary is the old one). The `EMI-RETURN-PATH` and
+  `EMI-CABLE-COMMON-MODE` entries existed as `unsupported`; they now carry the real status. The `EMI-MARGIN` entry says
+  cable common mode is voltages and a ranking only.
+- **`measures` keys.** `EMI-RETURN-PATH`: `subject`, `reference`, `routed_length_mm`, `uncovered_length_mm`, `gaps[]`
+  (`position_mm`, `slot_length_mm`, `resonance_hz`), `reference_changes[]`, `members[].layers[]` (`plane_edge`,
+  `board_edge` with `at_mm`), `thresholds`, `ranking` (section 15.8). `EMI-MODE-CONVERSION`: `pair`, `subject`, `ratio`,
+  `references`, `sections[]`, `parts[]`, `elements_in_order[]`, `observation_planes[]` (section 16.5).
+  `EMI-CABLE-COMMON-MODE`: `connector`, `part`, `cable`, `shield`, `differential_pairs[]`, `ground_noise[]`,
+  `ground_noise_not_counted[]`, `single_ended_signals[]`, `switch_node_coupling[]`, `ranking` (section 18.4); the per-driver
+  spectrum lines carry `quantity` (`continuous_bound`, `pattern_lines:<pattern>`, `random_data_in_rbw`, clock lines),
+  `frequency_hz` and `voltage_dbuv`. `EMI-CABLE-SHIELD`: `connector`, `kind`.
+
+The `issues` listing of stage `emi` (`copperscript.run-issues/v1`, `copper issues RUN --stage emi`) groups the findings by
+subject kind (converter cells, then signals and pairs, then cable connectors) and adds `details.causes` to
+`EMI-RETURN-PATH` (`kind`, `at_mm`, `text`), `EMI-MODE-CONVERSION` (`kind: routed_section`, `section`, `text`; the measures
+carry no coordinates, so the issue is located by the pads of the pair's nets) and `EMI-CABLE-COMMON-MODE` /
+`EMI-CABLE-SHIELD` (one cause per driver: `kind`, `name`, `status`, `quantity`, `termination`, `value_dbuv` and, for a driver
+that is ranking only, `ranking_value` with `ranking_unit`; the issue is located at the connector's pads).

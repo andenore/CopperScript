@@ -1,0 +1,9 @@
+// A driver with two single-ended lines and one differential pair, for the ground-noise lanes of J3.
+part Drv {
+    category = "interface.serdes";
+    pin SE1 { number = "1"; domains = "digital"; directions = "output"; clock_frequency = 100MHz; rise_time = 1ns; signal_swing = 1V; }
+    pin SE2 { number = "2"; domains = "digital"; directions = "output"; clock_frequency = 100MHz; rise_time = 1ns; signal_swing = 1V; }
+    pin PP { number = "3"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; signal_swing = 400mV; }
+    pin PN { number = "4"; domains = "digital"; directions = "output"; data_rate = 2.5Gbps; rise_time = 0.1ns; fall_time = 0.12ns; }
+    pin GND { number = "5"; domains = "ground"; directions = "input"; }
+}

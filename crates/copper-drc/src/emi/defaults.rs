@@ -222,6 +222,293 @@ pub const DEFAULT_ESR: f64 = 5e-3;
 pub const PACKAGE_ESL: [(&str, f64); 5] =
     [("0402", 0.4e-9), ("0603", 0.5e-9), ("0805", 0.6e-9), ("1206", 0.8e-9), ("1210", 0.9e-9)];
 
+// ---------------------------------------------------------------------------
+// 6. Fast digital signals (`docs/emi-signal-cable-plan.md`, P1)
+// ---------------------------------------------------------------------------
+
+/// The edge time of a fast signal is a default band (no `rise_time`/`fall_time` declared on the driver).
+pub const TAG_SIGNAL_EDGE: &str = "rule_of_thumb_signal_edge";
+/// The swing of a fast signal is a default band (no `signal_swing` declared on the driver).
+pub const TAG_SIGNAL_SWING: &str = "rule_of_thumb_signal_swing";
+
+/// Edge time of a data signal as a fraction of the unit interval: `(nominal, fast, slow)`.
+///
+/// Basis. A 10-90 % rise time `t_r` and the -3 dB bandwidth `B` of a single-pole system are related by
+/// `B = 0.35 / t_r` (Johnson and Graham, *High-Speed Digital Design: A Handbook of Black Magic*, Prentice Hall,
+/// 1993, ch. 1; Bogatin, *Signal and Power Integrity - Simplified*, 3rd ed., ch. 2). With that relation 0.2 to
+/// 0.35 UI is a driver bandwidth of 1.75 down to 1 times the bit rate. **The band itself is a rule of thumb:
+/// no published source for the 0.2 to 0.35 UI figures is known to the author**, and drivers of the same rate
+/// differ widely (standards specify a minimum transition time, not a typical one). Pass the 10-90 % time as the
+/// ramp duration, as [`copper_emi::estimate::trapezoid_harmonic`] does.
+pub const SIGNAL_EDGE_UI: (f64, f64, f64) = (0.25, 0.20, 0.35);
+/// Edge time of a clock or other signal with no declared rate, seconds: `(nominal, fast, slow)`.
+/// Rule of thumb for an on-board CMOS clock driver of a few ns down to a few hundred ps; **no published source
+/// is cited for these three numbers**.
+pub const SIGNAL_EDGE_CLOCK: (f64, f64, f64) = (1.0e-9, 0.3e-9, 3.0e-9);
+
+/// The default edge band of a fast signal, `(nominal, fast, slow)` seconds: a fraction of the unit interval when
+/// the driver declares a `data_rate`, else [`SIGNAL_EDGE_CLOCK`].
+pub fn signal_edge_band(data_rate: Option<f64>) -> (f64, f64, f64) {
+    match data_rate {
+        Some(rate) if rate > 0.0 => {
+            let (nominal, fast, slow) = SIGNAL_EDGE_UI;
+            (nominal / rate, fast / rate, slow / rate)
+        }
+        _ => SIGNAL_EDGE_CLOCK,
+    }
+}
+
+/// The rule behind [`signal_edge_band`], for `input:` lines.
+pub fn signal_edge_rule(data_rate: bool) -> String {
+    if data_rate {
+        format!(
+            "data signal, t(10-90 %) = {} UI nominal, {} UI fast bound, {} UI slow bound (B = 0.35 / t_r)",
+            SIGNAL_EDGE_UI.0, SIGNAL_EDGE_UI.1, SIGNAL_EDGE_UI.2
+        )
+    } else {
+        format!(
+            "clock or undeclared rate, t(10-90 %) = {} ns nominal, {} ns fast bound, {} ns slow bound",
+            SIGNAL_EDGE_CLOCK.0 * 1e9,
+            SIGNAL_EDGE_CLOCK.1 * 1e9,
+            SIGNAL_EDGE_CLOCK.2 * 1e9
+        )
+    }
+}
+
+/// Differential peak-to-peak swing band, volts: `(nominal, low, high)`.
+///
+/// Scale. LVDS (TIA/EIA-644-A) specifies a differential output voltage of 247 to 454 mV (350 mV nominal) into 100
+/// ohm, and MIPI D-PHY high-speed transmitters 140 to 270 mV (200 mV nominal); both as remembered, to be checked
+/// against the standards. Those are differential output voltages, not peak-to-peak values, and multi-gigabit
+/// serial standards (PCIe, USB 3) use larger swings, so this band is a rule of thumb for **small-swing
+/// differential links only** and **not a published figure**: declare `signal_swing` for anything else.
+pub const SIGNAL_SWING_DIFFERENTIAL: (f64, f64, f64) = (0.2, 0.1, 0.4);
+/// A single-ended driver's loaded swing as a fraction of its supply: `(nominal, low, high)`. A CMOS output
+/// swings close to rail to rail; the 0.8 low bound allows for load and drive strength. Rule of thumb, **no
+/// published source cited**.
+pub const SIGNAL_SWING_SUPPLY_FRACTION: (f64, f64, f64) = (1.0, 0.8, 1.0);
+
+/// The default swing band, `(nominal, low, high)` volts. A differential pair gets [`SIGNAL_SWING_DIFFERENTIAL`];
+/// a single-ended signal needs the driver's supply voltage and has no default without it (`None`).
+pub fn signal_swing_band(differential: bool, supply: Option<f64>) -> Option<(f64, f64, f64)> {
+    if differential {
+        return Some(SIGNAL_SWING_DIFFERENTIAL);
+    }
+    let supply = supply.filter(|volts| *volts > 0.0)?;
+    let (nominal, low, high) = SIGNAL_SWING_SUPPLY_FRACTION;
+    Some((nominal * supply, low * supply, high * supply))
+}
+
+/// The rule behind [`signal_swing_band`], for `input:` lines.
+pub fn signal_swing_rule(differential: bool) -> String {
+    if differential {
+        format!(
+            "small-swing differential link, {} V nominal, {} to {} V (LVDS and D-PHY scale; not a published figure)",
+            SIGNAL_SWING_DIFFERENTIAL.0, SIGNAL_SWING_DIFFERENTIAL.1, SIGNAL_SWING_DIFFERENTIAL.2
+        )
+    } else {
+        format!(
+            "single-ended CMOS output, {} to {} of the driver's supply",
+            SIGNAL_SWING_SUPPLY_FRACTION.1, SIGNAL_SWING_SUPPLY_FRACTION.2
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Return paths (`docs/emi-signal-cable-plan.md`, P2)
+// ---------------------------------------------------------------------------
+
+/// The reference coverage window (`k H` each side of a trace) is a rule of thumb.
+pub const TAG_RETURN_WINDOW: &str = "rule_of_thumb_return_window";
+/// The plane-edge and board-edge distance (`k H`) is a rule of thumb.
+pub const TAG_EDGE_DISTANCE: &str = "rule_of_thumb_edge_distance";
+/// The return-via distance (a fraction of a wavelength at the knee frequency) is a rule of thumb.
+pub const TAG_RETURN_VIA: &str = "rule_of_thumb_return_via_distance";
+
+/// Reference coverage: a trace at height `H` over a plane is checked over `k H` each side of its centre line:
+/// `(nominal, low, high)` in units of `H`.
+///
+/// Derived, not looked up. A thin line current `I` at height `H` over an infinite plane (the method of images: the
+/// line and its mirror image) induces the plane current density `J(x) = I H / (pi (x^2 + H^2))` at the lateral
+/// distance `x`, the distribution the return current takes at high frequency, where it follows the path of least
+/// inductance. The fraction of `I` within `k H` of the line is therefore `(2 / pi) atan(k)`
+/// ([`return_window_fraction`]): 50 % at 1 H, 70.5 % at 2 H, 79.5 % at 3 H, 87.4 % at 5 H. The nominal 3 H is the
+/// plan's choice of "about four fifths"; the band 2 H to 5 H is the 70 % to 87 % range. The distribution assumes a
+/// plane much wider than `H` and a thin trace; a wide trace or a stripline between two planes spreads differently.
+/// This derivation, not a citation, is the source here.
+pub const RETURN_WINDOW_H: (f64, f64, f64) = (3.0, 2.0, 5.0);
+
+/// The fraction of a thin trace's return current that flows within `k` heights of its centre line over an
+/// infinite plane, `(2 / pi) atan(k)` (see [`RETURN_WINDOW_H`]).
+pub fn return_window_fraction(k: f64) -> f64 {
+    2.0 / std::f64::consts::PI * k.atan()
+}
+
+/// Plane-edge and board-edge distance, in units of `H`: `(nominal, low, high)`. The "20 H rule" of EMC design
+/// guides (Montrose, *Printed Circuit Board Design Techniques for EMC Compliance*) keeps a trace or a smaller power
+/// plane back from the edge of its reference plane by `20 H` so that about 70 % of the fringing flux stays
+/// inside; the book is quoted from memory and not checked against the text, so this is a **rule of thumb with no
+/// verified citation**. The band 10 H to 100 H brackets the 10 H and 100 H flux-containment figures quoted with it.
+pub const EDGE_DISTANCE_H: (f64, f64, f64) = (20.0, 10.0, 100.0);
+
+/// A return via within `lambda / n` of the transition at the knee frequency (`n` nominal, then the two ends of
+/// the band). Structures much shorter than a wavelength are electrically small; `lambda / 10` is the usual
+/// bound for treating a structure as lumped and `lambda / 20` is the stricter figure used here. **Rule of
+/// thumb, no published source cited**: the factor is a screening choice, not a derived limit.
+pub const RETURN_VIA_LAMBDA_FRACTION: (f64, f64, f64) = (20.0, 10.0, 40.0);
+
+/// The knee frequency of an edge, `0.35 / t_r` for a 10-90 % rise time (a single-pole bandwidth: the relation
+/// P1 uses for its edge default).
+pub fn knee_frequency(rise_time_10_90: f64) -> f64 {
+    0.35 / rise_time_10_90
+}
+
+/// The return-via distance threshold, m: `lambda / n` at the knee frequency of a `rise_time_10_90` edge in a
+/// medium of effective relative permittivity `eps_eff`, `lambda = c / (f sqrt(eps_eff))`.
+pub fn return_via_threshold(rise_time_10_90: f64, eps_eff: f64, fraction: f64) -> f64 {
+    copper_emi::C0 / (knee_frequency(rise_time_10_90) * eps_eff.sqrt() * fraction)
+}
+
+/// The rule behind [`RETURN_WINDOW_H`], for `input:` lines.
+pub fn return_window_rule() -> String {
+    format!(
+        "return current taken within {} H each side of a trace ({:.1} % of a thin trace's return current over an infinite plane; derived, band {} H to {} H)",
+        RETURN_WINDOW_H.0,
+        100.0 * return_window_fraction(RETURN_WINDOW_H.0),
+        RETURN_WINDOW_H.1,
+        RETURN_WINDOW_H.2
+    )
+}
+
+/// The rule behind [`EDGE_DISTANCE_H`], for `input:` lines.
+pub fn edge_distance_rule() -> String {
+    format!(
+        "plane and board edges kept {} H from a trace (the 20 H rule of EMC design guides; band {} H to {} H; no verified citation)",
+        EDGE_DISTANCE_H.0, EDGE_DISTANCE_H.1, EDGE_DISTANCE_H.2
+    )
+}
+
+/// The rule behind [`RETURN_VIA_LAMBDA_FRACTION`], for `input:` lines.
+pub fn return_via_rule() -> String {
+    format!(
+        "return via within lambda / {} at the knee frequency 0.35 / t_r (band lambda / {} to lambda / {}; no published source)",
+        RETURN_VIA_LAMBDA_FRACTION.0, RETURN_VIA_LAMBDA_FRACTION.1, RETURN_VIA_LAMBDA_FRACTION.2
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 8. Mode conversion (`docs/emi-signal-cable-plan.md`, P3)
+// ---------------------------------------------------------------------------
+
+/// The amplitude imbalance a section's return-path exposure produces is a rule of thumb.
+pub const TAG_LEG_IMBALANCE: &str = "rule_of_thumb_leg_imbalance";
+/// The tolerance of a coupling capacitor, taken as an amplitude imbalance of the pair, is a rule of thumb.
+pub const TAG_CAPACITOR_TOLERANCE: &str = "rule_of_thumb_capacitor_tolerance";
+/// The single-ended impedance of a leg is a default (no stack-up to take it from).
+pub const TAG_PAIR_IMPEDANCE: &str = "rule_of_thumb_pair_impedance";
+
+/// Amplitude imbalance `a` (leg gains `1 + a` and `1 - a`) per unit difference of the two legs' exposure to return-path
+/// breaks along a section, `a = k (e_n - e_p)`, `e` the fraction of a leg's routed length without reference copper
+/// within the coverage window or within the edge limit: `(nominal, low, high)`. **A rule of thumb with no
+/// published source.** A leg that has lost its return reference over its whole length against a leg that has not
+/// is taken to launch an amplitude about 10 % different; the screening choice is that a few tens of per cent of
+/// impedance change over a section moves a wave by about that much. The band 0 to 0.2 is wide on purpose: 0 is a
+/// pair that is not unbalanced by the breaks, 0.2 a pair whose legs differ by 40 % in amplitude.
+pub const LEG_IMBALANCE_PER_EXPOSURE: (f64, f64, f64) = (0.1, 0.0, 0.2);
+
+/// The capacitance tolerance of a coupling capacitor, taken as legs of `C (1 + tol)` and `C (1 - tol)`:
+/// `(nominal, low, high)`. The EIA tolerance codes of ceramic capacitors are J (5 %), K (10 %) and M (20 %); the codes are
+/// quoted from memory and **not checked against the standard**, so this is a rule of thumb with no verified citation.
+/// Opposite signs on the two legs are the worst case of two parts of one reel.
+pub const CAPACITOR_TOLERANCE: (f64, f64, f64) = (0.1, 0.0, 0.2);
+
+/// The single-ended impedance of a leg when the stack-up does not give one, ohms. 50 ohm single-ended (100 ohm
+/// differential) is the usual target of high-speed serial standards; **rule of thumb, not checked against a
+/// published standard**.
+pub const PAIR_IMPEDANCE_SINGLE_ENDED: f64 = 50.0;
+
+/// The rule behind [`LEG_IMBALANCE_PER_EXPOSURE`], for `input:` lines.
+pub fn leg_imbalance_rule() -> String {
+    format!(
+        "amplitude imbalance of a section a = k (e_n - e_p), e the fraction of a leg's routed length without reference copper within the coverage window or within the edge limit, k = {} nominal, {} to {} (rule of thumb, no published source)",
+        LEG_IMBALANCE_PER_EXPOSURE.0, LEG_IMBALANCE_PER_EXPOSURE.1, LEG_IMBALANCE_PER_EXPOSURE.2
+    )
+}
+
+/// The rule behind [`CAPACITOR_TOLERANCE`], for `input:` lines.
+pub fn capacitor_tolerance_rule() -> String {
+    format!(
+        "coupling capacitor legs C (1 + tol) and C (1 - tol), tol = {} nominal, {} to {} (ceramic tolerance codes K and M, quoted from memory, not checked against the standard)",
+        CAPACITOR_TOLERANCE.0, CAPACITOR_TOLERANCE.1, CAPACITOR_TOLERANCE.2
+    )
+}
+
+/// The rule behind [`PAIR_IMPEDANCE_SINGLE_ENDED`], for `input:` lines.
+pub fn pair_impedance_rule() -> String {
+    format!(
+        "single-ended impedance of a leg {PAIR_IMPEDANCE_SINGLE_ENDED} ohm when no declared stack-up gives one (the usual high-speed serial target, not checked against a standard)"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 9. Cable common mode (`docs/emi-signal-cable-plan.md`, P4)
+// ---------------------------------------------------------------------------
+
+/// The height of the sense path of the ground-noise network over the reference plane is a scenario parameter with a band.
+pub const TAG_SENSE_HEIGHT: &str = "rule_of_thumb_sense_height";
+/// The radius within which a via counts as bonding a connector's shield pin to ground is a rule of thumb.
+pub const TAG_SHIELD_BOND_RADIUS: &str = "rule_of_thumb_shield_bond_radius";
+/// A connector with neither `cable_shielded` nor a `shield` pin is treated as taking an unshielded cable (a name of the
+/// plan, not a rule of thumb).
+pub const TAG_ASSUMED_UNSHIELDED: &str = "assumed_unshielded_cable";
+/// The absolute connector voltage assumes a cable whose common-mode impedance at the connector is the channel's
+/// common-mode reference impedance (a name of the plan).
+pub const TAG_MATCHED_CABLE: &str = "matched_cable_termination";
+
+/// Height of the straight sense path of loop B over the reference plane, mm: `(nominal, low, high)`.
+///
+/// The sense path stands for the cable leaving the board and the antenna's other conductor, which the board model does
+/// not contain, so its height is a scenario parameter and the result is published only where it stays within
+/// [`SENSE_BAND_LIMIT_DB`] across the band. **A rule of thumb with no published source**: 3 to 8 mm is the order of the
+/// height of a connector's body and shield over the board; the numbers are the ones the independent fixture 8 of the
+/// plan uses (136.7, 115.0 and 95.35 uV for a leg 2 mm from the loop at 100 MHz and 1 mA).
+pub const SENSE_HEIGHT_MM: (f64, f64, f64) = (5.0, 3.0, 8.0);
+
+/// The result of a ground-noise voltage may move by at most this many dB across the sense-height band for it to be
+/// published (the plan's fallback; a decision of the plan, not a rule of thumb).
+pub const SENSE_BAND_LIMIT_DB: f64 = 6.0;
+
+/// A pair's ground-noise voltage that is more than this many dB below the larger of its two legs' terms is a
+/// cancellation (symmetric legs): it is published as it is without the sense-band test, which would only measure the
+/// rounding of a difference of two nearly equal numbers. A choice of this implementation.
+pub const CANCELLATION_DB: f64 = 30.0;
+
+/// Radius, mm, within which a via on a shield pin's net counts as bonding the pin to the reference: `(nominal, low,
+/// high)`. **A rule of thumb with no published source**: the bond is the via nearest the pin, and one within a few
+/// millimetres shares the pin's current.
+pub const SHIELD_VIA_RADIUS_MM: (f64, f64, f64) = (5.0, 2.0, 10.0);
+
+/// Distance of the ground pins of a connector to another net's corridor, in units of `3 H` each side, below which the
+/// net is considered for the ground-noise driver: the two corridors (each widened by the 3 H of the return-path
+/// check) overlap. The 3 H of P2 ([`RETURN_WINDOW_H`]).
+pub const CORRIDOR_WIDENING_H: f64 = 3.0;
+
+/// The rule behind [`SENSE_HEIGHT_MM`], for `input:` lines.
+pub fn sense_height_rule() -> String {
+    format!(
+        "sense path of the ground-noise network: a straight return {} mm over the reference plane, band {} to {} mm (a scenario parameter standing for the cable leaving the board; rule of thumb, no published source; the result is published only where it stays within {SENSE_BAND_LIMIT_DB} dB across the band)",
+        SENSE_HEIGHT_MM.0, SENSE_HEIGHT_MM.1, SENSE_HEIGHT_MM.2
+    )
+}
+
+/// The rule behind [`SHIELD_VIA_RADIUS_MM`], for `input:` lines.
+pub fn shield_bond_rule() -> String {
+    format!(
+        "a via on the shield pin's net within {} mm of the pin counts as its bond to the reference (rule of thumb, no published source; {} to {} mm)",
+        SHIELD_VIA_RADIUS_MM.0, SHIELD_VIA_RADIUS_MM.1, SHIELD_VIA_RADIUS_MM.2
+    )
+}
+
 #[cfg(test)]
 fn ring(l: f64, c: f64) -> f64 {
     use std::f64::consts::PI;
@@ -231,6 +518,20 @@ fn ring(l: f64, c: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cable_defaults_are_bands_with_their_tags_and_say_they_have_no_verified_source() {
+        assert!(is_rule_tag(TAG_SENSE_HEIGHT) && is_rule_tag(TAG_SHIELD_BOND_RADIUS));
+        assert!(!is_rule_tag(TAG_ASSUMED_UNSHIELDED) && !is_rule_tag(TAG_MATCHED_CABLE));
+        let (nominal, low, high) = SENSE_HEIGHT_MM;
+        assert!(low < nominal && nominal < high);
+        let (nominal, low, high) = SHIELD_VIA_RADIUS_MM;
+        assert!(low < nominal && nominal < high);
+        assert!(
+            sense_height_rule().contains("no published source") && shield_bond_rule().contains("no published source")
+        );
+        assert!(sense_height_rule().contains("6 dB"));
+    }
 
     #[test]
     fn the_edge_follows_the_slew_rate() {
@@ -281,6 +582,64 @@ mod tests {
     fn the_ripple_band_brackets_the_nominal_and_the_rule_says_where_it_comes_from() {
         assert!(RIPPLE_RATIO.1 < RIPPLE_RATIO.0 && RIPPLE_RATIO.0 < RIPPLE_RATIO.2);
         assert!(ripple_rule().contains("power inductor"));
+    }
+
+    #[test]
+    fn signal_defaults_are_bands_around_a_nominal_and_carry_rule_tags() {
+        assert!(is_rule_tag(TAG_SIGNAL_EDGE) && is_rule_tag(TAG_SIGNAL_SWING));
+        // Data signal: fractions of the unit interval of 2.5 Gbps (400 ps).
+        let (nominal, fast, slow) = signal_edge_band(Some(2.5e9));
+        assert!(fast < nominal && nominal < slow);
+        assert!((fast - 0.2 * 400e-12).abs() < 1e-15 && (slow - 0.35 * 400e-12).abs() < 1e-15);
+        let (nominal, fast, slow) = signal_edge_band(None);
+        assert!(fast < nominal && nominal < slow);
+        assert_eq!(signal_edge_band(Some(0.0)), SIGNAL_EDGE_CLOCK);
+        let (nominal, low, high) = signal_swing_band(true, None).unwrap();
+        assert!(low < nominal && nominal < high);
+        // Single-ended: only with a supply.
+        assert_eq!(signal_swing_band(false, None), None);
+        let (nominal, low, high) = signal_swing_band(false, Some(3.3)).unwrap();
+        assert!((nominal - 3.3).abs() < 1e-12 && (low - 0.8 * 3.3).abs() < 1e-12 && (high - 3.3).abs() < 1e-12);
+        assert!(signal_edge_rule(true).contains("UI") && signal_edge_rule(false).contains("ns"));
+        assert!(signal_swing_rule(true).contains("differential") && signal_swing_rule(false).contains("supply"));
+    }
+
+    #[test]
+    fn the_return_path_defaults_are_derived_or_say_they_have_no_source() {
+        // The share of a thin trace's return current within k heights of it, (2 / pi) atan(k): 50 % at 1 H, 79.5 % at 3 H.
+        assert!((return_window_fraction(1.0) - 0.5).abs() < 1e-12);
+        assert!((return_window_fraction(3.0) - 0.7952).abs() < 1e-4);
+        assert!(
+            return_window_fraction(2.0) < return_window_fraction(3.0)
+                && return_window_fraction(3.0) < return_window_fraction(5.0)
+        );
+        assert!(RETURN_WINDOW_H.1 < RETURN_WINDOW_H.0 && RETURN_WINDOW_H.0 < RETURN_WINDOW_H.2);
+        assert!(EDGE_DISTANCE_H.1 < EDGE_DISTANCE_H.0 && EDGE_DISTANCE_H.0 < EDGE_DISTANCE_H.2);
+        // lambda / 20 at the knee of a 1 ns edge in eps = 4: f = 350 MHz, lambda = 299792458 / (350e6 * 2) = 0.42827 m,
+        // a twentieth is 21.41 mm.
+        assert!((knee_frequency(1e-9) - 350e6).abs() < 1.0);
+        let threshold = return_via_threshold(1e-9, 4.0, RETURN_VIA_LAMBDA_FRACTION.0);
+        assert!((threshold - 0.021_413).abs() < 1e-5, "{threshold}");
+        // A ten times faster edge shortens it by ten.
+        assert!((return_via_threshold(1e-10, 4.0, 20.0) * 10.0 - threshold).abs() < 1e-12);
+        for tag in [TAG_RETURN_WINDOW, TAG_EDGE_DISTANCE, TAG_RETURN_VIA] {
+            assert!(is_rule_tag(tag), "{tag}");
+        }
+        assert!(return_window_rule().contains("derived") && edge_distance_rule().contains("no verified citation"));
+        assert!(return_via_rule().contains("no published source"));
+    }
+
+    #[test]
+    fn the_mode_conversion_defaults_are_bands_and_say_they_have_no_verified_source() {
+        for tag in [TAG_LEG_IMBALANCE, TAG_CAPACITOR_TOLERANCE, TAG_PAIR_IMPEDANCE] {
+            assert!(is_rule_tag(tag), "{tag}");
+        }
+        for (nominal, low, high) in [LEG_IMBALANCE_PER_EXPOSURE, CAPACITOR_TOLERANCE] {
+            assert!(low <= nominal && nominal <= high);
+        }
+        assert!(leg_imbalance_rule().contains("no published source"));
+        assert!(capacitor_tolerance_rule().contains("not checked"));
+        assert!(pair_impedance_rule().contains("not checked"));
     }
 
     #[test]

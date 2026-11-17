@@ -3,7 +3,7 @@
 //! Every check, its order and its diagnostic follow the Python compiler, so
 //! the first error a source produces is the same in both implementations.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use copper_json::{python_isspace, python_str_repr as repr};
 use copper_units::{Decimal, Dimension, Quantity, Rounding};
@@ -545,8 +545,8 @@ fn emi_name<T>(
     })
 }
 
-/// `emi_role`, `rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time` and `current_fall_time`;
-/// `None` when none is declared.
+/// `emi_role`, `rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time`, `current_fall_time`,
+/// `data_rate`, `clock_frequency`, `signal_swing` and `spread_spectrum`; `None` when none is declared.
 fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<EmiProfile>> {
     let role = attributes
         .get("emi_role")
@@ -571,8 +571,165 @@ fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<Em
         current_peak: quantity_of("current_peak", Dimension::Current)?,
         current_rise_time: quantity_of("current_rise_time", Dimension::Time)?,
         current_fall_time: quantity_of("current_fall_time", Dimension::Time)?,
+        data_rate: quantity_of("data_rate", Dimension::DataRate)?,
+        clock_frequency: quantity_of("clock_frequency", Dimension::Frequency)?,
+        signal_swing: quantity_of("signal_swing", Dimension::Voltage)?,
+        spread_spectrum: quantity_of("spread_spectrum", Dimension::Ratio)?,
+        output_impedance: quantity_of("output_impedance", Dimension::Impedance)?,
+        open_circuit_swing: quantity_of("open_circuit_swing", Dimension::Voltage)?,
     };
+    // The Thevenin representation of a source needs both numbers and excludes the loaded pin voltage: the source
+    // impedance would be applied twice (the pin voltage already contains its loading).
+    match (&profile.output_impedance, &profile.open_circuit_swing) {
+        (Some(_), None) => {
+            return Err(error(
+                "CMP130",
+                "output_impedance is for the Thevenin representation of a source and needs open_circuit_swing; signal_swing is the loaded pin voltage and takes no output impedance",
+                location,
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(error(
+                "CMP130",
+                "open_circuit_swing needs output_impedance (the source impedance behind the open-circuit voltage)",
+                location,
+            ));
+        }
+        _ => {}
+    }
+    if profile.open_circuit_swing.is_some() && profile.signal_swing.is_some() {
+        return Err(error(
+            "CMP130",
+            "open_circuit_swing and signal_swing are exclusive: declare the source once, either as the loaded pin voltage (signal_swing) or as a Thevenin source (open_circuit_swing with output_impedance)",
+            location,
+        ));
+    }
     Ok((!profile.is_empty()).then_some(profile))
+}
+
+/// One entry of a list of impedances: `120 ohm` (a magnitude) or `60+j104 ohm` / `60-j20 ohm` (complex, inductive
+/// reactance positive). Zero is accepted (a zero-impedance element changes nothing).
+fn impedance_entry(text: &str, label: &str, location: &Location) -> Result<CommonModeValue> {
+    let usage =
+        format!("{label} entries must be `<number> <unit>` or `<resistance>+j<reactance> <unit>` in ohm, kohm or Mohm");
+    let units: Vec<&str> = Dimension::Impedance.units().iter().map(|(name, _)| *name).collect();
+    let bad = || error("CMP130", usage.clone(), location);
+    let (number, unit) = text.trim_matches(python_isspace).rsplit_once(python_isspace).ok_or_else(bad)?;
+    let (number, unit) = (number.trim_matches(python_isspace), unit.trim_matches(python_isspace));
+    if !units.contains(&unit) {
+        return Err(bad());
+    }
+    let make = |part: &str| -> Result<Quantity> {
+        let value = Decimal::parse(part).map_err(|_| bad())?;
+        Quantity::of(Dimension::Impedance, &value, unit).map_err(|_| bad())
+    };
+    // A complex entry has the imaginary marker after the real part: `+j` or `-j` (a leading sign belongs to the real
+    // part).
+    let marker = number.char_indices().skip(1).find(|(index, c)| {
+        (*c == '+' || *c == '-') && number[index + 1..].starts_with('j') && !number[..*index].ends_with(['e', 'E'])
+    });
+    match marker {
+        None => {
+            let magnitude = make(number)?;
+            if magnitude.base_value().is_negative() {
+                return Err(error("CMP130", format!("{label} must not be negative"), location));
+            }
+            Ok(CommonModeValue::Magnitude(magnitude))
+        }
+        Some((index, sign)) => {
+            let resistance = make(&number[..index])?;
+            if resistance.base_value().is_negative() {
+                return Err(error(
+                    "CMP130",
+                    format!("{label}: the resistance of a complex entry must not be negative"),
+                    location,
+                ));
+            }
+            let digits = &number[index + 2..];
+            let reactance = make(&format!("{}{digits}", if sign == '-' { "-" } else { "" }))?;
+            Ok(CommonModeValue::Complex { resistance, reactance })
+        }
+    }
+}
+
+/// `common_mode_impedance` with `common_mode_impedance_frequency`: one declared point (two quantities), or several
+/// (two quoted lists of equal length, the frequencies strictly increasing). Empty when neither is declared.
+fn common_mode_points(properties: &IndexMap<String, Scalar>, location: &Location) -> Result<Vec<CommonModePoint>> {
+    let (impedance, frequency) =
+        (properties.get("common_mode_impedance"), properties.get("common_mode_impedance_frequency"));
+    let (impedance, frequency) = match (impedance, frequency) {
+        (None, None) => return Ok(Vec::new()),
+        (Some(_), None) => {
+            return Err(error(
+                "CMP130",
+                "common_mode_impedance needs common_mode_impedance_frequency: an impedance is declared at a frequency",
+                location,
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(error(
+                "CMP130",
+                "common_mode_impedance_frequency is declared without common_mode_impedance",
+                location,
+            ));
+        }
+        (Some(impedance), Some(frequency)) => (impedance, frequency),
+    };
+    let frequency_usage =
+        "common_mode_impedance_frequency must be a positive frequency in Hz, kHz, MHz, GHz, or a quoted list of them";
+    let one_frequency = |text: &str| -> Result<Quantity> {
+        let bad = || error("CMP130", frequency_usage, location);
+        let (number, unit) = text.trim_matches(python_isspace).rsplit_once(python_isspace).ok_or_else(bad)?;
+        let value = Decimal::parse(number.trim_matches(python_isspace)).map_err(|_| bad())?;
+        let quantity =
+            Quantity::of(Dimension::Frequency, &value, unit.trim_matches(python_isspace)).map_err(|_| bad())?;
+        if quantity.base_value() <= &Decimal::zero() {
+            return Err(bad());
+        }
+        Ok(quantity)
+    };
+    let frequencies: Vec<Quantity> = match frequency {
+        Scalar::Quantity { .. } => {
+            vec![emi_quantity(frequency, Dimension::Frequency, "common_mode_impedance_frequency", location)?]
+        }
+        Scalar::Str(text) => text.split(',').map(one_frequency).collect::<Result<Vec<_>>>()?,
+        _ => return Err(error("CMP130", frequency_usage, location)),
+    };
+    let values: Vec<CommonModeValue> = match impedance {
+        Scalar::Quantity { value, unit } => {
+            vec![impedance_entry(&format!("{value} {unit}"), "common_mode_impedance", location)?]
+        }
+        Scalar::Str(text) => text
+            .split(',')
+            .map(|item| impedance_entry(item, "common_mode_impedance", location))
+            .collect::<Result<Vec<_>>>()?,
+        _ => {
+            return Err(error(
+                "CMP130",
+                "common_mode_impedance must be an impedance (120ohm) or a quoted list of impedances (\"60 ohm, 120 ohm\")",
+                location,
+            ));
+        }
+    };
+    if values.len() != frequencies.len() {
+        return Err(error(
+            "CMP130",
+            format!(
+                "common_mode_impedance has {} value(s) but common_mode_impedance_frequency has {}: one frequency per impedance",
+                values.len(),
+                frequencies.len()
+            ),
+            location,
+        ));
+    }
+    if frequencies.windows(2).any(|pair| pair[0].base_value() >= pair[1].base_value()) {
+        return Err(error("CMP130", "common_mode_impedance_frequency must be strictly increasing", location));
+    }
+    Ok(frequencies
+        .into_iter()
+        .zip(values)
+        .map(|(frequency, impedance)| CommonModePoint { frequency, impedance })
+        .collect())
 }
 
 /// The component property holding a board-chosen switching frequency.
@@ -642,6 +799,11 @@ fn part_emi(properties: &IndexMap<String, Scalar>, location: &Location) -> Resul
         Some(Scalar::Bool(flag)) => Some(*flag),
         Some(_) => return Err(error("CMP130", "external_cable must be true or false", location)),
     };
+    let cable_shielded = match properties.get("cable_shielded") {
+        None => None,
+        Some(Scalar::Bool(flag)) => Some(*flag),
+        Some(_) => return Err(error("CMP130", "cable_shielded must be true or false", location)),
+    };
     let emi = PartEmi {
         switching_frequency,
         topology,
@@ -651,6 +813,9 @@ fn part_emi(properties: &IndexMap<String, Scalar>, location: &Location) -> Resul
         self_resonance: quantity_of("self_resonance", Dimension::Frequency)?,
         output_capacitance: quantity_of("output_capacitance", Dimension::Capacitance)?,
         external_cable,
+        cable_shielded,
+        cable_common_mode_impedance: quantity_of("cable_common_mode_impedance", Dimension::Impedance)?,
+        common_mode_impedance: common_mode_points(properties, location)?,
     };
     Ok((!emi.is_empty()).then_some(emi))
 }
@@ -827,6 +992,12 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "current_peak",
                         "current_rise_time",
                         "current_fall_time",
+                        "data_rate",
+                        "clock_frequency",
+                        "signal_swing",
+                        "spread_spectrum",
+                        "output_impedance",
+                        "open_circuit_swing",
                         "io_supply",
                         "vih",
                         "vil",
@@ -1276,6 +1447,13 @@ pub fn compile_part(
                         "current_peak",
                         "current_rise_time",
                         "current_fall_time",
+                        "data_rate",
+                        "clock_frequency",
+                        "signal_swing",
+                        "spread_spectrum",
+                        "output_impedance",
+                        "open_circuit_swing",
+                        "passes_to",
                         "io_supply",
                         "vih",
                         "vil",
@@ -1316,6 +1494,12 @@ pub fn compile_part(
                     "current_peak",
                     "current_rise_time",
                     "current_fall_time",
+                    "data_rate",
+                    "clock_frequency",
+                    "signal_swing",
+                    "spread_spectrum",
+                    "output_impedance",
+                    "open_circuit_swing",
                     "io_supply",
                     "vih",
                     "vil",
@@ -1371,6 +1555,13 @@ pub fn compile_part(
                             Some(Scalar::Str(text)) => Some(text.clone()),
                             _ => None,
                         },
+                        passes_to: match attributes.get("passes_to") {
+                            None => None,
+                            Some(Scalar::Str(text)) => Some(text.clone()),
+                            Some(_) => {
+                                return Err(error("CMP130", "passes_to must name a pin of the same part", location));
+                            }
+                        },
                     },
                 );
             }
@@ -1409,6 +1600,10 @@ pub fn compile_part(
             "self_resonance",
             "output_capacitance",
             "external_cable",
+            "cable_shielded",
+            "cable_common_mode_impedance",
+            "common_mode_impedance",
+            "common_mode_impedance_frequency",
         ],
         location,
     )?;
@@ -1497,6 +1692,7 @@ pub fn compile_part(
             }
         }
     }
+    validate_passes_to(&pins, location)?;
     if pins.is_empty() {
         return Err(error("CMP050", "part must declare at least one pin", location));
     }
@@ -1548,6 +1744,55 @@ pub fn compile_part(
         part.metadata.insert(PART_HEIGHT_KEY.to_owned(), nm.to_string());
     }
     Ok(part)
+}
+
+/// `passes_to` (`CMP130`): the named pin exists, is another pin, the part has more than two pins, and both
+/// directions of a declared pair agree. A pin may be the target of one pin only.
+fn validate_passes_to(pins: &IndexMap<String, PackagePinDefinition>, location: &Location) -> Result<()> {
+    let mut targeted: BTreeMap<&str, &str> = BTreeMap::new();
+    for pin in pins.values() {
+        let Some(target) = &pin.passes_to else { continue };
+        if pins.len() <= 2 {
+            return Err(error(
+                "CMP130",
+                format!("pin {} declares passes_to, which is for parts with more than two pins", repr(&pin.name)),
+                location,
+            ));
+        }
+        let Some(other) = pins.get(target) else {
+            return Err(error(
+                "CMP130",
+                format!("pin {} passes_to unknown pin {}", repr(&pin.name), repr(target)),
+                location,
+            ));
+        };
+        if other.name == pin.name {
+            return Err(error("CMP130", format!("pin {} passes_to itself", repr(&pin.name)), location));
+        }
+        if let Some(back) = &other.passes_to
+            && *back != pin.name
+        {
+            return Err(error(
+                "CMP130",
+                format!(
+                    "pin {} passes_to {} but {} passes_to {}; a declared pair must agree in both directions",
+                    repr(&pin.name),
+                    repr(target),
+                    repr(target),
+                    repr(back)
+                ),
+                location,
+            ));
+        }
+        if targeted.insert(target.as_str(), pin.name.as_str()).is_some() {
+            return Err(error(
+                "CMP130",
+                format!("pin {} is the target of more than one passes_to", repr(target)),
+                location,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `model_sha256`, `model_license` and `model_redistributable`: required and
