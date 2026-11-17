@@ -1,23 +1,25 @@
 //! The current distribution of the quasi-static extraction as an SVG (`copper emi-check --extract --plot-current`):
 //! where the hot loop's current actually flows in the copper.
 //!
-//! One map per copper layer that carries loop current. Each shows the sheet current `|K| = |I| / w` of every mesh
-//! filament of the finest mesh, at one frequency, for the unit current into the port across the switch, as a heat
-//! map in dB relative to the largest `|K|` on any layer (a 30-step viridis scale, one dB a step; the colours are
-//! the `|J|` of the copper per layer, one compound path per colour); faint copper outlines under it; short arrows
-//! on a coarse grid for the direction of the current at the instant the port current peaks; the vias as circles
-//! whose area is their share of the current that changes layer there, with the percentage; the loop's pads with
-//! their names; the port. The right-hand column lists the loop inductance at the solved frequencies and the
-//! division of the current between the vias, from the same solution.
+//! One map per copper layer that carries loop current, titled with the layer and its peak (`F.Cu: peak 8.49 A/mm`).
+//! Each shows the sheet current `|K| = |I| / w` of every mesh filament of the finest mesh, at one frequency, for the
+//! unit current into the port across the switch, as a heat map in dB relative to a reference level (a 30-step viridis
+//! scale, one dB a step; one compound path per colour); faint copper outlines under it; short arrows on a coarse grid for
+//! the direction of the current at the instant the port current peaks; the vias as circles whose area is their share of
+//! the current that changes layer there; the loop's pads with their names; the port. A colour bar with a tick every 10 dB
+//! and a scale bar complete the maps; beside them a three-row table of the loop impedance at the solved frequencies and,
+//! only where a layer change carries current, the division between the vias, from the same solution. A title of one line,
+//! a subtitle ("per ampere into the switch port; quasi-static extraction (6787 filaments)"), a badge when the extraction
+//! did not converge, a legend of "current direction" and "port", and the one footer line.
 //!
 //! The renderer takes plain data ([`CurrentPanel`]) made by the command from `copper_extract`'s current map; the
 //! output is hand-written deterministic SVG on a white background with a fixed palette. A screening estimate, and
-//! says so in one line.
+//! says so.
 
 use crate::emi_field::{
-    BOARD, FieldPicture, INK, MUTED, Placer, centroid, halo, path_data, scale_color, stacked_svg, text_px, wrap_px,
+    BOARD, FieldPicture, INK, MUTED, Placer, centroid, halo, path_data, scale_color, text_px, wrap_px,
 };
-use crate::emi_impedance::counted;
+use crate::emi_figure::{header, legend_row, sig3, text_el};
 use crate::emi_plot::{escape, n};
 use crate::scene::Point;
 
@@ -207,10 +209,6 @@ fn bin(db: f64) -> Option<usize> {
     Some((((db + RANGE_DB) / RANGE_DB * STEPS as f64).floor() as usize).min(STEPS - 1))
 }
 
-fn text_rows(text: &str, size: f64, width: f64) -> Vec<String> {
-    wrap_px(text, size, width)
-}
-
 /// The `fraction` quantile of the covered cells of a raster, A/mm (0 without cells).
 fn quantile(raster: &Raster, fraction: f64) -> f64 {
     let mut values: Vec<f64> = raster.magnitude.iter().copied().filter(|v| v.is_finite() && *v > 0.0).collect();
@@ -281,20 +279,6 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
     } else {
         shown
     };
-    let hidden: Vec<String> = (0..panel.layers.len())
-        .filter(|l| !shown.contains(l))
-        .map(|l| {
-            if rasters[l].magnitude.iter().all(|v| v.is_nan()) {
-                format!("{} (no current-carrying copper in the window)", panel.layers[l].name)
-            } else {
-                format!(
-                    "{} ({} dB at the 90th percentile of its cells)",
-                    panel.layers[l].name,
-                    n(rel_db(quantile(&rasters[l], 0.9)))
-                )
-            }
-        })
-        .collect();
     let nets: Vec<&str> = {
         let mut v: Vec<&str> = panel.vias.iter().map(|v| v.net.as_str()).collect();
         v.sort_unstable();
@@ -351,47 +335,25 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
     let scale = if compact { (616.0 / ww).min(270.0 / wh).min(80.0) } else { (620.0 / ww).min(400.0 / wh).min(80.0) };
     let (map_w, map_h) = (ww * scale, wh * scale);
 
-    // Text blocks first: the picture's width depends on them.
+    // The picture's width depends on the column.
     let side = LEFT + map_w + 30.0;
     let column = 330.0;
-    let title = format!(
-        "{} hot loop: current distribution in the copper, {}extraction at {}",
-        panel.cell,
-        if compact { "" } else { "quasi-static " },
-        frequency_label(panel.frequency_hz)
-    );
+    let title =
+        format!("{} hot loop: current density in the copper at {}", panel.cell, frequency_label(panel.frequency_hz));
+    let subtitle = format!("per ampere into the switch port; quasi-static extraction ({} filaments)", panel.filaments);
     let width = if compact {
-        (LEFT + map_w + LEFT).max(text_px(&title, 14.0) * 1.07 + 2.0 * LEFT).max(460.0)
+        (LEFT + map_w + LEFT).max(460.0)
     } else {
-        (side + column + LEFT).max(560.0)
+        (side + column + LEFT).max(text_px(&title, 16.0) * 1.07 + 2.0 * LEFT).max(560.0)
     };
     let mut out: Vec<String> = Vec::new();
-    out.push(format!(
-        "<text x=\"{}\" y=\"26\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-        n(LEFT),
-        if compact { 14 } else { 16 },
-        escape(&title)
-    ));
-    let mut y = if compact { 34.0 } else { 46.0 };
-    let notes = [format!(
-        "Screening estimate from a quasi-static partial-element extraction of the filled copper ({} filaments, status {}{}): the current in every filament for one ampere into the port across the switch. Heat: sheet current |I|/w per mesh cell on a {} dB scale; arrows: direction at the instant the port current peaks. The displacement current and the skin effect are not modelled.",
-        panel.filaments,
-        panel.status,
-        if panel.status_reasons.is_empty() { String::new() } else { format!(": {}", panel.status_reasons.join("; ")) },
-        n(RANGE_DB)
-    )];
-    for text in notes.iter().filter(|_| !compact) {
-        for line in text_rows(text, 12.0, width - 2.0 * LEFT) {
-            out.push(format!(
-                "<text class=\"note\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
-                n(LEFT),
-                n(y),
-                escape(&line)
-            ));
-            y += 15.0;
-        }
-    }
-    let mut top = y + 10.0;
+    let y = if compact {
+        out.push(text_el(LEFT, 26.0, 14.0, INK, "title", "", true, "Current density in the copper"));
+        34.0
+    } else {
+        header(&mut out, LEFT, 16.0, width, &title, &subtitle, badge_of(panel))
+    };
+    let mut top = y + if compact { 0.0 } else { 10.0 };
     let heat_bin_max = STEPS;
     let mut defs: Vec<String> = Vec::new();
     let mut column_top = top;
@@ -399,26 +361,25 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
     for (slot, &l) in shown.iter().enumerate() {
         let layer = &panel.layers[l];
         let raster = &rasters[l];
-        let (ox, oy) = (LEFT, top + 22.0);
+        let (ox, oy) = (LEFT, top + if compact { 6.0 } else { 22.0 });
         let px = |x: f64| ox + (x - wx0) * scale;
         let py = |yv: f64| oy + (yv - wy0) * scale;
         let bounds = [ox, oy, ox + map_w, oy + map_h];
         let layer_peak = peak(raster);
         let layer_reference = quantile(raster, 0.99);
         out.push(format!("<g class=\"layer\" data-layer=\"{}\">", escape(&layer.name)));
-        out.push(format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"13\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-            n(ox),
-            n(top + 14.0),
-            escape(&format!(
-                "{} (z = {} mm): peak {} A/mm, {}{} dB re 0 dB",
-                layer.name,
-                n(layer.z_mm),
-                n(layer_peak),
-                if rel_db(layer_peak) > 0.0 { "+" } else { "" },
-                n(rel_db(layer_peak).max(-99.0))
-            ))
-        ));
+        if !compact {
+            out.push(text_el(
+                ox,
+                top + 14.0,
+                13.0,
+                INK,
+                "layer-title",
+                "",
+                true,
+                &format!("{}: peak {} A/mm", layer.name, sig3(layer_peak)),
+            ));
+        }
         let clip = if compact { format!("tclip{id}") } else { format!("clip{slot}") };
         defs.push(format!(
             "<clipPath id=\"{clip}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
@@ -622,7 +583,7 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
             );
             labels.push(halo(lx, ly, 10.0, "bold", "start", "via-label", &text));
         }
-        for pad in &layer_pads {
+        for pad in layer_pads.iter().filter(|_| !compact) {
             let b = pad.bounds;
             let c: Point = centroid(&[(px(b[0]), py(b[1])), (px(b[2]), py(b[3]))]);
             let w = text_px(&pad.label, 10.0);
@@ -653,31 +614,6 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
             ));
             placer.reserve([x - 8.0, y - 8.0, x + 8.0, y + 8.0]);
         }
-        if panel.port.plus.0 == l || panel.port.minus.0 == l {
-            let (a, b) = (panel.port.plus.1, panel.port.minus.1);
-            let at = if panel.port.plus.0 == l && panel.port.minus.0 == l {
-                [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
-            } else if panel.port.plus.0 == l {
-                a
-            } else {
-                b
-            };
-            let (x, y) = (px(at[0]), py(at[1]));
-            let text = "port (the switch)";
-            let w = text_px(text, 10.0);
-            let (lx, ly) = placer.place(
-                (x, y),
-                w,
-                10.0,
-                &[(-w / 2.0, -12.0), (-w / 2.0, 20.0), (9.0, 4.0), (-w - 9.0, 4.0), (9.0, -12.0), (-w - 9.0, -12.0)],
-            );
-            labels.push(format!(
-                "<text class=\"port-label\" x=\"{}\" y=\"{}\" font-size=\"10\" font-weight=\"bold\" fill=\"{PORT}\" stroke=\"#ffffff\" stroke-width=\"3\" stroke-linejoin=\"round\" paint-order=\"stroke\">{}</text>",
-                n(lx),
-                n(ly),
-                text
-            ));
-        }
         out.extend(labels);
         out.push(format!(
             "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{MUTED}\" stroke-width=\"1\"/>",
@@ -686,7 +622,7 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
             n(map_w),
             n(map_h)
         ));
-        if slot == shown.len() - 1 {
+        if slot == shown.len() - 1 && !compact {
             let bar = [1.0, 2.0, 5.0, 10.0].iter().copied().rev().find(|b| b * scale <= map_w / 3.0).unwrap_or(1.0);
             out.push(format!(
                 "<g class=\"scale\"><line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"3\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{} mm</text></g>",
@@ -706,219 +642,9 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
         }
     }
 
-    // Right column: colour bar, legend, loop inductance, the vias.
-    let column_start = out.len();
-    let (bar_x, bar_y, bar_h) = (side, column_top + 18.0, 180.0);
-    out.push("<g class=\"colorbar\">".to_owned());
-    out.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">sheet current, dB re 0 dB</text>",
-        n(bar_x),
-        n(column_top + 4.0)
-    ));
-    let block = bar_h / STEPS as f64;
-    for k in 0..STEPS {
-        out.push(format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"18\" height=\"{}\" fill=\"{}\"/>",
-            n(bar_x),
-            n(bar_y + bar_h - (k as f64 + 1.0) * block),
-            n(block + 0.3),
-            scale_color((k as f64 + 0.5) / STEPS as f64)
-        ));
-    }
+    // The colour bar: dB below the 0 dB level, right of the maps (a row under the map in the thumbnail).
     let ticks = (RANGE_DB / 10.0).round() as usize;
-    for k in 0..=ticks {
-        let level = -RANGE_DB + 10.0 * k as f64;
-        let yy = bar_y + bar_h - bar_h * k as f64 / ticks as f64;
-        out.push(format!(
-            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{} dB</text>",
-            n(bar_x + 18.0),
-            n(yy),
-            n(bar_x + 23.0),
-            n(yy),
-            n(bar_x + 27.0),
-            n(yy + 4.0),
-            n(level)
-        ));
-    }
-    let mut cy = bar_y + bar_h + 18.0;
-    let note = format!(
-        "0 dB = {} A/mm per ampere into the port: the level the strongest 1 % of the cells of the layer with the largest peak exceed; cells above it, up to {} A/mm ({} dB), are drawn in the top colour. Copper more than {} dB below 0 dB takes the bottom colour; copper without a filament is white.{}",
-        n(reference),
-        n(raw_peak),
-        n(rel_db(raw_peak)),
-        n(RANGE_DB),
-        if hidden.is_empty() {
-            String::new()
-        } else {
-            format!(" No map for {}: more than {} dB below 0 dB.", hidden.join(", "), n(LAYER_DB))
-        }
-    );
-    for line in wrap_px(&note, 10.0, column) {
-        out.push(format!(
-            "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"10\" fill=\"{MUTED}\">{}</text>",
-            n(bar_x),
-            n(cy),
-            escape(&line)
-        ));
-        cy += 12.0;
-    }
-    out.push("</g>".to_owned());
-    // Legend.
-    cy += 10.0;
-    out.push("<g class=\"legend\">".to_owned());
-    let legend: Vec<(String, &str)> = vec![
-        (
-            "<path d=\"M0 0L20 0M13 -4L20 0L13 4\" fill=\"none\" stroke=\"#111827\" stroke-opacity=\"0.75\" stroke-width=\"2.8\" stroke-linecap=\"round\"/><path d=\"M0 0L20 0M13 -4L20 0L13 4\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>".to_owned(),
-            "current direction at the port current's peak",
-        ),
-        (
-            format!(
-                "<rect x=\"0\" y=\"-5\" width=\"22\" height=\"10\" fill=\"#ffffff\" fill-opacity=\"0.18\" stroke=\"{INK}\" stroke-width=\"1\"/>"
-            ),
-            "pad of the loop",
-        ),
-        (
-            format!("<circle cx=\"11\" cy=\"0\" r=\"6\" fill=\"none\" stroke=\"{PORT}\" stroke-width=\"2\"/>"),
-            "the port, across the switch",
-        ),
-    ];
-    let via_entries: Vec<(String, String)> = nets
-        .iter()
-        .map(|net| {
-            (
-                format!(
-                    "<circle cx=\"11\" cy=\"0\" r=\"6\" fill=\"#ffffff\" fill-opacity=\"0.8\" stroke=\"{}\" stroke-width=\"1.6\"/>",
-                    net_colour(net)
-                ),
-                format!("via of {net}: area is its share of the layer change"),
-            )
-        })
-        .collect();
-    let legend: Vec<(String, String)> = legend.into_iter().map(|(g, l)| (g, l.to_owned())).chain(via_entries).collect();
-    for (glyph, label) in &legend {
-        out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(bar_x), n(cy)));
-        out.push(format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
-            n(bar_x + 30.0),
-            n(cy + 4.0)
-        ));
-        cy += 18.0;
-    }
-    out.push("</g>".to_owned());
-    // Loop inductance at the solved frequencies.
-    cy += 14.0;
-    let heading = |out: &mut Vec<String>, cy: &mut f64, text: &str| {
-        out.push(format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"12\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-            n(bar_x),
-            n(*cy),
-            escape(text)
-        ));
-        *cy += 17.0;
-    };
-    heading(&mut out, &mut cy, "loop impedance across the switch");
-    for (hz, l_nh, r_mohm) in &panel.impedance {
-        out.push(format!(
-            "<text class=\"inductance-row\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{}</text>",
-            n(bar_x),
-            n(cy),
-            escape(&format!("{}: {} nH, {} mohm", frequency_label(*hz), n(*l_nh), n(*r_mohm)))
-        ));
-        cy += 14.0;
-    }
-    cy += 12.0;
-    heading(&mut out, &mut cy, "division between the vias");
-    if panel.transitions.is_empty() {
-        for line in wrap_px("none: the loop's current does not change layer through a via", 11.0, column) {
-            out.push(format!(
-                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-                n(bar_x),
-                n(cy),
-                escape(&line)
-            ));
-            cy += 14.0;
-        }
-    }
-    let near_pad = |via: &ViaMark| -> Option<&str> {
-        panel
-            .pads
-            .iter()
-            .map(|p| {
-                let dx = (p.bounds[0] - via.position[0]).max(via.position[0] - p.bounds[2]).max(0.0);
-                let dy = (p.bounds[1] - via.position[1]).max(via.position[1] - p.bounds[3]).max(0.0);
-                (dx.hypot(dy), p.label.as_str())
-            })
-            .filter(|(d, _)| *d <= NEAR_PAD_MM)
-            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(b.1)))
-            .map(|(_, label)| label)
-    };
-    for t in panel.transitions.iter().filter(|t| is_listed(t)) {
-        let head = format!(
-            "{}, {} to {}: {} A up, {} A down per A into the port",
-            t.net,
-            t.lower,
-            t.upper,
-            n(t.up),
-            n(t.down)
-        );
-        let mut entries: Vec<String> = Vec::new();
-        for &(via, share) in t.top.iter().filter(|(_, s)| *s >= LABEL_SHARE) {
-            let number = numbers.get(&via).copied().unwrap_or(0);
-            let near = near_pad(&panel.vias[via]).map_or(String::new(), |p| format!(" near {p}"));
-            entries.push(format!("{number}: {} %{near}", n((share * 100.0).round())));
-        }
-        let rest = t.top.iter().filter(|(_, s)| *s < LABEL_SHARE).count();
-        let mut row = format!("{head}. {}", entries.join("; "));
-        if rest > 0 {
-            row.push_str(&format!("; {} under {} %", counted(rest, "more via", "more vias"), n(LABEL_SHARE * 100.0)));
-        }
-        row.push('.');
-        for (k, line) in wrap_px(&row, 11.0, column - 12.0).iter().enumerate() {
-            out.push(format!(
-                "<text class=\"via-row\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{}</text>",
-                n(bar_x + if k == 0 { 0.0 } else { 12.0 }),
-                n(cy),
-                escape(line)
-            ));
-            cy += 14.0;
-        }
-        cy += 3.0;
-    }
-    let weaker = panel.transitions.iter().filter(|t| !is_listed(t)).count();
-    if weaker > 0 {
-        let text = format!(
-            "{} {} under {} A each.",
-            counted(weaker, "weaker layer change", "weaker layer changes"),
-            if weaker == 1 { "carries" } else { "carry" },
-            n(LISTED_AMPERE)
-        );
-        for line in wrap_px(&text, 11.0, column) {
-            out.push(format!(
-                "<text class=\"via-row\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-                n(bar_x),
-                n(cy),
-                escape(&line)
-            ));
-            cy += 14.0;
-        }
-    }
-    cy += 10.0;
-    for line in wrap_px(
-        "Share = |I| over the sum of |I| of the vias of that net between the panel's layer and the adjacent layer that carries the net's current; vias on a layer change under 0.1 A are small and unlabelled. Up and down are equal where the port's two terminals are on one layer; more than 1 A means current that circulates between the layers (induced by the loop). Current shares of the other capacitors are not part of this solution: the hot capacitor closes the loop as copper and the others are open ports (see --plot-impedance).",
-        10.0,
-        column,
-    ) {
-        out.push(format!(
-            "<text class=\"column-note\" x=\"{}\" y=\"{}\" font-size=\"10\" fill=\"{MUTED}\">{}</text>",
-            n(bar_x),
-            n(cy),
-            escape(&line)
-        ));
-        cy += 12.0;
-    }
     if compact {
-        // The thumbnail drops the column: a one-row colour scale under the map, a caption and the legend in rows.
-        out.truncate(column_start);
         let map_bottom = top - 34.0;
         let (bar_w, bar_h) = (200.0, 10.0);
         let bx = (LEFT + map_w - bar_w).max(LEFT + 150.0);
@@ -934,69 +660,141 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
                 scale_color((k as f64 + 0.5) / STEPS as f64)
             ));
         }
-        let ticks = (RANGE_DB / 10.0).round() as usize;
         for k in 0..=ticks {
             let x = bx + bar_w * k as f64 / ticks as f64;
             out.push(format!(
-                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{0}\" y=\"{3}\" font-size=\"10\" text-anchor=\"middle\" fill=\"{INK}\">{4} dB</text>",
+                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/>",
                 n(x),
                 n(by + bar_h),
-                n(by + bar_h + 4.0),
-                n(by + bar_h + 15.0),
-                n(-RANGE_DB + 10.0 * k as f64)
+                n(by + bar_h + 4.0)
             ));
-        }
-        out.push("</g>".to_owned());
-        let mut ty = by + bar_h + 34.0;
-        let caption = format!(
-            "Sheet current per mesh cell for one ampere into the port, dB below the level the strongest 1 % of the cells exceed ({} A/mm); quasi-static extraction, {} filaments, status {}.",
-            n(reference),
-            panel.filaments,
-            panel.status
-        );
-        for line in wrap_px(&caption, 11.0, width - 2.0 * LEFT) {
-            out.push(format!(
-                "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-                n(LEFT),
-                n(ty),
-                escape(&line)
+            out.push(text_el(
+                x,
+                by + bar_h + 15.0,
+                10.0,
+                INK,
+                "tick",
+                "middle",
+                false,
+                &format!("{} dB", n(-RANGE_DB + 10.0 * k as f64)),
             ));
-            ty += 14.0;
-        }
-        ty += 6.0;
-        let mut lx = LEFT;
-        out.push("<g class=\"legend\">".to_owned());
-        for (glyph, label) in &legend {
-            let need = 30.0 + text_px(label, 11.0) + 16.0;
-            if lx + need > width - LEFT && lx > LEFT {
-                lx = LEFT;
-                ty += 17.0;
-            }
-            out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(lx), n(ty)));
-            out.push(format!(
-                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
-                n(lx + 30.0),
-                n(ty + 4.0)
-            ));
-            lx += need;
         }
         out.push("</g>".to_owned());
         let mut content = vec![format!("<defs>{}</defs>", defs.join(""))];
         content.extend(out);
-        return FieldPicture { content: content.join("\n"), width, height: ty + 14.0 };
+        return FieldPicture { content: content.join("\n"), width, height: by + bar_h + 24.0 };
     }
-    let height = top.max(cy) + 10.0;
+    let (bar_x, bar_y, bar_h) = (side, column_top + 4.0, 180.0);
+    out.push("<g class=\"colorbar\">".to_owned());
+    let block = bar_h / STEPS as f64;
+    for k in 0..STEPS {
+        out.push(format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"18\" height=\"{}\" fill=\"{}\"/>",
+            n(bar_x),
+            n(bar_y + bar_h - (k as f64 + 1.0) * block),
+            n(block + 0.3),
+            scale_color((k as f64 + 0.5) / STEPS as f64)
+        ));
+    }
+    for k in 0..=ticks {
+        let level = -RANGE_DB + 10.0 * k as f64;
+        let yy = bar_y + bar_h - bar_h * k as f64 / ticks as f64;
+        out.push(format!(
+            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"1\"/>",
+            n(bar_x + 18.0),
+            n(yy),
+            n(bar_x + 23.0),
+            n(yy)
+        ));
+        out.push(text_el(bar_x + 27.0, yy + 4.0, 11.0, INK, "tick", "", false, &format!("{} dB", n(level))));
+    }
+    out.push("</g>".to_owned());
+    // The loop impedance across the switch at the solved frequencies: a small table.
+    let mut cy = bar_y + bar_h + 30.0;
+    out.push(text_el(bar_x, cy, 12.0, INK, "table-title", "", true, "loop impedance"));
+    cy += 17.0;
+    for (hz, l_nh, r_mohm) in &panel.impedance {
+        out.push(text_el(
+            bar_x,
+            cy,
+            11.0,
+            INK,
+            "inductance-row",
+            "",
+            false,
+            &format!("{}: {} nH, {} mohm", frequency_label(*hz), sig3(*l_nh), sig3(*r_mohm)),
+        ));
+        cy += 14.0;
+    }
+    // The division between the vias, only where a layer change carries current.
+    let near_pad = |via: &ViaMark| -> Option<&str> {
+        panel
+            .pads
+            .iter()
+            .map(|p| {
+                let dx = (p.bounds[0] - via.position[0]).max(via.position[0] - p.bounds[2]).max(0.0);
+                let dy = (p.bounds[1] - via.position[1]).max(via.position[1] - p.bounds[3]).max(0.0);
+                (dx.hypot(dy), p.label.as_str())
+            })
+            .filter(|(d, _)| *d <= NEAR_PAD_MM)
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(b.1)))
+            .map(|(_, label)| label)
+    };
+    let listed: Vec<&TransitionRow> = panel.transitions.iter().filter(|t| is_listed(t)).collect();
+    if !listed.is_empty() {
+        cy += 12.0;
+        out.push(text_el(bar_x, cy, 12.0, INK, "table-title", "", true, "division between the vias"));
+        cy += 17.0;
+    }
+    for t in listed {
+        let head = format!("{}, {} to {}: {} A up, {} A down", t.net, t.lower, t.upper, sig3(t.up), sig3(t.down));
+        let mut entries: Vec<String> = Vec::new();
+        for &(via, share) in t.top.iter().filter(|(_, s)| *s >= LABEL_SHARE) {
+            let number = numbers.get(&via).copied().unwrap_or(0);
+            let near = near_pad(&panel.vias[via]).map_or(String::new(), |p| format!(" near {p}"));
+            entries.push(format!("{number}: {} %{near}", n((share * 100.0).round())));
+        }
+        let row = if entries.is_empty() { format!("{head}.") } else { format!("{head}. {}.", entries.join("; ")) };
+        for (k, line) in wrap_px(&row, 11.0, column - 12.0).iter().enumerate() {
+            out.push(text_el(bar_x + if k == 0 { 0.0 } else { 12.0 }, cy, 11.0, INK, "via-row", "", false, line));
+            cy += 14.0;
+        }
+        cy += 3.0;
+    }
+    // Legend under the maps: the arrows and the port.
+    let legend: Vec<(String, String)> = vec![
+        (
+            "<path d=\"M0 0L20 0M13 -4L20 0L13 4\" fill=\"none\" stroke=\"#111827\" stroke-opacity=\"0.75\" stroke-width=\"2.8\" stroke-linecap=\"round\"/><path d=\"M0 0L20 0M13 -4L20 0L13 4\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1.2\" stroke-linecap=\"round\"/>".to_owned(),
+            "current direction".to_owned(),
+        ),
+        (
+            format!("<circle cx=\"11\" cy=\"0\" r=\"6\" fill=\"none\" stroke=\"{PORT}\" stroke-width=\"2\"/>"),
+            "port".to_owned(),
+        ),
+    ];
+    let legend_y = top + 10.0;
+    legend_row(&mut out, LEFT, legend_y, &legend);
+    let height = (legend_y + 20.0).max(cy) + 10.0;
     let mut content = vec![format!("<defs>{}</defs>", defs.join(""))];
     content.extend(out);
     FieldPicture { content: content.join("\n"), width, height }
 }
 
-/// The SVG of `panels`, stacked; `title` names the board in the document title.
+/// The one badge of a picture: the extraction did not converge or failed, said in one short line.
+pub(crate) fn badge_of(panel: &CurrentPanel) -> Option<&'static str> {
+    match panel.status.as_str() {
+        "ok" => None,
+        "error" => Some("extraction failed: no reliable current"),
+        _ => Some("extraction not converged: indicative only"),
+    }
+}
+
+/// The SVG of `panels`, stacked, ending in the one footer line; `title` names the board in the document title.
 pub fn current_svg(title: &str, pictures: &[FieldPicture]) -> String {
-    stacked_svg(
+    crate::emi_figure::stacked_with_footer(
         &format!("{} current distribution of the hot loop (screening estimate)", escape(title)),
         pictures,
-        560.0,
+        940.0,
     )
 }
 
@@ -1096,24 +894,113 @@ mod tests {
         }
     }
 
+    use crate::emi_figure::check::{assert_simple, plain};
+
     #[test]
-    fn the_map_has_a_panel_per_layer_with_current_and_says_what_it_is() {
-        let svg = current_svg("board", &[current_picture(&panel())]);
-        assert_eq!(svg, current_svg("board", &[current_picture(&panel())]), "the render is repeatable");
+    fn the_map_has_a_panel_per_layer_with_current_and_a_title_with_its_peak() {
+        let p = panel();
+        let picture = current_picture(&p);
+        let svg = current_svg("board", std::slice::from_ref(&picture));
+        assert_eq!(svg, current_svg("board", &[current_picture(&p)]), "the render is repeatable");
         assert!(svg.starts_with("<svg") && svg.contains("fill=\"#ffffff\""));
         assert_eq!(svg.matches("class=\"layer\"").count(), 2, "the empty bottom layer has no map");
-        assert!(!svg.contains("data-layer=\"B.Cu\"") && svg.contains("No map for"));
-        assert!(svg.contains("quasi-static extraction at 10 MHz") && svg.contains("Screening estimate"));
+        assert!(!svg.contains("data-layer=\"B.Cu\"") && !svg.contains("No map for"));
+        let text = plain(&picture.content);
+        assert!(
+            text.starts_with(
+                "U1 hot loop: current density in the copper at 10 MHz per ampere into the switch port; quasi-static extraction (480 filaments)"
+            ),
+            "{text}"
+        );
+        // One title per panel: the layer and its peak, in A/mm, from the raster of that layer.
+        for layer in &p.layers[..2] {
+            let raster = rasterise(layer, p.window, 0.05);
+            let title = format!("{}: peak {} A/mm", layer.name, sig3(peak(&raster)));
+            assert!(text.contains(&title), "{title} in {text}");
+        }
+        assert!(text.contains("F.Cu: peak 2 A/mm"), "{text}");
         assert!(svg.contains("data-via=\"v1\"") && svg.contains("data-pad=\"C1.1\"") && svg.contains("class=\"port\""));
-        // The layer change of 1 A is listed in full with its via numbered and its nearest pad; the 0.05 A one only counted.
-        assert!(svg.contains("GND, In1.Cu to F.Cu: 1 A up"));
-        assert!(svg.contains(">1: 100 %</text>") && svg.contains("class=\"via-label\""));
-        assert!(svg.contains("1 weaker layer change"), "a layer change under 0.1 A is summed, not listed");
-        assert_eq!(svg.matches("class=\"via-label\"").count(), 2, "v1 is labelled on both layers, v2 never");
-        assert!(svg.contains("data-via=\"v2\" data-net=\"GND\" data-share=\"0\""));
-        assert!(!svg.contains("(s)") && !svg.contains("(es)"));
-        assert!(svg.contains("10 MHz: 4 nH, 12 mohm"));
-        assert!(!svg.contains("NaN"));
+        assert!(!text.contains("0 dB = ") && !text.contains("Share =") && !text.contains("Heat:"), "{text}");
+        assert!(!text.contains("(s)") && !text.contains("(es)") && !text.contains("NaN"));
+        assert_eq!(svg.matches("class=\"footer\"").count(), 1);
+    }
+
+    #[test]
+    fn the_loop_impedance_is_a_three_row_table_and_the_vias_are_listed_only_where_they_share_current() {
+        let p = panel();
+        let text = plain(&current_picture(&p).content);
+        assert!(text.contains("loop impedance"), "{text}");
+        for (hz, l, r) in &p.impedance {
+            let row = format!("{}: {} nH, {} mohm", frequency_label(*hz), sig3(*l), sig3(*r));
+            assert!(text.contains(&row), "{row} in {text}");
+        }
+        assert!(text.contains("10 MHz: 4 nH, 12 mohm"));
+        // The layer change of 1 A is listed with its via numbered and shares; the 0.05 A one is not mentioned.
+        assert!(
+            text.contains("division between the vias") && text.contains("GND, In1.Cu to F.Cu: 1 A up, 1 A down"),
+            "{text}"
+        );
+        assert!(text.contains("1: 100 %"), "{text}");
+        assert!(!text.contains("weaker layer change") && !text.contains("under 0.1 A"), "{text}");
+        assert_eq!(
+            current_picture(&p).content.matches("class=\"via-label\"").count(),
+            2,
+            "v1 on both layers, v2 never"
+        );
+        assert!(current_picture(&p).content.contains("data-via=\"v2\" data-net=\"GND\" data-share=\"0\""));
+        // Without a layer change that carries current there is no division and no sentence saying so.
+        let mut flat = panel();
+        flat.transitions.clear();
+        let text = plain(&current_picture(&flat).content);
+        assert!(
+            !text.contains("division between the vias") && !text.contains("none:") && !text.contains("through a via"),
+            "{text}"
+        );
+        assert!(text.contains("loop impedance"));
+    }
+
+    #[test]
+    fn one_badge_says_the_extraction_did_not_converge_and_nothing_narrates_why() {
+        let ok = current_picture(&panel());
+        assert!(!ok.content.contains("class=\"badge\""));
+        let mut indicative = panel();
+        indicative.status = "indicative".to_owned();
+        indicative.status_reasons =
+            vec!["the two finest meshes differ by more than 5 % in an entry of the R matrix".to_owned()];
+        let picture = current_picture(&indicative);
+        let text = plain(&picture.content);
+        assert_eq!(picture.content.matches("class=\"badge\"").count(), 1);
+        assert!(text.contains("extraction not converged: indicative only"), "{text}");
+        assert!(!text.contains("finest meshes") && !text.contains("R matrix"), "{text}");
+        let mut failed = panel();
+        failed.status = "error".to_owned();
+        assert_eq!(badge_of(&failed), Some("extraction failed: no reliable current"));
+        assert_eq!(badge_of(&panel()), None);
+        assert!(badge_of(&indicative).is_some_and(|b| b.chars().count() <= 80));
+    }
+
+    #[test]
+    fn the_legend_has_the_arrows_and_the_port_and_the_figure_keeps_to_the_simple_rules() {
+        let picture = current_picture(&panel());
+        assert_eq!(picture.content.matches("class=\"legend-entry\"").count(), 2);
+        let text = plain(&picture.content);
+        assert!(text.contains("current direction") && text.contains("port"), "{text}");
+        assert!(!text.contains("via of GND") && !text.contains("pad of the loop"), "{text}");
+        // The colour bar has a tick every 10 dB below the 0 dB level, each with its unit.
+        for tick in ["0 dB", "-10 dB", "-20 dB", "-30 dB"] {
+            assert!(text.contains(tick), "{tick} in {text}");
+        }
+        assert_simple(&picture.content, picture.width, 26, "current");
+    }
+
+    #[test]
+    fn the_thumbnail_shows_the_strongest_layer_with_a_short_title_and_a_colour_row() {
+        let thumbnail = current_thumbnail(&panel(), 0);
+        let text = plain(&thumbnail.content);
+        assert!(text.starts_with("Current density in the copper"), "{text}");
+        assert_eq!(thumbnail.content.matches("class=\"layer\"").count(), 1);
+        assert!(!text.contains("C1.1") && !text.contains("loop impedance") && !text.contains("port"), "{text}");
+        assert_simple(&thumbnail.content, thumbnail.width, 10, "current thumbnail");
     }
 
     #[test]

@@ -707,63 +707,51 @@ stays the single file of a run (there is no sidecar):
 
 ### Visualization
 
-Hand-written, deterministic SVGs (no dependencies, explicit white
-background, fixed palette), each labelled as a screening estimate in one short
-line ("Screening estimate, not a compliance measurement" under the spectrum, a
-neutral note that also says the inductor's own field is not included on the
-map); the assumptions and the limits of the model are stated once, in plain
-sentences, not as repeated warnings.
+Hand-written, deterministic SVGs (no dependencies, explicit white background, fixed palette). The converter pictures
+follow the rules of the signal, pair and connector figures: a title of one line; one subtitle line of at most about 110
+characters with the facts needed to read the chart; at most one badge line in the warning colour for the caveat that
+matters most (an extraction that did not converge, capacitor ESR and ESL that are defaults); direct labels on the marks
+instead of a legend where they fit, a legend of at most four entries of at most three words otherwise; only the one or two
+annotations that carry the message; numbers with one decimal for dB and at most three significant digits otherwise, with
+their units; and one footer line per document: "Screening estimate, never a pass or a fail and not a compliance
+measurement. Details: `copper issues RUN --stage emi`; what is not modelled: `copper explain CODE`." The assumptions, the
+lists of what is not modelled, convergence narratives and definitions of colour scales are not drawn: they stay in the
+JSON, in `copper issues` and in `copper explain`. The tests check every figure structurally (no text outside its page, no
+two texts overlapping, a cap on the number of `<text>` elements that is at most half of what the figure had before it was
+simplified, at most four legend entries, no text over 120 characters) and not by eye.
 
-**Conducted spectrum.** `copper emi-check BOARD [--run RUN] --plot-spectrum OUT.svg`
-writes one panel per cell with an `EMI-CONDUCTED` finding (renderer:
-`copper_report::emi_plot`, data read from `measures.harmonics`): a log
-frequency axis from 150 kHz to 30 MHz (decade and 2/5 gridlines), dBuV with a
-gridline every 10 dB, a marker per harmonic at the high end of its band (its total level
-when it has none; the differential-mode series is the total while common mode
-is not modelled; with common mode present DM and CM are added as markers) joined
-by a thin envelope line, with a stem from the axis floor for the first ten
-harmonics only (above that the stems would merge into a fence; a harmonic below
-the axis floor breaks the line and is counted under the plot), a
-translucent whisker from the low to the high end behind each marker for a banded
-harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
-limit lines drawn across the whole band from the limit table of `copper_emi`
-(`estimate::limits::cispr32_conducted`, class from `measures.limit_class`:
-its segment ends, so the 150-500 kHz slope, linear in dB against log frequency,
-is one straight line and the step at 5 MHz is vertical; not through the
-per-harmonic values) when an
-`emission` standard with a conducted table is declared **and the finding's levels are detector
-readings** (`measures.detector_applicability = isolated_lines`; for `receiver_emulation` the lines run through the harmonics the receiver model read, which are marked by diamonds at their high-end quasi-peak reading, in the warning colour above a limit, while the stems stay line amplitudes and the panel is headed "NOT detector readings; receiver emulation at the diamonds"), harmonics above the
-average line in the warning colour, and the worst harmonic ringed on its point with a label giving its frequency, level and
-its margin to each limit line ("12.3 dB over the average limit", "4.1 dB under the quasi-peak limit"; `limit - level`, from
-the harmonic's own `limit_avg`/`limit_qp`). The legend lists exactly the styles present in the plot, both limit lines included.
-The finding's tags are shown as plain sentences (a table in `copper_report::emi_plot`, most consequential first, at most four,
-then "+N more in the report"; an unknown tag is shown as its words) under the title. A panel whose detector
-assumption fails (harmonic spacing inside the IF bandwidth, or a declared frequency range) is headed
-"conducted line amplitudes, NOT a detector reading", draws no limit line, no warning colour and no
-margin, and prints the reason; the panels of a frequency range are one per fixed-frequency
-scenario, titled with the scenario. A report that does not state the status is drawn the same way.
-There is no accuracy whisker. The common-mode coupling-risk score of `EMI-SWITCH-NODE` is a
-relative ranking and is never drawn here. A board
-without an `EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
+**Conducted spectrum.** `copper emi-check BOARD [--run RUN] --plot-spectrum OUT.svg` writes one panel per cell with an
+`EMI-CONDUCTED` finding (renderer: `copper_report::emi_plot`, data read from `measures.harmonics`). Title "U1: conducted
+emission at the input"; subtitle "500 kHz switching; dBuV at a 50 uH LISN; limit: CISPR 32 class B". The chart is a log
+frequency axis from 150 kHz to 30 MHz against dBuV: a stem and a dot per harmonic (at the high end of its band, its total
+level when it has none), in the warning colour above the average limit, a thin whisker for the band where the inputs are
+rule-of-thumb defaults, and the quasi-peak and average limit lines drawn across the whole band from the limit table of
+`copper_emi` (`estimate::limits::cispr32_conducted`, class from `measures.limit_class`; the 150-500 kHz slope is one straight
+line and the step at 5 MHz is vertical), each named at its right end, when an `emission` standard with a conducted table is
+declared **and the levels are detector readings** (`measures.detector_applicability = isolated_lines`; for
+`receiver_emulation` the lines run through the harmonics the receiver model read, marked by diamonds at their high-end
+quasi-peak reading, while the stems stay line amplitudes). One annotation marks the worst harmonic: "95.6 dBuV at 500 kHz,
++49.6 dB over average" (`limit_avg - level`, from the harmonic's own numbers; "6.4 dB under average" when under). The legend
+is "over the limit", "under the limit", "band (default inputs)" (with common mode present, "differential" and "common"
+instead of the band). A panel whose detector assumption fails (harmonic spacing inside the IF bandwidth, or a declared
+frequency range) is titled "conducted line amplitudes", draws no limit line, no warning colour and no excess, and carries the
+badge "line amplitudes, not detector readings: no limit applies"; the panels of a frequency range are one per
+fixed-frequency scenario, titled with the scenario. A report that does not state the status is drawn the same way. The
+common-mode coupling-risk score of `EMI-SWITCH-NODE` is a relative ranking and is never drawn here. A board without an
+`EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
 
-**Magnetic near field.** `copper emi-check BOARD [--run RUN] --plot-field OUT.svg
-[--field-height 1mm]` and `copper view RUN --issue M<n> --emi-field
-[--field-height 1mm]` (an `EMI-HOT-LOOP` issue) draw `|H|` in a plane
-`--field-height` above the top copper (default 1 mm) as a heat map in
-dB relative to the map maximum (0 to -40 dB, a 40-step viridis scale of one dB
-a step, so only the true maximum is in the last step; cells below it are
-transparent) with contour lines every 10 dB, over the loop window, with the loop drawn from
-`loop_path_3d_mm` (solid on the component layer, dashed on another layer, a circle
-at each via; legend entries only for the styles present), the pads of the cell's
-loop components with their names, the top-layer copper of the board scene under the map and as thin outlines above it,
-the board outline where it reaches the window, a colour bar and, for every pad of a `sensitive` net outside the cell and of every cable
-connector, a marker with its level below the peak at the pad centre (the useful
-number: the field at the victim), also listed beside the map ("x dB below peak,
-y mm from the loop"). The absolute maximum is stated once, in small text under the colour bar with its
-amplitude and scenario (a ranking aid). The window holds the loop's box plus 3 mm on every side and every cell within 40 dB of the maximum
-(it may reach past the board outline; the field is first computed 20 mm round the box and cropped), and the right-hand column is
-sized from its text, with long rows wrapped, so nothing is clipped. Labels have a white halo and are nudged
-deterministically clear of the rings, the contour levels, the loop and each other. Grid cells are 0.25 mm, with a
+**Magnetic near field.** `copper emi-check BOARD [--run RUN] --plot-field OUT.svg [--field-height 1mm]` and `copper view RUN
+--issue M<n> --emi-field [--field-height 1mm]` (an `EMI-HOT-LOOP` issue) draw `|H|` in a plane `--field-height` above the top
+copper (default 1 mm) as a heat map in dB relative to the map maximum (0 to -40 dB, a 40-step viridis scale of one dB a
+step; cells below it are transparent) with contour lines every 10 dB, over the loop window. Title "U1 hot loop: magnetic
+near field, 1 mm above the copper"; subtitle "relative to the map maximum; contours every 10 dB; 4.5 A worst case" (or
+"operating point", or "per ampere"). The loop is drawn from `loop_path_3d_mm` (solid on the component layer, dashed on
+another, a circle at each via), only the pads of the loop's own components are named, a colour bar with ticks at 0, -20 and
+-40 dB and a scale bar complete the map, and the field level below the peak is labelled at the three nearest sensitive pads
+and cable-connector pads ("R1.2 -55.5 dB"). The legend lists the loop and the sensitive pad (and the other layer and the
+via when the loop has them). The window holds the loop's box plus 3 mm on every side and every cell within 40 dB of the
+maximum (it may reach past the board outline; the field is first computed 20 mm round the box and cropped). Labels have a
+white halo and are nudged deterministically clear of the rings, the loop and each other. Grid cells are 0.25 mm, with a
 larger step when the window would exceed 200 cells a side; the heat map is one compound path per colour step.
 
 The field is computed by `copper_emi::field` from data the finding carries:
@@ -786,7 +774,7 @@ The field is computed by `copper_emi::field` from data the finding carries:
   image currents (mirrored segments, reversed current: zero normal field at the
   plane, zero field behind it).
 
-Limits, which the legend and footer repeat: a ranking and placement aid, not a
+Limits (in the report and in `copper explain`, not on the picture): a ranking and placement aid, not a
 field prediction. The model is quasi-static (valid where the region is much
 smaller than a wavelength: fine up to a few hundred MHz over a few cm), uses the
 one static current named above as the amplitude, round the loop, and only the hot loop
@@ -813,109 +801,86 @@ inductance, a coupling, a filter and a supply-side capacitor, and
 `the_node_impedance_of_the_input_network_is_the_one_the_anti_resonance_scan_reports`). The default report is
 unchanged: the function is only called by the picture.
 
-* **Top panel**, `|Z|` in ohm on a log axis against frequency on the log axis of the spectrum (150 kHz to 30 MHz, down
-  to the fundamental when that is lower): the heavy line is `|Z|` at the node `K` where the capacitors meet (every
-  source off; what the anti-resonance scan of the report reads, and what the level at the V-network is proportional
-  to); thin lines in the branch's colour are each capacitor branch's own series impedance
-  `R + j (w (L_connection + ESL) - 1 / (w C))` with the capacitance at bias, labelled with the reference and value at the
-  right-hand end; a hollow downward triangle on a branch line is its self-resonance
-  `1 / (2 pi sqrt((L_connection + ESL) C))` with its frequency; a hollow upward triangle on the heavy line is an
-  anti-resonance of the total (a local maximum with a prominence of 0.5 dB, as in `measures.anti_resonances`) with
-  its frequency and impedance; a tick on the heavy line is every switching harmonic; a harmonic within
-  `copper_report::emi_impedance::TOLERANCE` (5 %) in frequency of an anti-resonance is a red dot, ringed when the
-  report finds it raised by 6 dB or more over the best single branch, and the 5 % band is shaded in both panels. When
-  the hot-loop inductance changes the impedance across the converter's source by more than 5 % a dashed line is `|Z|`
-  across the source (`K` behind the loop inductance, and the couplings of an extraction): the source sees the loop
-  inductance, the level at the V-network does not, unless it is coupled.
-* **Bottom panel**, the current each branch carries per ampere the converter draws, in dB (0 dB is all of it; a branch
-  can exceed it where two branches circulate current), one line per branch in the colour of the top panel, and the
-  part that goes on to the V-network (dashed black). A line below the axis is labelled "(off scale)".
-* **Assumptions** are sentences under the title, as in the spectrum, limited to the ones that bear on the impedance
-  (capacitor derating, default ESR and ESL, ...); the line below them says where the connection inductances come from:
-  with `--extract` those of the hot loop and of the capacitors on the hot net are the extracted ones, with their
-  mutual inductances, at 10 MHz and with the extraction's status, the others estimated from the pad distance.
+Title "U1: input-network impedance seen by the switch"; subtitle "|Z| at the switching node; hot-loop inductance 4.97 nH
+(placement estimate)" (the basis is `placement estimate`, `traced copper`, `partly traced copper` or, with `--extract`,
+`extracted`). The chart is `|Z|` in ohm on a log axis against frequency (150 kHz to 30 MHz, down to the fundamental when
+that is lower): a thick line for the total at the node where the capacitors meet (every source off; what the
+anti-resonance scan of the report reads), a thin line for each capacitor branch's own series impedance
+`R + j (w (L_connection + ESL) - 1 / (w C))`, named by its capacitor at the right-hand end, a hollow upward triangle on each
+anti-resonance of the total (a local maximum with a prominence of 0.5 dB, as in `measures.anti_resonances`) labelled with
+its frequency (and "harmonic n" when the model attributes a significant harmonic to it), a hollow downward triangle on each
+branch's minimum, its self-resonance `1 / (2 pi sqrt((L_connection + ESL) C))`, labelled with its frequency, and a tick on the
+frequency axis at every switching harmonic, taller and in the warning colour where the harmonic lies within
+`copper_report::emi_impedance::TOLERANCE` (5 %) of an anti-resonance, with a dot on the curve there (ringed when the report
+finds it raised by 6 dB or more over the best single branch); the 5 % band is shaded. A second panel with the current each
+branch carries per ampere the converter draws, in dB (0 dB is all of it), is drawn **only when the cell has more than one
+capacitor branch** (with one it is a flat line at 0 dB). The legend is "total", "one branch", "anti-resonance"; one badge says
+that the capacitor ESR and ESL are defaults, or that the extraction did not converge (the extraction wins).
 
 **Extraction current map.** `copper emi-check BOARD --extract --plot-current OUT.svg` (an error without `--extract`)
 draws where the hot loop's current flows in the copper, from the extraction of the same invocation; nothing of it is
 stored in `route-report.json` and the `emi` JSON is unchanged (`HotLoopOptions::current_map` only arranges the branch
 currents the loop analysis already solves; `copper_extract::current`, renderer `copper_report::emi_current`). The
-solution is one frequency of the finest mesh, 10 MHz when it was solved (else the highest), named in the title,
-for a unit current into the port across the switch.
+solution is one frequency of the finest mesh, 10 MHz when it was solved (else the highest), for a unit current into the
+port across the switch. Title "U1 hot loop: current density in the copper at 10 MHz"; subtitle "per ampere into the switch
+port; quasi-static extraction (6787 filaments)"; the badge "extraction not converged: indicative only" when the extraction's
+status is not `ok` (the reasons are in `measures.extract.status_reasons`).
 
-* One map per copper layer whose peak is within 20 dB of the 0 dB level (layers below it are named, with their level, in
-  the column), over the window of the cells within the scale plus 1.5 mm. The copper of the layer is drawn white with a
+* One map per copper layer whose peak is within 20 dB of the 0 dB level, titled with the layer and its peak ("F.Cu: peak
+  8.49 A/mm"), over the window of the cells within the scale plus 1.5 mm. The copper of the layer is drawn white with a
   faint outline, one path per conductor shape.
 * **Heat**: the sheet current `|K| = |I| / w` of every filament (`w` the cross-section width of the filament:
   the strip it stands for times the part of it that copper covers; the filaments across the thickness are summed),
   rasterised at 0.05 mm (coarser above about 90 000 cells), the x- and y-filaments of a cell combined as
   `sqrt(|K_x|^2 + |K_y|^2)`, in dB below the 0 dB level on a 30-step viridis scale (one dB a step, one compound path
-  per colour). The 0 dB level is the 99th percentile of the cells of the layer with the largest peak: a few cells at a
-  terminal or a corner, where the filament mesh crowds the current, would otherwise set the scale; the cells above it
-  are drawn in the top colour and the true peak is stated in the column. Copper more than 30 dB below is white.
+  per colour); the colour bar has a tick every 10 dB. The 0 dB level is the 99th percentile of the cells of the layer with
+  the largest peak: a few cells at a terminal or a corner, where the filament mesh crowds the current, would otherwise set
+  the scale; the cells above it are drawn in the top colour. Copper more than 30 dB below is white.
 * **Arrows**: on a grid of about a twentieth of the width, the strongest cell of each block, where it is above 15 % of
   the layer's 0 dB level and the real part of the current is at least half its magnitude: the direction at the
-  instant the port current (the real unit current) peaks. In quadrature the direction at that instant is not the
-  direction of the flow, so there is no arrow.
+  instant the port current (the real unit current) peaks. In quadrature there is no arrow.
 * **Vias** are circles whose area is the via's share of the current that changes layer there, with the percentage
-  (labelled from 2 %). The share is `|I| / sum |I|` over the vias of the same net that join the same two layers (a
-  via through several layers has a share per transition; the circle shows its strongest). The column lists each
-  transition, how many vias, the magnitude of the complex sum of their currents in ampere per ampere into the port
-  (about 1 where the whole loop current changes layer there) and the shares of the strongest.
-* The loop's **pads** are labelled and the **port** is ringed; the column lists the loop inductance and resistance at
-  every solved frequency, from the same solution (the numbers of `measures.extract`).
+  (labelled from 2 %), the share being `|I| / sum |I|` over the vias of the same net that join the same two layers. Only when a
+  layer change carries current (0.1 A per ampere or more) a "division between the vias" lists it beside the maps with its
+  strongest shares; with none there is no such heading and no sentence saying so.
+* The loop's **pads** are labelled and the **port** is ringed (legend: "current direction", "port"); a three-row table
+  "loop impedance" lists the inductance and resistance at the solved frequencies, from the same solution (the numbers of
+  `measures.extract`).
 * The per-capacitor current shares are not in this solution: the hot capacitor closes the loop as a copper bar and the
   other capacitors of the hot net are open ports of the multi-port matrix; their currents are the impedance picture's
-  bottom panel.
-
-Both pictures are screening estimates and say so in one line; neither is a pass or a fail.
+  second panel.
 
 **One-page summary.** `copper emi-check BOARD [--run RUN] [--extract] [--fullwave] --plot-summary OUT.svg` writes the
-picture to open first: one page per switching cell (stacked when the board has several, as the other pictures do),
-about 1400 px wide and as tall as its text needs (renderer `copper_report::emi_summary`; roughly 1400 x 1500 px for a
-cell with four thumbnails). Every number on it is read from the report document or comes from the in-memory results
-the other pictures use; nothing is computed for the page, and a value the report does not hold is left out (its row is
-not drawn; one line such as "quasi-static extraction: not available without --extract" says what is missing and how to
-get it). It changes no number of the report: the default `emi-check --json` is byte-identical with and without it.
+picture to open first: one page per switching cell (stacked when the board has several, as the other pictures do), 1400 px
+wide and as tall as it needs (renderer `copper_report::emi_summary`; about 1400 x 1100 px for a cell with three or four
+pictures). Every number on it is read from the report document or comes from the in-memory results the other pictures use;
+nothing is computed for the page, and a value the report does not hold is left out (its tile is not drawn). It changes no
+number of the report: the default `emi-check --json` is byte-identical with and without it.
 
-1. **Header**: the converter's reference and part, the topology, the switching frequency (with its basis, `fixed` or a
-   range bound), the input and output voltage and the switch edge from the cell and its conducted finding, the current
-   scenario in one sentence (the declared operating point with its load current, inductor ripple and switch peak, or the
-   switch current limit as a worst case with no load current declared) and "Screening estimate, not a compliance
-   measurement".
-2. **Key numbers**: the hot-loop inductance by method, one row each: the closed form (always, with whether it rests on
-   traced copper or on the placement), the quasi-static extraction (only when `--extract` ran: the inductance at each
-   solved frequency, its status and the mesh sensitivity at the last), the full wave (only when `--fullwave` ran: the
-   value over its band, its status, "indicative only" when it is, and its mesh sensitivity) and, when both ran, the
-   cross-check statement of `measures.extract.cross_check` verbatim; the loop area and path length; the worst conducted
-   harmonic with the margin to each limit line in the wording of the spectrum picture ("49.64 dB over the average
-   limit", "16.44 dB under the quasi-peak limit"; no margin where the levels are line amplitudes or no standard is
-   declared, and the row says so); how many harmonics lie over each limit; the input filter when one is modelled; each
-   anti-resonance with its frequency and impedance and the harmonic that lands on it ("raised x dB over the best
-   capacitor branch alone", or "lies in its lobe ... (not significant)"); and the switch node (copper area, capacitance to
-   the plane, and the voltage swing and edge time or the declared slew rate when the report holds it).
-3. **Findings** of the cell, worst severity first, then by id (the `M` ids `copper issues` gives, when `--run` is
-   given: they are those of the findings ordered by cell and report order, the ids the run's report holds once
-   `--write` stored this result), with the rule, the severity (or the `emi_accept` reason of an accepted one), the
-   objects and nets and the first clause of the message on one line; at most ten, then "+N more (copper issues RUN --stage
-   emi)".
-4. **Four thumbnails** in a 2 x 2 grid, each drawn by the code of its full-size picture with a `compact` form of the
-   renderer (the same plot area, the same marks and labels, a title of its own, a one-row colour scale and a legend
-   under the map where the full-size one has a column; the header paragraphs, the notes, the current-share panel of the
-   impedance picture, the sensitive-pad listing and the footers are left out because the page states them once) and
-   embedded as nested SVGs at their natural size, or smaller by at most 10 % (the smallest text on the page is then about
-   9 px): the board overlay (the near-field map with the hot loop, the pads and the field at the sensitive pads), the
-   conducted spectrum, the input-network impedance (the `|Z|` panel) and, when `--extract` ran, the current
-   distribution of the layer that carries the most current; without `--extract` a labelled box says "run with --extract
-   for the current distribution". A picture that cannot be drawn (no scene, no harmonics, no network) is a box with the
-   reason.
-5. **Footer**: the assumptions as plain sentences (the table of `copper_report::emi_plot`, at most four, then "+N more
-   in the report"), what is not modelled (the first words of each `estimate.not_modelled` entry of the cell's hot-loop and
-   conducted findings), and the exact command line of each full-size picture (the options of the run, without the plot,
-   `--json`, `--write` and `--fullwave` options; `--plot-current` shows `--extract`).
+1. **Header**: the title "U1: buck converter", one subtitle line ("500 kHz, 12 V in, 5 V out, 5 ns edge; worst case at the
+   4.5 A current limit", or "declared operating point, 2 A load") and at most one badge line: an extraction or a full wave that
+   failed or did not converge ("extraction not converged: indicative only") beats "default capacitor ESR/ESL (no datasheet
+   values)".
+2. **Up to five tiles**, each a small label, one big value and one small line, in neutral ink (the value that is an excess
+   over a limit is in the warning colour; nothing is coloured as a pass or a fail): "Hot loop" (the inductance by the best
+   method that ran, named: the full wave, else the extraction at the frequency nearest 10 MHz, else the closed form with the
+   loop area and its basis); "Conducted, worst" ("+49.6 dB", "over average; 95.6 dBuV at 500 kHz", the worst harmonic's
+   distance to the average limit; the level alone where there is no limit); "Harmonics over the limit" ("55 of 60", with the
+   count over the quasi-peak limit); "Switch node" (copper area, capacitance to the plane); "Nearest sensitive net" (the
+   smallest `EMI-PROXIMITY` distance, "L1 to FB").
+3. **One line of chips** naming the cell's findings, `M<id> HOT-LOOP` with the id `copper issues` gives when `--run` is given
+   (the code alone otherwise), worst severity first then by id, an accepted finding in grey; at most twelve, then "+N more".
+4. **The pictures**: the near field and the conducted spectrum side by side at one size; under them the input-network
+   impedance and, only when `--extract` ran, the current distribution (without it the impedance plot is centred and nothing
+   stands in for the missing one). Each is drawn by the code of its full-size picture in a `compact` form (a short title of its
+   own, no subtitle, no legend, a one-row colour bar, direct labels only) and embedded as a nested SVG at its natural size, or
+   smaller by at most 10 % (the smallest text is then about 9 px). A picture that cannot be drawn is one line saying why.
+
+The assumptions, what is not modelled and the commands that draw the full-size pictures are not on the page.
 
 **No switching cell, and the figures of signals, pairs and connectors.** A board with no cell but with `EMI-RETURN-PATH`,
 `EMI-MODE-CONVERSION` or cable findings (sections 15, 16 and 18, `--run` given for the routed ones) no longer refuses
-`--plot-summary`. The pages follow the subject kinds of `copper issues`: the cell pages first, unchanged; then, when return-path
+`--plot-summary`. The pages follow the subject kinds of `copper issues`: the cell pages first; then, when return-path
 findings exist, the return-path map (section 15.12); then the one page of the mode conversion of the pairs; then one page per
 cable connector that has a finding; then, once, at the very end, one footer line. A board with none of these exits 2
 ("no switching cell and no return-path, mode-conversion or cable finding to summarise"). A document of cell pages only is
@@ -954,7 +919,7 @@ the report has `EMI-CABLE-COMMON-MODE` findings with a published voltage (`coppe
 chart as the connector page, one per connector, stacked, 900 px wide and ending in the footer (a connector with no published
 voltage has no chart there). It prints "common-mode voltages at the connector of N drivers on K connectors (no limit line:
 voltages, not a field) written to ...". The conducted spectrum of the cells, when the board has any, comes first in the same
-file and is unchanged; a board with neither still reports "no EMI-CONDUCTED finding with harmonics to plot". The
+file; a board with neither still reports "no EMI-CONDUCTED finding with harmonics to plot". The
 pictures were checked structurally by the tests (bars, groups, no text outside its page, no two texts overlapping, the
 words that must not appear) and not by eye.
 

@@ -77,7 +77,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
              inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run 
-             --plot-summary OUT.svg draws the one-page summary of each cell (key numbers, findings, four thumbnails of the other pictures, assumptions and the commands for the full-size pictures), the picture to open first; with EMI-RETURN-PATH findings (--run) it adds a return-path map with numbered marks (gaps, reference changes without a return path, plane and board edge points) and a legend beside it, and on a board with no switching cell that map is the whole picture; one page then charts the mode conversion of the pairs (a bar per pair in dB, the worst first, with its channel of sections and parts beside it) and one page per cable connector charts the common-mode voltage of each driver in dBuV, in three groups (pairs, ground noise, ranking only); one footer line ends the document. --plot-spectrum also draws, for each cable connector whose finding publishes a voltage, the same driver chart (no limit line: voltages, not a field). For each cable connector the report has an EMI-CABLE-COMMON-MODE finding: the common-mode voltage (dBuV) each driver leaves at the connector and a ranking of the drivers, never a current, a field or a margin (differential pairs need --run)"
+             --plot-summary OUT.svg draws the one-page summary of each cell (a title, one line of facts, up to five stat tiles, the findings as chips, and the near field, the conducted spectrum, the input-network impedance and with --extract the current distribution as pictures), the picture to open first; with EMI-RETURN-PATH findings (--run) it adds a return-path map with numbered marks (gaps, reference changes without a return path, plane and board edge points) and a legend beside it, and on a board with no switching cell that map is the whole picture; one page then charts the mode conversion of the pairs (a bar per pair in dB, the worst first, with its channel of sections and parts beside it) and one page per cable connector charts the common-mode voltage of each driver in dBuV, in three groups (pairs, ground noise, ranking only); one footer line ends the document. --plot-spectrum also draws, for each cable connector whose finding publishes a voltage, the same driver chart (no limit line: voltages, not a field). For each cable connector the report has an EMI-CABLE-COMMON-MODE finding: the common-mode voltage (dBuV) each driver leaves at the connector and a ranking of the drivers, never a current, a field or a margin (differential pairs need --run)"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -254,7 +254,6 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             physical: &physical,
             extracted: &extracted,
             parsed: &parsed,
-            board: &board,
             height_mm,
             extract: extract.is_some(),
             fullwave: fullwave.is_some(),
@@ -279,8 +278,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         }
         if let Some(path) = parsed.value("--plot-field") {
-            let source = if parsed.value("--run").is_some() { "routed board" } else { "placed board" };
-            match plot_field(&document, &physical, &pypath::display(path), height_mm, source) {
+            match plot_field(&document, &physical, &pypath::display(path), height_mm) {
                 Ok(message) => plotted.push(message),
                 Err(message) => {
                     let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
@@ -526,7 +524,6 @@ fn plot_field(
     physical: &copper_pcb::board::PhysicalBoard,
     path: &str,
     height_mm: f64,
-    source: &str,
 ) -> Result<String, String> {
     let state = copper_route::state_codec::encode_board(physical);
     let scene = copper_report::scene::scene_from_physical(&state).map_err(|error| error.message.clone())?;
@@ -549,7 +546,7 @@ fn plot_field(
             height_mm,
             copper_report::emi_field::DEFAULT_STEP_MM,
         )?;
-        pictures.push(copper_report::emi_field::field_picture(&map, source));
+        pictures.push(copper_report::emi_field::field_picture(&map));
     }
     let board = document.get("board").and_then(copper_json::Value::as_str).unwrap_or("board");
     write_plot(path, &copper_report::emi_field::field_svg(board, &pictures))?;
@@ -565,47 +562,9 @@ struct SummaryInput<'a> {
     physical: &'a copper_pcb::board::PhysicalBoard,
     extracted: &'a [(String, copper_extract::hotloop::HotLoopExtraction)],
     parsed: &'a option_parser::Parsed,
-    board: &'a str,
     height_mm: f64,
     extract: bool,
     fullwave: bool,
-}
-
-/// `copper emi-check ...` as run, without the plot options, the JSON and write switches and the full-wave options:
-/// the base of the commands that draw the full-size pictures (the options are as the parser resolved them).
-fn command_base(parsed: &option_parser::Parsed, board: &str) -> String {
-    const DROPPED: [&str; 12] = [
-        "--plot-spectrum",
-        "--plot-field",
-        "--field-height",
-        "--plot-impedance",
-        "--plot-current",
-        "--plot-summary",
-        "--fullwave",
-        "--fullwave-fidelity",
-        "--fullwave-budget",
-        "--fullwave-margin",
-        "--fullwave-single-mesh",
-        "--fullwave-zone-outline",
-    ];
-    let quote = |text: &str| {
-        if text.is_empty() || text.contains(|c: char| c.is_whitespace() || "\"'&|;<>()$`".contains(c)) {
-            format!("\"{}\"", text.replace('"', "\\\""))
-        } else {
-            text.to_owned()
-        }
-    };
-    let mut words = vec!["copper".to_owned(), "emi-check".to_owned(), quote(board)];
-    for (name, value) in &parsed.options {
-        if DROPPED.contains(name) || matches!(*name, "--json" | "--write" | "--help") {
-            continue;
-        }
-        words.push((*name).to_owned());
-        if let Some(value) = value {
-            words.push(quote(value));
-        }
-    }
-    words.join(" ")
 }
 
 /// `--plot-summary`: one page per cell, the key numbers, the findings and four thumbnails of the other pictures;
@@ -651,8 +610,8 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
                 && f.get("cell").and_then(copper_json::Value::as_str) == Some(cell.as_str())
         });
         let overlay = match (loop_finding, &scene) {
-            (None, _) => missing("no EMI-HOT-LOOP finding for this cell (see the EMI-HOT-LOOP coverage entries)"),
-            (_, Err(why)) => Thumb::Missing(format!("the board scene could not be built: {why}")),
+            (None, _) => missing("no near-field map: no EMI-HOT-LOOP finding (copper explain EMI-HOT-LOOP)"),
+            (_, Err(why)) => Thumb::Missing(format!("no near-field map: {why}")),
             (Some(finding), Ok(scene)) => match copper_report::emi_field::hot_loop_field(
                 finding,
                 &document,
@@ -661,24 +620,21 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
                 copper_report::emi_field::DEFAULT_STEP_MM,
             ) {
                 Ok(map) => Thumb::Picture(copper_report::emi_field::field_thumbnail(&map)),
-                Err(why) => Thumb::Missing(format!("the near-field map could not be drawn: {why}")),
+                Err(why) => Thumb::Missing(format!("no near-field map: {why}")),
             },
         };
         let spectrum_thumb = match spectrum.iter().find(|p| p.cell == *cell) {
             Some(panel) => Thumb::Picture(copper_report::emi_plot::spectrum_thumbnail(panel, i)),
-            None => missing(
-                "no EMI-CONDUCTED finding with harmonics for this cell (see the EMI-CONDUCTED coverage entries)",
-            ),
+            None => missing("no conducted spectrum: no EMI-CONDUCTED finding with harmonics"),
         };
         let impedance_thumb = match impedance.iter().find(|p| p.as_ref().map_or(true, |p| p.cell == *cell)) {
             Some(Ok(panel)) => Thumb::Picture(copper_report::emi_impedance::impedance_thumbnail(panel, i)),
-            Some(Err(why)) => Thumb::Missing(format!("the input network could not be drawn: {why}")),
-            None => missing(
-                "no EMI-CONDUCTED finding with a network for this cell (see the EMI-CONDUCTED coverage entries)",
-            ),
+            Some(Err(why)) => Thumb::Missing(format!("no impedance plot: {why}")),
+            None => missing("no impedance plot: no EMI-CONDUCTED finding with a network"),
         };
         let current_thumb = if !input.extract {
-            missing("run with --extract for the current distribution")
+            // No extraction: no picture and no placeholder.
+            missing("")
         } else {
             let drawn = input
                 .extracted
@@ -687,9 +643,7 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
                 .and_then(|(name, result)| crate::emi_current::panel(name, result));
             match drawn {
                 Some(panel) => Thumb::Picture(copper_report::emi_current::current_thumbnail(&panel, i)),
-                None => Thumb::Missing(format!(
-                    "the extraction produced no current distribution for this cell (see the EMI-EXTRACT:{cell} coverage entry)"
-                )),
+                None => Thumb::Missing(format!("no current density: no result (copper explain EMI-EXTRACT:{cell})")),
             }
         };
         thumbnails.push(CellThumbnails {
@@ -700,22 +654,12 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
             current: current_thumb,
         });
     }
-    let command = command_base(input.parsed, input.board);
-    let context = Context {
-        run: input.parsed.value("--run"),
-        extract: input.extract,
-        fullwave: input.fullwave,
-        command: &command,
-        field_file: "emi-field.svg",
-        spectrum_file: "emi-spectrum.svg",
-        impedance_file: "emi-impedance.svg",
-        current_file: "emi-current.svg",
-    };
+    let context = Context { run: input.parsed.value("--run"), extract: input.extract, fullwave: input.fullwave };
     let mut pages = copper_report::emi_summary::summary_pages(&document, &context, &thumbnails);
     let cell_pages = pages.len();
     pages.extend(copper_report::emi_return_path::return_path_picture(&document, scene.as_ref().ok()));
     // After the cells and the map: the one page of the mode conversion of the pairs, then one page per cable connector,
-    // and the one footer line of the document at its very end (a document of cell pages only has none).
+    // and the one footer line of the document at its very end.
     let pairs_page = copper_report::emi_summary::pairs_page(&document);
     let connector_pages = copper_report::emi_summary::connector_pages(&document);
     let (pairs, connectors) = (
@@ -724,9 +668,8 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
     );
     pages.extend(pairs_page);
     pages.extend(connector_pages);
-    if pages.len() > cell_pages {
-        pages.push(copper_report::emi_summary::footer_page());
-    }
+    // The one footer line of the document, at its very end.
+    pages.push(copper_report::emi_summary::footer_page(cell_pages > 0));
     write_plot(path, &copper_report::emi_summary::summary_svg(&input.report.board, &pages))?;
     let mut parts: Vec<String> = Vec::new();
     if cell_pages > 0 {

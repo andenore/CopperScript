@@ -206,10 +206,7 @@ fn emi_field_view(
         copper_report::emi_field::DEFAULT_STEP_MM,
     )
     .map_err(fail)?;
-    let svg = copper_report::emi_field::field_svg(
-        &issue.id,
-        &[copper_report::emi_field::field_picture(&map, &format!("{} of the run", paths::name(&scene.source)))],
-    );
+    let svg = copper_report::emi_field::field_svg(&issue.id, &[copper_report::emi_field::field_picture(&map)]);
     let output = match &options.output {
         Some(output) => output.clone(),
         None => paths::join(&paths::join("build", "views"), &format!("{}_field.svg", safe_label(&issue.id))),

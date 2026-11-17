@@ -32,11 +32,40 @@ pub fn pages(svg: &str) -> Vec<&str> {
     svg.split("<g transform=\"translate(0,").skip(1).collect()
 }
 
+/// `page` without the nested thumbnails (`<svg class="thumbnail" ...>...</svg>`): their texts are in their own
+/// coordinates and are checked on their own by [`thumbnails`].
+pub fn without_thumbnails(page: &str) -> String {
+    let mut out = String::new();
+    let mut rest = page;
+    while let Some(at) = rest.find("<svg class=\"thumbnail\"") {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        rest = rest.split_once("</svg>").map_or("", |(_, after)| after);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The nested thumbnails of `svg`: each one's width (its viewBox) and its content.
+pub fn thumbnails(svg: &str) -> Vec<(f64, String)> {
+    svg.split("<svg class=\"thumbnail\"")
+        .skip(1)
+        .map(|part| {
+            let (tag, rest) = part.split_once('>').expect("a thumbnail tag");
+            let view = tag.split("viewBox=\"0 0 ").nth(1).expect("a viewBox").split('"').next().expect("a value");
+            let width = view.split(' ').next().expect("a width").parse().expect("a number");
+            (width, rest.split("</svg>").next().unwrap_or("").to_owned())
+        })
+        .collect()
+}
+
 /// Every `<text>` element of `page`.
 pub fn text_boxes(page: &str) -> Vec<TextBox> {
     let mut found = Vec::new();
     for part in page.split("<text ").skip(1) {
         let (tag, rest) = part.split_once('>').expect("a text tag");
+        let tag = format!(" {tag}");
+        let tag = tag.as_str();
         let body = unescape(rest.split("</text>").next().expect("a text body"));
         let number = |name: &str| -> f64 { attribute(tag, name).expect(name).parse().expect("a number") };
         let (x, y, size) = (number("x"), number("y"), number("font-size"));
@@ -54,7 +83,7 @@ pub fn text_boxes(page: &str) -> Vec<TextBox> {
 /// No text of any page of `svg` ends right of `width` or starts left of 0.
 pub fn assert_inside(svg: &str, width: f64) {
     for page in pages(svg) {
-        for text in text_boxes(page) {
+        for text in text_boxes(&without_thumbnails(page)) {
             assert!(
                 text.left >= -0.01 && text.right <= width + 0.01,
                 "{:?} spans {:.1} to {:.1} on a page {width} wide",
@@ -69,7 +98,7 @@ pub fn assert_inside(svg: &str, width: f64) {
 /// No two texts of one page of `svg` overlap by more than half a pixel in each direction.
 pub fn assert_no_overlap(svg: &str) {
     for page in pages(svg) {
-        let boxes = text_boxes(page);
+        let boxes = text_boxes(&without_thumbnails(page));
         for (i, a) in boxes.iter().enumerate() {
             for b in &boxes[i + 1..] {
                 let overlap = a.left < b.right - 0.5
@@ -82,6 +111,52 @@ pub fn assert_no_overlap(svg: &str) {
     }
 }
 
+/// The rules of the simple figures, for the page of a document and for each thumbnail in it: nothing outside its page
+/// (a thumbnail: its own width), no two texts overlapping, no text of more than 120 characters (the footer line apart),
+/// at most four legend entries on a figure, at most `max_texts` `<text>` elements in the whole of `svg`.
+pub fn assert_simple(svg: &str, width: f64, max_texts: usize) {
+    assert_inside(svg, width);
+    assert_no_overlap(svg);
+    for (thumb_width, content) in thumbnails(svg) {
+        assert_inside_one(&content, thumb_width);
+        let boxes = text_boxes(&content);
+        for (i, a) in boxes.iter().enumerate() {
+            for b in &boxes[i + 1..] {
+                let overlap = a.left < b.right - 0.5
+                    && b.left < a.right - 0.5
+                    && a.top < b.bottom - 0.5
+                    && b.top < a.bottom - 0.5;
+                assert!(!overlap, "in a thumbnail: {:?} overlaps {:?}", a, b);
+            }
+        }
+    }
+    for text in text_boxes(svg) {
+        assert!(
+            text.body.chars().count() <= 120 || text.body.starts_with("Screening "),
+            "{:?} is longer than 120 characters",
+            text.body
+        );
+    }
+    for page in pages(svg) {
+        assert!(page.matches("class=\"legend-entry\"").count() <= 4, "more than four legend entries");
+    }
+    let count = text_count(svg);
+    assert!(count <= max_texts, "{count} texts, at most {max_texts}");
+}
+
+/// No text of `content` ends right of `width` or starts left of 0.
+fn assert_inside_one(content: &str, width: f64) {
+    for text in text_boxes(content) {
+        assert!(
+            text.left >= -0.01 && text.right <= width + 0.01,
+            "{:?} spans {:.1} to {:.1} on a page {width} wide",
+            text.body,
+            text.left,
+            text.right
+        );
+    }
+}
+
 /// The text of every `<text>` element of `svg`, joined by a space.
 pub fn plain(svg: &str) -> String {
     text_boxes(svg).into_iter().map(|t| t.body).collect::<Vec<_>>().join(" ")
@@ -90,6 +165,11 @@ pub fn plain(svg: &str) -> String {
 /// The number of `<text>` elements.
 pub fn text_count(svg: &str) -> usize {
     svg.matches("<text ").count()
+}
+
+/// The width of the document, px.
+pub fn width(svg: &str) -> f64 {
+    svg.split("width=\"").nth(1).expect("a width").split('"').next().expect("a value").parse().expect("a number")
 }
 
 /// The height of the document, px.

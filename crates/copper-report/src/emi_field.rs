@@ -3,8 +3,11 @@
 //! loop's current path in a plane above the board, as a heat map over the
 //! layout (dB relative to the map maximum, with 10 dB contours), the loop drawn
 //! from its traced path (solid on the component layer, dashed on another layer, a
-//! circle at each via), and the field level below the peak at the pads of
-//! sensitive nets and cable connectors.
+//! circle at each via), the loop's own pads named, and the field level below the
+//! peak at the three nearest pads of sensitive nets and cable connectors. A title
+//! of one line, a subtitle ("relative to the map maximum; contours every 10 dB; 4.5 A
+//! worst case"), a colour bar with dB ticks, a scale bar, a legend of at most four
+//! entries and the one footer line; no paragraphs.
 //!
 //! The source is the `loop_path_3d_mm` measure of an `EMI-HOT-LOOP` finding
 //! (the loop as a closed 3D polyline, millimetres, z = 0 at the top copper
@@ -29,6 +32,7 @@ use copper_emi::field::{self, Grid};
 use copper_emi::inductance::Segment;
 use copper_json::Value;
 
+use crate::emi_figure::{header, legend_row, text_el};
 use crate::emi_plot::{escape, n};
 use crate::scene::{Point, Scene};
 
@@ -447,6 +451,7 @@ pub fn hot_loop_field(
 }
 
 /// A picture of one map: SVG elements and the size they need.
+#[derive(Clone)]
 pub struct FieldPicture {
     pub content: String,
     pub width: f64,
@@ -646,47 +651,13 @@ pub(crate) fn halo(x: f64, y: f64, size: f64, weight: &str, anchor: &str, class:
     )
 }
 
-/// The amplitude sentence of a map, naming its scenario.
-fn amplitude_text(map: &FieldMap) -> String {
+/// The amplitude in a few words, for the subtitle.
+fn amplitude_phrase(map: &FieldMap) -> String {
     match (map.current_a, map.scenario.as_deref()) {
-        (Some(i), Some("declared_operating_point")) => format!(
-            "{} A, scenario declared_operating_point: {}",
-            n(i),
-            map.amplitude_basis.as_deref().unwrap_or("I_out + dI/2, the peak of the high-side switch current")
-        ),
-        (Some(i), Some(_)) => format!(
-            "{} A, scenario current_limit: {}; declare load_current on the converter for an operating point",
-            n(i),
-            map.amplitude_basis
-                .as_deref()
-                .unwrap_or("current_peak, the switch current limit (a worst case, not a load current)")
-        ),
-        (Some(i), None) => format!(
-            "{} A (the cell's current_peak, the switch current limit, a worst case, not a load current; this report does not record the scenario)",
-            n(i)
-        ),
-        (None, _) => "1 A: the cell declares no usable current, so levels are per ampere".to_owned(),
-    }
-}
-
-/// The amplitude in a few words, for the scale's footnote.
-fn amplitude_short(map: &FieldMap) -> String {
-    match (map.current_a, map.scenario.as_deref()) {
-        (Some(i), Some(scenario)) => format!("{} A, scenario {scenario}", n(i)),
-        (Some(i), None) => format!("{} A, current limit, scenario not recorded", n(i)),
+        (Some(i), Some("declared_operating_point")) => format!("{} A operating point", n(i)),
+        (Some(i), Some(_)) => format!("{} A worst case", n(i)),
+        (Some(i), None) => format!("{} A current limit", n(i)),
         (None, _) => "per ampere".to_owned(),
-    }
-}
-
-/// How the loop was drawn from the report, in words.
-fn loop_basis(map: &FieldMap) -> &'static str {
-    let has = |tag: &str| map.tags.iter().any(|t| t == tag);
-    if has("traced_copper") {
-        "traced copper path"
-    } else if has("partially_traced") {
-        "partly traced copper path (unrouted legs straight)"
-    } else {
-        "pad-centre estimate (no traced copper)"
     }
 }
 
@@ -750,92 +721,59 @@ fn track_outline(
     )
 }
 
-/// Draw one map.
-pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
-    picture(map, scene_source, false)
+/// Draw one map: the title, the subtitle, the map with the loop, the colour bar, the scale bar and the legend.
+pub fn field_picture(map: &FieldMap) -> FieldPicture {
+    picture(map, false)
 }
 
-/// The map as a thumbnail for the summary page: its own title, the map with the loop, the contours and the labels at
-/// the sensitive pads, a one-row colour scale, the legend and one caption line; the notes, the right-hand column and
-/// the footer of [`field_picture`] are left out (the summary states what they say once).
+/// The map as a thumbnail for the summary page: a short title, the map with the loop and the label at the nearest
+/// sensitive pad, a one-row colour bar; no subtitle, no legend.
 pub fn field_thumbnail(map: &FieldMap) -> FieldPicture {
-    picture(map, "", true)
+    picture(map, true)
 }
 
-fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
+/// The sensitive pads that are labelled: the nearest to the loop, at most this many (one in the thumbnail).
+const LABELLED_VICTIMS: usize = 3;
+
+fn picture(map: &FieldMap, compact: bool) -> FieldPicture {
     let [wx0, wy0, wx1, wy1] = map.window;
     let (ww, wh) = (wx1 - wx0, wy1 - wy0);
-    let scale = if compact { (616.0 / ww).min(270.0 / wh).min(60.0) } else { (640.0 / ww).min(440.0 / wh).min(60.0) };
+    let scale = if compact { (616.0 / ww).min(270.0 / wh).min(60.0) } else { (720.0 / ww).min(470.0 / wh).min(60.0) };
     let ox = 24.0;
     let (map_w, map_h) = (ww * scale, wh * scale);
     let px = |x: f64| ox + (x - wx0) * scale;
     let side = ox + map_w + 28.0;
     let rel = |db: f64| db - map.max_db;
 
-    // The right-hand column: sized from its text, so nothing runs off the canvas.
-    let victim_rows: Vec<String> = map
-        .victims
-        .iter()
-        .take(14)
-        .map(|v| {
-            format!(
-                "{} {}: {} dB below peak, {} mm from the loop",
-                v.name,
-                v.pad,
-                n1(-rel(v.level_db)),
-                n(v.distance_mm)
-            )
-        })
-        .collect();
-    let heading = "field at sensitive pads and connectors";
-    let longest = victim_rows.iter().map(|r| text_px(r, 11.0)).fold(text_px(heading, 12.0) * 1.1, f64::max);
-    let column = longest.clamp(250.0, 400.0);
-    let title = {
+    let title = if compact {
+        "Magnetic near field".to_owned()
+    } else {
         let label = match &map.loop_name {
             Some(name) => format!("{} {name}", map.cell),
             None => map.cell.clone(),
         };
-        if compact {
-            format!("{label} hot loop: magnetic near field |H|, {} mm above the copper", n(map.height_mm))
-        } else {
-            format!("{label} hot loop: magnetic near field |H|, {} mm above the top copper", n(map.height_mm))
-        }
+        format!("{label} hot loop: magnetic near field, {} mm above the copper", n(map.height_mm))
     };
+    let title: String = title.chars().take(crate::emi_figure::SUBTITLE_CHARS).collect();
+    let subtitle =
+        format!("relative to the map maximum; contours every {} dB; {}", n(CONTOUR_DB), amplitude_phrase(map));
+    let title_size = if compact { 14.0 } else { 16.0 };
     let width = if compact {
-        (ox + map_w + ox).max(text_px(&title, 14.0) * 1.07 + 2.0 * ox).max(460.0)
+        (ox + map_w + ox).max(460.0)
     } else {
-        (side + column + ox).max(text_px(&title, 16.0) * 1.07 + 2.0 * ox).max(560.0)
+        (side + 72.0 + ox)
+            .max(text_px(&title, title_size) * 1.07 + 2.0 * ox)
+            .max(text_px(&subtitle, 12.0) + 2.0 * ox)
+            .max(560.0)
     };
 
     let mut out: Vec<String> = Vec::new();
-    out.push(format!(
-        "<text x=\"{}\" y=\"26\" font-size=\"{}\" font-weight=\"bold\" fill=\"{INK}\">{}</text>",
-        n(ox),
-        if compact { 14 } else { 16 },
-        escape(&title)
-    ));
-    let plane = match map.plane_z_mm {
-        Some(z) => format!("ideal ground plane at z = {} mm by image currents", n(z)),
-        None => "no reference plane: free space".to_owned(),
+    let y = if compact {
+        out.push(text_el(ox, 26.0, title_size, INK, "title", "", true, &title));
+        34.0
+    } else {
+        header(&mut out, ox, title_size, width, &title, &subtitle, None)
     };
-    let mut y = if compact { 34.0 } else { 46.0 };
-    for text in [
-        "Screening estimate, a ranking and placement aid: the quasi-static field of the hot-loop current only. The power inductor's own field is NOT included (coverage unsupported EMI-FIELD:inductor).".to_owned(),
-        format!("Amplitude {}; loop: {}; {plane}.", amplitude_text(map), loop_basis(map)),
-    ]
-    .into_iter()
-    .filter(|_| !compact)
-    {
-        for line in wrap_px(&text, 12.0, width - 2.0 * ox) {
-            out.push(format!(
-                "<text class=\"note\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
-                n(ox),
-                n(y),
-                escape(&line)
-            ));
-            y += 15.0;
-        }
-    }
     let oy = y + 8.0;
     let py = |y: f64| oy + (y - wy0) * scale;
     let bounds = [ox, oy, ox + map_w, oy + map_h];
@@ -924,7 +862,6 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
             py(map.grid.y0 * 1e3 + (j + 0.5) * map.grid.step * 1e3),
         )
     };
-    let mut contour_labels: Vec<(f64, Point)> = Vec::new();
     let mut under = String::new();
     let mut over = String::new();
     let mut level_db = -CONTOUR_DB;
@@ -934,17 +871,6 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
             let d = path_data(line, line.len() > 3 && line.first() == line.last());
             under.push_str(&d);
             over.push_str(&d);
-        }
-        if let Some(longest) = lines.iter().max_by_key(|l| l.len()).filter(|l| l.len() >= 6) {
-            // The highest point of the longest line, if it has room for a label.
-            if let Some(top) = longest
-                .iter()
-                .copied()
-                .filter(|p| p.1 > oy + 14.0 && p.0 > ox + 24.0 && p.0 < ox + map_w - 24.0)
-                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.total_cmp(&b.0)))
-            {
-                contour_labels.push((level_db, top));
-            }
         }
         level_db -= CONTOUR_DB;
     }
@@ -995,7 +921,10 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
 
     // Labels, placed so none overlaps another or a ring: victims first, then contour levels, then loop pads.
     let in_window = |p: Point| p.0 >= wx0 && p.0 <= wx1 && p.1 >= wy0 && p.1 <= wy1;
-    let shown_victims: Vec<&Victim> = map.victims.iter().filter(|v| in_window(v.at)).collect();
+    let mut shown_victims: Vec<&Victim> = map.victims.iter().filter(|v| in_window(v.at)).collect();
+    shown_victims
+        .sort_by(|a, b| a.distance_mm.total_cmp(&b.distance_mm).then(a.name.cmp(&b.name)).then(a.pad.cmp(&b.pad)));
+    shown_victims.truncate(if compact { 1 } else { LABELLED_VICTIMS });
     for run in &runs {
         for pair in run.points.windows(2) {
             placer.reserve_line((px(pair[0].0), py(pair[0].1)), (px(pair[1].0), py(pair[1].1)), 4.0, 2.5);
@@ -1006,14 +935,6 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
         placer.reserve([x - 8.0, y - 8.0, x + 8.0, y + 8.0]);
     }
     let mut labels: Vec<String> = Vec::new();
-    for (level, at) in &contour_labels {
-        let text = format!("{} dB", n(*level));
-        // The thumbnail is shown at 0.9 at the smallest: 10 px there is 9 px on the page.
-        let size = if compact { 10.0 } else { 9.0 };
-        let w = text_px(&text, size);
-        let (x, y) = placer.place(*at, w, size, &[(-w / 2.0, -3.0), (-w / 2.0, 11.0), (4.0, -3.0), (-w - 4.0, -3.0)]);
-        labels.push(halo(x, y, size, "normal", "start", "contour-label", &text));
-    }
     for victim in &shown_victims {
         let (x, y) = (px(victim.at.0), py(victim.at.1));
         let text = format!("{} {} dB", victim.pad, n1(rel(victim.level_db)));
@@ -1044,7 +965,7 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
             halo(lx, ly, 11.0, "bold", "start", "", &text)
         ));
     }
-    for pad in map.pads.iter().filter(|p| p.in_loop) {
+    for pad in map.pads.iter().filter(|p| p.in_loop && !compact) {
         let c = centroid(&pad.polygon);
         let (x, y) = (px(c.0), py(c.1));
         let w = text_px(&pad.label, 10.0);
@@ -1076,7 +997,8 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
     ));
     // Scale bar.
     let bar = [1.0, 2.0, 5.0, 10.0].iter().copied().rev().find(|b| b * scale <= map_w / 3.0).unwrap_or(1.0);
-    out.push(format!(
+    if !compact {
+        out.push(format!(
         "<g class=\"scale\"><line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"3\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{} mm</text></g>",
         n(ox),
         n(oy + map_h + 16.0),
@@ -1086,139 +1008,12 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
         n(oy + map_h + 20.0),
         n(bar)
     ));
-
-    // Right column: colour bar in dB below the maximum, then the legend, then the field at the victims.
-    let column_start = out.len();
-    let (bar_x, bar_y, bar_h) = (side, oy + 14.0, 200.0_f64.min(map_h));
-    out.push("<g class=\"colorbar\">".to_owned());
-    out.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">dB relative to the map maximum</text>",
-        n(bar_x),
-        n(oy + 4.0)
-    ));
-    let block = bar_h / STEPS as f64;
-    for k in 0..STEPS {
-        out.push(format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"18\" height=\"{}\" fill=\"{}\"/>",
-            n(bar_x),
-            n(bar_y + bar_h - (k as f64 + 1.0) * block),
-            n(block + 0.3),
-            scale_color((k as f64 + 0.5) / STEPS as f64)
-        ));
     }
+
+    // The colour bar: dB below the maximum, right of the map (a row under it in the thumbnail).
     let ticks = (RANGE_DB / CONTOUR_DB).round() as usize;
-    for k in 0..=ticks {
-        let level = -RANGE_DB + CONTOUR_DB * k as f64;
-        let y = bar_y + bar_h - bar_h * k as f64 / ticks as f64;
-        out.push(format!(
-            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{} dB</text>",
-            n(bar_x + 18.0),
-            n(y),
-            n(bar_x + 23.0),
-            n(y),
-            n(bar_x + 27.0),
-            n(y + 4.0),
-            n(level)
-        ));
-    }
-    let mut cy = bar_y + bar_h + 18.0;
-    let note = format!(
-        "0 dB = {} dB(uA/m) at the maximum ({}), a ranking aid. Contours every {} dB; transparent below {} dB.",
-        n1(map.max_db),
-        amplitude_short(map),
-        n(CONTOUR_DB),
-        n(-RANGE_DB)
-    );
-    for line in wrap_px(&note, 10.0, column) {
-        out.push(format!(
-            "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"10\" fill=\"{MUTED}\">{}</text>",
-            n(bar_x),
-            n(cy),
-            escape(&line)
-        ));
-        cy += 12.0;
-    }
-    out.push("</g>".to_owned());
-
-    // Legend: the styles present in this map.
-    cy += 10.0;
-    let mut legend: Vec<(String, &str)> = Vec::new();
-    let component_runs = runs.iter().any(|r| r.component_layer);
-    if component_runs || runs.is_empty() {
-        legend.push((
-            format!("<line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"{LOOP}\" stroke-width=\"2\"/>"),
-            "hot loop, component layer",
-        ));
-    }
-    if runs.iter().any(|r| !r.component_layer) {
-        legend.push((
-            format!("<line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"{LOOP_OTHER}\" stroke-width=\"2\" stroke-dasharray=\"6 4\"/>"),
-            "hot loop, another layer (dashed)",
-        ));
-    }
-    if !vias.is_empty() {
-        legend.push((
-            format!("<circle cx=\"11\" cy=\"0\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{LOOP}\" stroke-width=\"1.8\"/>"),
-            "via in the loop",
-        ));
-    }
-    if !shown_victims.is_empty() {
-        legend.push((
-            format!("<circle cx=\"11\" cy=\"0\" r=\"5\" fill=\"none\" stroke=\"{VICTIM}\" stroke-width=\"2\"/>"),
-            "sensitive pad or connector",
-        ));
-    }
-    if !under.is_empty() {
-        legend.push((format!("<line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"{INK}\" stroke-opacity=\"0.45\" stroke-width=\"2.4\"/><line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#ffffff\" stroke-width=\"1\"/>"), "contour"));
-    }
-    out.push("<g class=\"legend\">".to_owned());
-    for (glyph, label) in &legend {
-        out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(bar_x), n(cy)));
-        out.push(format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
-            n(bar_x + 30.0),
-            n(cy + 4.0)
-        ));
-        cy += 17.0;
-    }
-    out.push("</g>".to_owned());
-
-    // The numbers that matter: the field at the victims, below the peak.
-    cy += 14.0;
-    out.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"12\" font-weight=\"bold\" fill=\"{INK}\">{heading}</text>",
-        n(bar_x),
-        n(cy)
-    ));
-    cy += 17.0;
-    if map.victims.is_empty() {
-        for line in wrap_px("none: no sensitive net or cable connector has placed pads outside the cell", 11.0, column)
-        {
-            out.push(format!(
-                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-                n(bar_x),
-                n(cy),
-                escape(&line)
-            ));
-            cy += 14.0;
-        }
-    }
-    for row in &victim_rows {
-        for (k, line) in wrap_px(row, 11.0, column - 12.0).iter().enumerate() {
-            out.push(format!(
-                "<text class=\"victim-row\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{}</text>",
-                n(bar_x + if k == 0 { 0.0 } else { 12.0 }),
-                n(cy),
-                escape(line)
-            ));
-            cy += 14.0;
-        }
-        cy += 2.0;
-    }
-
+    let tick_label = |k: usize| k.is_multiple_of(2);
     if compact {
-        // The thumbnail drops the column: a one-row colour scale under the map, one caption line and the legend in rows.
-        out.truncate(column_start);
         let (bar_w, bar_h) = (200.0, 10.0);
         let bx = (ox + map_w - bar_w).max(ox + 150.0);
         let by = oy + map_h + 6.0;
@@ -1233,79 +1028,87 @@ fn picture(map: &FieldMap, scene_source: &str, compact: bool) -> FieldPicture {
                 scale_color((k as f64 + 0.5) / STEPS as f64)
             ));
         }
-        let ticks = (RANGE_DB / CONTOUR_DB).round() as usize;
         for k in 0..=ticks {
             let x = bx + bar_w * k as f64 / ticks as f64;
             out.push(format!(
-                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/><text x=\"{0}\" y=\"{3}\" font-size=\"10\" text-anchor=\"middle\" fill=\"{INK}\">{4} dB</text>",
+                "<line x1=\"{0}\" y1=\"{1}\" x2=\"{0}\" y2=\"{2}\" stroke=\"{INK}\" stroke-width=\"1\"/>",
                 n(x),
                 n(by + bar_h),
-                n(by + bar_h + 4.0),
-                n(by + bar_h + 15.0),
-                n(-RANGE_DB + CONTOUR_DB * k as f64)
+                n(by + bar_h + 4.0)
             ));
+            if tick_label(k) {
+                out.push(text_el(
+                    x,
+                    by + bar_h + 15.0,
+                    10.0,
+                    INK,
+                    "tick",
+                    "middle",
+                    false,
+                    &format!("{} dB", n(-RANGE_DB + CONTOUR_DB * k as f64)),
+                ));
+            }
         }
         out.push("</g>".to_owned());
-        let mut ty = by + bar_h + 34.0;
-        let caption = format!(
-            "0 dB = {} dB(uA/m) at the map maximum ({}), a ranking aid; contours every {} dB{}.",
-            n1(map.max_db),
-            amplitude_short(map),
-            n(CONTOUR_DB),
-            if shown_victims.is_empty() {
-                ""
-            } else {
-                "; the labels at the rings give the level at that pad, dB below the peak"
-            }
-        );
-        for line in wrap_px(&caption, 11.0, width - 2.0 * ox) {
-            out.push(format!(
-                "<text class=\"scale-note\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-                n(ox),
-                n(ty),
-                escape(&line)
-            ));
-            ty += 14.0;
-        }
-        ty += 6.0;
-        let mut lx = ox;
-        out.push("<g class=\"legend\">".to_owned());
-        for (glyph, label) in &legend {
-            let need = 30.0 + text_px(label, 11.0) + 16.0;
-            if lx + need > width - ox && lx > ox {
-                lx = ox;
-                ty += 17.0;
-            }
-            out.push(format!("<g transform=\"translate({} {})\">{glyph}</g>", n(lx), n(ty)));
-            out.push(format!(
-                "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{INK}\">{label}</text>",
-                n(lx + 30.0),
-                n(ty + 4.0)
-            ));
-            lx += need;
-        }
-        out.push("</g>".to_owned());
-        return FieldPicture { content: out.join("\n"), width, height: ty + 14.0 };
+        return FieldPicture { content: out.join("\n"), width, height: by + bar_h + 24.0 };
     }
-
-    // Footer: what the map is, in one neutral line or two.
-    let mut foot = (oy + map_h + 44.0).max(cy + 8.0);
-    for line in wrap_px(
-        &format!(
-            "Quasi-static, one static current round the loop, no shielding by other copper. Pads, copper and the loop are drawn from the board scene ({scene_source})."
-        ),
-        11.0,
-        width - 2.0 * ox,
-    ) {
+    let (bar_x, bar_y, bar_h) = (side, oy + 4.0, 200.0_f64.min(map_h - 4.0));
+    out.push("<g class=\"colorbar\">".to_owned());
+    let block = bar_h / STEPS as f64;
+    for k in 0..STEPS {
         out.push(format!(
-            "<text class=\"footer\" x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{MUTED}\">{}</text>",
-            n(ox),
-            n(foot),
-            escape(&line)
+            "<rect x=\"{}\" y=\"{}\" width=\"18\" height=\"{}\" fill=\"{}\"/>",
+            n(bar_x),
+            n(bar_y + bar_h - (k as f64 + 1.0) * block),
+            n(block + 0.3),
+            scale_color((k as f64 + 0.5) / STEPS as f64)
         ));
-        foot += 14.0;
     }
-    FieldPicture { content: out.join("\n"), width, height: foot + 8.0 }
+    for k in 0..=ticks {
+        let level = -RANGE_DB + CONTOUR_DB * k as f64;
+        let y = bar_y + bar_h - bar_h * k as f64 / ticks as f64;
+        out.push(format!(
+            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{INK}\" stroke-width=\"1\"/>",
+            n(bar_x + 18.0),
+            n(y),
+            n(bar_x + 23.0),
+            n(y)
+        ));
+        if tick_label(k) {
+            out.push(text_el(bar_x + 27.0, y + 4.0, 11.0, INK, "tick", "", false, &format!("{} dB", n(level))));
+        }
+    }
+    out.push("</g>".to_owned());
+
+    // Legend: the styles present in this map, at most four, under the map.
+    let mut legend: Vec<(String, String)> = Vec::new();
+    if runs.iter().any(|r| r.component_layer) || runs.is_empty() {
+        legend.push((
+            format!("<line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"{LOOP}\" stroke-width=\"2\"/>"),
+            "hot loop".to_owned(),
+        ));
+    }
+    if runs.iter().any(|r| !r.component_layer) {
+        legend.push((
+            format!("<line x1=\"0\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"{LOOP_OTHER}\" stroke-width=\"2\" stroke-dasharray=\"6 4\"/>"),
+            "other layer".to_owned(),
+        ));
+    }
+    if !vias.is_empty() {
+        legend.push((
+            format!("<circle cx=\"11\" cy=\"0\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{LOOP}\" stroke-width=\"1.8\"/>"),
+            "via".to_owned(),
+        ));
+    }
+    if !shown_victims.is_empty() {
+        legend.push((
+            format!("<circle cx=\"11\" cy=\"0\" r=\"5\" fill=\"none\" stroke=\"{VICTIM}\" stroke-width=\"2\"/>"),
+            "sensitive pad".to_owned(),
+        ));
+    }
+    let legend_y = oy + map_h + 40.0;
+    legend_row(&mut out, ox, legend_y, &legend);
+    FieldPicture { content: out.join("\n"), width, height: legend_y + 18.0 }
 }
 
 pub(crate) fn points(polygon: &[Point], px: &dyn Fn(f64) -> f64, py: &dyn Fn(f64) -> f64) -> String {
@@ -1317,9 +1120,13 @@ pub(crate) fn centroid(polygon: &[Point]) -> Point {
     (polygon.iter().map(|p| p.0).sum::<f64>() / count, polygon.iter().map(|p| p.1).sum::<f64>() / count)
 }
 
-/// The SVG document of one or more maps, stacked.
+/// The SVG document of one or more maps, stacked, ending in the one footer line.
 pub fn field_svg(title: &str, pictures: &[FieldPicture]) -> String {
-    stacked_svg(&format!("{} magnetic near field of the hot loop (screening estimate)", escape(title)), pictures, 560.0)
+    crate::emi_figure::stacked_with_footer(
+        &format!("{} magnetic near field of the hot loop (screening estimate)", escape(title)),
+        pictures,
+        940.0,
+    )
 }
 
 /// One SVG document of pictures stacked from the top; `title` is the (already escaped) document title.
@@ -1437,6 +1244,15 @@ mod tests {
         .unwrap()
     }
 
+    /// The subtitle of a drawn map.
+    fn subtitle(map: &FieldMap) -> String {
+        crate::emi_figure::check::text_boxes(&field_picture(map).content)
+            .into_iter()
+            .map(|t| t.body)
+            .find(|b| b.starts_with("relative to the map maximum"))
+            .expect("a subtitle")
+    }
+
     #[test]
     fn the_map_takes_the_amplitude_and_scenario_the_hot_loop_finding_recorded() {
         // A declared operating point: the peak of the high-side switch current, not the 4.5 A limit of the cell.
@@ -1448,9 +1264,7 @@ mod tests {
         let map = hot_loop_field(finding(&declared), &declared, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
         assert_eq!(map.current_a, Some(2.62));
         assert_eq!(map.scenario.as_deref(), Some("declared_operating_point"));
-        let svg = field_picture(&map, "test").content;
-        assert!(svg.contains("Amplitude 2.62 A, scenario declared_operating_point"), "{svg}");
-        assert!(!svg.contains("worst_case_current"), "the declared scenario is not the current limit");
+        assert_eq!(subtitle(&map), "relative to the map maximum; contours every 10 dB; 2.62 A operating point");
         // The same field at the limit scales by 20 log10(4.5 / 2.62) at the victim.
         let limit = section_with_scenario(
             "current_limit",
@@ -1460,13 +1274,12 @@ mod tests {
         let at_limit = hot_loop_field(finding(&limit), &limit, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
         assert_eq!(at_limit.current_a, Some(4.5));
         assert!((at_limit.victims[0].level_db - map.victims[0].level_db - 20.0 * (4.5f64 / 2.62).log10()).abs() < 1e-9);
-        let svg = field_picture(&at_limit, "test").content;
-        assert!(svg.contains("Amplitude 4.5 A, scenario current_limit") && svg.contains("load_current"), "{svg}");
-        // A report from before the finding recorded its scenario falls back to the cell's current limit and says so.
+        assert_eq!(subtitle(&at_limit), "relative to the map maximum; contours every 10 dB; 4.5 A worst case");
+        // A report from before the finding recorded its scenario falls back to the cell's current limit.
         let old = section("\"4.5 A\"");
         let old_map = hot_loop_field(finding(&old), &old, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
         assert_eq!((old_map.current_a, old_map.scenario.clone()), (Some(4.5), None));
-        assert!(amplitude_text(&old_map).contains("does not record the scenario"));
+        assert!(subtitle(&old_map).ends_with("4.5 A current limit"));
     }
 
     #[test]
@@ -1477,26 +1290,80 @@ mod tests {
         let b = hot_loop_field(finding(&unknown), &unknown, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
         assert_eq!(b.current_a, None);
         assert!((a.victims[0].level_db - b.victims[0].level_db - 20.0 * 2.0f64.log10()).abs() < 1e-9);
-        assert!(field_picture(&b, "test").content.contains("per ampere"));
+        assert!(subtitle(&b).ends_with("per ampere"));
     }
 
     #[test]
-    fn the_svg_has_a_colour_bar_the_loop_outline_the_victim_label_and_the_caveats() {
+    fn the_figure_is_a_title_a_subtitle_the_map_a_colour_bar_and_the_labels_that_carry_the_message() {
         let s = section("\"4.5 A\"");
         let map = hot_loop_field(finding(&s), &s, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
-        let svg = field_svg("EmiBuck", &[field_picture(&map, "test scene")]);
+        let picture = field_picture(&map);
+        let svg = field_svg("EmiBuck", std::slice::from_ref(&picture));
         assert_eq!(svg.matches("<g class=\"colorbar\">").count(), 1);
         assert_eq!(svg.matches("class=\"emi_loop\"").count(), 1);
         assert!(svg.contains("class=\"victim\" data-pad=\"R1.2\" data-net=\"FB\" data-level-db=\""), "{svg}");
-        assert!(svg.contains("dB(uA/m)") && svg.contains("EMI-FIELD:inductor"));
-        assert!(svg.contains("Screening estimate, a ranking and placement aid"));
-        // One neutral note, no warning banner and no raw snake_case tags.
+        let text = crate::emi_figure::check::plain(&picture.content);
+        assert!(
+            text.starts_with("U1 hot loop: magnetic near field, 1 mm above the copper relative to the map maximum"),
+            "{text}"
+        );
+        // The pad is labelled at its ring with the level below the peak (the number the victim records).
+        let victim = &map.victims[0];
+        let label = format!("R1.2 {} dB", n1(victim.level_db - map.max_db));
+        assert!(text.contains(&label), "{label} in {text}");
+        // Only the loop's own pads are named, three ticks of the colour bar, a scale bar; nothing else.
+        for gone in
+            ["EMI-FIELD:inductor", "Quasi-static", "Amplitude", "field at sensitive pads", "dB(uA/m)", "contour:"]
+        {
+            assert!(!text.contains(gone), "{gone} in {text}");
+        }
+        assert!(
+            text.contains("0 dB") && text.contains("-20 dB") && text.contains("-40 dB") && text.contains(" mm"),
+            "{text}"
+        );
+        assert!(!text.contains("-10 dB") && !text.contains("-30 dB"), "{text}");
         assert!(!svg.contains("class=\"caveat\"") && !svg.contains("placement_estimate"), "{svg}");
         assert!(svg.contains("fill=\"#ffffff\"/>"));
-        // Palette colours, 16 colour-bar steps, at most one rect per run of equal cells.
         assert!(svg.matches("<rect x=").count() > 16);
         assert!(map.grid.nx <= MAX_CELLS && map.grid.ny <= MAX_CELLS);
-        assert_eq!(svg, field_svg("EmiBuck", &[field_picture(&map, "test scene")]));
+        // One legend row of two entries here; one footer line ends the document.
+        assert_eq!(picture.content.matches("class=\"legend-entry\"").count(), 2);
+        assert!(text.contains("hot loop") && text.contains("sensitive pad"));
+        assert_eq!(svg.matches("class=\"footer\"").count(), 1);
+        crate::emi_figure::check::assert_simple(&picture.content, picture.width, 20, "near field");
+        assert_eq!(svg, field_svg("EmiBuck", &[field_picture(&map)]));
+    }
+
+    #[test]
+    fn only_the_three_nearest_sensitive_pads_are_labelled_and_the_thumbnail_labels_one() {
+        let mut s = section("\"4.5 A\"");
+        // Five victim pads on one net: the labels go to the nearest three.
+        if let Value::Object(root) = &mut s
+            && let Some(Value::Array(findings)) = root.get_mut("findings")
+            && let Some(Value::Object(f)) = findings.first_mut()
+            && let Some(Value::Object(m)) = f.get_mut("measures")
+        {
+            m.insert(
+                "field_victims".to_owned(),
+                copper_json::parse(
+                    r#"[{"kind":"sensitive_net","name":"FB","pads":["R1.2","R2.2","R3.2","R4.2","R5.2"]}]"#,
+                )
+                .unwrap(),
+            );
+        }
+        let mut sc = scene((8.0, 16.0));
+        for (k, reference) in ["R2", "R3", "R4", "R5"].iter().enumerate() {
+            sc.pads.push(pad(reference, "2", "FB", 8.0 + 2.0 * (k as f64 + 1.0), 16.0 + 2.0 * (k as f64 + 1.0)));
+        }
+        let map = hot_loop_field(finding(&s), &s, &sc, 1.0, 0.5).unwrap();
+        assert!(map.victims.len() > 3, "{}", map.victims.len());
+        let picture = field_picture(&map);
+        assert_eq!(picture.content.matches("class=\"victim\"").count(), 3);
+        assert_eq!(field_thumbnail(&map).content.matches("class=\"victim\"").count(), 1);
+        crate::emi_figure::check::assert_simple(&picture.content, picture.width, 20, "near field, many pads");
+        let thumbnail = field_thumbnail(&map);
+        crate::emi_figure::check::assert_simple(&thumbnail.content, thumbnail.width, 10, "near field thumbnail");
+        assert!(!crate::emi_figure::check::plain(&thumbnail.content).contains("U1 hot loop"));
     }
 
     fn section_with_path(path: &str) -> Value {
@@ -1515,26 +1382,26 @@ mod tests {
         // Two vias: the return leg runs on another layer (z = -0.2).
         let s = section_with_path("[[4,10,0],[10,10,0],[10,13,0],[10,13,-0.2],[4,13,-0.2],[4,13,0]]");
         let map = hot_loop_field(finding(&s), &s, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
-        let svg = field_picture(&map, "test").content;
+        let svg = field_picture(&map).content;
         assert_eq!(svg.matches("class=\"emi_loop\"").count(), 1, "{svg}");
         assert!(
             svg.matches("class=\"loop-component\"").count() >= 1 && svg.matches("class=\"loop-other\"").count() == 1
         );
         assert_eq!(svg.matches("class=\"loop-via\"").count(), 2, "{svg}");
-        assert!(svg.contains("hot loop, another layer (dashed)") && svg.contains("via in the loop"), "{svg}");
+        let legend = crate::emi_figure::check::plain(&svg);
+        assert!(legend.contains("hot loop") && legend.contains("other layer") && legend.contains("via"), "{legend}");
         assert!(svg.contains("stroke-dasharray=\"6 4\""));
-        assert!(svg.contains("loop: traced copper path"), "{svg}");
         // A loop on one layer has neither dashes nor vias, and the legend does not list them.
         let flat = section_with_path("[[4,10,0],[10,10,0],[10,13,0],[4,13,0]]");
         let flat_map = hot_loop_field(finding(&flat), &flat, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
-        let svg = field_picture(&flat_map, "test").content;
+        let svg = field_picture(&flat_map).content;
         assert!(
             !svg.contains("class=\"loop-other\"")
                 && !svg.contains("class=\"loop-via\"")
-                && !svg.contains("another layer"),
+                && !svg.contains("other layer"),
             "{svg}"
         );
-        assert!(svg.contains("hot loop, component layer"));
+        assert!(crate::emi_figure::check::plain(&svg).contains("hot loop"));
     }
 
     #[test]
@@ -1560,7 +1427,7 @@ mod tests {
             "only the edges that reach the window: {:?}",
             map.board_edges
         );
-        let svg = field_picture(&map, "test").content;
+        let svg = field_picture(&map).content;
         assert!(svg.contains("class=\"board-outline\""), "{svg}");
         // The field is not cut at the window edge: every edge row and column is weaker than EXTENT_DB below the maximum.
         let (nx, ny) = (map.grid.nx, map.grid.ny);
@@ -1592,31 +1459,22 @@ mod tests {
     }
 
     #[test]
-    fn nothing_in_the_right_column_runs_past_the_canvas() {
-        // A victim with a long name.
+    fn nothing_runs_past_the_canvas_and_a_long_title_is_cut_to_the_page() {
+        // A victim pad with a long reference, and a loop name that makes the title long.
         let long = copper_json::parse(
             r#"{"cells":[{"controller":"U1","current_peak":"4.5 A"}],"findings":[
               {"code":"EMI-HOT-LOOP","cell":"U1","tags":[],"measures":{"loop_capacitor":"CIN",
                "pad_sequence":["input capacitor CIN.1","hot supply U1.1"],
                "loop_path_3d_mm":[[4,10,0],[10,10,0],[10,13,0],[4,13,0]],
-               "field_victims":[{"kind":"sensitive_net","name":"A_RATHER_LONG_FEEDBACK_NET_NAME_FOR_THE_REGULATOR","pads":["R1.2"]}]}}]}"#,
+               "field_victims":[{"kind":"sensitive_net","name":"FB","pads":["A_RATHER_LONG_REFERENCE.12"]}]}}]}"#,
         )
         .unwrap();
-        let map = hot_loop_field(finding(&long), &long, &scene((8.0, 16.0)), 1.0, 0.5).unwrap();
-        let picture = field_picture(&map, "test");
-        let number = |line: &str, key: &str| -> Option<f64> {
-            line.split(key).nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.parse().ok())
-        };
-        for line in picture.content.lines().filter(|l| l.starts_with("<text")) {
-            let (x, size) = (number(line, " x=\"").unwrap_or(0.0), number(line, "font-size=\"").unwrap_or(11.0));
-            let text = line.split('>').nth(1).and_then(|r| r.split('<').next()).unwrap_or("");
-            // Labels inside the map may be anchored at their end; the column and the notes start at x.
-            if !line.contains("text-anchor=\"end\"") && !line.contains("text-anchor=\"middle\"") {
-                assert!(x + text_px(text, size) <= picture.width, "{text:?} runs past {}: {line}", picture.width);
-            }
-        }
-        // The row wraps instead of widening the column without bound.
-        assert!(picture.content.matches("class=\"victim-row\"").count() >= 2, "a long row wraps");
+        let mut scene = scene((8.0, 16.0));
+        scene.pads.push(pad("A_RATHER_LONG_REFERENCE", "12", "FB", 9.0, 17.0));
+        let mut map = hot_loop_field(finding(&long), &long, &scene, 1.0, 0.5).unwrap();
+        map.loop_name = Some("A_RATHER_LONG_LOOP_NAME_THAT_MAKES_THE_TITLE_VERY_LONG_INDEED_AND_THEN_SOME".to_owned());
+        let picture = field_picture(&map);
+        crate::emi_figure::check::assert_simple(&picture.content, picture.width, 20, "long names");
     }
 
     #[test]
