@@ -302,7 +302,8 @@ pub fn connector_picture(connector: &str, spectra: &[Spectrum], compact: bool) -
             out.push(marker(family, x, yy, below));
             out.push("</g>".to_owned());
         }
-        y = bottom + 16.0;
+        // The value lines start below the frequency tick labels (drawn at `bottom + 12`).
+        y = bottom + if compact { 16.0 } else { 28.0 };
         if !compact {
             let values: Vec<String> = spectrum.lines.iter().map(line_text).collect();
             for line in wrap_px(&values.join("; "), 10.0, width - 2.0 * MARGIN) {
