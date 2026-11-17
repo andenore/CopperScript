@@ -1,448 +1,594 @@
-//! The per-driver voltage spectra at a cable connector (`copper emi-check --run RUN --plot-spectrum OUT.svg` when the
-//! report has `EMI-CABLE-COMMON-MODE` findings, and the thumbnail of the connector page of `--plot-summary`): one
-//! panel per driver with a published voltage (each differential pair's common-mode voltage at the connector, each
-//! ground-noise source with a voltage), the lines on a logarithmic frequency axis in dBuV.
+//! The voltage of each driver at a cable connector, as one ranked bar chart per connector: the connector page of
+//! `copper emi-check --plot-summary` and, stacked at 900 px, `copper emi-check --run RUN --plot-spectrum OUT.svg` when
+//! the report has `EMI-CABLE-COMMON-MODE` findings with a published voltage.
 //!
-//! **Voltages at the connector, not a field.** There is no limit line, no margin and no field in these pictures: a
-//! field would need the bundle's net current, which the board model does not have, so there is nothing to compare a
-//! limit with. Every spectrum quantity of a driver (the continuous bound, each named pattern's lines, random data in a
-//! resolution bandwidth, a clock's lines) is its own mark and is never merged into one curve; a driver whose
-//! quantity is a first-arrival voltage says so in its title, because that is the first wavefront before any
-//! reflection and not a steady-state value. Only values already in the `measures` of the findings are drawn.
+//! Three groups of rows, in this order and never sorted across groups, because they are different quantities: the
+//! common-mode voltage of each differential pair at the connector (a first-arrival voltage, the first wavefront before
+//! any reflection, when the cable's impedance is declared and not matched), the ground-noise voltage of the bundle
+//! against the board reference, and the drivers that are ranking only (no bar: a single-ended signal's slew rate, a
+//! switch node's coupling score, a ground-noise source with no voltage and the short reason). The bars of the first
+//! two groups share one axis in dBuV, 60 dB below the strongest up to it; each value is printed at its bar end with the
+//! frequency of that line, and a band (a magnitude-only choke's, or the sense-height band of a ground-noise source) is
+//! a thin whisker on the bar.
+//!
+//! **Voltages at the connector, not a field.** The value of a bar is the headline value of the driver exactly as the
+//! finding ranks it; a field would need the bundle's net current, which the board model does not have. Only values
+//! already in the `measures` of the findings are drawn. The cable facts are the one subtitle line; everything else the
+//! findings say stays in the JSON, in `copper issues` and in `copper explain`.
 
-use crate::emi_field::{FieldPicture, text_px, wrap_px};
+use copper_json::Value;
+
+use crate::emi_field::FieldPicture;
+use crate::emi_figure::{
+    AXIS, BAND, GREY, GRID, GROUND_NOISE, INK, MUTED, PAIR, fit_text, hertz, one_decimal, text_el,
+};
 use crate::emi_plot::{escape, n};
-use crate::emi_signal::{FLOOR_DBUV, Line, Spectrum};
+use crate::emi_signal::{Driver, FLOOR_DBUV, Subject, pair_label};
 
-/// Width of the full-size picture and of the thumbnail, px.
+/// Width of the standalone picture, px.
 pub const WIDTH: f64 = 900.0;
-pub const THUMB_WIDTH: f64 = 664.0;
-/// Panels drawn at most per picture; the rest are named.
-pub const MAX_PANELS: usize = 12;
-pub const MAX_THUMB_PANELS: usize = 4;
+/// Rows drawn at most per group; the rest are counted.
+pub const MAX_ROWS: usize = 20;
 
 const MARGIN: f64 = 24.0;
-const LEFT: f64 = 70.0;
-const INK: &str = "#1f2933";
-const MUTED: &str = "#52606d";
-const GRID: &str = "#d9e0e7";
-const AXIS: &str = "#aab4be";
-const CONTINUOUS: &str = "#1d5fa8";
-const PATTERN: &str = "#2a9d8f";
-const RANDOM: &str = "#8e44ad";
-const CLOCK: &str = "#c2410c";
+const LABEL_W: f64 = 180.0;
+const VALUE_W: f64 = 160.0;
+const MAX_PLOT_W: f64 = 720.0;
+const ROW: f64 = 22.0;
+const BAR_H: f64 = 12.0;
+const SPAN_DB: f64 = 60.0;
+const FIRST_ARRIVAL_FILL: &str = "#c9dcf0";
 
-/// How a spectrum quantity is drawn: its family name, colour and marker.
+/// The groups of rows, in drawing order.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Family {
-    Continuous,
-    Pattern,
-    Random,
-    Clock,
+enum Group {
+    /// A pair's common-mode voltage at the connector.
+    Pair,
+    /// A pair's first-arrival voltage (a declared, unmatched cable).
+    FirstArrival,
+    GroundNoise,
+    Ranking,
 }
 
-fn family(quantity: &str) -> Family {
-    if quantity == "continuous_bound" {
-        Family::Continuous
-    } else if quantity.starts_with("pattern_lines") {
-        Family::Pattern
-    } else if quantity.starts_with("random_data") {
-        Family::Random
-    } else {
-        Family::Clock
-    }
-}
-
-impl Family {
-    fn colour(self) -> &'static str {
+impl Group {
+    fn title(self) -> &'static str {
         match self {
-            Family::Continuous => CONTINUOUS,
-            Family::Pattern => PATTERN,
-            Family::Random => RANDOM,
-            Family::Clock => CLOCK,
+            Group::Pair => "Pair common mode at the connector",
+            Group::FirstArrival => "Pair common mode at the connector (first-arrival voltage)",
+            Group::GroundNoise => "Ground noise (bundle against the board reference)",
+            Group::Ranking => "Ranking only (no voltage)",
         }
     }
 
-    fn name(self) -> &'static str {
-        match self {
-            Family::Continuous => "continuous bound (diamond)",
-            Family::Pattern => "pattern lines, each named (circle)",
-            Family::Random => "random data in the resolution bandwidth (square)",
-            Family::Clock => "clock lines (triangle)",
-        }
+    fn has_bars(self) -> bool {
+        self != Group::Ranking
     }
 }
 
-fn marker(family: Family, cx: f64, cy: f64, hollow: bool) -> String {
-    let fill = if hollow { "#ffffff".to_owned() } else { family.colour().to_owned() };
-    let style = format!("fill=\"{fill}\" stroke=\"{}\" stroke-width=\"1.5\"", family.colour());
-    match family {
-        Family::Continuous => format!(
-            "<polygon points=\"{},{} {},{} {},{} {},{}\" {style}/>",
-            n(cx),
-            n(cy - 5.0),
-            n(cx + 5.0),
-            n(cy),
-            n(cx),
-            n(cy + 5.0),
-            n(cx - 5.0),
-            n(cy)
-        ),
-        Family::Pattern => format!("<circle cx=\"{}\" cy=\"{}\" r=\"4.5\" {style}/>", n(cx), n(cy)),
-        Family::Random => {
-            format!("<rect x=\"{}\" y=\"{}\" width=\"9\" height=\"9\" {style}/>", n(cx - 4.5), n(cy - 4.5))
-        }
-        Family::Clock => format!(
-            "<polygon points=\"{},{} {},{} {},{}\" {style}/>",
-            n(cx),
-            n(cy - 5.5),
-            n(cx + 5.0),
-            n(cy + 4.5),
-            n(cx - 5.0),
-            n(cy + 4.5)
-        ),
+/// `LANE_D_P/N` for the pair `LANE_D_P/LANE_D_N`: the name of a driver as a row label.
+fn row_name(name: &str) -> String {
+    match name.split_once('/') {
+        Some((positive, negative)) if !negative.contains('/') => pair_label(positive, negative),
+        _ => name.to_owned(),
     }
 }
 
-fn text_element(x: f64, y: f64, size: f64, fill: &str, class: &str, body: &str, extra: &str) -> String {
-    format!(
-        "<text class=\"{class}\" x=\"{}\" y=\"{}\" font-size=\"{}\" fill=\"{fill}\"{extra}>{}</text>",
-        n(x),
-        n(y),
-        n(size),
-        escape(body)
-    )
-}
-
-/// `1 GHz`, `100 MHz`, `10 kHz`.
-fn hertz(value: f64) -> String {
-    if value >= 1e9 {
-        format!("{} GHz", n(value / 1e9))
-    } else if value >= 1e6 {
-        format!("{} MHz", n(value / 1e6))
-    } else {
-        format!("{} kHz", n(value / 1e3))
+fn group_of(driver: &Driver) -> Group {
+    match (driver.kind, driver.value_dbuv) {
+        ("differential_pair", Some(_)) if driver.quantity.as_deref() == Some("first_arrival_voltage") => {
+            Group::FirstArrival
+        }
+        ("differential_pair", Some(_)) => Group::Pair,
+        ("ground_noise", Some(_)) => Group::GroundNoise,
+        _ => Group::Ranking,
     }
 }
 
-/// The title of a driver's panel: the driver, the quantity label of the finding and what it means.
-fn panel_title(spectrum: &Spectrum) -> String {
-    let what = match spectrum.driver {
-        "ground_noise" => "ground-noise voltage, current driven (a voltage between the loops, not a common-mode voltage at the connector)".to_owned(),
-        _ if spectrum.first_arrival() => {
-            let cable = spectrum
-                .cable_impedance_ohm
-                .map_or_else(String::new, |ohm| format!(", cable {} ohm declared, not matched", n(ohm)));
-            format!("first_arrival_voltage: the first wavefront before any reflection, NOT a steady-state value{cable}")
-        }
-        _ => match &spectrum.termination {
-            Some(termination) => format!("{} ({termination})", spectrum.quantity),
-            None => spectrum.quantity.clone(),
+/// The kind of a ranking-only driver and its ranking value in words.
+fn ranking_text(driver: &Driver) -> String {
+    match driver.kind {
+        "single_ended_signal" => match driver.ranking_value {
+            Some((value, unit)) => format!("single-ended signal, {} {unit}", one_decimal(value)),
+            None => "single-ended signal".to_owned(),
         },
-    };
-    format!("{}: {what}", spectrum.name)
-}
-
-fn line_text(line: &Line) -> String {
-    if line.dbuv <= FLOOR_DBUV {
-        format!("{}: no line", line.quantity)
-    } else {
-        format!("{}: {} dBuV at {}", line.quantity, n(line.dbuv), hertz(line.frequency_hz))
+        "switch_node_coupling" => match driver.ranking_value {
+            Some((value, unit)) => format!("switch node, coupling score {} {unit}", one_decimal(value)),
+            None => "switch node".to_owned(),
+        },
+        "ground_noise" => match &driver.reason {
+            Some(reason) => format!("ground-noise source, {reason}"),
+            None => "ground-noise source".to_owned(),
+        },
+        _ => match &driver.reason {
+            Some(reason) => format!("pair, no voltage, {reason}"),
+            None => "pair, no voltage".to_owned(),
+        },
     }
 }
 
-/// The picture of `spectra` (all of one connector): `compact` is the thumbnail form for the summary page (fewer
-/// panels, no value lists, no footer).
-pub fn connector_picture(connector: &str, spectra: &[Spectrum], compact: bool) -> FieldPicture {
-    let width = if compact { THUMB_WIDTH } else { WIDTH };
-    let limit = if compact { MAX_THUMB_PANELS } else { MAX_PANELS };
-    let shown: Vec<&Spectrum> = spectra.iter().take(limit).collect();
-    let text_size = if compact { 10.0 } else { 11.0 };
+/// The order of the ranking-only rows: pairs with no voltage, ground-noise sources, single-ended signals by slew rate,
+/// switch nodes by coupling score (strongest first inside a kind; ground-noise sources and pairs keep the finding's
+/// rank order).
+fn ranking_order(drivers: &mut [&Driver]) {
+    let rank = |d: &Driver| match d.kind {
+        "differential_pair" => 0,
+        "ground_noise" => 1,
+        "single_ended_signal" => 2,
+        _ => 3,
+    };
+    drivers.sort_by(|a, b| {
+        rank(a).cmp(&rank(b)).then_with(|| match (a.ranking_value, b.ranking_value) {
+            (Some(x), Some(y)) => y.0.total_cmp(&x.0),
+            _ => std::cmp::Ordering::Equal,
+        })
+    });
+}
+
+fn measures_of(finding: &Value) -> Option<&Value> {
+    finding.get("measures")
+}
+
+fn number(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Float(number) => Some(*number),
+        Value::Int(number) => number.to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+/// The cable facts in one line: the length, the shield, the termination.
+fn subtitle(subject: &Subject) -> String {
+    let common =
+        subject.findings.iter().find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CABLE-COMMON-MODE"));
+    let shield_missing =
+        subject.findings.iter().any(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CABLE-SHIELD"));
+    let Some(measures) = common.and_then(|f| measures_of(f)) else {
+        return if shield_missing { "shielded cable, bond not declared".to_owned() } else { String::new() };
+    };
+    let cable = measures.get("cable").filter(|c| matches!(c, Value::Object(_)));
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(length) = cable.and_then(|c| number(c.get("cable_length_m"))) {
+        parts.push(format!("cable {} m", crate::emi_figure::sig3(length)));
+    }
+    let shielded = cable.and_then(|c| c.get("shielded"));
+    let assumed = cable.and_then(|c| c.get("assumed_unshielded"));
+    if shielded == Some(&Value::Bool(true)) {
+        let vias = measures.get("shield").and_then(|s| number(s.get("via_count_to_ground")));
+        parts.push(match vias {
+            _ if shield_missing => "shielded, bond not declared".to_owned(),
+            Some(vias) => {
+                format!("shielded, bond {} via{}", crate::emi_figure::sig3(vias), if vias == 1.0 { "" } else { "s" })
+            }
+            None => "shielded".to_owned(),
+        });
+    } else if assumed == Some(&Value::Bool(true)) {
+        parts.push("unshielded (assumed)".to_owned());
+    } else if shielded == Some(&Value::Bool(false)) {
+        parts.push("unshielded (declared)".to_owned());
+    }
+    parts.push(match cable.and_then(|c| number(c.get("common_mode_impedance_ohm"))) {
+        Some(ohm) => format!("{} ohm declared: first-arrival voltages", crate::emi_figure::sig3(ohm)),
+        None => "matched termination assumed".to_owned(),
+    });
+    parts.join(", ")
+}
+
+/// The bar-end text of a driver: its value and the frequency of that line.
+fn value_text(value: f64, frequency: Option<f64>, below_axis: bool) -> String {
+    if value <= FLOOR_DBUV {
+        return "below -100 dBuV".to_owned();
+    }
+    if below_axis {
+        return format!("{} dBuV, below the axis", one_decimal(value));
+    }
+    match frequency {
+        Some(f) => format!("{} dBuV @ {}", one_decimal(value), hertz(f)),
+        None => format!("{} dBuV", one_decimal(value)),
+    }
+}
+
+/// The chart of one connector, `width` px wide: title, the cable facts, the groups of rows.
+pub fn connector_picture(subject: &Subject, width: f64) -> FieldPicture {
+    let drivers: Vec<Driver> = subject
+        .findings
+        .iter()
+        .filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CABLE-COMMON-MODE"))
+        .flat_map(|f| crate::emi_signal::drivers(f))
+        .collect();
     let mut out: Vec<String> = Vec::new();
-    let mut y = if compact { 20.0 } else { 28.0 };
-    out.push(text_element(
+    out.push(format!("<g class=\"summary-connector\" data-connector=\"{}\">", escape(&subject.name)));
+    out.push(text_el(
         MARGIN,
-        y,
-        if compact { 14.0 } else { 17.0 },
+        34.0,
+        20.0,
         INK,
         "title",
-        &format!("{connector}: voltage spectra at the connector, per driver (dBuV)"),
-        " font-weight=\"bold\"",
+        "",
+        true,
+        &fit_text(
+            &format!("{}: common-mode voltage at the connector, per driver", subject.display),
+            20.0,
+            width - 2.0 * MARGIN,
+        ),
     ));
-    y += if compact { 16.0 } else { 20.0 };
-    let intro = if compact {
-        "Voltages against the board reference at the connector, not a field; no limit line."
-    } else {
-        "Voltages between the conductors and the board reference at the connector's ground pins, single-sided peak amplitude of each spectrum line. Not a field: no limit line and no margin are drawn, because there is no field estimate to compare with one. Each spectrum quantity is its own mark, never merged into one curve."
-    };
-    for line in wrap_px(intro, text_size + 1.0, width - 2.0 * MARGIN) {
-        out.push(text_element(MARGIN, y, text_size + 1.0, MUTED, "intro", &line, ""));
-        y += (text_size + 1.0) * 1.35;
-    }
-    y += 4.0;
-
-    // The axes are common to the panels of one picture: the frequency decades around the lines, 60 dB below the strongest.
-    let drawn = |line: &&Line| line.dbuv > FLOOR_DBUV && line.frequency_hz > 0.0;
-    let all: Vec<&Line> = shown.iter().flat_map(|s| s.lines.iter()).filter(drawn).collect();
-    let (f_lo, f_hi) =
-        all.iter().fold((f64::INFINITY, 0.0_f64), |(lo, hi), l| (lo.min(l.frequency_hz), hi.max(l.frequency_hz)));
-    let decade_lo = if all.is_empty() { 1e6 } else { 10f64.powf(f_lo.log10().floor()) };
-    let mut decade_hi = if all.is_empty() { 1e9 } else { 10f64.powf(f_hi.log10().ceil()) };
-    if decade_hi <= decade_lo * 1.0001 {
-        decade_hi = decade_lo * 10.0;
-    }
-    let top_db = all.iter().map(|l| l.dbuv).fold(f64::NEG_INFINITY, f64::max);
-    let y_max = if all.is_empty() { 60.0 } else { ((top_db + 1.0) / 10.0).ceil() * 10.0 };
-    let span = if compact { 50.0 } else { 60.0 };
-    let y_min = y_max - span;
-    let plot_w = width - LEFT - MARGIN;
-    let plot_h = if compact { 54.0 } else { 78.0 };
-    let x_of = |f: f64| LEFT + (f.log10() - decade_lo.log10()) / (decade_hi.log10() - decade_lo.log10()) * plot_w;
-
-    for spectrum in &shown {
-        out.push(format!(
-            "<g class=\"driver-panel\" data-connector=\"{}\" data-driver=\"{}\" data-driver-kind=\"{}\" data-quantity=\"{}\">",
-            escape(connector),
-            escape(&spectrum.name),
-            spectrum.driver,
-            escape(&spectrum.quantity)
+    let line = subtitle(subject);
+    if !line.is_empty() {
+        out.push(text_el(
+            MARGIN,
+            56.0,
+            13.0,
+            MUTED,
+            "subtitle",
+            "",
+            false,
+            &fit_text(&line, 13.0, width - 2.0 * MARGIN),
         ));
-        for line in wrap_px(&panel_title(spectrum), text_size + 1.0, width - 2.0 * MARGIN) {
-            out.push(text_element(MARGIN, y, text_size + 1.0, INK, "panel-title", &line, " font-weight=\"bold\""));
-            y += (text_size + 1.0) * 1.3;
+    }
+
+    let order = [Group::Pair, Group::FirstArrival, Group::GroundNoise, Group::Ranking];
+    let mut groups: Vec<(Group, Vec<&Driver>)> = Vec::new();
+    for group in order {
+        let mut members: Vec<&Driver> = drivers.iter().filter(|d| group_of(d) == group).collect();
+        if members.is_empty() {
+            continue;
         }
-        y += 4.0;
-        let top = y;
-        let bottom = top + plot_h;
-        out.push(format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#fbfcfd\" stroke=\"{AXIS}\"/>",
-            n(LEFT),
-            n(top),
-            n(plot_w),
-            n(plot_h)
+        if group == Group::Ranking {
+            ranking_order(&mut members);
+        } else {
+            members.sort_by(|a, b| b.value_dbuv.unwrap_or(f64::MIN).total_cmp(&a.value_dbuv.unwrap_or(f64::MIN)));
+        }
+        groups.push((group, members));
+    }
+
+    // The shared axis of the bar groups: 60 dB below the strongest drawn level (the band's top included) up to it.
+    let strongest = groups
+        .iter()
+        .filter(|(g, _)| g.has_bars())
+        .flat_map(|(_, members)| members.iter())
+        .flat_map(|d| [d.value_dbuv, d.band_dbuv.map(|b| b.1)])
+        .flatten()
+        .filter(|v| *v > FLOOR_DBUV)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let top_db = if strongest.is_finite() { (strongest / 10.0).ceil() * 10.0 } else { 0.0 };
+    let min_db = top_db - SPAN_DB;
+    let x0 = MARGIN + LABEL_W + 10.0;
+    let plot_w = (width - MARGIN - VALUE_W - x0).min(MAX_PLOT_W);
+    let x_of = |level: f64| x0 + (level - min_db) / SPAN_DB * plot_w;
+
+    let mut body: Vec<String> = Vec::new();
+    let mut y = 84.0;
+    let last_bar_group = groups.iter().rposition(|(g, _)| g.has_bars());
+    let mut grid_top: Option<f64> = None;
+    let mut grid_bottom = y;
+    for (index, (group, members)) in groups.iter().enumerate() {
+        if group.has_bars() && grid_top.is_none() {
+            grid_top = Some(y);
+        }
+        body.push(format!(
+            "<rect class=\"group\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"20\" fill=\"{BAND}\"/>",
+            n(MARGIN),
+            n(y),
+            n(width - 2.0 * MARGIN)
         ));
-        // Gridlines: each decade and its 2 and 5, labelled at the decades; 10 dB lines labelled at the left.
-        let mut decade = decade_lo;
-        while decade < decade_hi * 0.9999 {
-            for (k, multiple) in [1.0, 2.0, 5.0].into_iter().enumerate() {
-                let f = decade * multiple;
-                if f > decade_hi * 1.0001 {
-                    continue;
+        body.push(text_el(MARGIN + 6.0, y + 14.0, 12.0, INK, "group-title", "", true, group.title()));
+        y += 26.0;
+        for driver in members.iter().take(MAX_ROWS) {
+            let cy = y + ROW / 2.0;
+            body.push(format!(
+                "<g class=\"{}\" data-connector=\"{}\" data-driver=\"{}\" data-driver-kind=\"{}\" data-group=\"{}\"{}>",
+                if group.has_bars() { "driver-bar" } else { "driver-ranking" },
+                escape(&subject.name),
+                escape(&driver.name),
+                driver.kind,
+                match group {
+                    Group::Pair => "pair",
+                    Group::FirstArrival => "pair-first-arrival",
+                    Group::GroundNoise => "ground-noise",
+                    Group::Ranking => "ranking-only",
+                },
+                match driver.value_dbuv {
+                    Some(value) => format!(" data-dbuv=\"{}\"", n(value)),
+                    None => String::new(),
                 }
-                let x = x_of(f);
-                out.push(format!(
-                    "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{GRID}\" stroke-width=\"{}\"/>",
-                    n(x),
-                    n(top),
-                    n(x),
-                    n(bottom),
-                    if k == 0 { "1" } else { "0.5" }
-                ));
-                if k == 0 {
-                    out.push(text_element(x, bottom + 12.0, 9.0, MUTED, "tick", &hertz(f), " text-anchor=\"middle\""));
+            ));
+            body.push(text_el(
+                MARGIN,
+                cy + 4.0,
+                11.0,
+                if group.has_bars() { INK } else { MUTED },
+                "driver-name",
+                "",
+                false,
+                &fit_text(&row_name(&driver.name), 11.0, LABEL_W),
+            ));
+            match (group.has_bars(), driver.value_dbuv) {
+                (true, Some(value)) => {
+                    let below = value < min_db;
+                    let (fill, stroke, dash) = match group {
+                        Group::GroundNoise => (GROUND_NOISE, GROUND_NOISE, ""),
+                        Group::FirstArrival => (FIRST_ARRIVAL_FILL, PAIR, " stroke-dasharray=\"4 2\""),
+                        _ => (PAIR, PAIR, ""),
+                    };
+                    let mut end = x0;
+                    if value > FLOOR_DBUV && !below {
+                        end = x_of(value.min(top_db));
+                        body.push(format!(
+                            "<rect class=\"bar\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"1\"{dash}/>",
+                            n(x0),
+                            n(cy - BAR_H / 2.0),
+                            n((end - x0).max(1.0)),
+                            n(BAR_H)
+                        ));
+                    }
+                    if let Some((low, high)) = driver.band_dbuv.filter(|_| value > FLOOR_DBUV && !below) {
+                        let (a, b) = (x_of(low.max(min_db)), x_of(high.min(top_db)));
+                        body.push(format!(
+                            "<path class=\"band\" d=\"M{} {} L{} {} M{} {} L{} {} M{} {} L{} {}\" stroke=\"{INK}\" stroke-width=\"1.5\" fill=\"none\"/>",
+                            n(a),
+                            n(cy),
+                            n(b),
+                            n(cy),
+                            n(a),
+                            n(cy - 4.0),
+                            n(a),
+                            n(cy + 4.0),
+                            n(b),
+                            n(cy - 4.0),
+                            n(b),
+                            n(cy + 4.0)
+                        ));
+                        end = end.max(b);
+                    }
+                    let text = value_text(value, driver.frequency_hz, below);
+                    let at = end + 6.0;
+                    body.push(text_el(
+                        at,
+                        cy + 4.0,
+                        11.0,
+                        INK,
+                        "value",
+                        "",
+                        false,
+                        &fit_text(&text, 11.0, (width - MARGIN - at).max(20.0)),
+                    ));
+                }
+                _ => {
+                    body.push(text_el(
+                        x0,
+                        cy + 4.0,
+                        11.0,
+                        GREY,
+                        "ranking",
+                        "",
+                        false,
+                        &fit_text(&ranking_text(driver), 11.0, width - MARGIN - x0),
+                    ));
                 }
             }
-            decade *= 10.0;
+            body.push("</g>".to_owned());
+            y += ROW;
         }
-        out.push(text_element(
-            x_of(decade_hi),
-            bottom + 12.0,
-            9.0,
-            MUTED,
-            "tick",
-            &hertz(decade_hi),
-            " text-anchor=\"middle\"",
-        ));
-        let mut level = y_min;
-        while level <= y_max + 0.001 {
-            let yy = bottom - (level - y_min) / span * plot_h;
-            out.push(format!(
-                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{GRID}\" stroke-width=\"0.5\"/>",
-                n(LEFT),
-                n(yy),
-                n(LEFT + plot_w),
-                n(yy)
+        if members.len() > MAX_ROWS {
+            body.push(text_el(
+                MARGIN + 6.0,
+                y + 12.0,
+                10.0,
+                MUTED,
+                "more",
+                "",
+                false,
+                &format!("+{} more", members.len() - MAX_ROWS),
             ));
-            if (level - y_min) % 20.0 < 0.001 {
-                out.push(text_element(
-                    LEFT - 6.0,
-                    yy + 3.0,
+            y += ROW;
+        }
+        if group.has_bars() {
+            grid_bottom = y;
+        }
+        if Some(index) == last_bar_group {
+            // The shared axis labels, under the last group with bars.
+            let mut level = min_db;
+            while level <= top_db + 0.001 {
+                body.push(text_el(
+                    x_of(level),
+                    y + 12.0,
                     9.0,
                     MUTED,
                     "tick",
+                    "middle",
+                    false,
                     &format!("{} dBuV", n(level)),
-                    " text-anchor=\"end\"",
                 ));
+                level += 10.0;
             }
+            y += 20.0;
+        }
+        y += 6.0;
+    }
+    if groups.is_empty() {
+        body.push(text_el(MARGIN, y + 12.0, 12.0, MUTED, "none", "", false, "no driver of this connector is reported"));
+        y += 24.0;
+    }
+    if let Some(top) = grid_top {
+        let mut level = min_db;
+        while level <= top_db + 0.001 {
+            let x = x_of(level);
+            out.push(format!(
+                "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{GRID}\" stroke-width=\"1\"/>",
+                n(x),
+                n(top),
+                n(x),
+                n(grid_bottom)
+            ));
             level += 10.0;
         }
-        for line in spectrum.lines.iter().filter(|l| l.dbuv > FLOOR_DBUV && l.frequency_hz > 0.0) {
-            let family = family(&line.quantity);
-            let x = x_of(line.frequency_hz).clamp(LEFT, LEFT + plot_w);
-            let below = line.dbuv < y_min;
-            let yy = if below { bottom } else { bottom - (line.dbuv.min(y_max) - y_min) / span * plot_h };
-            out.push(format!(
-                "<g class=\"driver-line\" data-driver=\"{}\" data-quantity=\"{}\" data-frequency-hz=\"{}\" data-dbuv=\"{}\"{}>",
-                escape(&spectrum.name),
-                escape(&line.quantity),
-                n(line.frequency_hz),
-                n(line.dbuv),
-                if below { " data-below-axis=\"true\"" } else { "" }
-            ));
-            if !below {
-                out.push(format!(
-                    "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>",
-                    n(x),
-                    n(bottom),
-                    n(x),
-                    n(yy),
-                    family.colour()
-                ));
-            }
-            out.push(marker(family, x, yy, below));
-            out.push("</g>".to_owned());
-        }
-        // The value lines start below the frequency tick labels (drawn at `bottom + 12`).
-        y = bottom + if compact { 16.0 } else { 28.0 };
-        if !compact {
-            let values: Vec<String> = spectrum.lines.iter().map(line_text).collect();
-            for line in wrap_px(&values.join("; "), 10.0, width - 2.0 * MARGIN) {
-                out.push(text_element(MARGIN, y, 10.0, INK, "values", &line, ""));
-                y += 13.0;
-            }
-        }
-        y += if compact { 4.0 } else { 10.0 };
-        out.push("</g>".to_owned());
-    }
-    if spectra.len() > shown.len() {
-        out.push(text_element(
-            MARGIN,
-            y,
-            text_size + 1.0,
-            MUTED,
-            "more",
-            &format!(
-                "+{} more driver(s) with a voltage: the full-size picture (--plot-spectrum) draws up to {MAX_PANELS}, the findings hold every one",
-                spectra.len() - shown.len()
-            ),
-            "",
+        out.push(format!(
+            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{AXIS}\" stroke-width=\"1\"/>",
+            n(x0),
+            n(top),
+            n(x0),
+            n(grid_bottom)
         ));
-        y += 16.0;
     }
-    // Legend of the families present.
-    let mut x = MARGIN;
-    let mut seen: Vec<Family> = Vec::new();
-    for line in spectra.iter().flat_map(|s| s.lines.iter()) {
-        let f = family(&line.quantity);
-        if !seen.contains(&f) {
-            seen.push(f);
-        }
-    }
-    for f in seen {
-        let label = f.name();
-        if x + 20.0 + text_px(label, 10.0) > width - MARGIN {
-            x = MARGIN;
-            y += 16.0;
-        }
-        out.push(marker(f, x + 6.0, y - 3.0, false));
-        out.push(text_element(x + 16.0, y, 10.0, INK, "legend", label, ""));
-        x += 28.0 + text_px(label, 10.0);
-    }
-    y += 20.0;
-    if !compact {
-        let footer = "Voltages at the connector, not a field, a current or a margin; nothing here is a pass or a fail and none of it is correlated with a measurement. Axis: dBuV of the single-sided peak amplitude of one spectrum line, 60 dB below the strongest drawn line at the bottom; a line below the axis is drawn hollow on its bottom edge. A first-arrival voltage is the first wavefront before any reflection, not a steady-state value. Not modelled: the bundle's net current, the cable's routing, far-end termination and resonance, the shield's transfer impedance, and radiation.";
-        for line in wrap_px(footer, 11.0, width - 2.0 * MARGIN) {
-            out.push(text_element(MARGIN, y, 11.0, MUTED, "footer", &line, ""));
-            y += 15.0;
-        }
-    }
-    FieldPicture { content: out.join("\n"), width, height: y + 6.0 }
+    out.extend(body);
+    out.push("</g>".to_owned());
+    FieldPicture { content: out.join("\n"), width, height: y + 8.0 }
 }
 
-/// The full-size pictures of the connector spectra of `document` (one per connector with a published voltage), in the
-/// order of the findings; empty when no connector has one.
-pub fn connector_pictures(document: &copper_json::Value) -> Vec<FieldPicture> {
-    crate::emi_signal::connector_spectra(document)
-        .iter()
-        .map(|(connector, spectra)| connector_picture(connector, spectra, false))
-        .collect()
+/// The connectors of `document` with at least one published voltage, in the order of the findings.
+fn voltage_subjects<'a>(document: &'a Value, ordered: &[&'a Value]) -> Vec<Subject<'a>> {
+    let with_voltage: Vec<String> =
+        crate::emi_signal::connector_voltages(document).into_iter().map(|(connector, _)| connector).collect();
+    crate::emi_signal::connector_subjects(ordered).into_iter().filter(|s| with_voltage.contains(&s.name)).collect()
+}
+
+/// The full-size pictures of `document` (one per connector with a published voltage), 900 px wide, in the order of the
+/// findings; empty when no connector has one.
+pub fn connector_pictures(document: &Value) -> Vec<FieldPicture> {
+    let ordered = crate::issues::ordered_findings(document);
+    voltage_subjects(document, &ordered).iter().map(|s| connector_picture(s, WIDTH)).collect()
+}
+
+/// How many drivers with a published voltage there are in `document`, and on how many connectors.
+pub fn voltage_counts(document: &Value) -> (usize, usize) {
+    let groups = crate::emi_signal::connector_voltages(document);
+    (groups.iter().map(|(_, drivers)| drivers.len()).sum(), groups.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emi_figure::check::{assert_inside, assert_no_overlap, plain};
 
-    fn spectrum(name: &str, quantity: &str, driver: &'static str) -> Spectrum {
-        Spectrum {
-            connector: "J1".to_owned(),
-            driver,
-            name: name.to_owned(),
-            quantity: quantity.to_owned(),
-            termination: Some("matched_cable_termination".to_owned()),
-            cable_impedance_ohm: (quantity == "first_arrival_voltage").then_some(150.0),
-            lines: vec![
-                Line { quantity: "continuous_bound".to_owned(), frequency_hz: 1.25e9, dbuv: 84.87 },
-                Line { quantity: "pattern_lines:alternating".to_owned(), frequency_hz: 1.25e9, dbuv: 84.44 },
-                Line { quantity: "pattern_lines:square_runs_4".to_owned(), frequency_hz: 0.9375e9, dbuv: 72.6 },
-                Line { quantity: "random_data_in_rbw".to_owned(), frequency_hz: 1.25e9, dbuv: 41.26 },
-                Line { quantity: "pattern_lines:square_runs_2".to_owned(), frequency_hz: 1.25e9, dbuv: -200.0 },
-            ],
-        }
+    fn document() -> Value {
+        copper_json::parse(
+            r#"{"board":"b","cells":[],"findings":[
+              {"code":"EMI-CABLE-COMMON-MODE","objects":["J1"],"nets":["A_P","A_N"],"measures":{"connector":"J1",
+               "cable":{"shielded":null,"assumed_unshielded":true,"cable_length_m":0.5,"common_mode_impedance_ohm":null},"shield":null,
+               "differential_pairs":[
+                {"conductors":["A_P","A_N"],"status":"evaluated","termination":{"assumption":"matched_cable_termination"},
+                 "voltage":{"quantity":"common_mode_voltage_at_connector","headline_dbuv":84.87,"headline_frequency_hz":1250000000.0,"band_dbuv":[80.1,84.87]}},
+                {"conductors":["B_P","B_N"],"status":"evaluated","termination":{"assumption":"matched_cable_termination"},
+                 "voltage":{"quantity":"common_mode_voltage_at_connector","headline_dbuv":61.4,"headline_frequency_hz":937500000.0}},
+                {"conductors":["C_P","C_N"],"status":"evaluated","termination":{"assumption":"matched_cable_termination"},
+                 "voltage":{"quantity":"common_mode_voltage_at_connector","headline_dbuv":-200.0,"headline_frequency_hz":1250000000.0}},
+                {"conductors":["D_P","D_N"],"status":"unsupported","reason":"needs routed copper","voltage":null}],
+               "ground_noise":[
+                {"source":"A_P/A_N","status":"evaluated","voltage":{"quantity":"ground_noise_voltage","headline_dbuv":49.01,"headline_frequency_hz":1250000000.0,"sense_band_dbuv":[46.11,50.21]}},
+                {"source":"CLK","status":"ranking_only","voltage":null,"slots_between_the_loops":[{"slot_length_mm":3.0}],"no_voltage_because":["a slot"]}],
+               "single_ended_signals":[{"net":"SE1","status":"ranking_only","slew_v_per_ns":1.0},{"net":"SE2","status":"ranking_only","slew_v_per_ns":2.5}],
+               "switch_node_coupling":[{"net":"SW","status":"ranking_only","coupling_score_db":-12.34}]}}]}"#,
+        )
+        .unwrap()
     }
 
-    /// The text of every `<text>` element, joined by a space (a paragraph is wrapped over several).
-    fn plain(content: &str) -> String {
-        content
-            .split("<text ")
-            .skip(1)
-            .map(|part| part.split_once('>').unwrap().1.split("</text>").next().unwrap().to_owned())
-            .collect::<Vec<_>>()
-            .join(" ")
+    fn picture(document: &Value, width: f64) -> FieldPicture {
+        let ordered = crate::issues::ordered_findings(document);
+        let subjects = crate::emi_signal::connector_subjects(&ordered);
+        connector_picture(&subjects[0], width)
     }
 
     #[test]
-    fn each_quantity_is_its_own_mark_and_no_limit_is_drawn() {
-        let spectra = [
-            spectrum("A_P/A_N", "common_mode_voltage_at_connector", "differential_pair"),
-            spectrum("B_P/B_N", "first_arrival_voltage", "differential_pair"),
-        ];
-        let picture = connector_picture("J1", &spectra, false);
-        assert_eq!(picture.width, WIDTH);
-        // Four drawn lines per panel (the fifth has no content), two panels.
-        assert_eq!(picture.content.matches("class=\"driver-line\"").count(), 8);
-        assert_eq!(picture.content.matches("class=\"driver-panel\"").count(), 2);
-        assert!(picture.content.contains("data-quantity=\"pattern_lines:square_runs_4\""));
-        assert_eq!(
-            panel_title(&spectra[1]),
-            "B_P/B_N: first_arrival_voltage: the first wavefront before any reflection, NOT a steady-state value, cable 150 ohm declared, not matched"
+    fn the_groups_are_in_order_each_sorted_strongest_first_and_never_merged() {
+        let document = document();
+        let p = picture(&document, WIDTH);
+        let text = plain(&p.content);
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle} in {text}"));
+        assert!(at("Pair common mode at the connector") < at("Ground noise (bundle against the board reference)"));
+        assert!(at("Ground noise") < at("Ranking only (no voltage)"));
+        // Inside the pair group: strongest first; the pair at the floor has no line.
+        assert!(at("A_P/N") < at("B_P/N") && at("B_P/N") < at("C_P/N"));
+        assert!(text.contains("84.9 dBuV @ 1.25 GHz") && text.contains("61.4 dBuV @ 938 MHz"), "{text}");
+        assert!(text.contains("below -100 dBuV"), "{text}");
+        assert!(text.contains("49.0 dBuV @ 1.25 GHz"), "the ground-noise value is its own row: {text}");
+        // Ranking only: no bar, the kind and the ranking value, the short reason of a ground-noise source.
+        assert!(
+            text.contains("single-ended signal, 2.5 V/ns") && text.contains("switch node, coupling score -12.3 dB")
         );
-        assert_eq!(panel_title(&spectra[0]), "A_P/A_N: common_mode_voltage_at_connector (matched_cable_termination)");
-        let text = plain(&picture.content);
-        assert!(text.contains("pattern_lines:square_runs_2: no line"), "{text}");
-        assert!(text.contains("Not a field"), "{text}");
-        // The only words "limit" and "margin" are in the statements that none is drawn.
-        for word in ["limit", "margin"] {
-            for (at, _) in text.match_indices(word) {
-                assert!(text[..at].ends_with("no ") || text[..at].ends_with("or a "), "{word} at {at}: {text}");
-            }
-        }
-        assert!(!picture.content.contains("class=\"limit"));
-        // Every text starts inside the picture.
-        for part in picture.content.split("<text ").skip(1) {
-            let x: f64 = part.split("x=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
-            let y: f64 = part.split("y=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
-            assert!((0.0..=picture.width).contains(&x) && (0.0..=picture.height).contains(&y), "{part}");
+        assert!(text.contains("ground-noise source, slot between the loops"));
+        assert!(text.contains("pair, no voltage, needs routed copper"));
+        assert!(at("SE2") < at("SE1"), "strongest first inside a kind");
+        // The bars: three with a line, one with a band whisker, none for the ranking rows.
+        assert_eq!(p.content.matches("class=\"bar\"").count(), 3);
+        assert_eq!(p.content.matches("class=\"band\"").count(), 2, "the pair's band and the sense-height band");
+        assert_eq!(p.content.matches("class=\"driver-ranking\"").count(), 5);
+        // The bar groups never interleave: the data-group of each bar row follows the group order.
+        let groups: Vec<&str> =
+            p.content.split("data-group=\"").skip(1).map(|g| g.split('"').next().unwrap()).collect();
+        let first_noise = groups.iter().position(|g| *g == "ground-noise").unwrap();
+        assert!(groups[..first_noise].iter().all(|g| *g == "pair"));
+        assert!(groups[first_noise..].iter().all(|g| *g != "pair"));
+    }
+
+    #[test]
+    fn the_subtitle_states_the_cable_in_one_line() {
+        let document = document();
+        let p = picture(&document, WIDTH);
+        assert!(plain(&p.content).contains("cable 0.5 m, unshielded (assumed), matched termination assumed"));
+        let declared = copper_json::Dumps::compact()
+            .dumps(&document)
+            .replace("\"shielded\":null,\"assumed_unshielded\":true", "\"shielded\":true,\"assumed_unshielded\":false")
+            .replace("\"common_mode_impedance_ohm\":null", "\"common_mode_impedance_ohm\":150.0")
+            .replace("\"shield\":null", "\"shield\":{\"via_count_to_ground\":3}");
+        let document = copper_json::parse(&declared).unwrap();
+        let p = picture(&document, WIDTH);
+        assert!(
+            plain(&p.content).contains("cable 0.5 m, shielded, bond 3 vias, 150 ohm declared: first-arrival voltages"),
+            "{}",
+            plain(&p.content)
+        );
+    }
+
+    #[test]
+    fn a_first_arrival_group_is_named_and_nothing_runs_over_anything_else() {
+        let document = copper_json::parse(
+            &copper_json::Dumps::compact()
+                .dumps(&document())
+                .replace("common_mode_voltage_at_connector", "first_arrival_voltage"),
+        )
+        .unwrap();
+        for width in [WIDTH, 1400.0] {
+            let p = picture(&document, width);
+            let text = plain(&p.content);
+            assert!(text.contains("Pair common mode at the connector (first-arrival voltage)"), "{text}");
+            assert_inside(&p.content, width, "connector chart");
+            assert_no_overlap(&p.content, "connector chart");
+            assert!(p.content.contains("stroke-dasharray"), "a first-arrival bar is drawn dashed");
         }
     }
 
     #[test]
-    fn the_thumbnail_is_narrower_and_draws_at_most_four_panels() {
-        let spectra: Vec<Spectrum> = (0..6)
-            .map(|k| spectrum(&format!("P{k}"), "common_mode_voltage_at_connector", "differential_pair"))
+    fn a_long_group_is_cut_and_the_rest_counted() {
+        let pairs: Vec<String> = (0..23)
+            .map(|k| {
+                format!(
+                    r#"{{"conductors":["L{k}_P","L{k}_N"],"status":"evaluated","voltage":{{"quantity":"common_mode_voltage_at_connector","headline_dbuv":{}.0,"headline_frequency_hz":1e9}}}}"#,
+                    40 + k
+                )
+            })
             .collect();
-        let compact = connector_picture("J1", &spectra, true);
-        assert_eq!(compact.width, THUMB_WIDTH);
-        assert_eq!(compact.content.matches("class=\"driver-panel\"").count(), MAX_THUMB_PANELS);
-        assert!(compact.content.contains("+2 more driver(s)"));
+        let text = format!(
+            r#"{{"findings":[{{"code":"EMI-CABLE-COMMON-MODE","objects":["J9"],"measures":{{"connector":"J9","cable":{{}},"differential_pairs":[{}],"ground_noise":[],"single_ended_signals":[],"switch_node_coupling":[]}}}}]}}"#,
+            pairs.join(",")
+        );
+        let document = copper_json::parse(&text).unwrap();
+        let p = picture(&document, WIDTH);
+        assert_eq!(p.content.matches("class=\"bar\"").count(), MAX_ROWS);
+        assert!(plain(&p.content).contains("+3 more"));
+        assert_eq!(voltage_counts(&document), (23, 1));
+        assert_eq!(connector_pictures(&document).len(), 1);
+    }
+
+    #[test]
+    fn a_connector_with_no_voltage_is_ranking_only_and_has_no_standalone_picture() {
+        let document = copper_json::parse(
+            r#"{"findings":[{"code":"EMI-CABLE-COMMON-MODE","objects":["J1"],"measures":{"connector":"J1","cable":{},"differential_pairs":[{"conductors":["A_P","A_N"],"status":"unsupported","reason":"needs routed copper","voltage":null}],"ground_noise":[],"single_ended_signals":[],"switch_node_coupling":[]}}]}"#,
+        )
+        .unwrap();
+        let p = picture(&document, 1400.0);
+        assert_eq!(p.content.matches("class=\"bar\"").count(), 0);
+        assert!(!p.content.contains("class=\"grid\""), "no axis without a bar");
+        assert!(plain(&p.content).contains("pair, no voltage, needs routed copper"));
+        assert!(connector_pictures(&document).is_empty());
+        assert_eq!(voltage_counts(&document), (0, 0));
     }
 }

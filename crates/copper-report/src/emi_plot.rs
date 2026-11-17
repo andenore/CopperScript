@@ -901,8 +901,9 @@ pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
     spectrum_svg_with(title, panels, &[])
 }
 
-/// The SVG of `panels` followed by `extra` pictures of the same width (the voltage spectra at the cable connectors,
-/// which have no limit line); with no `extra` it is [`spectrum_svg`] byte for byte.
+/// The SVG of `panels` followed by `extra` pictures of the same width (the common-mode voltages at the cable
+/// connectors, which have no limit line), ending in the one footer line of the figures of connectors; with no `extra`
+/// it is [`spectrum_svg`] byte for byte.
 pub fn spectrum_svg_with(title: &str, panels: &[SpectrumPanel], extra: &[crate::emi_field::FieldPicture]) -> String {
     let mut body: Vec<String> = Vec::new();
     let mut top = 0.0;
@@ -919,7 +920,11 @@ pub fn spectrum_svg_with(title: &str, panels: &[SpectrumPanel], extra: &[crate::
         ));
         top += picture.height;
     }
-    let height = top + FOOTER;
+    // Connector charts carry the one footer line of the figures of signals, pairs and connectors; the cell panels alone
+    // keep theirs.
+    let footer_lines = if extra.is_empty() { Vec::new() } else { crate::emi_figure::footer_lines(WIDTH, 11.0) };
+    let extra_footer = 14.0 * footer_lines.len().saturating_sub(1) as f64;
+    let height = top + FOOTER + extra_footer;
     let mut out: Vec<String> = Vec::new();
     out.push(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" font-family=\"Helvetica, Arial, sans-serif\">",
@@ -929,15 +934,29 @@ pub fn spectrum_svg_with(title: &str, panels: &[SpectrumPanel], extra: &[crate::
         n(height)
     ));
     let what =
-        if panels.is_empty() { "voltage spectra at the cable connectors" } else { "conducted emission spectrum" };
+        if panels.is_empty() { "common-mode voltages at the cable connectors" } else { "conducted emission spectrum" };
     out.push(format!("<title>{} {what} (screening estimate)</title>", escape(title)));
     out.push(format!("<rect width=\"{}\" height=\"{}\" fill=\"{BACKGROUND}\"/>", n(WIDTH), n(height)));
     out.extend(body);
-    out.push(format!(
-        "<text class=\"footer\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">Screening estimate, not a compliance measurement.</text>",
-        n(LEFT),
-        n(height - 14.0)
-    ));
+    if footer_lines.is_empty() {
+        out.push(format!(
+            "<text class=\"footer\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">Screening estimate, not a compliance measurement.</text>",
+            n(LEFT),
+            n(height - 14.0)
+        ));
+    }
+    for (k, line) in footer_lines.iter().enumerate() {
+        out.push(crate::emi_figure::text_el(
+            24.0,
+            height - 14.0 - 14.0 * (footer_lines.len() - 1 - k) as f64,
+            11.0,
+            MUTED,
+            "footer",
+            "",
+            false,
+            line,
+        ));
+    }
     out.push(
         "</svg>
 "

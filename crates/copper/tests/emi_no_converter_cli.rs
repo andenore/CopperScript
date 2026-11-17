@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use copper_json::Value;
+
+#[path = "support/svg_text.rs"]
+mod svg_text;
 use sha2::{Digest, Sha256};
 
 fn workspace() -> PathBuf {
@@ -171,24 +174,40 @@ fn the_summary_is_the_return_path_map() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
-    assert!(stdout(&output).contains("return-path map of 3 findings written to"), "{}", stdout(&output));
-    assert!(stdout(&output).contains("; also 3 pages for signals and pairs"), "{}", stdout(&output));
+    let message = stdout(&output);
+    assert!(message.contains("return-path map of 3 findings written to"), "{message}");
+    assert!(!message.contains("; also"), "no pair converts and no connector is cabled on this board: {message}");
     let svg = std::fs::read_to_string(&path).expect("the SVG");
-    assert!(svg.contains("EMI-RETURN-PATH: where the return path is broken"), "the map");
-    assert!(svg.contains("never a pass or a fail"));
+    assert!(svg.contains("Where the return path is broken"), "the map");
     let marks = |kind: &str| svg.matches(&format!("class=\"return-path-mark\" data-kind=\"{kind}\"")).count();
+    // One gap; the via; the plane-edge points at the gap are the gap itself and are dropped, leaving the other subject's
+    // plane edge; one board edge.
     assert_eq!(marks("gap"), 1);
     assert_eq!(marks("reference_change_without_return_path"), 1);
-    assert!(marks("plane_edge") >= 2 && marks("board_edge") == 1);
-    // The gap carries its slot length and resonance; the via its distance against its threshold.
-    assert!(svg.contains("slot 76 mm, resonance 1123.03 MHz"), "{svg}");
-    assert!(svg.contains("nearest return path 7.16 mm, threshold 2 mm"), "{svg}");
-    // No cell page: the converter layout never appears. Each return-path subject has its own page after the map.
-    assert!(!svg.contains("Screening estimate, not a compliance measurement"));
-    for subject in ["LANE_B_P", "CLK_U", "CLK_E"] {
-        assert!(svg.contains(&format!("<g class=\"summary-signal\" data-subject=\"{subject}\">")), "{subject}");
+    assert_eq!(marks("plane_edge"), 1);
+    assert_eq!(marks("board_edge"), 1);
+    for number in 1..=4 {
+        assert!(svg.contains(&format!("data-number=\"{number}\"")), "mark {number}");
     }
-    assert!(!svg.contains("summary-connector"), "no cable connector finding on this board");
+    // Every mark is a number; the legend says what each is in one short line, gaps first.
+    let text = svg_text::plain(&svg);
+    for line in [
+        "1  gap  LANE_B_P/N  slot 76 mm, 1.12 GHz",
+        "2  via  CLK_U  return 7.2 mm > 2.0 mm",
+        "3  plane edge  CLK_E  1.0 mm < 4.7 mm",
+        "4  board edge  CLK_E  3.0 mm < 4.7 mm",
+    ] {
+        assert!(text.contains(line), "{line} in {text}");
+    }
+    assert!(!text.contains("resonance") && !text.contains("nearest return path"), "no sentence at a mark");
+    // No cell page: the converter layout never appears; the footer is said once at the end.
+    assert!(!svg.contains("Screening estimate, not a compliance measurement"));
+    assert!(!svg.contains("summary-signal") && !svg.contains("summary-connector") && !svg.contains("summary-pairs"));
+    assert_eq!(svg.matches("class=\"footer\"").count(), 1);
+    assert!(text.contains("never a pass or a fail") && text.contains("no limit applies"));
+    svg_text::assert_limit_and_margin_only_in_the_footer(&svg);
+    svg_text::assert_inside(&svg, 1400.0);
+    svg_text::assert_no_overlap(&svg);
 }
 
 #[test]

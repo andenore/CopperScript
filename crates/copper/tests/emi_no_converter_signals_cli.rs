@@ -5,13 +5,16 @@
 //! (pairs) and `EMI-CABLE-COMMON-MODE` (connectors), and the board has the clocks `CLK_NEAR` and `CLK_FAR` as sources
 //! of ground noise at a connector.
 //!
-//! The pictures were checked structurally (marks, labels, positions, the words that must not appear); nobody looked
+//! The pictures were checked structurally (bars, groups, text boxes, the words that must not appear); nobody looked
 //! at them.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use copper_json::Value;
+
+#[path = "support/svg_text.rs"]
+mod svg_text;
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the workspace root").to_path_buf()
@@ -84,32 +87,16 @@ fn checked_document() -> Value {
     json(&stdout(&output))
 }
 
-/// The text of every `<text>` element of `svg`, joined by a space.
-fn plain(svg: &str) -> String {
-    svg.split("<text ")
-        .skip(1)
-        .map(|part| part.split_once('>').expect("a tag").1.split("</text>").next().unwrap().to_owned())
-        .collect::<Vec<_>>()
-        .join(" ")
+/// The cable and conversion pages and pictures show no limit line, margin, field or current: the words "limit" and
+/// "margin" are only in the footer's denial.
+fn assert_no_limit_or_margin_is_shown(svg: &str) {
+    svg_text::assert_limit_and_margin_only_in_the_footer(svg);
 }
 
-/// The cable and conversion pages and pictures show no limit line, margin, field or current: where the words
-/// "limit" or "margin" occur they only deny one.
-fn assert_no_limit_or_margin_is_shown(svg: &str) {
-    let text = plain(svg);
-    for word in ["limit", "margin"] {
-        for (at, _) in text.match_indices(word) {
-            let before = &text[..at];
-            assert!(
-                before.ends_with("no ") || before.ends_with("or a "),
-                "{word} outside a denial: ...{}",
-                &text[at.saturating_sub(60)..(at + 40).min(text.len())]
-            );
-        }
-    }
-    assert!(!svg.contains("class=\"limit"), "no limit line");
-    assert!(!svg.contains("margin_db"), "no margin value");
-}
+/// What `--plot-summary` of this board drew before the figures were simplified: its height in px and its number of
+/// `<text>` elements (seven pages of text for the pairs, three connector pages).
+const SUMMARY_HEIGHT_BEFORE: f64 = 7087.4;
+const SUMMARY_TEXTS_BEFORE: usize = 476;
 
 #[test]
 fn the_check_finds_the_pairs_and_the_connectors_with_clocks_as_sources_and_no_cell() {
@@ -231,9 +218,8 @@ fn write_keeps_the_section_without_a_cell_and_issues_group_signals_before_connec
     );
 }
 
-#[test]
-fn the_summary_has_a_page_per_pair_and_per_connector_and_no_cell_page() {
-    let directory = scratch("emi-no-converter-signals-summary");
+fn summary_svg(name: &str) -> (Output, String) {
+    let directory = scratch(name);
     let path = directory.join("summary.svg");
     let output = copper(&[
         "emi-check",
@@ -245,63 +231,105 @@ fn the_summary_has_a_page_per_pair_and_per_connector_and_no_cell_page() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
-    assert!(
-        stdout(&output).contains("7 pages for signals and pairs and 3 pages for cable connectors written to"),
-        "{}",
-        stdout(&output)
-    );
     let svg = std::fs::read_to_string(&path).expect("the SVG");
-    assert!(!svg.contains("class=\"summary\""), "no converter page");
-    assert_eq!(svg.matches("<g class=\"summary-signal\"").count(), 7);
-    assert_eq!(svg.matches("<g class=\"summary-connector\"").count(), 3);
-    // The signal pages come before the connector pages.
-    let last_signal = svg.rfind("<g class=\"summary-signal\"").unwrap();
-    let first_connector = svg.find("<g class=\"summary-connector\"").unwrap();
-    assert!(last_signal < first_connector);
-    assert_no_limit_or_margin_is_shown(&svg);
-    let text = plain(&svg);
-    assert!(text.contains("never a current, a field or a pass or a fail"), "{text}");
-    assert!(text.contains("first_arrival_voltage"), "the unmatched connector says so");
-    assert!(text.contains("matched_cable_termination"), "the matched connectors say so");
-    // Every text starts inside the picture.
-    let height: f64 = svg.split("height=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
-    for part in svg.split("<text ").skip(1) {
-        let value = |name: &str| -> f64 {
-            part.split(&format!(" {name}=\"")).nth(1).unwrap().split('"').next().unwrap().parse().unwrap()
-        };
-        let (x, y) = (value("x"), value("y"));
-        assert!((0.0..=1400.0).contains(&x) && (0.0..=height).contains(&y), "{part}");
-    }
+    (output, svg)
 }
 
 #[test]
-fn the_spectrum_plot_has_a_panel_per_driver_with_a_voltage_and_no_limit_line() {
-    let document = checked_document();
-    // The drivers with a published voltage and their lines, by the report's own numbers.
-    let mut panels = 0usize;
-    let mut lines = 0usize;
-    for finding in findings(&document, "EMI-CABLE-COMMON-MODE") {
-        let measures = finding.get("measures").unwrap();
-        let voltages = list(measures, "differential_pairs")
-            .iter()
-            .chain(list(measures, "ground_noise"))
-            .filter_map(|d| d.get("voltage").filter(|v| matches!(v, Value::Object(_))));
-        for voltage in voltages {
-            let spectrum = list(voltage, "spectrum");
-            if spectrum.is_empty() {
-                continue;
+fn the_summary_has_one_conversion_page_one_page_per_connector_and_one_footer() {
+    let (output, svg) = summary_svg("emi-no-converter-signals-summary");
+    assert!(
+        stdout(&output).contains("the mode-conversion page of 7 pairs and 3 pages for cable connectors written to"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!svg.contains("class=\"summary\""), "no converter page");
+    assert_eq!(svg.matches("<g class=\"summary-pairs\"").count(), 1);
+    assert_eq!(svg.matches("<g class=\"pair-row\"").count(), 7, "a row per pair with a conversion finding");
+    assert_eq!(svg.matches("<g class=\"summary-connector\"").count(), 3);
+    // The conversion page comes before the connector pages, the footer after them.
+    let pairs = svg.find("<g class=\"summary-pairs\"").unwrap();
+    let first_connector = svg.find("<g class=\"summary-connector\"").unwrap();
+    let last_connector = svg.rfind("<g class=\"summary-connector\"").unwrap();
+    let footer = svg.find("class=\"footer\"").unwrap();
+    assert!(pairs < first_connector && last_connector < footer);
+    assert_eq!(svg.matches("class=\"footer\"").count(), 1, "the footer is said once");
+    assert_no_limit_or_margin_is_shown(&svg);
+    let text = svg_text::plain(&svg);
+    assert!(text.contains("Mode conversion of the differential pairs"), "{text}");
+    assert!(text.contains("(first-arrival voltage)"), "the declared, unmatched connector says so");
+    assert!(text.contains("cable 0.5 m, unshielded (assumed), matched termination assumed"), "{text}");
+    assert!(text.contains("Screening evidence, never a pass or a fail."), "{text}");
+    // The figure is much smaller than the seven pages of text it replaces.
+    let height = svg_text::height(&svg);
+    assert!(height <= 2600.0, "{height} px tall, it was {SUMMARY_HEIGHT_BEFORE}");
+    let texts = svg_text::text_count(&svg);
+    assert!(3 * texts <= SUMMARY_TEXTS_BEFORE, "{texts} texts, it was {SUMMARY_TEXTS_BEFORE}");
+    // No text leaves its 1400 px page and none overlaps another on its page.
+    svg_text::assert_inside(&svg, 1400.0);
+    svg_text::assert_no_overlap(&svg);
+}
+
+/// The bar rows of each connector chart: `(connector, group, dBuV)` in document order.
+fn bar_rows(svg: &str) -> Vec<(String, String, f64)> {
+    let mut rows = Vec::new();
+    for part in svg.split("<g class=\"driver-bar\" data-connector=\"").skip(1) {
+        let connector = part.split('"').next().unwrap().to_owned();
+        let tag = part.split('>').next().unwrap();
+        let group = tag.split("data-group=\"").nth(1).unwrap().split('"').next().unwrap().to_owned();
+        let value: f64 = tag.split("data-dbuv=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+        rows.push((connector, group, value));
+    }
+    rows
+}
+
+#[test]
+fn the_bars_of_a_connector_are_never_ordered_across_groups() {
+    let (_, svg) = summary_svg("emi-no-converter-signals-bars");
+    let rows = bar_rows(&svg);
+    assert!(rows.len() >= 10, "{rows:?}");
+    let rank = |group: &str| match group {
+        "pair" => 0,
+        "pair-first-arrival" => 1,
+        "ground-noise" => 2,
+        other => panic!("a bar in the group {other}"),
+    };
+    for connector in ["J1", "J2", "J3"] {
+        let mine: Vec<&(String, String, f64)> = rows.iter().filter(|r| r.0 == connector).collect();
+        assert!(!mine.is_empty(), "{connector}");
+        // The groups come in their fixed order, and inside a group the strongest comes first.
+        for pair in mine.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(rank(&a.1) <= rank(&b.1), "{connector}: {a:?} before {b:?}");
+            if a.1 == b.1 {
+                assert!(a.2 >= b.2, "{connector}: {a:?} before {b:?}");
             }
-            panels += 1;
-            lines += spectrum
-                .iter()
-                .filter(|l| match l.get("voltage_dbuv") {
-                    Some(Value::Float(x)) => *x > -100.0,
-                    _ => false,
-                })
-                .count();
         }
     }
-    assert!(panels >= 10 && lines >= panels, "{panels} panels, {lines} lines");
+    // J3 shows it: its ground-noise bar is stronger than its pair bar and still comes after it.
+    let j3: Vec<&(String, String, f64)> = rows.iter().filter(|r| r.0 == "J3").collect();
+    let first_pair = j3.iter().find(|r| r.1 == "pair").expect("a pair bar");
+    let first_noise = j3.iter().find(|r| r.1 == "ground-noise").expect("a ground-noise bar");
+    assert!(first_noise.2 > first_pair.2, "{first_pair:?} {first_noise:?}");
+}
+
+#[test]
+fn the_spectrum_plot_is_the_driver_chart_of_each_connector_with_a_voltage_and_no_limit_line() {
+    let document = checked_document();
+    // The drivers with a published voltage, by the report's own numbers.
+    let mut drivers = 0usize;
+    let mut connectors = 0usize;
+    for finding in findings(&document, "EMI-CABLE-COMMON-MODE") {
+        let measures = finding.get("measures").unwrap();
+        let published = list(measures, "differential_pairs")
+            .iter()
+            .chain(list(measures, "ground_noise"))
+            .filter(|d| matches!(d.get("voltage"), Some(Value::Object(_))))
+            .count();
+        drivers += published;
+        connectors += usize::from(published > 0);
+    }
+    assert!(drivers >= 10 && connectors == 3, "{drivers} drivers, {connectors} connectors");
     let directory = scratch("emi-no-converter-signals-spectrum");
     let path = directory.join("spectrum.svg");
     let output = copper(&[
@@ -314,28 +342,32 @@ fn the_spectrum_plot_has_a_panel_per_driver_with_a_voltage_and_no_limit_line() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
-    assert!(stdout(&output).contains("voltage spectra at the connector of"), "{}", stdout(&output));
-    let svg = std::fs::read_to_string(&path).expect("the SVG");
-    // Twelve panels are drawn at most per connector; a connector's panels are one picture each.
-    assert_eq!(svg.matches("<g class=\"driver-panel\"").count(), panels);
-    assert_eq!(svg.matches("<g class=\"driver-line\"").count(), lines);
-    assert!(svg.contains("data-connector=\"J2\""));
     assert!(
-        plain(&svg)
-            .contains("first_arrival_voltage: the first wavefront before any reflection, NOT a steady-state value")
+        stdout(&output).contains(&format!(
+            "common-mode voltages at the connector of {drivers} drivers on {connectors} connectors (no limit line: voltages, not a field) written to"
+        )),
+        "{}",
+        stdout(&output)
     );
-    assert!(svg.contains("data-quantity=\"continuous_bound\"") && svg.contains("data-quantity=\"random_data_in_rbw\""));
-    assert!(svg.contains("data-quantity=\"pattern_lines:alternating\""), "each pattern is its own mark");
-    assert!(plain(&svg).contains("not a field"));
-    assert_no_limit_or_margin_is_shown(&svg);
-    let height: f64 = svg.split("height=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
-    for part in svg.split("<text ").skip(1) {
-        let value = |name: &str| -> f64 {
-            part.split(&format!(" {name}=\"")).nth(1).unwrap().split('"').next().unwrap().parse().unwrap()
-        };
-        let (x, y) = (value("x"), value("y"));
-        assert!((0.0..=900.0).contains(&x) && (0.0..=height).contains(&y), "{part}");
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    assert_eq!(svg.matches("<g class=\"summary-connector\"").count(), connectors, "one chart per connector");
+    assert!(
+        svg.matches("<g class=\"driver-bar\"").count() + svg.matches("<g class=\"driver-ranking\"").count() >= drivers
+    );
+    for connector in ["J1", "J2", "J3"] {
+        assert!(svg.contains(&format!("data-connector=\"{connector}\"")), "{connector}");
     }
+    assert!(!svg.contains("driver-panel") && !svg.contains("driver-line"), "the lollipop panels are gone");
+    let text = svg_text::plain(&svg);
+    assert!(text.contains("(first-arrival voltage)") && text.contains("dBuV @ "), "{text}");
+    assert_eq!(svg.matches("class=\"footer\"").count(), 2, "the one footer sentence, wrapped to two lines");
+    assert_no_limit_or_margin_is_shown(&svg);
+    assert!(svg_text::height(&svg) < 1500.0, "{} px", svg_text::height(&svg));
+    svg_text::assert_inside(&svg, 900.0);
+    svg_text::assert_no_overlap(&svg);
+    // The footer is the document's own, after the charts; and it is the whole spectrum picture's text of that kind.
+    let footer_end = svg.rfind("class=\"footer\"").unwrap();
+    assert!(svg.rfind("<g class=\"summary-connector\"").unwrap() < footer_end);
 }
 
 #[test]

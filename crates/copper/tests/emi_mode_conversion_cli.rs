@@ -13,6 +13,9 @@ use std::process::{Command, Output};
 
 use copper_json::Value;
 
+#[path = "support/svg_text.rs"]
+mod svg_text;
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the workspace root").to_path_buf()
 }
@@ -173,5 +176,40 @@ fn a_board_without_a_differential_pair_has_no_entry_by_default_and_is_not_applic
     let report = copper_json::parse(&stdout(&output)).expect("JSON");
     assert_eq!(status(&report, "EMI-MODE-CONVERSION").as_deref(), Some("not_applicable"));
     assert!(list(&report, "findings").iter().all(|f| text(f, "code").as_deref() != Some("EMI-MODE-CONVERSION")));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn the_summary_charts_the_pairs_and_the_connector_without_overlapping_text() {
+    let directory = workspace().join("target").join("emi-mode-conversion-summary");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("summary.svg");
+    let output = copper(&[
+        "emi-check",
+        BOARD,
+        "--allow-proxy-footprints",
+        "--run",
+        ROUTED,
+        "--plot-summary",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).contains("the mode-conversion page of 3 pairs and 1 page for cable connectors written to"),
+        "{}",
+        stdout(&output)
+    );
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    assert_eq!(svg.matches("<g class=\"pair-row\"").count(), 3);
+    assert_eq!(svg.matches("<g class=\"summary-connector\"").count(), 1);
+    // The strip of each pair: its sections, its parts (the chokes are evaluated, filled) and a connector at the end.
+    assert!(svg.matches("class=\"section\"").count() >= 3 && svg.contains("class=\"part\""));
+    assert_eq!(svg.matches("class=\"end\"").count(), 3);
+    let text = svg_text::plain(&svg);
+    assert!(text.contains("|V_cm,out / V_diff,in| in dB at the fundamental"), "{text}");
+    assert_eq!(svg.matches("class=\"footer\"").count(), 1);
+    svg_text::assert_limit_and_margin_only_in_the_footer(&svg);
+    svg_text::assert_inside(&svg, 1400.0);
+    svg_text::assert_no_overlap(&svg);
     let _ = std::fs::remove_dir_all(&directory);
 }

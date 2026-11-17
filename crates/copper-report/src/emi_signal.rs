@@ -1,7 +1,8 @@
 //! Signal, pair and cable-connector subjects of the EMI report, read from the `measures` of the findings and nothing
 //! else: which subject kind a finding belongs to (converter cell, signal or pair, cable connector), the located causes
 //! `copper issues` lists for `EMI-MODE-CONVERSION`, `EMI-CABLE-COMMON-MODE` and `EMI-CABLE-SHIELD`, the drivers of a
-//! connector with the quantity label the finding gives each one, and the per-driver voltage spectra at a connector.
+//! connector with the quantity label, value, frequency and band the finding gives each one, and the channel of a pair's
+//! mode conversion as an ordered list of elements.
 //!
 //! **Screening evidence, never a pass or a fail.** A mode-conversion ratio is a ratio of two voltages of one network,
 //! and a connector voltage is a voltage between the pair's conductors and the board reference at the connector: neither
@@ -211,7 +212,42 @@ pub struct Driver {
     pub value_dbuv: Option<f64>,
     /// The ranking basis of a driver with no voltage: slew rate (V/ns) or coupling score (dB).
     pub ranking_value: Option<(f64, &'static str)>,
+    /// The frequency of the headline value, Hz.
+    pub frequency_hz: Option<f64>,
+    /// The band of the headline value in dBuV (a magnitude-only choke's, or the sense-height band of a ground-noise
+    /// source), where it is wider than a rounding.
+    pub band_dbuv: Option<(f64, f64)>,
+    /// A short reason a driver has no voltage, where the finding gives one (`slot between the loops`, `sense band 8
+    /// dB`, `no routed copper`, else the finding's first reason).
+    pub reason: Option<String>,
     pub text: String,
+}
+
+/// The band of `[low, high]` when it is wider than a rounding.
+fn band_pair(band: Option<&Value>) -> Option<(f64, f64)> {
+    let pair = band?.as_array()?;
+    let (low, high) = (number(pair.first()?)?, number(pair.get(1)?)?);
+    ((high - low).abs() > 0.005).then_some((low, high))
+}
+
+/// The short reason of a ground-noise source with no voltage.
+fn short_ground_noise_reason(entry: &Value) -> Option<String> {
+    if !list(entry, "slots_between_the_loops").is_empty() {
+        return Some("slot between the loops".to_owned());
+    }
+    let reasons: Vec<&str> = match entry.get("no_voltage_because") {
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect(),
+        Some(Value::Str(one)) => vec![one.as_str()],
+        _ => Vec::new(),
+    };
+    for reason in &reasons {
+        if let Some(rest) = reason.split("moves by ").nth(1)
+            && let Some(amount) = rest.split(" dB").next().and_then(|a| a.trim().parse::<f64>().ok())
+        {
+            return Some(format!("sense band {} dB", n(amount)));
+        }
+    }
+    reasons.iter().any(|r| r.contains("routed copper")).then(|| "no routed copper".to_owned())
 }
 
 fn band_text(band: Option<&Value>) -> String {
@@ -272,6 +308,9 @@ pub fn drivers(finding: &Value) -> Vec<Driver> {
             termination,
             value_dbuv: value,
             ranking_value: None,
+            frequency_hz: voltage.and_then(|v| field(v, "headline_frequency_hz")),
+            band_dbuv: voltage.and_then(|v| band_pair(v.get("band_dbuv"))),
+            reason: value.is_none().then(|| first_reason(pair)),
             text: line,
         });
     }
@@ -307,6 +346,9 @@ pub fn drivers(finding: &Value) -> Vec<Driver> {
             termination: None,
             value_dbuv: value,
             ranking_value: None,
+            frequency_hz: voltage.and_then(|v| field(v, "headline_frequency_hz")),
+            band_dbuv: voltage.and_then(|v| band_pair(v.get("sense_band_dbuv"))),
+            reason: if value.is_none() { short_ground_noise_reason(noise) } else { None },
             text: line,
         });
     }
@@ -328,6 +370,9 @@ pub fn drivers(finding: &Value) -> Vec<Driver> {
             termination: None,
             value_dbuv: None,
             ranking_value: slew.map(|s| (s, "V/ns")),
+            frequency_hz: None,
+            band_dbuv: None,
+            reason: None,
             text: line,
         });
     }
@@ -348,6 +393,9 @@ pub fn drivers(finding: &Value) -> Vec<Driver> {
             termination: None,
             value_dbuv: None,
             ranking_value: score.map(|s| (s, "dB")),
+            frequency_hz: None,
+            band_dbuv: None,
+            reason: None,
             text: line,
         });
     }
@@ -382,116 +430,148 @@ pub fn cable_causes(finding: &Value) -> Vec<Value> {
         .collect()
 }
 
-// ---- Spectra ----------------------------------------------------------------------------------------------------
+// ---- Published voltages -----------------------------------------------------------------------------------------
 
-/// One line of a driver's spectrum at the connector.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Line {
-    /// The spectrum quantity by name: `continuous_bound`, `pattern_lines:<pattern>`, `random_data_in_rbw`,
-    /// `clock_lines...`. Never merged with another.
-    pub quantity: String,
-    pub frequency_hz: f64,
-    pub dbuv: f64,
-}
-
-/// The voltage spectrum of one driver at a connector.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Spectrum {
-    pub connector: String,
-    pub driver: &'static str,
-    pub name: String,
-    /// The quantity label of the finding: `common_mode_voltage_at_connector`, `first_arrival_voltage` or
-    /// `ground_noise_voltage`.
-    pub quantity: String,
-    /// The termination statement of a pair (`matched_cable_termination` or the declared-not-matched one).
-    pub termination: Option<String>,
-    /// The declared cable common-mode impedance of an unmatched cable, ohm.
-    pub cable_impedance_ohm: Option<f64>,
-    pub lines: Vec<Line>,
-}
-
-impl Spectrum {
-    /// The quantity is a first-arrival voltage: the first wavefront before any reflection, not a steady-state value.
-    pub fn first_arrival(&self) -> bool {
-        self.quantity == "first_arrival_voltage"
-    }
-}
-
-/// Lines below this level are the "no content" value of a spectrum quantity that is empty and are not drawn.
+/// A voltage at or below this level (dBuV) is the "no content" value of a quantity that is empty: it has no bar.
 pub const FLOOR_DBUV: f64 = -100.0;
 
-/// The spectra of every driver of `finding` that has a published voltage (pairs and ground noise), in finding order.
-pub fn spectra(finding: &Value) -> Vec<Spectrum> {
-    let Some(measures) = measures(finding) else { return Vec::new() };
-    let connector = text(measures, "connector").unwrap_or("").to_owned();
-    let lines_of = |voltage: &Value| -> Vec<Line> {
-        list(voltage, "spectrum")
-            .iter()
-            .filter_map(|entry| {
-                Some(Line {
-                    quantity: text(entry, "quantity")?.to_owned(),
-                    frequency_hz: field(entry, "frequency_hz")?,
-                    dbuv: field(entry, "voltage_dbuv")?,
-                })
-            })
-            .collect()
-    };
-    let mut found = Vec::new();
-    for pair in list(measures, "differential_pairs") {
-        let Some(voltage) = pair.get("voltage").filter(|v| matches!(v, Value::Object(_))) else { continue };
-        let lines = lines_of(voltage);
-        if lines.is_empty() {
-            continue;
-        }
-        let termination = pair.get("termination");
-        found.push(Spectrum {
-            connector: connector.clone(),
-            driver: "differential_pair",
-            name: list(pair, "conductors").iter().filter_map(Value::as_str).collect::<Vec<_>>().join("/"),
-            quantity: text(voltage, "quantity").unwrap_or("common_mode_voltage_at_connector").to_owned(),
-            termination: termination.and_then(|t| text(t, "assumption")).map(str::to_owned),
-            cable_impedance_ohm: termination.and_then(|t| field(t, "cable_common_mode_impedance_ohm")),
-            lines,
-        });
-    }
-    for noise in list(measures, "ground_noise") {
-        let Some(voltage) = noise.get("voltage").filter(|v| matches!(v, Value::Object(_))) else { continue };
-        let lines = lines_of(voltage);
-        if lines.is_empty() {
-            continue;
-        }
-        found.push(Spectrum {
-            connector: connector.clone(),
-            driver: "ground_noise",
-            name: text(noise, "source").unwrap_or("").to_owned(),
-            quantity: text(voltage, "quantity").unwrap_or("ground_noise_voltage").to_owned(),
-            termination: None,
-            cable_impedance_ohm: None,
-            lines,
-        });
-    }
-    found
-}
-
-/// The spectra of every connector finding of `document`, one group per connector in finding order; connectors with no
-/// published voltage have no group.
-pub fn connector_spectra(document: &Value) -> Vec<(String, Vec<Spectrum>)> {
-    let mut groups: Vec<(String, Vec<Spectrum>)> = Vec::new();
+/// The drivers of every `EMI-CABLE-COMMON-MODE` finding of `document` that have a published voltage, one group per
+/// connector in finding order; a connector with none has no group.
+pub fn connector_voltages(document: &Value) -> Vec<(String, Vec<Driver>)> {
+    let mut groups: Vec<(String, Vec<Driver>)> = Vec::new();
     for finding in connector_findings(document) {
         if code_of(finding) != "EMI-CABLE-COMMON-MODE" {
             continue;
         }
-        let found = spectra(finding);
+        let found: Vec<Driver> = drivers(finding).into_iter().filter(|d| d.value_dbuv.is_some()).collect();
         if found.is_empty() {
             continue;
         }
-        let connector = found[0].connector.clone();
+        let connector = measures(finding).and_then(|m| text(m, "connector")).unwrap_or("").to_owned();
         match groups.iter_mut().find(|(name, _)| *name == connector) {
             Some((_, list)) => list.extend(found),
             None => groups.push((connector, found)),
         }
     }
     groups
+}
+
+// ---- Mode conversion of a pair ----------------------------------------------------------------------------------
+
+/// What an element of a pair's channel is, for the strip of glyphs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElementKind {
+    /// A routed section.
+    Section,
+    Resistor,
+    Capacitor,
+    Choke,
+    Ferrite,
+    /// A series part of a kind the cascade does not know.
+    Other,
+}
+
+/// One element of a channel, in the order the cascade crosses them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Element {
+    pub kind: ElementKind,
+    /// A routed section's skew, ps (0 when it has none), and whether it has an amplitude imbalance.
+    pub skew_ps: f64,
+    pub imbalance: bool,
+    /// A section was examined; a part is evaluated (its transfer is in the cascade).
+    pub evaluated: bool,
+}
+
+/// The mode conversion of one pair: the ratio at the fundamental and its worst up to the edge corner, and the channel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Conversion {
+    /// `A_P/N`: the pair's label.
+    pub label: String,
+    pub headline_db: f64,
+    pub worst_db: Option<f64>,
+    pub elements: Vec<Element>,
+    /// The observation plane is a connector (else the end of the routed pair).
+    pub ends_at_connector: bool,
+}
+
+/// `A_P/N` for the nets `A_P` and `A_N`, else both names: the label of a pair.
+pub fn pair_label(positive: &str, negative: &str) -> String {
+    let (mut p, mut q) = (positive.chars(), negative.chars());
+    let (last_p, last_q) = (p.next_back(), q.next_back());
+    match (last_p, last_q) {
+        (Some('P'), Some('N')) | (Some('p'), Some('n')) if p.as_str() == q.as_str() => {
+            format!("{positive}/{}", last_q.unwrap_or('N'))
+        }
+        _ => format!("{positive}/{negative}"),
+    }
+}
+
+/// The label of the subject of a finding: a pair's two nets collapsed, else its single net, else its subject.
+pub fn subject_label(finding: &Value) -> String {
+    let nets: Vec<&str> = list(finding, "nets").iter().filter_map(Value::as_str).collect();
+    match nets.as_slice() {
+        [positive, negative] => pair_label(positive, negative),
+        [one] => (*one).to_owned(),
+        _ => crate::emi_return_path::subject(finding),
+    }
+}
+
+/// The conversion of an `EMI-MODE-CONVERSION` finding; `None` for one with no ratio.
+pub fn conversion(finding: &Value) -> Option<Conversion> {
+    if code_of(finding) != "EMI-MODE-CONVERSION" {
+        return None;
+    }
+    let measures = measures(finding)?;
+    let ratio = measures.get("ratio").filter(|r| matches!(r, Value::Object(_)))?;
+    let headline_db = field(ratio, "headline_db").or_else(|| field(ratio, "at_fundamental_db"))?;
+    let worst_db = ratio.get("worst").and_then(|w| field(w, "ratio_db"));
+    let sections = list(measures, "sections");
+    let parts = list(measures, "parts");
+    let mut next_section = 0;
+    let mut next_part = 0;
+    let mut elements = Vec::new();
+    for element in list(measures, "elements_in_order") {
+        let kind = text(element, "kind").unwrap_or("");
+        if kind == "routed_section" {
+            let section = sections.get(next_section);
+            next_section += 1;
+            elements.push(Element {
+                kind: ElementKind::Section,
+                skew_ps: section.and_then(|s| field(s, "skew_ps")).unwrap_or(0.0),
+                imbalance: section.and_then(|s| field(s, "amplitude_imbalance")).is_some_and(|a| a != 0.0),
+                evaluated: section.is_none_or(|s| s.get("examined") != Some(&Value::Bool(false))),
+            });
+            continue;
+        }
+        let part = parts.get(next_part);
+        next_part += 1;
+        let basis = part.and_then(|p| text(p, "transfer_basis")).unwrap_or("");
+        let unvalued = part.is_some_and(|p| list(p, "per_leg_values").iter().any(|v| matches!(v, Value::Null)));
+        elements.push(Element {
+            kind: match kind {
+                "series_resistor" => ElementKind::Resistor,
+                "coupling_capacitor" => ElementKind::Capacitor,
+                "common_mode_choke" => ElementKind::Choke,
+                "ferrite" => ElementKind::Ferrite,
+                _ => ElementKind::Other,
+            },
+            skew_ps: 0.0,
+            imbalance: false,
+            evaluated: part.is_some() && basis != "not_declared_not_modelled" && !unvalued && kind != "series_part",
+        });
+    }
+    Some(Conversion {
+        label: subject_label(finding),
+        headline_db,
+        worst_db,
+        elements,
+        ends_at_connector: text(ratio, "output_plane").is_some_and(|p| p.starts_with("connector")),
+    })
+}
+
+/// The conversions of the findings of `document` (report order); a pair with only a return-path finding has none.
+pub fn conversions(document: &Value) -> Vec<Conversion> {
+    signal_findings(document).into_iter().filter_map(conversion).collect()
 }
 
 #[cfg(test)]
@@ -565,24 +645,61 @@ mod tests {
     }
 
     #[test]
-    fn spectra_are_the_published_voltages_by_driver_and_never_merged() {
-        let found = spectra(&cable());
-        let names: Vec<(&str, &str)> = found.iter().map(|s| (s.name.as_str(), s.quantity.as_str())).collect();
-        assert_eq!(
-            names,
-            [
-                ("A_P/A_N", "common_mode_voltage_at_connector"),
-                ("B_P/B_N", "first_arrival_voltage"),
-                ("A_P/A_N", "ground_noise_voltage")
-            ]
-        );
-        assert_eq!(found[0].lines.len(), 2);
-        assert!(found[1].first_arrival() && found[1].cable_impedance_ohm == Some(150.0));
+    fn published_voltages_carry_their_frequency_band_and_the_short_reason_of_the_rest() {
+        let found = drivers(&cable());
+        let by = |name: &str| found.iter().find(|d| d.name == name).unwrap();
+        assert_eq!(by("A_P/A_N").frequency_hz, Some(1.25e9));
+        let noise = found.iter().find(|d| d.kind == "ground_noise" && d.value_dbuv.is_some()).unwrap();
+        assert_eq!(noise.band_dbuv, Some((46.11, 50.21)));
+        assert_eq!(by("CLK").reason.as_deref(), Some("sense band 8 dB"));
+        assert_eq!(by("C_P/C_N").reason.as_deref(), Some("needs routed copper"));
         let document = parse(&format!(r#"{{"findings":[{}]}}"#, copper_json::Dumps::compact().dumps(&cable())));
-        let groups = connector_spectra(&document);
+        let groups = connector_voltages(&document);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "J1");
-        assert_eq!(groups[0].1.len(), 3);
+        assert_eq!(groups[0].1.len(), 3, "two pairs and one ground-noise source have a voltage");
+    }
+
+    #[test]
+    fn a_pair_label_collapses_the_trailing_p_and_n() {
+        assert_eq!(pair_label("LANE_D_P", "LANE_D_N"), "LANE_D_P/N");
+        assert_eq!(pair_label("DP", "DN"), "DP/N");
+        assert_eq!(pair_label("A_P", "B_N"), "A_P/B_N");
+        assert_eq!(pair_label("CLK", "DATA"), "CLK/DATA");
+    }
+
+    #[test]
+    fn a_conversion_lists_its_elements_in_order_with_skew_and_what_is_evaluated() {
+        let finding = parse(
+            r#"{"code":"EMI-MODE-CONVERSION","nets":["A_P","A_N"],"measures":{
+              "ratio":{"headline_db":-23.25,"worst":{"ratio_db":-17.16},"output_plane":"connector pins J1.DP and J1.DN"},
+              "elements_in_order":[{"kind":"routed_section"},{"kind":"common_mode_choke"},{"kind":"routed_section"},{"kind":"series_resistor"},{"kind":"ferrite"}],
+              "parts":[{"kind":"common_mode_choke","transfer_basis":"declared_complex_inside_declared_range","per_leg_values":[]},
+                       {"kind":"series_resistor","transfer_basis":"per_leg","per_leg_values":[null,null]},
+                       {"kind":"ferrite","transfer_basis":"not_declared_not_modelled","per_leg_values":[]}],
+              "sections":[{"section":0,"examined":true,"skew_ps":0.0,"amplitude_imbalance":0.0},
+                          {"section":1,"examined":true,"skew_ps":-35.149,"amplitude_imbalance":0.0}]}}"#,
+        );
+        let c = conversion(&finding).unwrap();
+        assert_eq!(
+            (c.label.as_str(), c.headline_db, c.worst_db, c.ends_at_connector),
+            ("A_P/N", -23.25, Some(-17.16), true)
+        );
+        let kinds: Vec<ElementKind> = c.elements.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ElementKind::Section,
+                ElementKind::Choke,
+                ElementKind::Section,
+                ElementKind::Resistor,
+                ElementKind::Ferrite
+            ]
+        );
+        assert_eq!(c.elements[2].skew_ps, -35.149);
+        let evaluated: Vec<bool> = c.elements.iter().map(|e| e.evaluated).collect();
+        assert_eq!(evaluated, [true, true, true, false, false], "no value for the resistor, no model for the ferrite");
+        assert!(conversion(&parse(r#"{"code":"EMI-MODE-CONVERSION","measures":{"ratio":null}}"#)).is_none());
     }
 
     #[test]
