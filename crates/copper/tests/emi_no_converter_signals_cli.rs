@@ -340,6 +340,7 @@ fn the_spectrum_plot_is_the_driver_chart_of_each_connector_with_a_voltage_and_no
         ROUTED,
         "--plot-spectrum",
         path.to_str().unwrap(),
+        "--verbose",
     ]);
     assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), stderr(&output));
     assert!(

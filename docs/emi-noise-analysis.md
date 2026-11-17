@@ -345,6 +345,23 @@ and measures the placed layout. Exit 0 unless the command itself fails
 JSON schema `copperscript-emi-check/v0.1`:
 `{ schema, board, evidence_grade, cells, findings, coverage, limits, summary }`.
 
+The text report is compact: every line is at most 110 characters (a longer one is wrapped at a word with a hanging
+indent). It starts with the board and the standard, then groups the findings by subject kind, in the order of the
+figures and of `copper issues`: the converter cells (a heading with the converter, its frequency, input and output
+voltage, edge and current scenario), then the signals and pairs, then each cable connector (a heading with the cable
+facts). Each finding is one line: its number (the number of `M<number>` in `copper issues`), its code without the
+`EMI-`, what it is about and how much it is, in the words and the roundings of the figures (the stat tiles of the cell
+page, the mode-conversion chart, the connector chart, the legend of the return-path map). A margin is worded as the
+figures word it (`+49.6 dB over average`, `23.3 dB under the limit`), a ranking score always carries `(ranking
+only)`, a first-arrival voltage is labelled `first arrival`, and an accepted finding carries `(accepted: reason)`.
+A finding code with no formatter of its own shows the first clause of its message and its estimate. Two lines
+follow for the coverage: the number of checks that ran, did not apply and did not run (the entries `CODE:subject` are
+counted under `CODE`), and the checks that did not run by short name, with a few words of reason when it is known
+(`needs --run`, `needs routed copper`, `needs --extract`, `needs --fullwave`), the required ones first. `--extract`
+and `--fullwave` add one line under the hot loop with their headline number. `--verbose` prints the full text
+instead (every finding with its message, estimate, `not modelled:` list and `input:` lines, and every coverage
+entry); `--json` is the complete record and is the same with or without `--verbose`.
+
 ```
 copper emi-check BOARD --run RUN [--write] [--json]
 ```

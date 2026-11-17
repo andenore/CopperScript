@@ -416,7 +416,7 @@ fn the_field_map_has_a_colour_bar_the_loop_outline_and_a_level_at_the_feedback_p
     assert!(text.ends_with(FOOTER), "{text}");
     svg_text::assert_simple(&svg, 940.0, 20);
     // The coverage entry says what is missing (the explanation is not on the picture).
-    let coverage = stdout(&copper(&["emi-check", BUCK, "--allow-proxy-footprints"]));
+    let coverage = stdout(&copper(&["emi-check", BUCK, "--allow-proxy-footprints", "--verbose"]));
     assert!(coverage.contains("unsupported EMI-FIELD:inductor"), "{coverage}");
     // A larger height lowers the field at the victim.
     let high = directory.join("high.svg");
@@ -616,7 +616,7 @@ fn a_frequency_range_plots_line_amplitudes_without_limit_lines_for_both_ends() {
     assert_eq!(svg.matches("class=\"footer\"").count(), 1, "one footer line for the whole document");
     svg_text::assert_simple(&svg, 940.0, 40);
     // The text report states the same: no margin on the conducted findings.
-    let text = stdout(&copper(&["emi-check", board.to_str().unwrap(), "--allow-proxy-footprints"]));
+    let text = stdout(&copper(&["emi-check", board.to_str().unwrap(), "--allow-proxy-footprints", "--verbose"]));
     assert!(text.contains("NOT a detector reading") && text.contains("no quasi-peak or average margin"), "{text}");
     assert!(text.contains("EMI-CONDUCTED:U1@min") && text.contains("EMI-CONDUCTED:U1@max"), "{text}");
     let _ = std::fs::remove_dir_all(board.parent().unwrap());

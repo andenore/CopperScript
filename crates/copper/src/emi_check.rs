@@ -4,7 +4,7 @@
 //! [--plot-current OUT.svg] [--plot-summary OUT.svg]
 //! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-zone-outline]]
 //! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
-//! [--extract-no-switch-bar]] [--json]`:
+//! [--extract-no-switch-bar]] [--verbose] [--json]`:
 //! screen the placed switching cells for noise sources (hot loop, switch node,
 //! proximity). Screening evidence only; findings never change the exit status.
 
@@ -26,7 +26,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--plot-impedance PLOT_IMPEDANCE] [--plot-current PLOT_CURRENT] [--plot-summary PLOT_SUMMARY] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--extract-reference] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--plot-impedance PLOT_IMPEDANCE] [--plot-current PLOT_CURRENT] [--plot-summary PLOT_SUMMARY] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--extract-reference] [--verbose] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -66,6 +66,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         flag("--extract-single-mesh"),
         flag("--extract-no-switch-bar"),
         flag("--extract-reference"),
+        flag("--verbose"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -76,7 +77,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run 
+             inductor and switch-node proximity); screening evidence, not EMC qualification. The text report is compact (one line for each finding, at most 110 characters a line); --verbose prints the full text with every input and caveat. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run 
              --plot-summary OUT.svg draws the one-page summary of each cell (a title, one line of facts, up to five stat tiles, the findings as chips, and the near field, the conducted spectrum, the input-network impedance and with --extract the current distribution as pictures), the picture to open first; with EMI-RETURN-PATH findings (--run) it adds a return-path map with numbered marks (gaps, reference changes without a return path, plane and board edge points) and a legend beside it, and on a board with no switching cell that map is the whole picture; one page then charts the mode conversion of the pairs (a bar per pair in dB, the worst first, with its channel of sections and parts beside it) and one page per cable connector charts the common-mode voltage of each driver in dBuV, in three groups (pairs, ground noise, ranking only); one footer line ends the document. --plot-spectrum also draws, for each cable connector whose finding publishes a voltage, the same driver chart (no limit line: voltages, not a field). For each cable connector the report has an EMI-CABLE-COMMON-MODE finding: the common-mode voltage (dBuV) each driver leaves at the connector and a ranking of the drivers, never a current, a field or a margin (differential pairs need --run)"
         );
         crate::help::options(out, "emi-check");
@@ -225,7 +226,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--json") {
         let _ = out.write_all(report.json().as_bytes());
     } else {
-        for line in report.lines() {
+        let lines = if parsed.flag("--verbose") {
+            report.lines()
+        } else {
+            let required: Vec<String> =
+                report.coverage.iter().filter(|entry| entry.required).map(|entry| entry.check.clone()).collect();
+            copper_report::emi_text::compact_lines(&report.to_value(), &required)
+        };
+        for line in lines {
             let _ = text::print(out, &line);
         }
     }
@@ -287,23 +295,36 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         }
     }
-    for message in plotted {
-        if parsed.flag("--json") {
-            let _ = writeln!(err, "{message}");
-        } else {
-            let _ = text::print(out, &message);
-        }
-    }
-    if let Some(message) = written {
+    for message in plotted.into_iter().chain(written) {
         // The JSON document owns stdout.
         if parsed.flag("--json") {
             let _ = writeln!(err, "{message}");
-        } else {
+        } else if parsed.flag("--verbose") {
             let _ = text::print(out, &message);
+        } else {
+            for line in compact_message(&message) {
+                let _ = text::print(out, &line);
+            }
         }
     }
     // Screening findings never fail the command.
     0
+}
+
+/// A message about a file written (a plot, the `--write` section) for the compact report: without the caveat in
+/// parentheses after the path, which `--verbose` prints, and wrapped to the width of the report.
+fn compact_message(message: &str) -> Vec<String> {
+    let caveat =
+        ["(screening", "(report_sha256", "(no summary"].iter().filter_map(|a| message.find(&format!(" {a}"))).min();
+    let short = match caveat {
+        Some(start) => {
+            let rest = &message[start..];
+            let tail = rest.find(')').map_or("", |end| &rest[end + 1..]);
+            format!("{}{tail}", &message[..start])
+        }
+        None => message.to_owned(),
+    };
+    copper_report::emi_text::wrapped(&short, copper_report::emi_text::MAX_WIDTH, 2)
 }
 
 /// The `--fullwave*` options: `None` without `--fullwave`; a usage error when a sub-option is given without it.

@@ -125,7 +125,7 @@ fn the_cli_runs_the_mode_conversion_check_on_the_routed_example() {
         "{c:?}"
     );
     // The text output lists the entries and no verdict.
-    let plain = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED]));
+    let plain = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED, "--verbose"]));
     assert!(plain.contains("executed EMI-MODE-CONVERSION:LANE_B_P"), "{plain}");
     assert!(plain.lines().all(|l| !l.starts_with("PASS") && !l.starts_with("FAIL")));
 }

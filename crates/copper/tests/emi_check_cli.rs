@@ -50,7 +50,7 @@ fn json_report_has_the_schema_cells_findings_and_coverage() {
 
 #[test]
 fn text_report_is_labelled_screening_evidence_and_never_fails() {
-    let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints"]);
+    let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--verbose"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert!(text.contains("screening evidence"), "{text}");

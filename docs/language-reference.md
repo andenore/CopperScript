@@ -2452,13 +2452,15 @@ fabricator's calculator or a field solver and record it in
 [--fullwave [--fullwave-fidelity coarse|fine]
 [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline]]
 [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM]
-[--extract-single-mesh] [--extract-no-switch-bar]] [--json]`
+[--extract-single-mesh] [--extract-no-switch-bar]] [--verbose] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
 EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
 constraints (`EMI-ACCEPT-UNUSED` for a stale one) and lists what it could not
-measure as coverage. It prints one block per cell with ranked findings and the
-measured numbers, or JSON (`copperscript-emi-check/v0.1`), and always exits 0
+measure as coverage. It prints a compact report (one line of at most 110
+characters per finding, grouped by cell, signal and pair, and cable connector, then
+the checks that did not run), the full text with `--verbose`, or JSON
+(`copperscript-emi-check/v0.1`), and always exits 0
 when the board loads. Every result is screening evidence, and margins against an
 `emission` standard are never a pass or a fail. No accuracy figure is claimed:
 the closed forms, the circuit solver and the receiver emulation are checked against

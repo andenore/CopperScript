@@ -724,6 +724,10 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--extract-reference",
                 help: "with --extract: also run an independent reference solver from the same copper (raster, flood-fill topology, finite-difference DC conduction, DC inductance from the field energy; no code shared with the mesher) and compare every entry of its R and L matrices with the extraction at 1 kHz (measures.extract.reference); a disagreement beyond 10 % adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; the DC limit only: it does not validate skin or proximity redistribution",
             },
+            Opt {
+                flag: "--verbose",
+                help: "print the full text report: every finding with its message, estimate, inputs and caveats, and every coverage entry (the default is a compact report of at most 110 characters a line)",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

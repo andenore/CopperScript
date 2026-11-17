@@ -18,6 +18,7 @@ pub mod emi_plot;
 pub mod emi_return_path;
 pub mod emi_signal;
 pub mod emi_summary;
+pub mod emi_text;
 pub mod explain;
 pub mod issues;
 pub mod paths;

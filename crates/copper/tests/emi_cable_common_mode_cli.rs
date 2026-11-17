@@ -129,7 +129,7 @@ fn the_cli_reports_the_cable_common_mode_of_the_routed_example() {
         list(ranking, "ground_noise_by_geometry").iter().filter_map(|r| text(r, "name")).collect();
     assert!(by_geometry.contains(&"SE2".to_owned()), "{by_geometry:?}");
     // The text output lists the findings and no verdict, no current, no field.
-    let plain = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED]));
+    let plain = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED, "--verbose"]));
     assert!(plain.contains("executed EMI-CABLE-COMMON-MODE:J1"), "{plain}");
     assert!(plain.lines().all(|l| !l.starts_with("PASS") && !l.starts_with("FAIL")));
     assert!(!stdout(&output).contains("margin_db\": "), "no margin_db in the report");

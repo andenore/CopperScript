@@ -137,7 +137,7 @@ fn number(value: Option<&Value>) -> Option<f64> {
 }
 
 /// The cable facts in one line: the length, the shield, the termination.
-fn subtitle(subject: &Subject) -> String {
+pub(crate) fn subtitle(subject: &Subject) -> String {
     let common =
         subject.findings.iter().find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CABLE-COMMON-MODE"));
     let shield_missing =

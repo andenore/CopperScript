@@ -112,7 +112,7 @@ fn the_cli_runs_the_return_path_check_on_the_routed_example() {
     assert_eq!(entry.get("status").and_then(Value::as_str), Some("unsupported"));
     assert!(entry.get("detail").and_then(Value::as_str).is_some_and(|d| d.contains("--run RUN")));
     // The text output lists the per-net entries and no verdict.
-    let text = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED]));
+    let text = stdout(&copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", ROUTED, "--verbose"]));
     assert!(text.contains("executed EMI-RETURN-PATH:LANE_B_P") && text.contains("EMI-RETURN-PATH"), "{text}");
     assert!(text.lines().all(|l| !l.starts_with("PASS") && !l.starts_with("FAIL")));
 }

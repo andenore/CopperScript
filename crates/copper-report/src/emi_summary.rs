@@ -212,12 +212,12 @@ fn badge_of(data: &CellData) -> Option<&'static str> {
 }
 
 /// A stat tile: a small label, one big value, one small line.
-struct Tile {
-    label: &'static str,
-    value: String,
-    small: String,
+pub(crate) struct Tile {
+    pub(crate) label: &'static str,
+    pub(crate) value: String,
+    pub(crate) small: String,
     /// The value is an excess over a limit: the warning colour.
-    excess: bool,
+    pub(crate) excess: bool,
 }
 
 /// What the closed form is based on, from the finding's tags.
@@ -238,7 +238,11 @@ fn basis_of(finding: &Value) -> Option<&'static str> {
 /// The hot-loop inductance by the best method that ran (full wave, then the quasi-static extraction, then the closed
 /// form) and the method named.
 fn hot_loop_tile(data: &CellData) -> Option<Tile> {
-    let finding = data.hot_loops.first()?;
+    hot_loop_tile_of(data.hot_loops.first()?)
+}
+
+/// The hot-loop tile of one `EMI-HOT-LOOP` finding.
+pub(crate) fn hot_loop_tile_of(finding: &Value) -> Option<Tile> {
     if let Some(l) = measure(finding, "fullwave").and_then(|f| number(f.get("inductance_nh"))) {
         return Some(Tile {
             label: "Hot loop",
@@ -287,12 +291,26 @@ fn hot_loop_tile(data: &CellData) -> Option<Tile> {
     Some(Tile { label: "Hot loop", value: format!("{} nH", sig3(l)), small, excess: false })
 }
 
-/// The worst conducted harmonic: its excess over the average limit when the report has limits, else its level.
-fn conducted_tile(data: &CellData, document: &Value) -> Option<Tile> {
-    let panel = panels_from_report(document).into_iter().find(|p| p.cell == data.controller)?;
+/// The worst conducted harmonic of a cell: its level, its frequency and, when the report has limits, its margin
+/// (negative over the limit) against the average limit or the receiver-emulation limit.
+pub(crate) struct ConductedWorst {
+    pub(crate) level_dbuv: f64,
+    pub(crate) frequency_hz: f64,
+    /// The margin in dB and what it is against (`average` or `limit`).
+    pub(crate) margin: Option<(f64, &'static str)>,
+}
+
+impl ConductedWorst {
+    /// `95.6 dBuV at 500 kHz`.
+    pub(crate) fn at(&self) -> String {
+        format!("{} dBuV at {}", one_decimal(self.level_dbuv), frequency_text(self.frequency_hz))
+    }
+}
+
+pub(crate) fn conducted_worst(controller: &str, document: &Value) -> Option<ConductedWorst> {
+    let panel = panels_from_report(document).into_iter().find(|p| p.cell == controller)?;
     let h = &panel.harmonics[worst(&panel.harmonics, panel.shows_limits())?];
-    let level = if panel.receiver_emulation { h.reading_qp.unwrap_or(h.level()) } else { h.level() };
-    let at = format!("{} dBuV at {}", one_decimal(level), frequency_text(h.frequency_hz));
+    let level_dbuv = if panel.receiver_emulation { h.reading_qp.unwrap_or(h.level()) } else { h.level() };
     let margin = if panel.detector_reason.is_none() {
         h.limit_avg.map(|l| (l - h.level(), "average"))
     } else if panel.receiver_emulation {
@@ -300,7 +318,14 @@ fn conducted_tile(data: &CellData, document: &Value) -> Option<Tile> {
     } else {
         None
     };
-    Some(match margin {
+    Some(ConductedWorst { level_dbuv, frequency_hz: h.frequency_hz, margin })
+}
+
+/// The worst conducted harmonic: its excess over the average limit when the report has limits, else its level.
+fn conducted_tile(data: &CellData, document: &Value) -> Option<Tile> {
+    let w = conducted_worst(&data.controller, document)?;
+    let at = w.at();
+    Some(match w.margin {
         Some((m, which)) => {
             let over = m < 0.0;
             Tile {
@@ -312,22 +337,32 @@ fn conducted_tile(data: &CellData, document: &Value) -> Option<Tile> {
         }
         None => Tile {
             label: "Conducted, worst",
-            value: format!("{} dBuV", one_decimal(level)),
-            small: format!("at {}", frequency_text(h.frequency_hz)),
+            value: format!("{} dBuV", one_decimal(w.level_dbuv)),
+            small: format!("at {}", frequency_text(w.frequency_hz)),
             excess: false,
         },
     })
 }
 
-/// How many harmonics are over the limit, when the report has limits.
-fn harmonics_tile(data: &CellData, document: &Value) -> Option<Tile> {
-    let panel = panels_from_report(document).into_iter().find(|p| p.cell == data.controller)?;
+/// How many harmonics are over the average limit, of how many reported, and over the quasi-peak limit, when the
+/// report has limits.
+pub(crate) fn harmonics_over(
+    controller: &str,
+    conducted: Option<&Value>,
+    document: &Value,
+) -> Option<(f64, f64, Option<f64>)> {
+    let panel = panels_from_report(document).into_iter().find(|p| p.cell == controller)?;
     let limits =
         panel.shows_limits() && (panel.standard.is_some() || panel.harmonics.iter().any(|h| h.limit_qp.is_some()));
-    let conducted = data.conducted.filter(|_| limits)?;
+    let conducted = conducted.filter(|_| limits)?;
     let total = number(measure(conducted, "harmonics_reported"))?;
     let over_avg = number(measure(conducted, "harmonics_over_average"))?;
-    let over_qp = number(measure(conducted, "harmonics_over_quasi_peak"));
+    Some((over_avg, total, number(measure(conducted, "harmonics_over_quasi_peak"))))
+}
+
+/// How many harmonics are over the limit, when the report has limits.
+fn harmonics_tile(data: &CellData, document: &Value) -> Option<Tile> {
+    let (over_avg, total, over_qp) = harmonics_over(&data.controller, data.conducted, document)?;
     Some(Tile {
         label: "Harmonics over the limit",
         value: format!("{} of {}", n(over_avg), n(total)),
@@ -340,7 +375,11 @@ fn harmonics_tile(data: &CellData, document: &Value) -> Option<Tile> {
 }
 
 fn switch_node_tile(data: &CellData) -> Option<Tile> {
-    let node = data.switch_node?;
+    switch_node_tile_of(data.switch_node?)
+}
+
+/// The switch-node tile of one `EMI-SWITCH-NODE` finding.
+pub(crate) fn switch_node_tile_of(node: &Value) -> Option<Tile> {
     let area = number(measure(node, "copper_area_mm2"))?;
     let small = match (number(measure(node, "capacitance_to_plane_pf")), measure(node, "routed_copper")) {
         (Some(c), _) => format!("{} pF to the plane", sig3(c)),
@@ -359,12 +398,23 @@ fn proximity_tile(data: &CellData) -> Option<Tile> {
         .filter(|f| measure(f, "victim_kind").and_then(Value::as_str).is_none_or(|k| k == "sensitive_net"))
         .filter_map(|f| Some((number(measure(f, "distance_mm"))?, *f)))
         .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    proximity_tile_of(finding, distance)
+}
+
+/// The proximity tile of one `EMI-PROXIMITY` finding at `distance` mm.
+pub(crate) fn proximity_tile_of(finding: &Value, distance: f64) -> Option<Tile> {
     let named = |key: &str| measure(finding, key).and_then(Value::as_str);
     let small = match (named("source"), named("victim")) {
         (Some(source), Some(victim)) => format!("{source} to {victim}"),
         _ => String::new(),
     };
     Some(Tile { label: "Nearest sensitive net", value: format!("{} mm", sig3(distance)), small, excess: false })
+}
+
+/// The title and the subtitle of the cell page of `cell` (an entry of the document's `cells`): the converter, then
+/// its frequency, input and output voltage, edge and current scenario.
+pub(crate) fn cell_header(document: &Value, cell: &Value) -> (String, String) {
+    header_lines(&cell_data(document, cell))
 }
 
 /// The tiles of the cell, each only when its data exists.
