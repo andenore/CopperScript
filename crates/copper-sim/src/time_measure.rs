@@ -187,10 +187,26 @@ fn periods(t: &[f64], x: &[f64], f0: f64) -> Result<(usize, Vec<f64>), String> {
     let end = t[t.len() - 1];
     let begin = (end - k as f64 / f0).max(t[0]);
     let n = k * SAMPLES_PER_PERIOD;
-    let samples = (0..n)
-        .map(|j| value_at(t, x, begin + (end - begin) * j as f64 / n as f64))
-        .collect::<Result<Vec<f64>, MeasureError>>()
-        .map_err(|e| e.to_string())?;
+    // `value_at` at increasing times, with one pass over the record instead
+    // of a search (and a check of the whole record) per sample.
+    let (first, last) = (t[0], t[t.len() - 1]);
+    let mut i = 0;
+    let mut samples = Vec::with_capacity(n);
+    for j in 0..n {
+        let at = begin + (end - begin) * j as f64 / n as f64;
+        if !(at >= first && at <= last) {
+            return Err(MeasureError::OutOfRange { x: at, first, last }.to_string());
+        }
+        while t[i] < at {
+            i += 1;
+        }
+        samples.push(if i == 0 || t[i] == at {
+            x[i]
+        } else {
+            let f = (at - t[i - 1]) / (t[i] - t[i - 1]);
+            x[i - 1] + f * (x[i] - x[i - 1])
+        });
+    }
     Ok((k, samples))
 }
 

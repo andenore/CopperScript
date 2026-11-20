@@ -54,6 +54,8 @@ use crate::lu::LuError;
 use crate::mna::{Layout, Unknown};
 use crate::models::MacroModel;
 use crate::real_lu::RealLu;
+use crate::sparse_lu::{SparseLu, SparseMatrix};
+use crate::timing::{self, Counter, Phase};
 use std::f64::consts::PI;
 
 /// Conductance of the output-clipping clamp beyond its knee, S.
@@ -132,6 +134,17 @@ pub(crate) struct Model {
     pub slot: Vec<usize>,
     /// The number of slots.
     pub slots: usize,
+    /// Per element: whether its stamp follows the iterate (diodes, laws, the
+    /// limited op-amp stages, and controlled sources whose control does);
+    /// the other stamps are fixed for one solve.
+    pub varies: Vec<bool>,
+    /// The complement of `varies`.
+    pub fixed: Vec<bool>,
+    /// Per element: whether its form is needed for the stamps that vary
+    /// (`varies`, or a control of such an element).
+    pub needed: Vec<bool>,
+    /// Distinguishes models, for the solver's cache of the fixed stamps.
+    pub id: u64,
 }
 
 impl Model {
@@ -229,7 +242,26 @@ impl Model {
             || !laws.is_empty()
             || !clamps.is_empty()
             || roles.iter().any(|r| !matches!(r, Role::Plain | Role::Skip));
-        Ok(Model { layout, roles, clamps, inductance, nonlinear, diodes, switches, laws, slot, slots })
+        let (varies, needed) = varying(c, &roles);
+        let fixed = varies.iter().map(|v| !v).collect();
+        static MODELS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = MODELS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Model {
+            layout,
+            roles,
+            clamps,
+            inductance,
+            nonlinear,
+            diodes,
+            switches,
+            laws,
+            slot,
+            slots,
+            varies,
+            fixed,
+            needed,
+            id,
+        })
     }
 
     /// Voltage of `node` in the unknown vector `x` (zero for ground and untouched nodes).
@@ -248,6 +280,70 @@ impl Model {
             Unknown::Branch(e) => (None, Some(c.elements()[e].name().to_string())),
         }
     }
+}
+
+/// [`Model::varies`] and [`Model::needed`] of `c` with `roles`.
+fn varying(c: &Circuit, roles: &[Role]) -> (Vec<bool>, Vec<bool>) {
+    let elements = c.elements();
+    let controls = |i: usize| -> Vec<usize> {
+        match elements[i].kind() {
+            ElementKind::Cccs { control, .. } | ElementKind::Ccvs { control, .. } => vec![control.index()],
+            ElementKind::Law { law, .. } => law
+                .controls
+                .iter()
+                .filter_map(|control| match control {
+                    Control::Current(id) => Some(id.index()),
+                    Control::Voltage(..) => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let mut varies: Vec<bool> = elements
+        .iter()
+        .zip(roles)
+        .map(|(e, role)| match (e.kind(), role) {
+            (_, Role::Skip) => false,
+            (_, Role::GainStage { .. } | Role::CurrentLimit { .. }) => true,
+            (ElementKind::Diode { .. } | ElementKind::Law { .. }, _) => true,
+            _ => false,
+        })
+        .collect();
+    // A controlled source follows the iterate when its control does.
+    loop {
+        let mut changed = false;
+        for i in 0..elements.len() {
+            if !varies[i]
+                && !matches!(roles[i], Role::Skip)
+                && matches!(elements[i].kind(), ElementKind::Cccs { .. } | ElementKind::Ccvs { .. })
+                && controls(i).iter().any(|&k| varies[k])
+            {
+                varies[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut needed = varies.clone();
+    loop {
+        let mut changed = false;
+        for i in 0..elements.len() {
+            if needed[i] {
+                for k in controls(i) {
+                    if !needed[k] {
+                        needed[k] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (varies, needed)
 }
 
 /// The integration method of one solve.
@@ -342,11 +438,16 @@ fn integration_factor(ctx: &Context) -> f64 {
     }
 }
 
-/// Every element's current as a linear form at iterate `x`, junctions linearised at `junction`.
-fn forms(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) -> Vec<Option<Form>> {
+/// The current of every element in `mask` as a linear form at iterate `x`,
+/// junctions linearised at `junction` (`None` for the others).
+fn forms(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64], mask: &[bool]) -> Vec<Option<Form>> {
     let k_int = integration_factor(ctx);
     let mut out: Vec<Option<Form>> = Vec::with_capacity(c.elements().len());
     for (i, e) in c.elements().iter().enumerate() {
+        if !mask[i] {
+            out.push(None);
+            continue;
+        }
         let branch = || Form { terms: vec![(m.layout.branch_row[i].expect("branch unknown"), 1.0)], constant: 0.0 };
         let form = match (e.kind(), &m.roles[i]) {
             (_, Role::Skip) => Some(Form::default()),
@@ -493,19 +594,53 @@ fn law_form(
     form
 }
 
-/// The assembled real system `A x = rhs` at iterate `x`.
-fn assemble(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let n = m.layout.size();
-    let mut a = vec![0.0; n * n];
-    let mut rhs = vec![0.0; n];
-    let forms = forms(m, c, ctx, x, junction);
+/// Which part of the real system [`stamp`] adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// The elements whose stamps are fixed for one solve (the circuit's
+    /// linear part with the companion models of the step), and gmin.
+    Linear,
+    /// The elements whose stamps follow the iterate ([`Model::varies`]) and the clamps.
+    Nonlinear,
+}
+
+/// Add `part` of the real system `A x = rhs` at iterate `x` to `rhs` and,
+/// when given, to the matrix `a`.
+#[allow(clippy::too_many_arguments)]
+fn stamp(
+    m: &Model,
+    c: &Circuit,
+    ctx: &Context,
+    x: &[f64],
+    junction: &[f64],
+    part: Part,
+    mut a: Option<&mut SparseMatrix<f64>>,
+    rhs: &mut [f64],
+) {
+    let mask = match part {
+        Part::Linear => &m.fixed,
+        Part::Nonlinear => &m.needed,
+    };
+    let forms = {
+        let _span = timing::span(Phase::Devices);
+        forms(m, c, ctx, x, junction, mask)
+    };
+    let _span = timing::span(Phase::Assembly);
+    let mut add = |r: usize, col: usize, v: f64| {
+        if let Some(a) = a.as_deref_mut() {
+            a.add(r, col, v);
+        }
+    };
     let k_int = integration_factor(ctx);
     for (i, e) in c.elements().iter().enumerate() {
+        if m.varies[i] != (part == Part::Nonlinear) {
+            continue;
+        }
         if let (Some((ta, tb)), Some(form)) = (e.kind().terminals(), &forms[i]) {
             for (node, sign) in [(ta, 1.0), (tb, -1.0)] {
                 if let Some(r) = m.row(node) {
                     for &(k, coef) in &form.terms {
-                        a[r * n + k] += sign * coef;
+                        add(r, k, sign * coef);
                     }
                     rhs[r] -= sign * form.constant;
                 }
@@ -514,17 +649,17 @@ fn assemble(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) 
         let Some(k) = m.layout.branch_row[i] else { continue };
         let (ta, tb) = e.kind().terminals().expect("branch elements have terminals");
         if let Some(r) = m.row(ta) {
-            a[k * n + r] += 1.0;
+            add(k, r, 1.0);
         }
         if let Some(r) = m.row(tb) {
-            a[k * n + r] -= 1.0;
+            add(k, r, -1.0);
         }
         match e.kind() {
             ElementKind::Inductor { .. } => {
                 if let (Some(prev), true) = (ctx.prev, ctx.method != Method::Dc) {
                     for &(j, l) in &m.inductance[i] {
                         let col = m.layout.branch_row[j].expect("inductor branch");
-                        a[k * n + col] -= k_int * l;
+                        add(k, col, -(k_int * l));
                         rhs[k] -= k_int * l * prev.x[col];
                     }
                     if ctx.method == Method::Trapezoidal {
@@ -535,16 +670,16 @@ fn assemble(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) 
             ElementKind::VoltageSource { value, .. } => rhs[k] = source_value(c, i, value, ctx),
             ElementKind::Vcvs { cp, cn, gain, .. } => {
                 if let Some(r) = m.row(*cp) {
-                    a[k * n + r] -= gain;
+                    add(k, r, -*gain);
                 }
                 if let Some(r) = m.row(*cn) {
-                    a[k * n + r] += gain;
+                    add(k, r, *gain);
                 }
             }
             ElementKind::Ccvs { control, ohms, .. } => {
                 if let Some(form) = &forms[control.index()] {
                     for &(col, coef) in &form.terms {
-                        a[k * n + col] -= ohms * coef;
+                        add(k, col, -(ohms * coef));
                     }
                     rhs[k] += ohms * form.constant;
                 }
@@ -552,43 +687,42 @@ fn assemble(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) 
             ElementKind::Law { .. } => {
                 let form = law_form(m, c, ctx, x, junction, &forms, i);
                 for &(col, coef) in &form.terms {
-                    a[k * n + col] -= coef;
+                    add(k, col, -coef);
                 }
                 rhs[k] += form.constant;
             }
             _ => unreachable!("only branch elements have a branch row"),
         }
     }
-    for clamp in &m.clamps {
+    for clamp in m.clamps.iter().filter(|_| part == Part::Nonlinear) {
         let Some(r) = m.row(clamp.node) else { continue };
         let (vp, vn, p1) = (m.v(x, clamp.vp), m.v(x, clamp.vn), m.v(x, clamp.node));
         // Above the high limit: current g s(V(p1) - V(vp) + high) from the
         // node to ground, linearised; the matrix carries g (V(p1) - V(vp)).
         let (s, ds) = knee(p1 - vp + clamp.high);
         let (g, i0) = (CLAMP_CONDUCTANCE * ds, CLAMP_CONDUCTANCE * s);
-        a[r * n + r] += g;
+        add(r, r, g);
         if let Some(q) = m.row(clamp.vp) {
-            a[r * n + q] -= g;
+            add(r, q, -g);
         }
         rhs[r] -= i0 - g * (p1 - vp);
         // Below the low limit: current g s(V(vn) + low - V(p1)) from ground into the node.
         let (s, ds) = knee(vn + clamp.low - p1);
         let (g, i0) = (CLAMP_CONDUCTANCE * ds, CLAMP_CONDUCTANCE * s);
-        a[r * n + r] += g;
+        add(r, r, g);
         if let Some(q) = m.row(clamp.vn) {
-            a[r * n + q] -= g;
+            add(r, q, -g);
         }
         rhs[r] += i0 + g * (p1 - vn);
     }
-    if ctx.gmin > 0.0 {
+    if ctx.gmin > 0.0 && part == Part::Linear {
         for row in m.layout.node_row.iter().flatten() {
-            a[row * n + row] += ctx.gmin;
+            add(*row, *row, ctx.gmin);
             if let Some(anchor) = ctx.anchor {
                 rhs[*row] += ctx.gmin * anchor[*row];
             }
         }
     }
-    (a, rhs)
 }
 
 /// The current of element `i` (from `a` to `b`) at a solved point: `x`, the
@@ -690,27 +824,126 @@ pub(crate) enum Failure {
     Diverged { nodes: Vec<String>, elements: Vec<String> },
 }
 
-/// Newton solver state shared by the solves of one analysis: the last
-/// factorisation (reused when the matrix is unchanged) and counters.
+/// The factors of the last matrix: sparse, or dense where the sparse
+/// factorisation left the matrix to the dense one (see [`crate::sparse_lu`]).
+#[derive(Debug)]
+enum Factors {
+    Sparse(Box<SparseLu<f64>>),
+    Dense(RealLu),
+}
+
+/// Newton solver state shared by the solves of one analysis: the matrix
+/// (its pattern grows as entries are stamped), the last factorisation
+/// (reused when the matrix is unchanged, refactored in the same pivot order
+/// when only its values changed) and counters.
 #[derive(Debug, Default)]
 pub(crate) struct Solver {
-    cache: Option<RealLu>,
+    matrix: Option<SparseMatrix<f64>>,
+    /// The fixed stamps of the last solve's matrix ([`Part::Linear`]) and what they depend on.
+    fixed: Option<(FixedKey, SparseMatrix<f64>)>,
+    cache: Option<Factors>,
     pub factorizations: usize,
     pub iterations: usize,
 }
 
+/// What the fixed part of the matrix depends on besides the model: the
+/// companion models (method, step), gmin and the switch states.
+#[derive(Debug, Clone, PartialEq)]
+struct FixedKey {
+    model: u64,
+    method: Method,
+    h: u64,
+    gmin: u64,
+    switch_on: Vec<bool>,
+}
+
 impl Solver {
-    fn solve(&mut self, a: Vec<f64>, rhs: &[f64], n: usize) -> Result<Vec<f64>, LuError> {
+    /// The fixed part of the system of `ctx`: the matrix in `self.fixed`
+    /// (kept while its key holds, as across the time steps of one step
+    /// size) and the right-hand side, returned.
+    fn fixed_part(&mut self, m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64]) -> Vec<f64> {
+        let n = m.layout.size();
+        let key = FixedKey {
+            model: m.id,
+            method: ctx.method,
+            h: ctx.h.to_bits(),
+            gmin: ctx.gmin.to_bits(),
+            switch_on: ctx.switch_on.to_vec(),
+        };
+        let mut rhs = vec![0.0; n];
+        match &self.fixed {
+            Some((cached, matrix)) if *cached == key && matrix.size() == n => {
+                stamp(m, c, ctx, x, junction, Part::Linear, None, &mut rhs);
+            }
+            _ => {
+                // In the pattern of the full matrix, so that loading it is a copy.
+                let mut matrix = match &self.matrix {
+                    Some(full) if full.size() == n => full.clone(),
+                    _ => SparseMatrix::new(n),
+                };
+                matrix.clear();
+                stamp(m, c, ctx, x, junction, Part::Linear, Some(&mut matrix), &mut rhs);
+                matrix.finish();
+                self.fixed = Some((key, matrix));
+            }
+        }
+        rhs
+    }
+
+    /// The matrix to stamp an `n x n` system into.
+    fn matrix(&mut self, n: usize) -> &mut SparseMatrix<f64> {
+        if self.matrix.as_ref().is_none_or(|a| a.size() != n) {
+            self.matrix = Some(SparseMatrix::new(n));
+            self.cache = None;
+        }
+        self.matrix.as_mut().expect("set above")
+    }
+
+    /// Solve the stamped matrix with `rhs`.
+    fn solve(&mut self, rhs: &[f64]) -> Result<Vec<f64>, LuError> {
+        let a = self.matrix.as_mut().expect("stamped before solving");
+        let n = a.size();
         if n == 0 {
             return Ok(Vec::new());
         }
-        let reuse = self.cache.as_ref().is_some_and(|lu| lu.matrix() == a.as_slice());
-        if !reuse {
-            self.cache = Some(RealLu::factor(a, n)?);
-            self.factorizations += 1;
+        {
+            let _span = timing::span(Phase::Factor);
+            a.finish();
+            let reuse = match &self.cache {
+                Some(Factors::Sparse(lu)) => lu.factors(a),
+                Some(Factors::Dense(lu)) => lu.matrix() == a.to_dense().as_slice(),
+                None => false,
+            };
+            if !reuse {
+                self.factorizations += 1;
+                let refactored = match &mut self.cache {
+                    Some(Factors::Sparse(lu)) if lu.fits(a) => lu.refactor(a),
+                    _ => false,
+                };
+                if refactored {
+                    timing::count(Counter::Refactored);
+                } else {
+                    self.cache = None;
+                    self.cache = Some(match SparseLu::factor(a) {
+                        Ok(lu) => {
+                            let lu = Box::new(lu);
+                            timing::count(Counter::Ordered);
+                            Factors::Sparse(lu)
+                        }
+                        Err(_) => {
+                            timing::count(Counter::Dense);
+                            Factors::Dense(RealLu::factor(a.to_dense(), n)?)
+                        }
+                    });
+                }
+            }
         }
-        let lu = self.cache.as_ref().expect("factored above");
-        lu.solve(rhs).ok_or(LuError::NonFinite)
+        let _span = timing::span(Phase::Solve);
+        let solved = match self.cache.as_ref().expect("factored above") {
+            Factors::Sparse(lu) => lu.solve(rhs),
+            Factors::Dense(lu) => lu.solve(rhs),
+        };
+        solved.ok_or(LuError::NonFinite)
     }
 
     /// Newton iteration from `x0` with junction voltages `junction0`.
@@ -727,7 +960,9 @@ impl Solver {
         let mut x = x0.to_vec();
         let mut junction = junction0.to_vec();
         let mut last_change: Vec<f64> = vec![0.0; n];
+        let fixed_rhs = self.fixed_part(m, c, ctx, &x, &junction);
         for iteration in 1..=max_iterations {
+            let limiting = timing::span(Phase::Devices);
             for &d in &m.diodes {
                 let ElementKind::Diode { anode, cathode, params } = c.elements()[d].kind() else { continue };
                 let v = m.v(&x, *anode) - m.v(&x, *cathode);
@@ -744,8 +979,17 @@ impl Solver {
                     }
                 }
             }
-            let (a, rhs) = assemble(m, c, ctx, &x, &junction);
-            let x_new = self.solve(a, &rhs, n).map_err(Failure::Singular)?;
+            drop(limiting);
+            let mut rhs = fixed_rhs.clone();
+            {
+                self.matrix(n);
+                let (Some(a), Some((_, fixed))) = (self.matrix.as_mut(), self.fixed.as_ref()) else {
+                    unreachable!("the matrix and its fixed part are set above")
+                };
+                a.load(fixed);
+                stamp(m, c, ctx, &x, &junction, Part::Nonlinear, Some(a), &mut rhs);
+            }
+            let x_new = self.solve(&rhs).map_err(Failure::Singular)?;
             self.iterations += 1;
             if !m.nonlinear {
                 return Ok(Converged { x: x_new, junction });

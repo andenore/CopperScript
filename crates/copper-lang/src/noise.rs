@@ -5,7 +5,7 @@
 //! ```copper
 //! analysis noise {
 //!     from = 10Hz; to = 100kHz; points_per_decade = 20;
-//!     output = V(OUT);            // or V(P, N)
+//!     output = V(OUT);            // or V(P, N), or several: V(A), V(B)
 //!     input = SRC;                // a source model: bench model or replacement
 //!     temperature = 27degC;       // or 300.15K; 27 degC by default
 //! }
@@ -55,9 +55,11 @@ pub struct NoiseAnalysis {
     pub from: SimQuantity,
     pub to: SimQuantity,
     pub points_per_decade: u32,
-    /// The output node, and its reference (`None` is the ground).
+    /// The (first) output node, and its reference (`None` is the ground).
     pub output: Node,
     pub reference: Option<Node>,
+    /// Every output, the first included: `output = V(A), V(B, C);`.
+    pub outputs: Vec<(Node, Option<Node>)>,
     pub input: Option<NoiseInput>,
     /// `None` is the default, 27 degC.
     pub temperature: Option<Temperature>,
@@ -66,7 +68,7 @@ pub struct NoiseAnalysis {
 impl NoiseAnalysis {
     /// What the expression checker needs to know.
     pub fn scope(&self) -> NoiseScope {
-        NoiseScope { input: self.input.as_ref().map(|input| input.dimension) }
+        NoiseScope { input: self.input.as_ref().map(|input| input.dimension), outputs: self.outputs.len() }
     }
 
     /// The temperature in kelvin.
@@ -188,25 +190,39 @@ pub(crate) fn analysis(
                 }
             },
             "output" => {
-                let SimValue::List(nodes) = &entry.value else {
-                    return Err(error(
-                        "SIM094",
-                        "analysis noise output is a voltage probe: output = V(OUT); or output = V(P, N);",
-                        &entry.location,
-                    ));
+                let probes: Vec<(&SimValue, &Location)> = match &entry.value {
+                    SimValue::Block { kind, entries } if kind == "outputs" => {
+                        entries.iter().map(|probe| (&probe.value, &probe.location)).collect()
+                    }
+                    value => vec![(value, &entry.location)],
                 };
-                let mut resolved = Vec::new();
-                for value in nodes {
-                    let Scalar::Str(name) = value else {
-                        return Err(error("SIM094", "analysis noise output names nodes", &entry.location));
+                let mut all: Vec<(Node, Option<Node>)> = Vec::new();
+                for (value, location) in probes {
+                    let SimValue::List(nodes) = value else {
+                        return Err(error(
+                            "SIM094",
+                            "analysis noise output is a voltage probe: output = V(OUT); or output = V(P, N); or several, output = V(A), V(B);",
+                            location,
+                        ));
                     };
-                    resolved.push(node(name, &entry.location)?);
+                    let mut resolved = Vec::new();
+                    for value in nodes {
+                        let Scalar::Str(name) = value else {
+                            return Err(error("SIM094", "analysis noise output names nodes", location));
+                        };
+                        resolved.push(node(name, location)?);
+                    }
+                    if resolved.len() > 2 {
+                        return Err(error("SIM094", "output = V(P, N) takes at most two nodes", location));
+                    }
+                    let mut resolved = resolved.into_iter();
+                    let probe = (resolved.next().expect("the parser reads one node"), resolved.next());
+                    if all.contains(&probe) {
+                        return Err(error("SIM094", "analysis noise names one output twice", location));
+                    }
+                    all.push(probe);
                 }
-                if resolved.len() > 2 {
-                    return Err(error("SIM094", "output = V(P, N) takes at most two nodes", &entry.location));
-                }
-                let mut resolved = resolved.into_iter();
-                output = Some((resolved.next().expect("the parser reads one node"), resolved.next()));
+                output = Some(all);
             }
             "input" => match single()? {
                 Scalar::Str(name) => source = Some(input(name, replacements, models, &entry.location)?),
@@ -238,15 +254,17 @@ pub(crate) fn analysis(
             &item.location,
         ));
     }
-    let Some((output, reference)) = output else {
+    let Some(outputs) = output else {
         return Err(error("SIM094", "analysis noise needs its output: output = V(OUT);", &item.location));
     };
+    let (output, reference) = outputs[0].clone();
     Ok(Analysis::Noise(Box::new(NoiseAnalysis {
         from,
         to,
         points_per_decade,
         output,
         reference,
+        outputs,
         input: source,
         temperature: temp,
     })))
@@ -298,6 +316,23 @@ pub fn analysis_value(
     ];
     if let Some(t) = &noise.temperature {
         entries.push(("temperature".to_owned(), Value::from(t.written.as_str())));
+    }
+    if noise.outputs.len() > 1 {
+        let outputs = noise
+            .outputs
+            .iter()
+            .map(|(output, reference)| {
+                Value::Object(
+                    vec![
+                        ("output".to_owned(), node(output)),
+                        ("reference".to_owned(), reference.as_ref().map(node).unwrap_or(Value::Null)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            })
+            .collect();
+        entries.push(("outputs".to_owned(), Value::Array(outputs)));
     }
     Value::Object(entries.into_iter().collect())
 }

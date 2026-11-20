@@ -472,7 +472,7 @@ fn noise_of_a_diode_and_the_noise_figure_axes() {
     assert!(rel(value(r, 0, "density"), want) < 1e-5, "{} vs {want}", value(r, 0, "density"));
     // noise(D1) holds the junction's shot noise and its series resistance's thermal noise.
     assert!(rel(value(r, 0, "shot"), want) < 1e-5);
-    let labels: Vec<&str> = r.steps[0].noise.as_ref().unwrap().contributors.iter().map(|c| c.label.as_str()).collect();
+    let labels: Vec<&str> = r.steps[0].noise.first().unwrap().contributors.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"D1 shot noise") && labels.contains(&"D1 thermal"), "{labels:?}");
     // Noise densities are drawn log-log, even over a flat stretch.
     let html = copper_simulate::report::html(r, "Analog");

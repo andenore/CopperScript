@@ -280,6 +280,21 @@ fn part_sim_value(model: &crate::simulation::PartSimModel) -> Value {
         ("unmodelled", texts(&model.unmodelled)),
     ];
     entries.extend(crate::bench::spec_fields(&model.spec));
+    if !model.supply_sets.is_empty() {
+        let sets = model
+            .supply_sets
+            .iter()
+            .map(|set| {
+                let parameters = set
+                    .parameters
+                    .iter()
+                    .map(|(key, value)| (key.clone(), object(vec![("quantity", quantity_value(&value.value))])))
+                    .collect();
+                object(vec![("span", quantity_value(&set.span)), ("parameters", Value::Object(parameters))])
+            })
+            .collect();
+        entries.push(("supply_sets", Value::Array(sets)));
+    }
     object(entries)
 }
 

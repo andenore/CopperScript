@@ -312,6 +312,86 @@ pub struct PartSimModel {
     /// Pins this block declares the model leaves open.
     pub unmodelled: Vec<String>,
     pub spec: SimSpec,
+    /// Parameter sets per supply span (`supply 3.3V { ... }`), in source order;
+    /// the set nearest the span the part runs at overrides the block's parameters.
+    pub supply_sets: Vec<SupplySet>,
+}
+
+/// `supply SPAN { PARAMETER = q; ... }` in an `opamp` or `diffamp` part block:
+/// the parameters that differ when the part runs at that supply span
+/// (`V(vp) - V(vn)`), from its data sheet's table for that supply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SupplySet {
+    pub span: Quantity,
+    pub parameters: IndexMap<String, SimQuantity>,
+    pub location: Location,
+}
+
+/// The kinds whose part blocks take parameter sets per supply: the amplifiers.
+const SUPPLY_SET_KINDS: [SimKind; 2] = [SimKind::Opamp, SimKind::Diffamp];
+
+/// The parameter sets per supply of a part block's entries (`supply 3.3V { ... }`, `SIM096`).
+fn supply_sets(kind: SimKind, entries: &[SimEntry]) -> Result<Vec<SupplySet>> {
+    let mut sets: Vec<SupplySet> = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.key == "supply") {
+        let SimValue::Block { kind: span, entries: items } = &entry.value else { continue };
+        if !SUPPLY_SET_KINDS.contains(&kind) {
+            return Err(error(
+                "SIM096",
+                format!(
+                    "sim {} has no supply pins; parameter sets per supply belong to opamp and diffamp blocks",
+                    kind.name()
+                ),
+                &entry.location,
+            ));
+        }
+        let quantity = span.split_once(' ').and_then(|(number, unit)| crate::expression::sim_quantity(number, unit));
+        let Some(span) = quantity.filter(|q| {
+            q.dimension() == Dimension::Voltage && !q.base_value().is_zero() && !q.base_value().is_negative()
+        }) else {
+            return Err(error(
+                "SIM096",
+                format!(
+                    "a parameter set per supply names a positive supply span in volts (V(vp) - V(vn)), found {}",
+                    repr(span)
+                ),
+                &entry.location,
+            ));
+        };
+        if sets.iter().any(|set| set.span.base_value() == span.base_value()) {
+            return Err(error("SIM096", format!("two parameter sets for the supply span {span}"), &entry.location));
+        }
+        let mut parameters = IndexMap::new();
+        for item in items {
+            let key = item.key.as_str();
+            let label = format!("sim {} supply {span} {key}", kind.name());
+            let Some((_, dimension)) = kind.parameters().iter().find(|(name, _)| *name == key) else {
+                let names: Vec<&str> = kind.parameters().iter().map(|(name, _)| *name).collect();
+                return Err(suggesting(
+                    error(
+                        "SIM096",
+                        format!(
+                            "a parameter set per supply holds model parameters of sim {}; {} is none",
+                            kind.name(),
+                            repr(key)
+                        ),
+                        &item.location,
+                    ),
+                    key,
+                    &names,
+                ));
+            };
+            let scalar = single(item, &label)?;
+            let value = match plain_number(scalar, *dimension) {
+                Some(value) => value,
+                None => typed_value(scalar, *dimension, &label, &ValueScope::Part, &item.location)?,
+            };
+            check_range(kind, key, &value.value, &item.location)?;
+            parameters.insert(key.to_owned(), value);
+        }
+        sets.push(SupplySet { span, parameters, location: entry.location.clone() });
+    }
+    Ok(sets)
 }
 
 /// Where a simulation value may name a param.
@@ -961,10 +1041,12 @@ pub(crate) fn part_models(
                 &block.location,
             ));
         }
+        let sets = supply_sets(kind, &block.entries)?;
+        let plain: Vec<SimEntry> = block.entries.iter().filter(|entry| entry.key != "supply").cloned().collect();
         let lowered = if kind == SimKind::Spice {
-            lower_spice_block(&block.entries, &block.location)?
+            lower_spice_block(&plain, &block.location)?
         } else {
-            lower_block(kind, &block.entries, &ValueScope::Part, true, &block.location)?
+            lower_block(kind, &plain, &ValueScope::Part, true, &block.location)?
         };
         let mut block_pins: Vec<&str> = Vec::new();
         for (role, (pin, location)) in &lowered.roles {
@@ -1034,6 +1116,7 @@ pub(crate) fn part_models(
             pins: lowered.roles.into_iter().map(|(role, (pin, _))| (role, pin)).collect(),
             unmodelled,
             spec: lowered.spec,
+            supply_sets: sets,
         });
     }
     if let Some(first) = blocks.first() {

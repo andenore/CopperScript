@@ -37,6 +37,10 @@ pub const SCHEMA: &str = "copperscript-bench/v0.1";
 /// The directory beside a board file that holds its benches.
 pub const BENCH_DIRECTORY: &str = "benches";
 
+/// The pin name of `I(SUPPLY)` in a probe of supply `NAME` (component `supply NAME`):
+/// the current the supply delivers into its net.
+pub const SUPPLY_NET: &str = "net";
+
 fn error(code: &str, message: impl Into<String>, location: &Location) -> CopperScriptError {
     CopperScriptError::new(code, message, location.clone())
 }
@@ -450,8 +454,21 @@ pub struct Bench {
     pub variation: Option<crate::tolerance::Variation>,
     /// The initial conditions of `analysis tran`, in source order.
     pub initial_conditions: Vec<InitialCondition>,
-    /// The fixtures the bench uses (`using A, B`), in order.
+    /// The fixtures the bench uses (`using A, B`, and the fixtures those use), in order.
     pub fixtures: Vec<String>,
+    /// For one analysis of a bench with several: the analysis's name (the
+    /// bench's `name` is then `BENCH.SECTION`).
+    pub section: Option<String>,
+}
+
+impl Bench {
+    /// The name of the bench as declared: `name` without its section.
+    pub fn bench_name(&self) -> &str {
+        match &self.section {
+            Some(section) => self.name.strip_suffix(&format!(".{section}")).unwrap_or(&self.name),
+            None => &self.name,
+        }
+    }
 }
 
 impl Bench {
@@ -580,7 +597,7 @@ pub fn load_benches(board_file: &Path, design: &Design) -> Result<Vec<Bench>> {
     for document in documents {
         let target = bench_target(&document)?;
         if target.board == design.electrical.name || !modules_named(design, &target.board).is_empty() {
-            benches.push(compile_bench_with_fixtures(&document, &fixtures, design)?);
+            benches.extend(compile_bench_sections(&document, &fixtures, design)?);
             continue;
         }
         let known = boards.get_or_insert_with(|| {
@@ -670,112 +687,62 @@ fn overridable(declaration: &Declaration) -> Option<(&'static str, &str)> {
 }
 
 /// The bench `document` with the declarations of the fixtures it uses in
-/// front of its own, in `using` order. A bench declaration of the same param,
-/// supply, bench model, replacement or bench component as a fixture's takes
-/// the fixture declaration's place (so later fixture params derived from it
-/// follow it). Fixtures hold setup only (`SIM073`).
+/// front of its own, in `using` order. A fixture may use other fixtures
+/// (`fixture B for T using A`): they come first, each fixture once, and a
+/// fixture declaration of the same param, supply, bench model, replacement
+/// or bench component as one of a fixture it uses (directly or through
+/// another) takes that declaration's place. A bench declaration of the same
+/// key as any fixture's takes the fixture declaration's place (so later
+/// fixture params derived from it follow it). Fixtures hold setup only (`SIM073`).
 fn merge_fixtures(document: &Document, fixtures: &[Document], design: &Design) -> Result<Document> {
     let target = bench_target(document)?;
     if target.fixtures.is_empty() {
         return Ok(document.clone());
     }
     let own = resolve_target(document, target, design)?;
-    let mut used: Vec<&Document> = Vec::new();
+    let mut merged = Merged::default();
+    let mut seen: Vec<String> = Vec::new();
     for (name, location) in target.fixtures.iter().zip(&target.fixture_locations) {
-        let Some(fixture) = fixtures.iter().find(|fixture| &fixture.name == name) else {
-            let names: Vec<&str> = fixtures.iter().map(|fixture| fixture.name.as_str()).collect();
-            return Err(suggesting(
-                error(
-                    "SIM073",
-                    format!(
-                        "bench {} uses fixture {}, which no fixture NAME for TARGET {{ ... }} in its directory declares",
-                        repr(&document.name),
-                        repr(name)
-                    ),
-                    location,
-                ),
-                name,
-                &names,
-            ));
-        };
-        if used.iter().any(|other| other.name == fixture.name) {
+        if seen.contains(name) {
             return Err(error(
                 "SIM073",
                 format!("bench {} uses fixture {} twice", repr(&document.name), repr(name)),
                 location,
             ));
         }
-        let Some(Declaration::Bench(BenchStatement::Target(fixture_target))) = fixture.declarations.first() else {
-            return Err(error(
-                "SIM073",
-                "expected a fixture document: fixture NAME for TARGET { ... }",
-                &fixture.location,
-            ));
-        };
-        if resolve_target(fixture, fixture_target, design)? != own {
-            return Err(error(
-                "SIM073",
-                format!(
-                    "fixture {} is for {}, but bench {} is for {}; a bench uses fixtures of its own target",
-                    repr(&fixture.name),
-                    repr(&fixture_target.board),
-                    repr(&document.name),
-                    repr(&target.board)
-                ),
-                location,
-            ));
-        }
-        for declaration in &fixture.declarations[1..] {
-            let bench_only = match declaration {
-                Declaration::Bench(BenchStatement::Analysis(item)) => Some(("analysis", &item.location)),
-                Declaration::Bench(BenchStatement::Step(item)) => Some(("step", &item.location)),
-                Declaration::Bench(BenchStatement::Measure(item)) => Some(("measure", &item.location)),
-                Declaration::Bench(BenchStatement::Plot(item)) => Some(("plot", &item.location)),
-                Declaration::Bench(BenchStatement::Variation(item)) if item.kind != "tolerance" => {
-                    Some((item.kind.as_str(), &item.location))
-                }
-                _ => None,
-            };
-            if let Some((keyword, location)) = bench_only {
-                return Err(error(
-                    "SIM073",
-                    format!(
-                        "a fixture holds setup shared by benches; {keyword} belongs in the bench (fixture {})",
-                        repr(&fixture.name)
-                    ),
-                    location,
-                ));
-            }
-        }
-        used.push(fixture);
+        seen.push(name.clone());
+        let mut stack = vec![document.name.clone()];
+        include_fixture(name, location, document, fixtures, design, &own, &mut merged, &mut stack)?;
     }
     let own_declarations = &document.declarations[1..];
     let mut taken = vec![false; own_declarations.len()];
     let mut declarations = vec![document.declarations[0].clone()];
-    let mut libraries = Vec::new();
-    let mut imports = Vec::new();
-    for fixture in &used {
-        libraries.extend(fixture.libraries.iter().cloned());
-        imports.extend(fixture.imports.iter().cloned());
-        for declaration in &fixture.declarations[1..] {
-            let replacement = overridable(declaration)
-                .and_then(|key| own_declarations.iter().position(|own| overridable(own) == Some(key)));
-            match replacement {
-                Some(index) if !taken[index] => {
-                    taken[index] = true;
-                    declarations.push(own_declarations[index].clone());
-                }
-                _ => declarations.push(declaration.clone()),
+    for (declaration, _) in &merged.declarations {
+        let replacement = overridable(declaration)
+            .and_then(|key| own_declarations.iter().position(|own| overridable(own) == Some(key)));
+        match replacement {
+            Some(index) if !taken[index] => {
+                taken[index] = true;
+                declarations.push(own_declarations[index].clone());
             }
+            _ => declarations.push(declaration.clone()),
         }
     }
     declarations.extend(own_declarations.iter().zip(&taken).filter(|(_, taken)| !**taken).map(|(own, _)| own.clone()));
+    let mut libraries = merged.libraries;
     for library in &document.libraries {
         if !libraries.contains(library) {
             libraries.push(library.clone());
         }
     }
+    let mut imports = merged.imports;
     imports.extend(document.imports.iter().cloned());
+    let mut header = document.declarations[0].clone();
+    // The bench records every fixture it compiled with, in the order they were included.
+    if let Declaration::Bench(BenchStatement::Target(target)) = &mut header {
+        target.fixtures = merged.included.clone();
+    }
+    declarations[0] = header;
     Ok(Document {
         location: document.location.clone(),
         kind: document.kind,
@@ -784,6 +751,127 @@ fn merge_fixtures(document: &Document, fixtures: &[Document], design: &Design) -
         imports,
         declarations,
     })
+}
+
+/// The fixtures a bench includes, flattened.
+#[derive(Default)]
+struct Merged {
+    /// Each declaration and the fixture it came from.
+    declarations: Vec<(Declaration, String)>,
+    /// Fixture name -> the fixtures it uses, directly or through others.
+    uses: IndexMap<String, Vec<String>>,
+    included: Vec<String>,
+    libraries: Vec<String>,
+    imports: Vec<ImportDecl>,
+}
+
+/// Add fixture `name` (after the fixtures it uses) to `merged`, once.
+#[allow(clippy::too_many_arguments)]
+fn include_fixture(
+    name: &str,
+    location: &Location,
+    user: &Document,
+    fixtures: &[Document],
+    design: &Design,
+    own: &Option<String>,
+    merged: &mut Merged,
+    stack: &mut Vec<String>,
+) -> Result<()> {
+    if merged.included.iter().any(|item| item == name) {
+        return Ok(());
+    }
+    if stack.iter().skip(1).any(|item| item == name) {
+        return Err(error(
+            "SIM073",
+            format!("fixture {} uses itself through {}", repr(name), stack[1..].join(" -> ")),
+            location,
+        ));
+    }
+    let Some(fixture) = fixtures.iter().find(|fixture| fixture.name == name) else {
+        let names: Vec<&str> = fixtures.iter().map(|fixture| fixture.name.as_str()).collect();
+        let what = if user.kind == DocumentKind::Fixture { "fixture" } else { "bench" };
+        return Err(suggesting(
+            error(
+                "SIM073",
+                format!(
+                    "{what} {} uses fixture {}, which no fixture NAME for TARGET {{ ... }} in its directory declares",
+                    repr(&user.name),
+                    repr(name)
+                ),
+                location,
+            ),
+            name,
+            &names,
+        ));
+    };
+    let Some(Declaration::Bench(BenchStatement::Target(fixture_target))) = fixture.declarations.first() else {
+        return Err(error("SIM073", "expected a fixture document: fixture NAME for TARGET { ... }", &fixture.location));
+    };
+    if &resolve_target(fixture, fixture_target, design)? != own {
+        return Err(error(
+            "SIM073",
+            format!(
+                "fixture {} is for {}, but {} is for another target; fixtures and the benches that use them share one target",
+                repr(&fixture.name),
+                repr(&fixture_target.board),
+                repr(&user.name)
+            ),
+            location,
+        ));
+    }
+    for declaration in &fixture.declarations[1..] {
+        let bench_only = match declaration {
+            Declaration::Bench(BenchStatement::Analysis(item)) => Some(("analysis", &item.location)),
+            Declaration::Bench(BenchStatement::Step(item)) => Some(("step", &item.location)),
+            Declaration::Bench(BenchStatement::Measure(item)) => Some(("measure", &item.location)),
+            Declaration::Bench(BenchStatement::Plot(item)) => Some(("plot", &item.location)),
+            Declaration::Bench(BenchStatement::Variation(item)) if item.kind != "tolerance" => {
+                Some((item.kind.as_str(), &item.location))
+            }
+            _ => None,
+        };
+        if let Some((keyword, location)) = bench_only {
+            return Err(error(
+                "SIM073",
+                format!(
+                    "a fixture holds setup shared by benches; {keyword} belongs in the bench (fixture {})",
+                    repr(&fixture.name)
+                ),
+                location,
+            ));
+        }
+    }
+    // The fixtures this one uses, first.
+    stack.push(name.to_owned());
+    let mut closure: Vec<String> = Vec::new();
+    for (used, used_location) in fixture_target.fixtures.iter().zip(&fixture_target.fixture_locations) {
+        include_fixture(used, used_location, fixture, fixtures, design, own, merged, stack)?;
+        closure.push(used.clone());
+        closure.extend(merged.uses.get(used).cloned().unwrap_or_default());
+    }
+    stack.pop();
+    // Its own declarations: in place of a used fixture's declaration of the same key, else after.
+    for declaration in &fixture.declarations[1..] {
+        let place = overridable(declaration).and_then(|key| {
+            merged
+                .declarations
+                .iter()
+                .position(|(other, origin)| closure.contains(origin) && overridable(other) == Some(key))
+        });
+        match place {
+            Some(index) => merged.declarations[index] = (declaration.clone(), name.to_owned()),
+            None => merged.declarations.push((declaration.clone(), name.to_owned())),
+        }
+    }
+    for library in &fixture.libraries {
+        if !merged.libraries.contains(library) {
+            merged.libraries.push(library.clone());
+        }
+    }
+    merged.imports.extend(fixture.imports.iter().cloned());
+    merged.uses.insert(name.to_owned(), closure);
+    merged.included.push(name.to_owned());
+    Ok(())
 }
 
 /// The effective params: the target's (board or module), then the bench's overrides and its own.
@@ -973,6 +1061,8 @@ struct Context<'a> {
     nets: &'a [BenchNet],
     /// The model kind of each replacement (by target) and bench model (by name), for `I(...)`.
     model_kinds: &'a [(String, SimKind)],
+    /// Every supply, for `I(SUPPLY)`.
+    supplies: &'a [SimSupply],
 }
 
 impl Context<'_> {
@@ -1120,11 +1210,50 @@ impl Context<'_> {
         }
     }
 
+    /// `I(SUPPLY)`: the current a supply delivers into its net (`SUPPLY_NET`
+    /// of instance `supply NAME`); `I(SUPPLY.ROLE)` of a replaced supply: the
+    /// current into a terminal of its model.
+    fn supply_current(&self, supply: &SimSupply, pin: Option<&str>, location: &Location) -> Result<(String, String)> {
+        let instance = format!("supply {}", supply.name);
+        let refuse = |reason: String| Err(error("SIM045", format!("I({}): {reason}", supply.name), location));
+        match (&supply.treatment, pin) {
+            (SupplyTreatment::DcSource | SupplyTreatment::Replaced(_), None) => Ok((instance, SUPPLY_NET.to_owned())),
+            (SupplyTreatment::Replaced(_), Some(role)) => {
+                let Some((_, kind)) = self.model_kinds.iter().find(|(name, _)| name == &supply.name) else {
+                    return refuse("the replacement has an unknown model kind".to_owned());
+                };
+                let (_, role) = self.model_current(&supply.name, Some(role), *kind, "replaced by a model", location)?;
+                Ok((instance, role))
+            }
+            (SupplyTreatment::DcSource, Some(pin)) => refuse(format!(
+                "a supply is one source on its net; write I({}) for the current it delivers, not {}",
+                supply.name,
+                repr(pin)
+            )),
+            (SupplyTreatment::Ground, _) => refuse(format!(
+                "{} is the simulation ground, which takes the return of every source; probe another supply",
+                repr(&supply.name)
+            )),
+            (SupplyTreatment::Component(component), _) => refuse(format!(
+                "{} is driven by component {component}; probe the current of its pins, I({component}.PIN)",
+                repr(&supply.name)
+            )),
+            (SupplyTreatment::Ignored, _) => {
+                refuse(format!("{} is ignored in this bench; it delivers no current", repr(&supply.name)))
+            }
+        }
+    }
+
     fn current(&self, target: &str, location: &Location) -> Result<(String, String)> {
         let (reference, pin) = match target.split_once('.') {
             Some((reference, pin)) => (reference, Some(pin)),
             None => (target, None),
         };
+        if let Some(supply) = self.supplies.iter().find(|supply| supply.name == reference)
+            && !self.components.iter().any(|component| component.reference == reference)
+        {
+            return self.supply_current(supply, pin, location);
+        }
         let placed = self.model_kinds.iter().find(|(name, _)| name == reference);
         if let Some((_, kind)) = placed
             && !self.components.iter().any(|component| component.reference == reference)
@@ -1132,9 +1261,10 @@ impl Context<'_> {
             return self.model_current(reference, pin, *kind, "a bench model", location);
         }
         let Some(component) = self.components.iter().find(|component| component.reference == reference) else {
-            let names: Vec<&str> = self.components.iter().map(|component| component.reference.as_str()).collect();
+            let mut names: Vec<&str> = self.components.iter().map(|component| component.reference.as_str()).collect();
+            names.extend(self.supplies.iter().map(|supply| supply.name.as_str()));
             return Err(suggesting(
-                error("SIM045", format!("unknown component {} in I(...)", repr(reference)), location),
+                error("SIM045", format!("unknown component or supply {} in I(...)", repr(reference)), location),
                 reference,
                 &names,
             ));
@@ -1187,6 +1317,8 @@ struct ExpressionScope<'a> {
     swept: bool,
     params: &'a IndexMap<String, Quantity>,
     lets: &'a IndexMap<String, ExpressionType>,
+    /// The checked lets so far, for `noise(x)` of a let.
+    definitions: &'a [Let],
     /// Lets that read a reference run.
     referencing: &'a [String],
     references: &'a [String],
@@ -1210,6 +1342,10 @@ impl Scope for ExpressionScope<'_> {
 
     fn let_type(&self, name: &str) -> Option<ExpressionType> {
         self.lets.get(name).copied()
+    }
+
+    fn let_expression(&self, name: &str) -> Option<Expression> {
+        self.definitions.iter().find(|item| item.name == name).map(|item| item.expression.clone())
     }
 
     fn names(&self) -> Vec<String> {
@@ -1301,8 +1437,174 @@ pub fn compile_bench(document: &Document, design: &Design) -> Result<Bench> {
 /// Check `document`, a bench, against the compiled board `design`, with the
 /// fixture documents it may use (`using A, B`).
 pub fn compile_bench_with_fixtures(document: &Document, fixtures: &[Document], design: &Design) -> Result<Bench> {
+    let mut sections = compile_bench_sections(document, fixtures, design)?;
+    if sections.len() > 1 {
+        return Err(error(
+            "SIM097",
+            format!(
+                "bench {} has {} analyses, which compile to one bench each; load them with compile_bench_sections",
+                repr(&document.name),
+                sections.len()
+            ),
+            &document.location,
+        ));
+    }
+    Ok(sections.remove(0))
+}
+
+/// Compile the bench source `source`, one [`Bench`] per analysis (see [`compile_bench_sections`]).
+pub fn compile_benches_source(source: &str, filename: &str, design: &Design) -> Result<Vec<Bench>> {
+    compile_bench_sections(&parse(source, filename)?, &[], design)
+}
+
+/// The analysis statements of a bench, in order.
+fn analysis_declarations(document: &Document) -> Vec<(usize, &AnalysisDecl)> {
+    document
+        .declarations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, declaration)| match declaration {
+            Declaration::Bench(BenchStatement::Analysis(item)) => Some((index, item)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The names an expression reads (params, lets and contributors alike).
+fn expression_names(expression: &Expr, out: &mut Vec<String>) {
+    match &expression.kind {
+        ExprKind::Name(name) => out.push(name.clone()),
+        ExprKind::Call { arguments, .. } => arguments.iter().for_each(|argument| expression_names(argument, out)),
+        ExprKind::Negate(operand) => expression_names(operand, out),
+        ExprKind::Binary { left, right, .. } | ExprKind::Compare { left, right, .. } => {
+            expression_names(left, out);
+            expression_names(right, out);
+        }
+        ExprKind::Number(_) | ExprKind::Quantity { .. } | ExprKind::Probe { .. } => {}
+    }
+}
+
+/// Compile `document`, a bench, with the fixture documents it may use: one
+/// [`Bench`] for a bench with one analysis, and one per analysis for a bench
+/// with several (`SIM097`). In a bench with several analyses each `analysis`
+/// starts its section: the `let`, `measure` and `plot` statements after it,
+/// up to the next `analysis`, belong to it, and its name is the analysis's
+/// (`analysis NAME: KIND`, or the kind). Everything else is shared, and so
+/// are the lets before the first analysis (fixture lets among them); a
+/// section sees the shared lets its own statements use, directly or through
+/// other lets. `ic` statements go to the transient sections.
+pub fn compile_bench_sections(document: &Document, fixtures: &[Document], design: &Design) -> Result<Vec<Bench>> {
     let merged = merge_fixtures(document, fixtures, design)?;
-    let document = &merged;
+    let analyses = analysis_declarations(&merged);
+    if analyses.len() <= 1 {
+        return Ok(vec![compile_merged(&merged, design)?]);
+    }
+    let mut names: Vec<String> = Vec::new();
+    for (_, item) in &analyses {
+        let name = item.name.clone().unwrap_or_else(|| item.kind.clone());
+        if names.contains(&name) {
+            return Err(error(
+                "SIM097",
+                format!(
+                    "bench {} has two analyses named {}; name each: analysis NAME: {} {{ ... }}",
+                    repr(&merged.name),
+                    repr(&name),
+                    item.kind
+                ),
+                &item.location,
+            ));
+        }
+        names.push(name);
+    }
+    let first = analyses[0].0;
+    let section_of = |index: usize| analyses.iter().rposition(|(start, _)| *start <= index);
+    let tran = analyses.iter().any(|(_, item)| item.kind == "tran");
+    // The shared lets: before the first analysis.
+    let mut shared: Vec<(String, Vec<String>)> = Vec::new();
+    for (index, declaration) in merged.declarations.iter().enumerate() {
+        match declaration {
+            Declaration::Bench(BenchStatement::Let(item)) if index < first => {
+                let mut used = Vec::new();
+                expression_names(&item.expression, &mut used);
+                shared.push((item.name.clone(), used));
+            }
+            Declaration::Bench(BenchStatement::Measure(item)) if index < first => {
+                return Err(error(
+                    "SIM097",
+                    format!(
+                        "measure {} comes before the first analysis; in a bench with several analyses a measure belongs to the analysis it follows",
+                        item.name
+                    ),
+                    &item.location,
+                ));
+            }
+            Declaration::Bench(BenchStatement::Plot(item)) if index < first => {
+                return Err(error(
+                    "SIM097",
+                    "a plot comes before the first analysis; in a bench with several analyses a plot belongs to the analysis it follows",
+                    &item.location,
+                ));
+            }
+            Declaration::Bench(BenchStatement::InitialCondition(item)) if !tran => {
+                return Err(error(
+                    "SIM075",
+                    "ic sets the start of a transient run, and no analysis of the bench is tran",
+                    &item.location,
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut benches = Vec::new();
+    for (k, (_, analysis)) in analyses.iter().enumerate() {
+        // The names this section's own statements read, then the shared lets among them, transitively.
+        let mut wanted: Vec<String> = Vec::new();
+        for (index, declaration) in merged.declarations.iter().enumerate() {
+            if index < first || section_of(index) != Some(k) {
+                continue;
+            }
+            match declaration {
+                Declaration::Bench(BenchStatement::Let(item)) => expression_names(&item.expression, &mut wanted),
+                Declaration::Bench(BenchStatement::Measure(item)) => expression_names(&item.expression, &mut wanted),
+                Declaration::Bench(BenchStatement::Plot(item)) => {
+                    item.expressions.iter().for_each(|expression| expression_names(expression, &mut wanted))
+                }
+                _ => {}
+            }
+        }
+        let mut needed: Vec<&str> = Vec::new();
+        for (name, used) in shared.iter().rev() {
+            if wanted.contains(name) {
+                needed.push(name);
+                wanted.extend(used.iter().cloned());
+            }
+        }
+        let declarations: Vec<Declaration> = merged
+            .declarations
+            .iter()
+            .enumerate()
+            .filter(|(index, declaration)| match declaration {
+                Declaration::Bench(BenchStatement::Analysis(_)) => *index == analyses[k].0,
+                Declaration::Bench(BenchStatement::Let(item)) if *index < first => needed.contains(&item.name.as_str()),
+                Declaration::Bench(BenchStatement::Let(_) | BenchStatement::Measure(_) | BenchStatement::Plot(_)) => {
+                    section_of(*index) == Some(k)
+                }
+                Declaration::Bench(BenchStatement::InitialCondition(_)) => analysis.kind == "tran",
+                _ => true,
+            })
+            .map(|(_, declaration)| declaration.clone())
+            .collect();
+        let section = Document { declarations, ..merged.clone() };
+        let mut bench = compile_merged(&section, design)?;
+        bench.name = format!("{}.{}", merged.name, names[k]);
+        bench.section = Some(names[k].clone());
+        benches.push(bench);
+    }
+    Ok(benches)
+}
+
+/// Compile a bench document whose fixtures are merged in and that has at most one analysis.
+fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
     let target = bench_target(document)?;
     let board = &design.electrical;
     let module = resolve_target(document, target, design)?;
@@ -1637,10 +1939,20 @@ pub fn compile_bench_with_fixtures(document: &Document, fixtures: &[Document], d
             treatment,
         });
     }
-    // Bench nets.
-    let mut nets: Vec<BenchNet> = Vec::new();
+    // Bench nets: declarations of one name are one net (a bench adds pins to a fixture's net).
+    let mut net_declarations: Vec<NetDecl> = Vec::new();
     for declaration in &document.declarations {
         let Declaration::Net(declaration) = declaration else { continue };
+        match net_declarations.iter_mut().find(|net| net.name == declaration.name) {
+            Some(net) => {
+                net.endpoints.extend(declaration.endpoints.iter().cloned());
+                net.endpoint_locations.extend(declaration.endpoint_locations.iter().cloned());
+            }
+            None => net_declarations.push(declaration.clone()),
+        }
+    }
+    let mut nets: Vec<BenchNet> = Vec::new();
+    for declaration in &net_declarations {
         nets.push(bench_net(declaration, &view, &library, &bench_components, &nets)?);
     }
     for (component, location) in bench_components.iter().zip(&bench_locations) {
@@ -1677,6 +1989,7 @@ pub fn compile_bench_with_fixtures(document: &Document, fixtures: &[Document], d
         bench_components: &bench_components,
         nets: &nets,
         model_kinds: &model_kinds,
+        supplies: &supplies,
     };
 
     // Replacements.
@@ -1843,6 +2156,7 @@ pub fn compile_bench_with_fixtures(document: &Document, fixtures: &[Document], d
             swept,
             params: &values,
             lets: &let_types,
+            definitions: &lets,
             referencing: &referencing,
             references: &reference_names,
             noise: noise_scope,
@@ -2028,6 +2342,7 @@ pub fn compile_bench_with_fixtures(document: &Document, fixtures: &[Document], d
         variation,
         initial_conditions,
         fixtures: target.fixtures.clone(),
+        section: None,
     })
 }
 
@@ -2760,10 +3075,20 @@ pub fn expression_value(expression: &Expression) -> Value {
         ExpressionKind::Probe(Probe::Current { component, pin }) => {
             vec![("probe", text("I")), ("component", text(component)), ("pin", text(pin))]
         }
-        ExpressionKind::Probe(Probe::Noise { contributor }) => {
-            vec![("probe", text("noise")), ("contributor", optional(contributor, |name| text(name)))]
+        ExpressionKind::Probe(Probe::Noise { contributor, quantity }) => {
+            let mut entries = vec![("probe", text("noise")), ("contributor", optional(contributor, |name| text(name)))];
+            if let Some(quantity) = quantity {
+                entries.push(("quantity", expression_value(quantity)));
+            }
+            entries
         }
-        ExpressionKind::Probe(Probe::InputNoise) => vec![("probe", text("input_noise"))],
+        ExpressionKind::Probe(Probe::InputNoise { quantity }) => {
+            let mut entries = vec![("probe", text("input_noise"))];
+            if let Some(quantity) = quantity {
+                entries.push(("quantity", expression_value(quantity)));
+            }
+            entries
+        }
         ExpressionKind::Call { function, arguments } => vec![
             ("call", text(function.name())),
             ("arguments", Value::Array(arguments.iter().map(expression_value).collect())),
@@ -2923,6 +3248,9 @@ pub fn bench_value(bench: &Bench) -> Value {
     }
     if !bench.fixtures.is_empty() {
         extra.push(("fixtures", Value::Array(bench.fixtures.iter().map(|name| text(name)).collect())));
+    }
+    if let Some(section) = &bench.section {
+        extra.push(("section", text(section)));
     }
     if !bench.initial_conditions.is_empty() {
         let items = bench

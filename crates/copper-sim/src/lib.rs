@@ -21,11 +21,14 @@
 //! | [`newton`] | real-valued assembly with companion models, Newton iteration, the nonlinear operating point (gmin and source stepping) and the small-signal linearisation for AC |
 //! | [`transient`] | transient analysis: trapezoidal integration with a backward-Euler start, truncation-error step control, breakpoints, initial conditions (`ic`, `uic`) |
 //! | [`dc`] | DC sweeps: Newton operating points over a swept value with continuation, op-amp limits active |
-//! | [`real_lu`] | dense real LU for the Newton and transient solves |
+//! | [`sparse_lu`] | sparse LU (real and complex) for every solve: Markowitz order with threshold pivoting, refactorisation in the same order while the pattern holds |
+//! | [`real_lu`] | dense real LU, which decides the systems the sparse LU leaves to it |
+//! | [`timing`] | opt-in accounting of where an analysis spends its time (`copper sim --timing`) |
 //! | [`time_measure`] | measurements on time vectors: windows, time-weighted mean and RMS, peak to peak, crossings, settling, overshoot, harmonics and THD |
 //!
-//! The solver is a dense complex LU with row equilibration and partial
-//! pivoting ([`lu`]), sized for tens to a few hundred unknowns. A singular
+//! The solver is a sparse LU with the equilibration and iterative refinement
+//! of the dense complex [`lu`] ([`sparse_lu`]); a system it finds singular or
+//! nearly so is factored by the dense LU, whose verdict stands. A singular
 //! system is an error that names the likely cause ([`diagnose`]): nodes with
 //! no (DC) path to ground, loops of voltage sources. No NaN or infinity
 //! escapes an analysis.
@@ -56,7 +59,9 @@ pub mod noise;
 pub mod real_lu;
 pub mod rng;
 pub mod semiconductors;
+pub mod sparse_lu;
 pub mod time_measure;
+pub mod timing;
 pub mod transient;
 pub mod waveform;
 
@@ -75,7 +80,9 @@ pub use error::{AnalysisPoint, SimError, SingularCause};
 pub use models::{
     DiffampPins, LoadParams, MacroInstance, MacroModel, OpampParams, OpampPins, SourceOutput, SourceParams,
 };
-pub use noise::{NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, integrate_psd, noise};
+pub use noise::{
+    NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,
+};
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, MosParams};
 pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

@@ -29,7 +29,11 @@
 //!
 //! Values come from the bench's params at the step being run: a passive
 //! whose value names a param, a model parameter that names one and the
-//! analysis bounds are re-valued per step. Model parameters the solver does
+//! analysis bounds are re-valued per step. A capacitor of 0 F is absent: no
+//! element, its pins open (so a fixture can hold an optional stray). An
+//! amplifier block with parameter sets per supply (`supply 3.3V { ... }`)
+//! runs with the set whose span is nearest its supply span, `V(vp) - V(vn)`
+//! read from the supplies and DC sources on those nets ([`supply_set`]). Model parameters the solver does
 //! not use in an AC or operating-point run (slew rate, noise densities,
 //! output swing and current limit, waveforms) are listed as inactive in the
 //! results; in a transient run the slew rate, swing, current limit and
@@ -45,16 +49,18 @@
 //! second. For a macro model it is the signed sum of the currents of the
 //! model's elements attached to that pin's role, as the expansion in
 //! `copper_sim::models` defines them; the op-amp's supply pins carry no
-//! current in this linear model.
+//! current in this linear model. `I(S)` of a supply is the current it
+//! delivers into its net (pin [`SUPPLY_NET`] of `supply S`): positive when it
+//! sources current, the negative of its source's current from plus to minus.
 
 use std::collections::BTreeMap;
 
 use copper_json::python_str_repr as repr;
-use copper_lang::bench::{Bench, PassiveKind, Replacement, SimComponent, SupplyTreatment, Treatment};
+use copper_lang::bench::{Bench, PassiveKind, Replacement, SUPPLY_NET, SimComponent, SupplyTreatment, Treatment};
 use copper_lang::compiler::Design;
 use copper_lang::expression::Node;
 use copper_lang::model::{FlatElectricalView, PartDefinition};
-use copper_lang::simulation::{SimKind, SimQuantity, SimSpec, SourceOutput};
+use copper_lang::simulation::{PartSimModel, SimKind, SimQuantity, SimSpec, SourceOutput, SupplySet};
 use copper_sim::{Circuit, DiffampPins, LoadParams, NodeId, OpampParams, OpampPins, SourceParams, SourceValue};
 use copper_units::Quantity;
 use indexmap::IndexMap;
@@ -454,7 +460,8 @@ impl Builder<'_> {
             SimKind::Load => {
                 let params = LoadParams {
                     resistance: self.parameter(spec, "resistance"),
-                    capacitance: self.parameter(spec, "capacitance"),
+                    // A capacitance of 0 F is none.
+                    capacitance: self.parameter(spec, "capacitance").filter(|c| *c != 0.0),
                 };
                 let (p, n) = (node("inp")?, node("ref")?);
                 self.circuit.load(instance, p, n, &params).map_err(fail)?;
@@ -582,8 +589,15 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
                         pins.len()
                     ));
                 };
-                let (a, z) = (b.pin(reference, first), b.pin(reference, second));
                 let x = b.params.get(&override_key(reference, None)).copied().unwrap_or_else(|| b.value(value));
+                // A capacitor of 0 F is absent (an optional stray): no element, its pins open.
+                if *kind == PassiveKind::Capacitor && x == 0.0 {
+                    used.fidelity = "ideal";
+                    used.model = "capacitor (0 F: absent)".to_owned();
+                    models.push(used);
+                    continue;
+                }
+                let (a, z) = (b.pin(reference, first), b.pin(reference, second));
                 let added = match kind {
                     PassiveKind::Resistor => b.circuit.resistor(reference, a, z, x),
                     PassiveKind::Capacitor => b.circuit.capacitor(reference, a, z, x),
@@ -598,6 +612,7 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
             }
             Treatment::PartModel => {
                 let blocks = bench.models(design, component);
+                let mut sets: Vec<String> = Vec::new();
                 for block in blocks {
                     let instance = match (&block.unit, blocks.len()) {
                         (Some(unit), n) if n > 1 => format!("{reference}.{unit}"),
@@ -607,7 +622,18 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
                     for (role, pin) in &block.pins {
                         nodes.insert(role.clone(), b.pin(reference, pin));
                     }
-                    let (roles, inactive) = b.model(&instance, reference, &block.spec, &nodes)?;
+                    let set = supply_set(bench, wiring, b.params, reference, block)?;
+                    let spec = match set {
+                        Some(set) => {
+                            let span = set.span.to_string();
+                            if !sets.contains(&span) {
+                                sets.push(span);
+                            }
+                            std::borrow::Cow::Owned(with_set(&block.spec, set))
+                        }
+                        None => std::borrow::Cow::Borrowed(&block.spec),
+                    };
+                    let (roles, inactive) = b.model(&instance, reference, &spec, &nodes)?;
                     for (role, terms) in roles {
                         if let Some(pin) = block.pins.get(&role) {
                             b.current(reference, pin, terms);
@@ -631,6 +657,9 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
                     }
                 }
                 used.model = kinds.join(", ");
+                if !sets.is_empty() {
+                    used.model.push_str(&format!(" (parameter set for a {} supply)", sets.join(", ")));
+                }
             }
             Treatment::Replaced(index) => {
                 let replacement = &bench.replacements[*index];
@@ -674,6 +703,8 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
                     .voltage_source(&instance, node, NodeId::GROUND, SourceValue::dc(volts))
                     .map_err(|error| format!("{owner}: {error}"))?;
                 b.owners.insert(instance.clone(), owner.clone());
+                // `I(SUPPLY)`: the current it delivers into its net, against the source's plus-to-minus current.
+                b.current(&instance, SUPPLY_NET, vec![(instance.clone(), -1.0)]);
                 used.fidelity = "ideal";
                 used.model = format!("dc source {}", supply.voltage);
             }
@@ -684,6 +715,10 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
             SupplyTreatment::Replaced(index) => {
                 let replacement = &bench.replacements[*index];
                 used.inactive = b.replacement(&instance, &owner, replacement)?;
+                // `I(SUPPLY)`: the current out of its model's `out` terminal into the net.
+                let out = b.pin_currents.get(&(instance.clone(), "out".to_owned())).cloned().unwrap_or_default();
+                let delivered = out.into_iter().map(|(element, sign)| (element, -sign)).collect();
+                b.current(&instance, SUPPLY_NET, delivered);
                 used.fidelity = "replaced";
                 used.model = replacement.spec.kind.name().to_owned();
             }
@@ -699,6 +734,92 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
         owners: b.owners,
         models,
     })
+}
+
+/// The DC voltage of solver node `node` as the bench sets it, when a supply
+/// or an ideal DC source sets it: the ground, a supply simulated as its DC
+/// source, a supply replaced with a voltage source to ground, or a bench
+/// model or replaced component that is a voltage source to ground (its `dc`).
+pub fn node_dc(bench: &Bench, wiring: &Wiring, params: &Params, node: &str) -> Option<f64> {
+    if node == wiring.ground() {
+        return Some(0.0);
+    }
+    let source_dc = |instance: &str, spec: &SimSpec, nodes: &IndexMap<String, Node>| -> Option<f64> {
+        let voltage =
+            spec.kind == SimKind::Source && spec.output.unwrap_or(SourceOutput::Voltage) == SourceOutput::Voltage;
+        let (out, reference) = (nodes.get("out")?, nodes.get("ref")?);
+        if !voltage || wiring.node(out) != node || wiring.node(reference) != wiring.ground() {
+            return None;
+        }
+        let swept = params.get(&override_key(instance, Some("dc"))).copied();
+        Some(swept.or_else(|| spec.parameters.get("dc").map(|q| value(q, params))).unwrap_or(0.0))
+    };
+    for supply in &bench.supplies {
+        let instance = format!("supply {}", supply.name);
+        match &supply.treatment {
+            SupplyTreatment::Ground if wiring.node(&Node::Net(supply.net.clone())) == node => return Some(0.0),
+            SupplyTreatment::DcSource if wiring.node(&Node::Net(supply.net.clone())) == node => {
+                let swept = params.get(&override_key(&instance, Some("voltage"))).copied();
+                return Some(swept.unwrap_or_else(|| base(&supply.voltage)));
+            }
+            SupplyTreatment::Replaced(index) => {
+                let replacement = &bench.replacements[*index];
+                if let Some(volts) = source_dc(&instance, &replacement.spec, &replacement.nodes) {
+                    return Some(volts);
+                }
+            }
+            _ => {}
+        }
+    }
+    for model in &bench.models {
+        if let Some(volts) = source_dc(&model.name, &model.spec, &model.nodes) {
+            return Some(volts);
+        }
+    }
+    for replacement in bench.replacements.iter().filter(|item| !item.supply) {
+        if let Some(volts) = source_dc(&replacement.target, &replacement.spec, &replacement.nodes) {
+            return Some(volts);
+        }
+    }
+    None
+}
+
+/// The parameter set per supply a part block of component `reference` runs
+/// with: the set whose span is nearest `V(vp) - V(vn)`, `None` when the block
+/// declares no sets. An error when the voltage of a supply pin is not set by
+/// a supply or a DC source of the bench.
+pub fn supply_set<'b>(
+    bench: &Bench,
+    wiring: &Wiring,
+    params: &Params,
+    reference: &str,
+    block: &'b PartSimModel,
+) -> Result<Option<&'b SupplySet>, String> {
+    if block.supply_sets.is_empty() {
+        return Ok(None);
+    }
+    let rail = |role: &str| -> Result<f64, String> {
+        let pin = block.pins.get(role).ok_or_else(|| format!("{reference}: the model has no {role} role"))?;
+        let node = wiring.pin_node(reference, pin);
+        node_dc(bench, wiring, params, &node).ok_or_else(|| {
+            format!(
+                "{reference}: its sim block has parameter sets per supply, but the voltage of its {role} pin {pin} (net {}) is set by no supply or DC source of the bench, so the set cannot be chosen",
+                repr(&node)
+            )
+        })
+    };
+    let span = rail("vp")? - rail("vn")?;
+    let distance = |set: &SupplySet| (base(&set.span) - span).abs();
+    Ok(block.supply_sets.iter().reduce(|best, set| if distance(set) < distance(best) { set } else { best }))
+}
+
+/// `spec` with the parameters of `set` in place of its own.
+pub fn with_set(spec: &SimSpec, set: &SupplySet) -> SimSpec {
+    let mut spec = spec.clone();
+    for (key, quantity) in &set.parameters {
+        spec.parameters.insert(key.clone(), quantity.clone());
+    }
+    spec
 }
 
 impl Lowered {

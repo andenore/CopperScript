@@ -95,7 +95,8 @@ impl Dimension {
     pub fn units(self) -> &'static [(&'static str, &'static str)] {
         // Units after the Python-era ones (`mohm`, `uV`, `nV`, `nA`, `pA`, `fA`) are appended so the
         // earlier declaration order is unchanged.
-        const OHMS: &[(&str, &str)] = &[("ohm", "1"), ("kohm", "1000"), ("Mohm", "1000000"), ("mohm", "0.001")];
+        const OHMS: &[(&str, &str)] =
+            &[("ohm", "1"), ("kohm", "1000"), ("Mohm", "1000000"), ("mohm", "0.001"), ("Gohm", "1000000000")];
         match self {
             Dimension::Voltage => &[("V", "1"), ("mV", "0.001"), ("uV", "0.000001"), ("nV", "1e-9")],
             Dimension::Resistance | Dimension::Impedance => OHMS,
@@ -260,7 +261,10 @@ mod tests {
         }
         // The Python-era units keep their order; the new ones follow.
         let ohms: Vec<&str> = Dimension::Resistance.units().iter().map(|(name, _)| *name).collect();
-        assert_eq!(ohms, ["ohm", "kohm", "Mohm", "mohm"]);
+        assert_eq!(ohms, ["ohm", "kohm", "Mohm", "mohm", "Gohm"]);
+        let giga = Quantity::of(Dimension::Resistance, &parse("1.5"), "Gohm").unwrap();
+        assert_eq!(giga.to_string(), "1.5 Gohm");
+        assert_eq!(giga.base_value().to_sci_string(), "1500000000.0");
     }
 
     #[test]

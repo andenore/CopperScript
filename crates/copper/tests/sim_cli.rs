@@ -33,7 +33,7 @@ fn sim_rc_example_passes_and_writes_its_files() {
     let stdout = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{stdout}{}", text(&output.stderr));
     assert!(stdout.starts_with("BENCH RcCorner (SimulationRCFilter): ac 10 Hz to 100 kHz"), "{stdout}");
-    assert!(stdout.contains("gain_at_corner   -3.011 dB") && stdout.contains("PASS: 2 of 2"), "{stdout}");
+    assert!(stdout.contains("gain_at_corner   -3.01 dB") && stdout.contains("PASS: 2 of 2"), "{stdout}");
     for file in ["sim-results.json", "RcCorner.csv", "RcCorner.html"] {
         assert!(out.join(file).is_file(), "{file}");
     }

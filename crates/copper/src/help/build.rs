@@ -110,10 +110,21 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Source,
         summary: "run the board's simulation benches and check their measures against limits",
         options: &[
-            Opt { flag: "--bench BENCH", help: "run only the bench of this name (default: every bench in benches/)" },
+            Opt {
+                flag: "--bench BENCH",
+                help: "run only the bench of this name (default: every bench in benches/); a bench with several analyses runs them all, BENCH.SECTION one of them",
+            },
             Opt {
                 flag: "--out OUT",
                 help: "directory for sim-results.json, BENCH.csv and BENCH.html (default: build/sim)",
+            },
+            Opt {
+                flag: "--jobs N",
+                help: "run a bench's steps, Monte Carlo runs and worst-case corners on up to N threads (default: one per core); the results do not depend on N",
+            },
+            Opt {
+                flag: "--timing",
+                help: "print each bench's wall time, solver work and time per phase (also COPPER_SIM_TIMING=1); adds timing to the JSON",
             },
             Opt {
                 flag: "--locked",

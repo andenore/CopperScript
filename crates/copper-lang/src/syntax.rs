@@ -552,10 +552,13 @@ pub struct IgnoreDecl {
     pub target_locations: Vec<Location>,
 }
 
-/// `analysis KIND;` or `analysis KIND { ... }`.
+/// `analysis KIND;` or `analysis KIND { ... }`; a bench with several
+/// analyses may name one: `analysis NAME: KIND { ... }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisDecl {
     pub location: Location,
+    /// The name of `analysis NAME: KIND`, `None` for `analysis KIND`.
+    pub name: Option<String>,
     pub kind: String,
     pub entries: Vec<SimEntry>,
 }
@@ -617,6 +620,10 @@ pub struct VariationDecl {
     pub kind: String,
     /// The target of a `tolerance` statement.
     pub target: Option<String>,
+    /// The further targets of a matched `tolerance A, B = t match m;`.
+    pub others: Vec<String>,
+    /// The ratio tolerance of a matched `tolerance ... match m;`.
+    pub match_value: Option<Scalar>,
     /// The value of a `tolerance` statement.
     pub value: Option<Scalar>,
     /// The properties of `montecarlo { ... }` (and of `worstcase { ... }`).

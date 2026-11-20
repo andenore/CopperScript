@@ -336,7 +336,8 @@ fn unknown_probe_targets() {
     assert!(rc_error(" let v = V(R9.1);").contains("SIM039: unknown node 'R9.1': 'R9' is no board or bench component"));
     let current = rc_error(" let i = I(RR1);");
     assert!(
-        current.contains("SIM045: unknown component 'RR1' in I(...)") && current.contains("did you mean 'R1'?"),
+        current.contains("SIM045: unknown component or supply 'RR1' in I(...)")
+            && current.contains("did you mean 'R1'?"),
         "{current}"
     );
     assert!(rc_error(" let i = I(R1.9);").contains("SIM045: 'R1' has no pin '9'"));
@@ -421,7 +422,7 @@ fn bench_circuit_checks() {
     // Analyses.
     let only = |text: &str| compile_bench_source(&format!("bench B for RC {{\n{text}\n}}"), "b.copper", &design);
     assert!(error_of(only(" let x = 1;")).contains("SIM040: a bench needs an analysis"));
-    assert!(error_of(only(" analysis op;\n analysis op;")).contains("SIM040: a bench runs one analysis"));
+    assert!(error_of(only(" analysis op;\n analysis op;")).contains("SIM097: bench 'B' has two analyses named 'op'"));
     assert!(error_of(only(" analysis tran { }")).contains("SIM069: analysis tran needs a stop time"));
     assert!(
         error_of(only(" analysis ac { from = 1kHz; to = 10Hz; points_per_decade = 10; }")).contains("0 < from < to")
@@ -932,8 +933,14 @@ fn fixtures_and_initial_conditions_parse() {
         panic!("a target first")
     };
     assert_eq!(target.fixtures, ["Common", "Other"]);
-    let failure = error_of(copper_lang::parse("fixture F for RC using G { }", "f.copper"));
-    assert!(failure.contains("SIM073"), "{failure}");
+    // A fixture may use other fixtures.
+    let fixture = copper_lang::parse("fixture F for RC using G { }", "f.copper").unwrap();
+    let Some(copper_lang::syntax::Declaration::Bench(copper_lang::syntax::BenchStatement::Target(target))) =
+        fixture.declarations.first()
+    else {
+        panic!("a target first")
+    };
+    assert_eq!(target.fixtures, ["G"]);
     let failure = error_of(copper_lang::parse("bench B for RC { ic V(A, B) = 1V; }", "b.copper"));
     assert!(failure.contains("SIM075"), "{failure}");
 }

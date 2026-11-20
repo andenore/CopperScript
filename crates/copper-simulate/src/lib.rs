@@ -22,6 +22,7 @@ pub mod evaluate;
 pub mod format;
 pub mod lower;
 pub mod noise;
+pub mod parallel;
 pub mod report;
 pub mod results;
 pub mod run;
@@ -35,6 +36,7 @@ use copper_lang::CopperScriptError;
 use copper_lang::bench::load_benches;
 use copper_lang::compiler::Design;
 
+pub use copper_sim::timing;
 pub use run::{BenchRun, Status, run_bench};
 
 /// Why benches could not be run at all.
@@ -72,10 +74,12 @@ pub fn simulate(board_file: &Path, design: &Design, only: Option<&str>) -> Resul
     }
     let selected: Vec<_> = match only {
         None => benches.iter().collect(),
-        Some(name) => benches.iter().filter(|bench| bench.name == name).collect(),
+        // A bench with several analyses is selected by its own name or one section's.
+        Some(name) => benches.iter().filter(|bench| bench.name == name || bench.bench_name() == name).collect(),
     };
     if selected.is_empty() {
-        let names: Vec<&str> = benches.iter().map(|bench| bench.name.as_str()).collect();
+        let mut names: Vec<&str> = benches.iter().map(|bench| bench.bench_name()).collect();
+        names.dedup();
         return Err(SimulateError::NoBench(format!(
             "board {} has no bench {}; its benches: {}",
             design.electrical.name,

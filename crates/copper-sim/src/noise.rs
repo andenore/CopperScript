@@ -5,7 +5,10 @@
 //! At each frequency of the sweep the AC matrix `A` of the circuit is
 //! assembled as for [`crate::ac`] and the transposed system `A^T z = e` is
 //! solved once, with `e` selecting the output (`+1` in the row of the output
-//! node, `-1` in the row of the reference node). Because `V_out = e^T x =
+//! node, `-1` in the row of the reference node). An output that is a
+//! weighted sum of node voltages ([`NoiseSpec::combination`], the
+//! linearisation of a quantity such as `V(a) / V(b)`) puts its complex
+//! weight at each frequency in the rows of its nodes instead. Because `V_out = e^T x =
 //! z^T b` for any right-hand side `b`, the transfer from every noise
 //! generator to the output follows from `z` without another solve: a current
 //! `I` driven from node `p` to node `q` adds `-I` to row `p` and `+I` to row
@@ -61,6 +64,8 @@ use crate::lu::{Lu, LuError};
 use crate::measure::MeasureError;
 use crate::mna::{Layout, Mode, assemble};
 use crate::models::MacroModel;
+use crate::sparse_lu::{SparseLu, SparseMatrix, factor_reusing};
+use crate::timing::{self, Phase};
 use std::f64::consts::PI;
 
 /// Boltzmann's constant, J/K (exact since the 2019 SI).
@@ -85,12 +90,32 @@ pub struct NoiseSpec {
     pub input: Option<String>,
     /// Temperature of the resistors, K.
     pub temperature: f64,
+    /// When set, the output is `sum_k w_k(f) (V(node_k) - V(reference_k))`
+    /// instead of `output` and `reference`: one `(node, reference, weights)`
+    /// term per node pair, with one complex weight per frequency of the sweep.
+    pub combination: Option<Vec<NoiseTerm>>,
+}
+
+/// One node pair of a weighted noise output ([`NoiseSpec::combination`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoiseTerm {
+    pub node: String,
+    /// `None` is ground.
+    pub reference: Option<String>,
+    /// The weight at each frequency of the sweep.
+    pub weights: Vec<Complex>,
 }
 
 impl NoiseSpec {
     /// Noise at `output` against ground, at [`DEFAULT_TEMPERATURE`].
     pub fn new(output: &str) -> Self {
-        Self { output: output.to_string(), reference: None, input: None, temperature: DEFAULT_TEMPERATURE }
+        Self {
+            output: output.to_string(),
+            reference: None,
+            input: None,
+            temperature: DEFAULT_TEMPERATURE,
+            combination: None,
+        }
     }
 }
 
@@ -441,11 +466,36 @@ pub fn noise(circuit: &Circuit, sweep: &Sweep, spec: &NoiseSpec) -> Result<Noise
         (circuit, Vec::new())
     };
     let layout = Layout::of(circuit);
-    let out = node_row(circuit, &layout, &spec.output)?;
-    let reference = match &spec.reference {
-        Some(name) => node_row(circuit, &layout, name)?,
-        None => None,
-    };
+    // The output's rows (node, reference) and their weights per frequency (`None`: 1).
+    type Rows<'w> = Vec<(Option<usize>, Option<usize>, Option<&'w [Complex]>)>;
+    let mut rows: Rows = Vec::new();
+    match &spec.combination {
+        None => {
+            let out = node_row(circuit, &layout, &spec.output)?;
+            let reference = match &spec.reference {
+                Some(name) => node_row(circuit, &layout, name)?,
+                None => None,
+            };
+            rows.push((out, reference, None));
+        }
+        Some(terms) => {
+            for term in terms {
+                if term.weights.len() != frequencies.len() {
+                    return Err(SimError::BadSweep(format!(
+                        "a weighted noise output has {} weights for {} frequencies",
+                        term.weights.len(),
+                        frequencies.len()
+                    )));
+                }
+                let out = node_row(circuit, &layout, &term.node)?;
+                let reference = match &term.reference {
+                    Some(name) => node_row(circuit, &layout, name)?,
+                    None => None,
+                };
+                rows.push((out, reference, Some(&term.weights)));
+            }
+        }
+    }
     let generators = generators(circuit, &bias)?;
     if generators.iter().any(Generator::has_corner) && frequencies.contains(&0.0) {
         return Err(SimError::BadSweep("a noise sweep with 1/f corners needs frequencies above 0 Hz".to_string()));
@@ -461,31 +511,52 @@ pub fn noise(circuit: &Circuit, sweep: &Sweep, spec: &NoiseSpec) -> Result<Noise
     let mut contributions: Vec<(Vec<f64>, Vec<f64>)> =
         generators.iter().map(|_| (Vec::with_capacity(points), Vec::with_capacity(points))).collect();
     let mut gains = Vec::with_capacity(frequencies.len());
-    for &f in &frequencies {
+    let mut factors: Option<SparseLu<Complex>> = None;
+    for (point, &f) in frequencies.iter().enumerate() {
         let at = AnalysisPoint::Ac { frequency: f };
         let mode = Mode::Ac { omega: 2.0 * PI * f };
         let z = if n == 0 {
             Vec::new()
         } else {
+            let span = timing::span(Phase::Assembly);
             let sys = assemble(circuit, &layout, mode);
-            let mut transposed = vec![Complex::ZERO; n * n];
-            for r in 0..n {
-                for k in 0..n {
-                    transposed[k * n + r] = sys.a[r * n + k];
+            let mut e = vec![Complex::ZERO; n];
+            for (out, reference, weights) in &rows {
+                let w = weights.map_or(Complex::ONE, |weights| weights[point]);
+                if let Some(r) = out {
+                    e[*r] += w;
+                }
+                if let Some(r) = reference {
+                    e[*r] -= w;
                 }
             }
-            let lu = Lu::factor(transposed, n).map_err(|e| match e {
-                LuError::NonFinite => SimError::NonFinite(at),
-                _ => SimError::Singular { at, causes: diagnose(circuit, &layout, at.is_dc(), e) },
-            })?;
-            let mut e = vec![Complex::ZERO; n];
-            if let Some(r) = out {
-                e[r] += Complex::ONE;
+            let sparse = SparseMatrix::from_dense(&sys.a, n).transposed();
+            drop(span);
+            let factored = {
+                let _span = timing::span(Phase::Factor);
+                factor_reusing(&sparse, factors.take())
+            };
+            match factored {
+                Some(lu) => {
+                    let _span = timing::span(Phase::Solve);
+                    let z = lu.solve(&e).ok_or(SimError::NonFinite(at))?;
+                    factors = Some(lu);
+                    z
+                }
+                None => {
+                    let mut transposed = vec![Complex::ZERO; n * n];
+                    for r in 0..n {
+                        for k in 0..n {
+                            transposed[k * n + r] = sys.a[r * n + k];
+                        }
+                    }
+                    let lu = Lu::factor(transposed, n).map_err(|e| match e {
+                        LuError::NonFinite => SimError::NonFinite(at),
+                        _ => SimError::Singular { at, causes: diagnose(circuit, &layout, at.is_dc(), e) },
+                    })?;
+                    lu.solve(&e).ok_or(SimError::NonFinite(at))?
+                }
             }
-            if let Some(r) = reference {
-                e[r] -= Complex::ONE;
-            }
-            lu.solve(&e).ok_or(SimError::NonFinite(at))?
         };
         let at_row = |r: Option<usize>| r.map_or(Complex::ZERO, |k| z[k]);
         let mut total = 0.0;

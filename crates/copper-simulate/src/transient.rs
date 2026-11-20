@@ -200,7 +200,7 @@ fn windowed(
 
 /// Evaluate a time-domain function or a windowed reduction of `x`.
 pub fn call(evaluator: &Evaluator, function: Function, x: &Value, arguments: &[Expression]) -> Result<Value, String> {
-    let solution = evaluator.solution;
+    let solution = evaluator.solution();
     // A time or dc axis: linear between samples, means weighted by the axis.
     let tran = matches!(solution, Solution::Tran(_) | Solution::Dc(_));
     let axis = solution.axis();
@@ -252,7 +252,7 @@ pub fn call(evaluator: &Evaluator, function: Function, x: &Value, arguments: &[E
     if !value.is_finite() {
         return Err("the result is not finite".to_owned());
     }
-    Ok(Value { samples: vec![copper_sim::Complex::real(value)], swept: false })
+    Ok(Value::real(value))
 }
 
 /// A time with three significant digits in engineering units (`900 us`, `1.25 ms`).

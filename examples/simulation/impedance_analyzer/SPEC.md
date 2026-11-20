@@ -276,8 +276,8 @@ CopperLib after review.
 | Common-mode error | 0.2 % at 70 dB rejection | Common mode about 7 times the sense voltage | 0.022 % with the receiver at its 90 dB minimum and matched buffers |
 | Sense contact pole | See the guard table | Contact resistance against node capacitance | node 1.6 pF, not 0.3 pF; see the guard table note |
 | Transimpedance phase lag at 1 MHz | About 7 degrees | 8 MHz single pole; removed by calibration | 10.7 degrees (1.5 pF); 10.3 to 10.5 for the whole channel before calibration, 0 after |
-| Current-channel noise | About 0.9 pA per root hertz, far below 15 uA in a 1 kHz detection bandwidth | Thermal noise of 20 kohm | estimated 0.9 pA/rtHz, simulated 4.0 pA/rtHz at 1 kHz referred to the current: 1.55 pA/rtHz the transimpedance stage, the rest the drive's own current noise, which cancels in the impedance; 98 dB SNR in 1 kHz (`MeasurementNoiseCurrent`) |
-| Voltage-channel noise at the smallest signal | not estimated | | simulated 22 nV/rtHz at 1 kHz, 15 nV/rtHz above 10 kHz referred to the sense electrodes; 55 to 59 dB SNR for 0.6 mV in 1 kHz: 0.17 % and 0.10 degrees RMS at 5 ohm m (`MeasurementNoiseGain1` to `Gain100`) |
+| Current-channel noise | About 0.9 pA per root hertz, far below 15 uA in a 1 kHz detection bandwidth | Thermal noise of 20 kohm | estimated 0.9 pA/rtHz, simulated 4.0 pA/rtHz at 1 kHz referred to the current: 1.55 pA/rtHz the transimpedance stage, the rest the drive's own current noise, which cancels in the impedance; 98 dB SNR in 1 kHz (`MeasurementNoise`) |
+| Voltage-channel noise at the smallest signal | not estimated | | simulated 22 nV/rtHz at 1 kHz, 15 nV/rtHz above 10 kHz referred to the sense electrodes; 55 to 59 dB SNR for 0.6 mV in 1 kHz: the impedance's noise 0.12 % and 0.070 degrees RMS at 5 ohm m (`MeasurementNoise`, `noise(z1)`) |
 | Slew rate needed | 20 V/us | 3.1 V peak at 1 MHz | estimated 20 V/us; simulated: the pump output peaks at 2.59 V at 1 kHz but only 0.61 V at 1 MHz (the strays take the current there), so the largest slew needed is 3.8 V/us at 1 MHz, against 225 V/us; no harmonic from slewing (`Distortion`) |
 | Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.66 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`) |
 | Guard loop stability | Unknown | The HC guard feeds the pump's own buffer output back to its input node through the pad capacitance | no peaking (guard tracking at most 100 %); a negative real part of -42.5 kohm that AC analysis cannot classify; no oscillation in the `Startup` transient with the electrodes in air (time steps up to 1 ms, so not conclusive) |
@@ -303,7 +303,7 @@ model and strays, the firmware's arithmetic, the tolerances) is in fixtures
 | `ContactImbalance` | Unequal contacts: limits 1 % and 1 degree within the rating (sense contacts 100 ohm apart, LC 200 ohm, HC 10 times); one contact 5 % to 10 times worse reported | P0 | pass |
 | `SenseCommonMode` | Common-mode rejection of the sense path; limit 63 dB with contacts up to 5.58 kohm, 11.2 to 72.5 kohm reported | P0 | pass |
 | `PumpOutputImpedance` | Output impedance of the pump against frequency; peaking as a stability warning, with the guard connected | P0 | pass |
-| `MeasurementNoiseGain1`, `MeasurementNoiseGain10`, `MeasurementNoiseGain100`, `MeasurementNoiseCurrent` | Noise on each ADC channel in a 1 kHz detection bandwidth at the soil corners (5, 100, 1300 ohm m); SNR, resolution, contributors (one bench per channel: a noise analysis has one output) | P1 | reported (no requirement) |
+| `MeasurementNoise` | Noise on each ADC channel in a 1 kHz detection bandwidth at the soil corners (5, 100, 1300 ohm m); SNR, resolution, contributors (one noise analysis with the four ADC inputs as outputs), and the noise of the computed impedance | P1 | reported (no requirement) |
 | `ResistorMatching`, `ResistorWorstCase` | Monte Carlo and worst case over the tolerances and the matched network; spread of drive current, output impedance, gain before calibration and common-mode rejection; limits 1 %, 1 degree and 0.5 % after calibration | P1 | pass |
 | `Startup` | Rails ramp, coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2 | pass |
 | `Distortion` | Harmonics of the drive current at 1 kHz, 100 kHz and 1 MHz into 160 kohm (1.3 kohm m) and 12 kohm (100 ohm m); clipping and slew headroom | P2 | reported (no requirement) |
@@ -333,7 +333,7 @@ The rating allows 0.2 pF near LP, about 0.13 mm2; 10 pF costs 18 degrees
 above the soil line; in the buried part the outer layers carry only the pads
 and guard copper. Not simulated: the soil's coupling to guard copper (at the
 guarded node's voltage, not at the soil's local voltage) and to inner-layer
-copper through the laminate; extraction (plan phase P5) must bound both.
+copper through the laminate; extraction (plan phase F5) must bound both.
 
 The traces from the pads to the amplifiers are 30 to 90 mm long. They stay on
 layer 2 between guard copper for their whole length; that is what makes the

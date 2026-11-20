@@ -75,8 +75,10 @@ pub struct StepRun {
     pub measures: Vec<MeasureValue>,
     /// One vector per plotted expression (in plot order), over `axis`.
     pub plots: Vec<Vec<f64>>,
-    /// The output noise over the analysis band and its contributors (`analysis noise`).
-    pub noise: Option<crate::noise::NoiseStep>,
+    /// The analysis at this step's params (its bounds may name stepped params).
+    pub analysis: AnalysisRun,
+    /// The output noise over the analysis band and its contributors, per output (`analysis noise`).
+    pub noise: Vec<crate::noise::NoiseStep>,
     /// The solver's work in a transient run (`analysis tran`).
     pub transient: Option<copper_sim::TranStats>,
 }
@@ -84,7 +86,10 @@ pub struct StepRun {
 /// A measure at one step.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeasureValue {
+    /// The value; NaN when it is "never" (an `upto` or `downto` whose comparison fails at the first sample).
     pub value: f64,
+    /// The value is "never": it fails every limit that covers its step.
+    pub never: bool,
     pub min: Option<f64>,
     pub max: Option<f64>,
     /// `None` without limits, or at a step the measure's `where` does not cover.
@@ -96,8 +101,12 @@ pub struct MeasureValue {
 }
 
 impl MeasureValue {
-    /// The distance inside the nearest limit (negative outside), or `None` without limits.
+    /// The distance inside the nearest limit (negative outside), or `None`
+    /// without limits; minus infinity for a "never" value.
     pub fn margin(&self) -> Option<f64> {
+        if self.never {
+            return (self.min.is_some() || self.max.is_some()).then_some(f64::NEG_INFINITY);
+        }
         let low = self.min.map(|min| self.value - min);
         let high = self.max.map(|max| max - self.value);
         match (low, high) {
@@ -182,6 +191,9 @@ pub struct BenchRun {
     pub module: Option<String>,
     /// The bench source file.
     pub file: String,
+    /// For one analysis of a bench with several: its name (`name` is then `BENCH.SECTION`).
+    pub section: Option<String>,
+    /// The analysis at the params' nominal values; each step has its own (`StepRun::analysis`).
     pub analysis: AnalysisRun,
     pub models: Vec<ModelUse>,
     pub steps: Vec<StepRun>,
@@ -191,9 +203,32 @@ pub struct BenchRun {
     pub error: Option<String>,
     /// Monte Carlo or worst-case statistics, one entry per step (`montecarlo`, `worstcase`).
     pub variation: Option<crate::variation::VariationRun>,
+    /// Where the time went, when timing is on (`copper sim --timing`).
+    pub timing: Option<BenchTiming>,
+}
+
+/// The wall time of a bench run and its solver phases (`copper sim --timing`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BenchTiming {
+    /// The whole bench, s.
+    pub wall_s: f64,
+    /// Each step (with its variation runs), s.
+    pub steps_s: Vec<f64>,
+    /// Seconds per [`copper_sim::timing::Phase::ALL`], summed over threads.
+    pub phases: [f64; 7],
+    /// Events per [`copper_sim::timing::Counter::ALL`].
+    pub counts: [u64; 3],
 }
 
 impl BenchRun {
+    /// The bench's name as declared: `name` without its section.
+    pub fn bench_name(&self) -> &str {
+        match &self.section {
+            Some(section) => self.name.strip_suffix(&format!(".{section}")).unwrap_or(&self.name),
+            None => &self.name,
+        }
+    }
+
     /// What the bench simulates, for headers: `Board`, or `module Module of Board`.
     pub fn target(&self) -> String {
         match &self.module {
@@ -225,27 +260,7 @@ impl BenchRun {
 
 /// Structural equality of two typed expressions, ignoring locations.
 pub fn same(a: &Expression, b: &Expression) -> bool {
-    match (&a.kind, &b.kind) {
-        (ExpressionKind::Number(x), ExpressionKind::Number(y)) => x == y,
-        (ExpressionKind::Quantity(x), ExpressionKind::Quantity(y)) => x == y,
-        (ExpressionKind::Param(x), ExpressionKind::Param(y))
-        | (ExpressionKind::Let(x), ExpressionKind::Let(y))
-        | (ExpressionKind::Reference(x), ExpressionKind::Reference(y)) => x == y,
-        (ExpressionKind::Probe(x), ExpressionKind::Probe(y)) => x == y,
-        (ExpressionKind::Negate(x), ExpressionKind::Negate(y)) => same(x, y),
-        (ExpressionKind::Call { function: f, arguments: x }, ExpressionKind::Call { function: g, arguments: y }) => {
-            f == g && x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q))
-        }
-        (
-            ExpressionKind::Binary { operator: o, left: l, right: r },
-            ExpressionKind::Binary { operator: p, left: m, right: s },
-        ) => o == p && same(l, m) && same(r, s),
-        (
-            ExpressionKind::Compare { operator: o, left: l, right: r },
-            ExpressionKind::Compare { operator: p, left: m, right: s },
-        ) => o == p && same(l, m) && same(r, s),
-        _ => false,
-    }
+    copper_lang::expression::same(a, b)
 }
 
 /// Whether a measure's `where` holds at `params` (equality within 1e-9 relative).
@@ -532,38 +547,14 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             }
         })
         .collect();
-    let analysis = match &bench.analysis {
-        Analysis::Op => AnalysisRun::Op,
-        Analysis::Ac { from, to, points_per_decade } => {
-            AnalysisRun::Ac { from: base(&from.value), to: base(&to.value), points_per_decade: *points_per_decade }
-        }
-        Analysis::Noise(noise) => crate::noise::analysis_run(noise),
-        Analysis::Tran(tran) => {
-            let nominal: Params = bench.params.iter().map(|(name, param)| (name.clone(), base(&param.value))).collect();
-            let options = crate::transient::options(tran, &nominal);
-            AnalysisRun::Tran {
-                stop: options.stop,
-                start: options.start,
-                max_step: options.max_step,
-                reltol: options.reltol,
-            }
-        }
-        Analysis::Dc(dc) => {
-            let nominal: Params = bench.params.iter().map(|(name, param)| (name.clone(), base(&param.value))).collect();
-            AnalysisRun::Dc {
-                name: dc.name.clone(),
-                units: Units::of(dc.dimension),
-                from: value(&dc.from, &nominal),
-                to: value(&dc.to, &nominal),
-                points: dc_values(dc, &nominal).map(|(values, _)| values.len()).unwrap_or(0),
-            }
-        }
-    };
+    let nominal: Params = bench.params.iter().map(|(name, param)| (name.clone(), base(&param.value))).collect();
+    let analysis = analysis_run(&bench.analysis, &nominal);
     let mut run = BenchRun {
         name: bench.name.clone(),
         board: bench.board.clone(),
         module: bench.module.clone(),
         file: bench.location.filename.to_string(),
+        section: bench.section.clone(),
         analysis,
         models: Vec::new(),
         steps: Vec::new(),
@@ -571,7 +562,14 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
         plots,
         error: None,
         variation: bench.variation.as_ref().map(crate::variation::VariationRun::new),
+        timing: None,
     };
+    let clock = copper_sim::timing::enabled().then(std::time::Instant::now);
+    if clock.is_some() {
+        copper_sim::timing::take();
+        copper_sim::timing::take_counts();
+    }
+    let mut steps_s = Vec::new();
     let view = match bench.view(design) {
         Ok(view) => view,
         Err(message) => {
@@ -588,11 +586,12 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             return run;
         }
     };
-    let nominal: Params = bench.params.iter().map(|(name, param)| (name.clone(), base(&param.value))).collect();
-    for stepped in combinations(bench) {
-        let label = step_label(&stepped);
+    // The nominal run of every step, in parallel: each is independent.
+    let combinations = combinations(bench);
+    let nominal_runs = crate::parallel::map(&combinations, |stepped| {
+        let step_clock = clock.map(|_| std::time::Instant::now());
         let mut params = nominal.clone();
-        for (name, quantity) in &stepped {
+        for (name, quantity) in stepped {
             params.insert(name.clone(), base(quantity));
         }
         let fixed: Vec<&str> = stepped.iter().map(|(name, _)| name.as_str()).collect();
@@ -610,6 +609,14 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             let step = run_step(design, bench, &wiring, &params, &marks, &covered)?;
             Ok((step, covered))
         });
+        (params, solved, step_clock.map_or(0.0, |start| start.elapsed().as_secs_f64()))
+    });
+    // Then in step order: the variation runs of each step (in parallel
+    // themselves), the first error ending the bench as a serial run would.
+    for (stepped, (params, solved, seconds)) in combinations.into_iter().zip(nominal_runs) {
+        let step_clock = clock.map(|_| std::time::Instant::now());
+        let label = step_label(&stepped);
+        let fixed: Vec<&str> = stepped.iter().map(|(name, _)| name.as_str()).collect();
         // Monte Carlo and worst-case runs of this step: the same board at every step.
         let solved = solved.and_then(|((mut step, models), covered)| match &mut run.variation {
             Some(variation) => {
@@ -630,7 +637,9 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                 if run.models.is_empty() {
                     run.models = models;
                 }
-                run.steps.push(StepRun { label, stepped, params, ..step });
+                let analysis = analysis_run(&bench.analysis, &params);
+                run.steps.push(StepRun { label, stepped, params, analysis, ..step });
+                steps_s.extend(step_clock.map(|start| seconds + start.elapsed().as_secs_f64()));
             }
             Err(message) => {
                 let at = if bench.steps.is_empty() { String::new() } else { format!(" at step {label}") };
@@ -663,10 +672,63 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             .map(|(s, _)| s);
     }
     run.measures = measures;
+    run.timing = clock.map(|start| BenchTiming {
+        wall_s: start.elapsed().as_secs_f64(),
+        steps_s,
+        phases: copper_sim::timing::take(),
+        counts: copper_sim::timing::take_counts(),
+    });
     run
 }
 
 pub(crate) type Marks<'a> = [Option<(LimitMark, Option<&'a Expression>)>];
+
+/// The analysis of `analysis` at `params`: its bounds with the params' values.
+pub fn analysis_run(analysis: &Analysis, params: &Params) -> AnalysisRun {
+    match analysis {
+        Analysis::Op => AnalysisRun::Op,
+        Analysis::Ac { from, to, points_per_decade } => {
+            AnalysisRun::Ac { from: value(from, params), to: value(to, params), points_per_decade: *points_per_decade }
+        }
+        Analysis::Noise(noise) => {
+            let mut run = crate::noise::analysis_run(noise);
+            if let AnalysisRun::Noise { from, to, .. } = &mut run {
+                *from = value(&noise.from, params);
+                *to = value(&noise.to, params);
+            }
+            run
+        }
+        Analysis::Tran(tran) => {
+            let options = crate::transient::options(tran, params);
+            AnalysisRun::Tran {
+                stop: options.stop,
+                start: options.start,
+                max_step: options.max_step,
+                reltol: options.reltol,
+            }
+        }
+        Analysis::Dc(dc) => AnalysisRun::Dc {
+            name: dc.name.clone(),
+            units: Units::of(dc.dimension),
+            from: value(&dc.from, params),
+            to: value(&dc.to, params),
+            points: dc_values(dc, params).map(|(values, _)| values.len()).unwrap_or(0),
+        },
+    }
+}
+
+/// Solve the analysis of a lowered bench at frequency `f` alone (`at(x, f)`
+/// between two samples of `analysis ac` or `analysis noise`).
+pub(crate) fn solve_point(lowered: &Lowered, analysis: &Analysis, params: &Params, f: f64) -> Result<Solution, String> {
+    let sweep = Sweep::List(vec![f]);
+    let solution = match analysis {
+        Analysis::Ac { .. } => copper_sim::ac(&lowered.circuit, &sweep).map(Solution::Ac),
+        Analysis::Noise(noise) => crate::noise::solve_sweep(lowered, noise, &sweep).map(Solution::Noise),
+        _ => return Err("only an ac or noise analysis is solved at one frequency".to_owned()),
+    };
+    let _ = params;
+    solution.map_err(|error| explain(&error, lowered))
+}
 
 /// The params of one point of a dc sweep: the swept param (derived params
 /// following it), or the override of the swept source's or supply's value.
@@ -760,49 +822,43 @@ pub(crate) fn run_step(
             .map_err(|error| format!("reference {}: {error}", reference.name))?;
         runs.push((reference.name.clone(), lowered, solution, overridden));
     }
-    let mut references: Vec<(String, Evaluator)> = Vec::new();
-    for (name, lowered, solution, overridden) in &runs {
-        let mut evaluator = Evaluator::new(lowered, solution, overridden);
-        for item in bench.lets.iter().filter(|item| !item.uses_reference) {
-            let result = evaluator
-                .eval(&item.expression)
-                .map_err(|error| format!("reference {name}: let {}: {error}", item.name))?;
-            evaluator.lets.insert(item.name.clone(), result);
-        }
-        references.push((name.clone(), evaluator));
-    }
-    let mut evaluator = Evaluator::new(&lowered, &solution, params);
-    for (name, reference) in &references {
+    let _evaluation = copper_sim::timing::span(copper_sim::timing::Phase::Evaluation);
+    // Lets are evaluated when a measure or plot first reads them; a reference
+    // run evaluates what the `reference(x, NAME)` calls read.
+    let mut evaluator = Evaluator::new(&lowered, &solution, params, &bench.analysis, &bench.lets);
+    for (name, reference_lowered, reference_solution, overridden) in &runs {
+        let reference = Evaluator::new(reference_lowered, reference_solution, overridden, &bench.analysis, &bench.lets);
         evaluator.references.insert(name.clone(), reference);
-    }
-    for item in &bench.lets {
-        let result = evaluator.eval(&item.expression).map_err(|error| format!("let {}: {error}", item.name))?;
-        evaluator.lets.insert(item.name.clone(), result);
     }
     let mut measures = Vec::new();
     for (k, (measure, mark)) in bench.measures.iter().zip(marks).enumerate() {
         let result =
             evaluator.eval(&measure.expression).map_err(|error| format!("measure {}: {error}", measure.name))?;
         let x = result.samples[0].re;
-        if !x.is_finite() {
+        if !result.never && !x.is_finite() {
             return Err(format!("measure {} is not finite", measure.name));
         }
         let covered = covered.get(k).copied().unwrap_or(true);
         let min = measure.min.as_ref().filter(|_| covered).map(|q| value(q, params));
         let max = measure.max.as_ref().filter(|_| covered).map(|q| value(q, params));
-        let pass =
-            (min.is_some() || max.is_some()).then(|| min.is_none_or(|min| x >= min) && max.is_none_or(|max| x <= max));
+        // "Never" fails every limit that covers the step.
+        let pass = (min.is_some() || max.is_some())
+            .then(|| !result.never && min.is_none_or(|min| x >= min) && max.is_none_or(|max| x <= max));
         let at = match mark {
             Some((_, Some(frequency))) => evaluator.eval(frequency).ok().map(|value| value.samples[0].re),
             _ => None,
         };
-        measures.push(MeasureValue { value: x, min, max, pass, at, covered });
+        let value = if result.never { f64::NAN } else { x };
+        measures.push(MeasureValue { value, never: result.never, min, max, pass, at, covered });
     }
     let mut plots = Vec::new();
     for plot in &bench.plots {
         for expression in &plot.expressions {
             let text = expression_text(expression, &|_, _| false);
             let result = evaluator.eval(expression).map_err(|error| format!("plot {text}: {error}"))?;
+            if result.never {
+                return Err(format!("plot {text}: it reads an upto or downto that never holds, so it has no values"));
+            }
             plots.push(result.reals());
         }
     }
@@ -810,6 +866,7 @@ pub(crate) fn run_step(
         label: String::new(),
         stepped: Vec::new(),
         params: Params::new(),
+        analysis: analysis_run(&bench.analysis, params),
         axis: solution.axis().to_vec(),
         measures,
         plots,

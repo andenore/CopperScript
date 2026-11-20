@@ -2564,7 +2564,7 @@ mod tests {
 
     #[test]
     fn unit_list_matches_python_sorting() {
-        assert_eq!(quantity_units()[..4], ["A", "F", "GHz", "H"]);
+        assert_eq!(quantity_units()[..5], ["A", "F", "GHz", "Gohm", "H"]);
         assert_eq!(quantity_dimension("ohm"), Some(Dimension::Resistance));
     }
 }

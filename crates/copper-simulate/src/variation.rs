@@ -4,7 +4,9 @@
 //!
 //! [`copper_lang::tolerance::Variation::variables`] gives the independent
 //! variables `x` in `[-1, 1]`; a model-parameter tolerance on a multi-unit
-//! part becomes one variable per unit (`U1.A.gbw`, `U1.B.gbw`). A run sets
+//! part becomes one variable per unit (`U1.A.gbw`, `U1.B.gbw`). A matched
+//! group's members may be units of one part (`RN.R1.resistance`): the common
+//! variable moves every one, each member's own variable its unit alone. A run sets
 //! each varied quantity to `nominal * (1 + sum of relative deviations) + sum
 //! of absolute ones`, where a variable contributes `scale * x`: params first
 //! (derived params are then re-derived from them), then passive values and
@@ -177,13 +179,14 @@ impl VariationRun {
         let has_limits: Vec<bool> = step.measures.iter().map(|m| m.min.is_some() || m.max.is_some()).collect();
         let result = match self.method.clone() {
             Method::MonteCarlo { runs, seed, distribution } => {
-                let mut evaluated: Vec<Vec<MeasureValue>> = Vec::with_capacity(runs as usize);
-                for k in 0..runs {
+                // Every run draws from its own stream, so the runs are independent.
+                let indices: Vec<u32> = (0..runs).collect();
+                let evaluated = crate::parallel::map(&indices, |&k| {
                     let x = draw(seed, u64::from(k), distribution, variables.len());
-                    let measures = evaluate(context, params, &variables, &x)
-                        .map_err(|error| format!("montecarlo run {k}: {error}"))?;
-                    evaluated.push(measures);
-                }
+                    evaluate(context, params, &variables, &x).map_err(|error| format!("montecarlo run {k}: {error}"))
+                })
+                .into_iter()
+                .collect::<Result<Vec<Vec<MeasureValue>>, String>>()?;
                 if self.run_pass.len() < evaluated.len() {
                     self.run_pass.resize(evaluated.len(), true);
                 }
@@ -207,27 +210,28 @@ fn expand(variation: &Variation, design: &Design, bench: &Bench) -> Result<Vec<R
             Effect::Relative { targets, scale } => (targets.clone(), true, *scale),
             Effect::Absolute { target, scale } => (vec![target.clone()], false, *scale),
         };
-        // A model parameter of a multi-unit part: one variable per unit.
-        if let [Target::ModelParameter { instance, parameter }] = targets.as_slice() {
-            for (name, nominal) in model_instances(bench, design, instance, parameter)? {
+        let mut resolved: Vec<Vec<(String, Nominal)>> = Vec::new();
+        for target in &targets {
+            resolved.push(match target {
+                Target::Param(name) => vec![(name.clone(), Nominal::Param(name.clone()))],
+                Target::Component(reference) => vec![(reference.clone(), Nominal::Passive(reference.clone()))],
+                Target::ModelParameter { instance, parameter } => model_instances(bench, design, instance, parameter)?,
+            });
+        }
+        // A model parameter on its own (no matched group): one variable per unit, named by its instance.
+        if let ([Target::ModelParameter { parameter, .. }], [units]) = (targets.as_slice(), resolved.as_slice())
+            && variable.group.is_none()
+        {
+            for (name, nominal) in units {
                 out.push(RunVariable {
                     name: format!("{name}.{parameter}"),
-                    effects: vec![RunEffect { nominal, relative, scale }],
+                    effects: vec![RunEffect { nominal: nominal.clone(), relative, scale }],
                 });
             }
             continue;
         }
-        let effects = targets
-            .iter()
-            .map(|target| {
-                let nominal = match target {
-                    Target::Param(name) => Nominal::Param(name.clone()),
-                    Target::Component(reference) => Nominal::Passive(reference.clone()),
-                    Target::ModelParameter { .. } => unreachable!("handled above"),
-                };
-                RunEffect { nominal, relative, scale }
-            })
-            .collect();
+        let effects =
+            resolved.into_iter().flatten().map(|(_, nominal)| RunEffect { nominal, relative, scale }).collect();
         out.push(RunVariable { name: variable.name.clone(), effects });
     }
     Ok(out)
@@ -279,6 +283,20 @@ fn model_instances(
         let instance = format!("supply {name}");
         return Ok(vec![(instance.clone(), nominal(instance, SpecRef::Replacement(index)))]);
     }
+    // One unit of a multi-unit part: `RN.R1`.
+    if let Some((reference, unit)) = name.split_once('.')
+        && let Some(component) = bench.components.iter().find(|component| component.reference == reference)
+        && matches!(component.treatment, Treatment::PartModel)
+    {
+        let blocks = bench.models(design, component);
+        let index = blocks.iter().position(|block| block.unit.as_deref() == Some(unit) && blocks.len() > 1);
+        if let Some(index) = index {
+            return Ok(vec![(
+                name.to_owned(),
+                nominal(name.to_owned(), SpecRef::Part { reference: reference.to_owned(), index }),
+            )]);
+        }
+    }
     Err(format!("tolerance {name}.{parameter}: {name} is not simulated with a model"))
 }
 
@@ -316,7 +334,14 @@ fn nominal_value(context: &StepContext, nominal: &Nominal, params: &Params) -> R
                         .find(|component| &component.reference == reference)
                         .ok_or_else(|| format!("unknown component {reference}"))?;
                     let blocks = bench.models(context.design, component);
-                    &blocks.get(*index).ok_or_else(|| format!("{reference} has no sim block {index}"))?.spec
+                    let block = blocks.get(*index).ok_or_else(|| format!("{reference} has no sim block {index}"))?;
+                    // A parameter of the block's set for its supply has that set's nominal value.
+                    if let Some(set) = crate::lower::supply_set(bench, context.wiring, params, reference, block)?
+                        && let Some(quantity) = set.parameters.get(parameter)
+                    {
+                        return Ok(value(quantity, params));
+                    }
+                    &block.spec
                 }
             };
             Ok(spec.parameters.get(parameter).map(|quantity| value(quantity, params)).unwrap_or(0.0))
@@ -411,6 +436,11 @@ fn apply_worst(step: &mut StepRun, runs: &[&[MeasureValue]], has_limits: &[bool]
     worst_runs
 }
 
+/// The finite values among `values` ("never" is NaN and left out of statistics).
+fn finite(values: &[f64]) -> Vec<f64> {
+    values.iter().copied().filter(|v| !v.is_nan()).collect()
+}
+
 fn monte_carlo_statistics(step: &mut StepRun, evaluated: &[Vec<MeasureValue>], has_limits: &[bool]) -> VariationStep {
     let nominal: Vec<f64> = step.measures.iter().map(|m| m.value).collect();
     let runs: Vec<&[MeasureValue]> = evaluated.iter().map(Vec::as_slice).collect();
@@ -419,17 +449,23 @@ fn monte_carlo_statistics(step: &mut StepRun, evaluated: &[Vec<MeasureValue>], h
     let measures = (0..nominal.len())
         .map(|j| {
             let values: Vec<f64> = evaluated.iter().map(|run| run[j].value).collect();
-            let mean = values.iter().sum::<f64>() / count as f64;
-            let std = if count > 1 {
-                (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (count - 1) as f64).sqrt()
-            } else {
+            // "Never" values count against the yield and are left out of the statistics.
+            let sample = finite(&values);
+            let n = sample.len();
+            let mean = if n > 0 { sample.iter().sum::<f64>() / n as f64 } else { f64::NAN };
+            let std = if n > 1 {
+                (sample.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt()
+            } else if n == 1 {
                 0.0
+            } else {
+                f64::NAN
             };
             let passing = evaluated.iter().filter(|run| run[j].pass != Some(false)).count();
+            let (min, max) = range(&sample);
             MeasureStatistics {
                 nominal: nominal[j],
-                min: values.iter().copied().fold(f64::INFINITY, f64::min),
-                max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                min,
+                max,
                 mean: Some(mean),
                 std: Some(std),
                 yield_fraction: has_limits[j].then(|| passing as f64 / count as f64),
@@ -457,36 +493,55 @@ fn worst_case(
     has_limits: &[bool],
 ) -> Result<VariationStep, String> {
     let n = variables.len();
+    // Every corner evaluated, in the order first asked for.
     let mut cache: Vec<(Vec<i8>, Vec<MeasureValue>)> = Vec::new();
-    let mut run = |corner: Vec<i8>| -> Result<Vec<MeasureValue>, String> {
-        if let Some((_, measures)) = cache.iter().find(|(x, _)| *x == corner) {
-            return Ok(measures.clone());
+    // Evaluate the corners not yet in the cache (in parallel), adding them in
+    // order; the first failing one in that order is the error.
+    let run_all = |cache: &mut Vec<(Vec<i8>, Vec<MeasureValue>)>, corners: Vec<Vec<i8>>| -> Result<(), String> {
+        let mut fresh: Vec<Vec<i8>> = Vec::new();
+        for corner in corners {
+            if !cache.iter().any(|(x, _)| *x == corner) && !fresh.contains(&corner) {
+                fresh.push(corner);
+            }
         }
-        let x: Vec<f64> = corner.iter().map(|c| f64::from(*c)).collect();
-        let text: Vec<String> = variables
-            .iter()
-            .zip(&corner)
-            .filter(|(_, c)| **c != 0)
-            .map(|(v, c)| format!("{} {}", v.name, if *c > 0 { "+" } else { "-" }))
-            .collect();
-        let measures = evaluate(context, params, variables, &x)
-            .map_err(|error| format!("worstcase corner {}: {error}", text.join(", ")))?;
-        cache.push((corner, measures.clone()));
-        Ok(measures)
+        let results = crate::parallel::map(&fresh, |corner| {
+            let x: Vec<f64> = corner.iter().map(|c| f64::from(*c)).collect();
+            let text: Vec<String> = variables
+                .iter()
+                .zip(corner)
+                .filter(|(_, c)| **c != 0)
+                .map(|(v, c)| format!("{} {}", v.name, if *c > 0 { "+" } else { "-" }))
+                .collect();
+            evaluate(context, params, variables, &x)
+                .map_err(|error| format!("worstcase corner {}: {error}", text.join(", ")))
+        });
+        for (corner, measures) in fresh.into_iter().zip(results) {
+            cache.push((corner, measures?));
+        }
+        Ok(())
     };
-    let mut plus = Vec::with_capacity(n);
-    let mut minus = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut corner = vec![0i8; n];
-        corner[i] = 1;
-        plus.push(run(corner.clone())?);
-        corner[i] = -1;
-        minus.push(run(corner)?);
-    }
+    let one_at_a_time: Vec<Vec<i8>> = (0..n)
+        .flat_map(|i| {
+            [1i8, -1].map(|sign| {
+                let mut corner = vec![0i8; n];
+                corner[i] = sign;
+                corner
+            })
+        })
+        .collect();
+    run_all(&mut cache, one_at_a_time.clone())?;
+    let measures_at = |cache: &[(Vec<i8>, Vec<MeasureValue>)], corner: &[i8]| {
+        cache.iter().find(|(x, _)| x == corner).map(|(_, m)| m.clone())
+    };
+    let plus: Vec<Vec<MeasureValue>> =
+        one_at_a_time.iter().step_by(2).filter_map(|corner| measures_at(&cache, corner)).collect();
+    let minus: Vec<Vec<MeasureValue>> =
+        one_at_a_time.iter().skip(1).step_by(2).filter_map(|corner| measures_at(&cache, corner)).collect();
     let count = step.measures.len();
     let mut corners: Vec<(Vec<i8>, Vec<i8>)> = Vec::with_capacity(count);
     let mut sensitivities: Vec<Vec<f64>> = Vec::with_capacity(count);
     for j in 0..count {
+        // A "never" end gives no direction (NaN, shown as never).
         let sensitivity: Vec<f64> = (0..n).map(|i| plus[i][j].value - minus[i][j].value).collect();
         let high: Vec<i8> = sensitivity
             .iter()
@@ -501,11 +556,10 @@ fn worst_case(
             })
             .collect();
         let low: Vec<i8> = high.iter().map(|c| -c).collect();
-        run(high.clone())?;
-        run(low.clone())?;
         corners.push((low, high));
         sensitivities.push(sensitivity);
     }
+    run_all(&mut cache, corners.iter().flat_map(|(low, high)| [high.clone(), low.clone()]).collect())?;
     let nominal: Vec<f64> = step.measures.iter().map(|m| m.value).collect();
     let all: Vec<&[MeasureValue]> = cache.iter().map(|(_, measures)| measures.as_slice()).collect();
     let worst = apply_worst(step, &all, has_limits);
@@ -516,10 +570,11 @@ fn worst_case(
                 std::iter::once(nominal[j]).chain(cache.iter().map(|(_, measures)| measures[j].value)).collect();
             let (low, high) = &corners[j];
             let at = |corner: &[i8]| find(corner).map(|m| m[j].value).unwrap_or(nominal[j]);
+            let (min, max) = range(&finite(&values));
             MeasureStatistics {
                 nominal: nominal[j],
-                min: values.iter().copied().fold(f64::INFINITY, f64::min),
-                max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                min,
+                max,
                 mean: None,
                 std: None,
                 // Corners are no sample of boards: a worst case has no yield.
@@ -565,21 +620,34 @@ pub fn varied_spec(
     Some(varied)
 }
 
+/// The smallest and largest of `values` (NaN for none).
+fn range(values: &[f64]) -> (f64, f64) {
+    if values.is_empty() {
+        return (f64::NAN, f64::NAN);
+    }
+    (values.iter().copied().fold(f64::INFINITY, f64::min), values.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+}
+
 // Results.
 
 fn object(entries: Vec<(&str, Value)>) -> Value {
     Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
 }
 
+/// A number, or null for NaN ("never", or no value).
+fn number(value: f64) -> Value {
+    if value.is_nan() { Value::Null } else { Value::Float(value) }
+}
+
 fn optional(value: Option<f64>) -> Value {
-    value.map(Value::Float).unwrap_or(Value::Null)
+    value.map(number).unwrap_or(Value::Null)
 }
 
 fn corner_value(corner: &Option<(f64, Vec<i8>)>, variables: &[String]) -> Value {
     match corner {
         None => Value::Null,
         Some((value, x)) => object(vec![
-            ("value", Value::Float(*value)),
+            ("value", number(*value)),
             (
                 "x",
                 Value::Object(
@@ -613,9 +681,9 @@ pub fn value_of(run: &BenchRun, variation: &VariationRun) -> Value {
                 .map(|(m, measure)| {
                     let mut entries = vec![
                         ("name", Value::from(measure.name.as_str())),
-                        ("nominal", Value::Float(m.nominal)),
-                        ("min", Value::Float(m.min)),
-                        ("max", Value::Float(m.max)),
+                        ("nominal", number(m.nominal)),
+                        ("min", number(m.min)),
+                        ("max", number(m.max)),
                         ("yield", optional(m.yield_fraction)),
                         ("worst_run", m.worst_run.map(|k| Value::from(k as i64)).unwrap_or(Value::Null)),
                     ];
@@ -623,7 +691,7 @@ pub fn value_of(run: &BenchRun, variation: &VariationRun) -> Value {
                         Method::MonteCarlo { .. } => {
                             entries.push(("mean", optional(m.mean)));
                             entries.push(("std", optional(m.std)));
-                            entries.push(("values", Value::Array(m.values.iter().map(|v| Value::Float(*v)).collect())));
+                            entries.push(("values", Value::Array(m.values.iter().map(|v| number(*v)).collect())));
                         }
                         Method::WorstCase => {
                             entries.push(("low_corner", corner_value(&m.low_corner, &variation.variables)));
@@ -635,7 +703,7 @@ pub fn value_of(run: &BenchRun, variation: &VariationRun) -> Value {
                                         .variables
                                         .iter()
                                         .zip(&m.sensitivity)
-                                        .map(|(name, d)| (name.clone(), Value::Float(*d)))
+                                        .map(|(name, d)| (name.clone(), number(*d)))
                                         .collect(),
                                 ),
                             ));

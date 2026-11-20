@@ -561,14 +561,15 @@ fn bench_statement(statement: &BenchStatement) -> StateValue {
                 ("target_locations", locations(&item.target_locations)),
             ],
         ),
-        BenchStatement::Analysis(item) => syntax(
-            "AnalysisDecl",
-            vec![
-                ("location", location(&item.location)),
-                ("kind", text(&item.kind)),
-                ("entries", sim_entries(&item.entries)),
-            ],
-        ),
+        BenchStatement::Analysis(item) => {
+            let mut fields = vec![("location", location(&item.location))];
+            if let Some(name) = &item.name {
+                fields.push(("name", text(name)));
+            }
+            fields.push(("kind", text(&item.kind)));
+            fields.push(("entries", sim_entries(&item.entries)));
+            syntax("AnalysisDecl", fields)
+        }
         BenchStatement::Step(item) => {
             let mut fields = vec![
                 ("location", location(&item.location)),
@@ -627,8 +628,14 @@ fn bench_statement(statement: &BenchStatement) -> StateValue {
             if let Some(target) = &item.target {
                 fields.push(("target", text(target)));
             }
+            if !item.others.is_empty() {
+                fields.push(("others", texts(&item.others)));
+            }
             if let Some(value) = &item.value {
                 fields.push(("value", scalar(value)));
+            }
+            if let Some(value) = &item.match_value {
+                fields.push(("match", scalar(value)));
             }
             fields.push(("entries", sim_entries(&item.entries)));
             syntax("VariationDecl", fields)

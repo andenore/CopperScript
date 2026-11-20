@@ -2812,6 +2812,32 @@ passive two-terminal element, so a pin may be the `inp` of one load and the
 capacitances from their ends to the exposed pad
 (`examples/simulation/impedance_analyzer/parts/analog_lt5400.copper`).
 
+**Parameter sets per supply.** An `opamp` or `diffamp` block may hold the
+parameters that differ with its supply, one set per supply span (the data
+sheet's tables for `VS = 3.3 V` and `VS = +/-5 V`):
+
+```copper
+sim opamp {
+    inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+    gbw = 180MHz; open_loop_gain = 100dB; slew_rate = 225V/us; output_swing_from_rail = 0.9V;
+    supply 3.3V { slew_rate = 175V/us; output_swing_from_rail = 0.1V; }
+    supply 10V { slew_rate = 225V/us; output_swing_from_rail = 0.9V; }
+}
+```
+
+`supply SPAN { ... }` names the span `V(vp) - V(vn)` in volts (positive, each
+span once) and holds typed parameters of the kind, checked as the block's own
+(`SIM096`, ranges `SIM019`). When a bench runs, each instance takes the set
+whose span is nearest its own supply span, read from the supplies and DC
+sources the bench puts on its `vp` and `vn` nets (a supply simulated as its DC
+source, a supply replaced with a voltage `source` to ground, a bench `model`
+or replaced component that is one; their `dc` value), on top of the block's
+other parameters; a rail that no supply or DC source sets is an error of the
+run naming the pin. The results name the set (`opamp (parameter set for a
+3.3 V supply)`), and a tolerance on a parameter a set overrides varies the
+set's value. Sets belong to part blocks only, not to a bench `replace` or
+`model`, whose parameters are written for their one use.
+
 `sim spice { ... }` binds a part to a SPICE subcircuit instead of a built-in
 model ([SPICE subcircuits](#spice-subcircuits)). The `diode` and `switch`
 kinds, the waveforms and the op-amp's transient limits are described under
@@ -2947,23 +2973,24 @@ bench CurrentFlatness for HowlandPump {
 | --- | --- |
 | `use library "..."` | Parts for bench components, besides the board's. Package imports are not supported in benches yet (`SIM031`). |
 | `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
-| `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). |
-| `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it; a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. |
+| `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). A capacitor of 0 F (bench or board, also a stepped or param value) is absent: no element, its pins open, so a fixture can hold an optional stray that a bench sets to 0 F. |
+| `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it; a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. Nets of one name are one net with the pins of all of them: a bench adds a pin to a fixture's net by declaring the net again with that pin. |
 | `replace X with KIND { ... }` | Swaps a board component or supply for a built-in model; roles name nodes: a board net, a bench net or `COMPONENT.PIN` (`SIM038`, `SIM039`). |
 | `supply NAME { voltage = q; net = NET; }` | A bench supply: an ideal DC voltage source from a net of the target to ground, an AC short; a 0 V one makes its net the ground. It takes `voltage` and `net` only (no `source`, no `external`); its name is new, its net is a net of the target (a module's port names its net) and no other supply drives it (`SIM048`). It cannot be replaced or ignored (`SIM038`). |
 | `model NAME: KIND { ... }` | A built-in model the bench adds, on nodes as for `replace`: a stimulus such as `model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }` on a module port, or a `load`. Its name is new (`SIM049`); `I(NAME)` and `I(NAME.ROLE)` read the current into its terminals ([Expressions](#expressions)). |
 | `ignore X, Y;` | Removes components or supplies; their pins are open (`SIM038`). |
-| `analysis ac { from; to; points_per_decade; }`, `analysis op;` | Exactly one analysis per bench in this version (`SIM040`). `0 < from < to`; `points_per_decade` is 1 to 10000. |
+| `analysis ac { from; to; points_per_decade; }`, `analysis op;` | One analysis, or several, each with its own measures and plots ([Several analyses](#several-analyses); `SIM040`, `SIM097`). `0 < from < to`; `points_per_decade` is 1 to 10000. `analysis NAME: KIND { ... }` names one of several. |
 | `analysis tran { stop; start; max_step; reltol; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
 | `analysis dc { sweep = NAME; from; to; step; }` (or `points = N;`) | Operating points over a swept param, source or supply ([DC sweep](#dc-sweep); `SIM074`). |
 | `ic V(NODE) = q;`, `ic C1 = q;`, `ic L1 = q;` | The state a transient run starts from: a node voltage, a capacitor's voltage, an inductor's current ([Transient analysis](#transient-analysis); `SIM075`). |
-| `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; temperature = 27degC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
+| `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; temperature = 27degC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, or of several (`output = V(A), V(B);`), optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
 | `tolerance TARGET = q;` | The tolerance of a param, of a passive component (overriding its own `tolerance`) or of a model parameter `COMPONENT.PARAMETER` ([Tolerances, Monte Carlo and worst case](#tolerances-monte-carlo-and-worst-case); `SIM091`). |
+| `tolerance A, B = t match m;` | A matched group of passives and model parameters (`RN.resistance` is one member per unit that declares it): every member within `t`, every ratio within `m` (`SIM091`, `SIM092`). |
 | `montecarlo { runs = N; seed = S; distribution = uniform; }`, `worstcase;` | Runs the bench over its tolerances: sampled boards, or the sensitivity corners (`SIM090`, `SIM092`, `SIM093`). |
 | `step PARAM in a, b, c;` | Repeats the run over values of the param's dimension; several steps nest, the first outermost (`SIM041`). |
 | `step A, B in (a1, b1), (a2, b2);` | A zipped step: the params move together, one tuple per run, each tuple with one value per param (`SIM041`). It nests with other steps like a plain one. |
 | `reference NAME { PARAM = q; ... }` | A reference run: at every step the bench is also solved with these params overridden (derived params that are not overridden follow them), for `reference(x, NAME)`. It models a calibration standard: `z / reference(z / z_true, CARD)` is a result calibrated on the standard (`SIM047`). |
-| `let NAME = expr;` | A named expression, visible to later statements (`SIM042`). |
+| `let NAME = expr;` | A named expression, visible to later statements (`SIM042`). It is evaluated when a measure or plot first reads it, directly or through another let; a let that nothing reads is checked but never evaluated, so it cannot stop the run (a `0 / 0` at `t = 0` of a let a transient bench does not read). |
 | `measure NAME = expr { min = q; max = q; where C and C; }` | One real value per step; the limits block is optional. Limits have the measure's dimension; a plain number or `%` is dimensionless (`SIM043`). A limit may name a param, and so differ per step. `where` scopes the limits to the steps whose params satisfy every comparison ([Limits per step](#limits-per-step); `SIM072`). |
 | `plot expr, expr;` | Real values swept over the analysis axis (`SIM044`). |
 
@@ -3027,10 +3054,20 @@ the bench's, and errors name the fixture's file. A bench declaration of the
 same param, `supply`, `model`, `replace` target or bench `component` as a
 fixture's takes the fixture declaration's place (so params the fixture
 derives from it follow the bench's value); anything else declared twice is
-the usual duplicate error. A fixture names the bench's target (the same
-board or module, `SIM073`), uses no other fixture, and must be in the same
-`benches/` directory; an unknown fixture is `SIM073`. The bench JSON lists
-the fixtures it used (`fixtures`).
+the usual duplicate error, except nets: a net of a fixture's net's name adds
+its pins to that net. A fixture names the bench's target (the same board or
+module, `SIM073`) and must be in the same `benches/` directory; an unknown
+fixture is `SIM073`.
+
+A fixture may use other fixtures, `fixture SoilWithStrays for T using Soil
+{ ... }`: they come first, and its own declarations of the same keys as a
+fixture it uses (directly or through another) take their places, so a
+fixture can change another's param or component. Each fixture is included
+once however many fixtures and the bench name it (`using Soil,
+SoilWithStrays` is `Soil` then `SoilWithStrays`); two fixtures that do not use
+one another still may not declare the same param. A fixture that uses itself
+through others is `SIM073`. The bench JSON lists every fixture it compiled
+with, in that order (`fixtures`).
 
 Every board component must be modelled, replaced or ignored (`SIM034`): there
 are no silent ideal parts. Passives (parts whose category is
@@ -3040,6 +3077,42 @@ ideal DC voltage sources from their net to ground unless replaced or ignored;
 a supply with a `source` component is driven by that component. The net of
 the board's 0 V supply is the simulation ground; a bench needs exactly one
 such net, and the ground supply cannot be replaced or ignored (`SIM046`).
+
+#### Several analyses
+
+```copper
+bench Response for RC {
+    replace J1 with source { out = J1.1; ref = GND; dc = 1V; ac = 1V; }
+    let h = V(VOUT) / V(VIN);                 // shared: before the first analysis
+    analysis op;
+    measure dc_out = V(VOUT);
+    analysis wide: ac { from = 10Hz; to = 100kHz; points_per_decade = 10; }
+    measure corner = cross(db(h), -3.0103dB);
+    plot mag(h);
+    analysis narrow: ac { from = 1kHz; to = 2kHz; points_per_decade = 50; }
+    measure gain_1k = mag(at(h, 1kHz));
+}
+```
+
+A bench may run several analyses of one circuit. Each `analysis` starts its
+section: the `let`, `measure` and `plot` statements after it, up to the next
+`analysis`, belong to it. Everything else (components, nets, supplies,
+models, replacements, params, steps, references, tolerances and the method)
+is the bench's and applies to every section, and so are the lets before the
+first analysis (fixture lets among them); a section sees the shared lets its
+own statements read, directly or through other lets, so a shared let that
+only another analysis can type does not stop it. A measure or plot before the
+first analysis is `SIM097`, as are two analyses of one name: an analysis is
+named `analysis NAME: KIND { ... }`, or by its kind when it is the only one
+of that kind. `ic` statements go to the transient sections (`SIM075` when
+there is none). With one analysis a bench is as before, whatever the order of
+its statements.
+
+Each section runs as a bench of its own named `BENCH.SECTION`
+(`Response.op`, `Response.wide`): its own table, CSV and HTML page, and a
+bench entry in the results JSON with `bench` (`Response`) and `section`
+(`wide`). `copper sim --bench Response` runs every section, `--bench
+Response.wide` one of them. Measure names are per section.
 
 #### Benches for a module
 
@@ -3090,19 +3163,22 @@ name), subtraction needs spaces: `mag(i) / 15uA - 1`.
 | `V(node)`, `V(a, b)` | Voltage of a node against ground, or between two nodes. A node is a board net, a bench net or `COMPONENT.PIN` (`SIM039`). |
 | `I(X)`, `I(X.PIN)` | Current into a pin; `I(X)` of a two-terminal component is the current into its first pin (`SIM045`): positive when current flows from the net into the pin, so a resistor carrying current from its first pin to its second reads positive at its first pin and negative at its second. The supply pins of the built-in op-amp model carry no current. |
 | `I(X)`, `I(X.ROLE)` of a replaced component or bench model | The current into a terminal of the model the bench placed: `ROLE` is a role of its kind (`I(J_IN.out)`), and `I(X)` of a two-terminal kind (`source`, `load`, `diode`) is its first role's. The part's own pins are not the model's terminals: `I(J_IN.1)` of a replaced connector is `SIM045`, which names the roles to write instead. The supply pins of an amplifier and a switch's control pins carry no current. |
-| `a < b`, `<=`, `>`, `>=`, `==`, `!=` | A comparison of two real values of the same units; allowed only as the argument of `upto` and `downto` and in a limit's `where` (`SIM072`). |
-| `upto(a < b)`, `downto(a < b)` | The axis value up to which the comparison (`<`, `<=`, `>`, `>=`) holds from the start of the axis, or down to which it holds from its end: the bandwidth `upto(db(H) > -3dB)`, the highest frequency at which a noise density stays below a limit (`upto(noise() < 10nV/rtHz)`), the input voltage where an amplifier leaves its linear range (`upto(V(OUT) < 4.4V)` in a dc sweep). Between the last sample where it holds and the first where it fails the margin (`b - a`, or `a - b` for `>`) is taken as linear in log frequency on a frequency axis and linear on a time or dc axis, and the crossing of zero is returned: at an RC corner sampled at 20 points per decade within 2e-4. The end of the axis when it holds everywhere (a lower bound); a run-time error when it fails at the first sample (`SIM072`). |
+| `I(S)` of a supply | The current supply `S` delivers into its net: positive when it sources current (a loaded positive rail), negative when it sinks it. For a supply simulated as its DC source and for one replaced with a model (then also `I(S.ROLE)`, into a terminal of the model, as above). The ground supply, an ignored supply and one driven by a component have none (`SIM045`). |
+| `a < b`, `<=`, `>`, `>=`, `==`, `!=` | A comparison of two real values of the same units; allowed only as the argument of `upto` and `downto`, as the condition of `if`, and in a limit's `where` (`SIM072`). |
+| `if(a < b, x, y)` | `x` where the comparison holds and `y` where it does not, per sample when the comparison varies over the axis (equality within 1e-9 relative, as in a `where`). `x` and `y` have the same units (`SIM065`); the result is complex or swept when either is. A condition that does not vary evaluates only the branch it chooses; with one that varies, a sample of the branch not chosen there may be infinite or undefined (`if(mag(i) > 1nA, V(OUT) / i, 0ohm)`). |
+| `upto(a < b)`, `downto(a < b)` | The axis value up to which the comparison (`<`, `<=`, `>`, `>=`) holds from the start of the axis, or down to which it holds from its end: the bandwidth `upto(db(H) > -3dB)`, the highest frequency at which a noise density stays below a limit (`upto(noise() < 10nV/rtHz)`), the input voltage where an amplifier leaves its linear range (`upto(V(OUT) < 4.4V)` in a dc sweep). Between the last sample where it holds and the first where it fails the margin (`b - a`, or `a - b` for `>`) is taken as linear in log frequency on a frequency axis and linear on a time or dc axis, and the crossing of zero is returned: at an RC corner sampled at 20 points per decade within 2e-4. The end of the axis when it holds everywhere (a lower bound). When it fails at the first sample the value is **never**: so is every value computed from it (`upto(...) / 2`, `at(x, upto(...))`), a measure that is never fails every limit that covers its step (the condition held nowhere), and without limits it is reported, not an error. The text table and the HTML page show `never` (`366 kHz to 1 MHz, never at 2 steps` over steps); the results JSON has `"value": null` and `"never": true` for that step; Monte Carlo and worst-case runs count a never value as outside its limits and leave it out of the minimum, maximum, mean and standard deviation (a statistic of no value is null). A plot that reads one is an error. |
 | `integrate(x)`, `integrate(x, from, to)` | The integral of a real swept value over the axis, trapezoidal in the axis variable (time, frequency or the swept value), a window's ends interpolated as the windows are; its units are `x`'s times the axis's (`integrate(I(R1))` is a charge). |
 | `mag`, `abs`, `re`, `im` | Real, of the argument's dimension. |
 | `phase` | Real, deg; a swept phase is unwrapped along the axis, starting in (-180, 180]. `db` is real, dB: `20 log10(abs(x))` with `x` in its base unit. |
 | `min`, `max`, `mean` | Reduce a real swept value over the analysis axis (`SIM066`, `SIM067`); `mean` is the mean of the samples, on the logarithmic ac axis the mean over log frequency. `max(x, from, to)` and the other windows reduce over a sub-band (or a time window, or part of a dc sweep): the samples inside it plus its two ends, interpolated as `at` interpolates (linear in log frequency on the ac and noise axes); `max(mag(H), 1kHz, 10kHz)` is the largest gain in that band. |
 | `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis. |
-| `at(x, f)` | `x` at one frequency of the ac axis (`SIM068`), interpolated between the two nearest samples: linear in log frequency, complex values in log magnitude and phase. Between samples this differs from the exact response by the curvature over one step (about 1e-3 dB at an RC corner at 50 points per decade). |
+| `at(x, f)` | `x` at one frequency of the ac or noise axis (`SIM068`). At a sample, the sample; between two samples the circuit is solved at `f` itself (with the step's reference runs): `x`'s swept parts (probes, lets of them, noise densities) are evaluated there and its scalar parts (`max(...)`, other `at(...)`, params) as on the whole axis, and a phase is taken on the branch of the sweep's unwrapped phase at `f`. The result is the exact response at `f`, independent of `points_per_decade`. `f` must lie within the axis. In `analysis tran` and `analysis dc` it is interpolated, see there. |
 
-| `noise()`, `noise(X)` | `analysis noise` only (`SIM085`): the output noise density, real and swept, V/rtHz; `noise(X)` the part of it that component or bench model `X` contributes (all of its generators, every unit of a multi-unit part; `SIM087`). |
-| `input_noise()` | The output noise density referred to the analysis's `input` (`SIM086`): divided by the input's transfer to the output; V/rtHz for a voltage source, A/rtHz for a current source. |
+| `noise()`, `noise(X)` | `analysis noise` only (`SIM085`): the output noise density, real and swept, V/rtHz; `noise(X)` the part of it that component or bench model `X` contributes (all of its generators, every unit of a multi-unit part; `SIM087`). With several outputs, name one (`SIM095`). |
+| `noise(Q)`, `noise(Q, X)` | The noise density of quantity `Q`, and the part `X` contributes: `Q` is an output of the analysis (`noise(V(OUT))`) or any small-signal quantity built from `V(...)` probes, params, numbers, `+ - * /`, lets of those and `reference(...)` values, such as a let `z = V(A) / V(B)` (`noise(z)`; `SIM095`). Its units are `Q`'s per root hertz ([Noise analysis](#noise-analysis)). A name that is both a let and a contributor is `SIM087`. |
+| `input_noise()`, `input_noise(Q)` | The output noise density referred to the analysis's `input` (`SIM086`): divided by the input's transfer to the output (to `Q`); V/rtHz for a voltage source, A/rtHz for a current source. |
 | `noise_rms(x, from, to)` | The RMS of the density `x` over the band, `sqrt(integral of x^2 df)`: `noise_rms(noise(), 10Hz, 20kHz)` is a voltage (`SIM088`). |
-| `noise_share(x, from, to)` | The fraction of the output noise power over the band that the density `x` carries: `noise_share(noise(R1), 10Hz, 20kHz)`, dimensionless; `x` is a V/rtHz density (`SIM088`). |
+| `noise_share(x, from, to)` | The fraction of the noise power over the band of the quantity whose noise `x` reads that `x` carries: `noise_share(noise(R1), 10Hz, 20kHz)` of the output, `noise_share(noise(V(B), R1), ...)` of output `V(B)`, dimensionless; `x` reads one quantity and has its noise units (`SIM088`). |
 
 In `analysis ac` probes are complex and swept over frequency; in
 `analysis op` they are real single values; in `analysis tran` they are real
@@ -3135,11 +3211,37 @@ bench MeasurementNoise for LowNoisePreamp {
 
 (`examples/simulation/preamp/benches/noise.copper`.) `from`, `to` and
 `points_per_decade` are as for `analysis ac`; `output` is a voltage probe,
-`V(NODE)` or `V(P, N)`, of nodes as `V(...)` takes them (`SIM094`). `input`
+`V(NODE)` or `V(P, N)`, of nodes as `V(...)` takes them, or several of them,
+`output = V(V_MON_1), V(I_MON);`, each named once (`SIM094`). `input`
 names a source: a bench `model` of kind `source`, or a component or supply
 replaced with one (`SIM094`); without it `input_noise()` is an error.
 `temperature` is the resistors' temperature in `degC` or `K` (27 degC when
 not given; it cannot be a param or stepped).
+
+With several outputs every noise probe names its quantity: `noise(V(V_MON_1))`,
+`noise(V(V_MON_1), U1)`, `input_noise(V(I_MON))` (`SIM095`), and the results
+have one contributor table per output (the text table one line per output).
+Each output is its own transposed solve per frequency, so its numbers are
+those of a bench with that output alone, to the last digit.
+
+**Noise of a derived quantity.** `noise(Q)` of a quantity that is no output,
+such as the impedance a firmware computes from two channels, `let z = V(V_MON) /
+(-V(I_MON) / R_TIA);`, is `Q`'s small-signal response to every generator:
+at each frequency `Q` is linearised in its voltage probes at the AC solution
+(`dQ = sum of (dQ / dV_k) dV_k`, the derivatives of `+ - * /` over complex
+values; params, numbers and `reference(...)` values are constants), and that
+weighted sum of node voltages is the output of one more transposed solve.
+Generators therefore combine with their signs before they are summed as
+powers: a source that both `V(A)` and `V(B)` see moves `V(A) / V(B)` only as
+far as their ratio changes (a drive's noise current that reaches the voltage
+and the current channel of an impedance measurement alike cancels in the
+impedance), which combining the channels' noise by hand as uncorrelated
+cannot show. The density has `Q`'s units per root hertz; `noise(z) /
+mag(z)` is the relative noise of `z`. Of a measured phasor `Q` with noise of
+density `n`, the magnitude's relative RMS over a band and the phase's RMS in
+radians are each `noise_rms(noise(Q) / mag(Q), from, to)`: each carries half
+the noise power, and `mag(Q)` is the phasor's peak. `input_noise(Q)` refers
+it to the analysis's input (an error when `Q` has no gain from it).
 
 The noise generators are uncorrelated:
 
@@ -3190,6 +3292,13 @@ change nothing until a bench runs over them. Members of one group need equal
 tolerances and two or more simulated members (`SIM092`); a component in a
 group cannot get a bench tolerance (`SIM091`).
 
+A component that simulates with a part's `sim` blocks takes the same
+attributes when its part is made of `load` blocks (a resistor network as one
+part): the tolerance applies to the `resistance` of each of them, every unit
+on its own, and with `match` every unit is a member of the group,
+`component RN_HOW: LT5400 { tolerance = 7.5%; match = "HOWLAND"; match_tolerance = 0.0125%; }`.
+Any other part model with a component tolerance is `SIM091`.
+
 A bench adds tolerances and names one method (`SIM090`):
 
 ```copper
@@ -3205,7 +3314,18 @@ of the target's dimension (dB and degree parameters take absolute values
 only). A model parameter must be declared by the model, except
 `input_offset_voltage`, `input_bias_current` and `input_offset_current`,
 whose undeclared value is zero and which take an absolute tolerance
-(`SIM091`). On a multi-unit part every unit varies on its own. `runs` is 1
+(`SIM091`). On a multi-unit part every unit varies on its own.
+
+A bench declares a matched group of its own with `tolerance A, B, ... = t
+match m;`, percentages with `m` at most `t`: members are passive components,
+model parameters `COMPONENT.PARAMETER` (one member per unit that declares
+it: `tolerance RN.resistance = 7.5% match 0.0125%;` matches the four units
+of a network), `COMPONENT.UNIT.PARAMETER` (one unit), and parameters of
+replacements and bench models. The group needs two or more members, each
+once (`SIM092`); a member cannot also have a tolerance statement or be in a
+component's group (`SIM091`), and the group replaces a member's own
+component tolerance. Its variables are named after the statement
+(`RN.resistance common`, `RN.resistance RN.R1.resistance`). `runs` is 1
 to 100000 and required; `seed` defaults to 1, `distribution` to `uniform`.
 A `tolerance` statement without a method is an error, and so is a method with
 nothing to vary (`SIM093`).
@@ -3449,7 +3569,9 @@ every param at that step's value (in component values, model parameters,
 analysis bounds, limits and expressions; derived params re-evaluated), plus
 one run per `reference` at each step. It prints, per bench, each measure's
 worst step against its limits (headed `BENCH NAME (BOARD)`, or `BENCH NAME
-(module MODULE of BOARD)` for a bench of a module), and writes into `--out`
+(module MODULE of BOARD)` for a bench of a module, then the analysis at the
+steps' values: a bound that differs between steps as its range, `tran 0 to
+300 us..60 ms`), and writes into `--out`
 (default `build/sim`): `sim-results.json` (schema `copperscript-sim/v0.1`: the
 solver and its version, per bench its board and, for a bench of a module, the
 module, the model fidelity of every component, supply and bench model, every
@@ -3460,7 +3582,12 @@ worst-case bench `variation`, the statistics per step and measure, and for a
 transient bench `transient` per step, the solver's accepted and rejected
 steps, Newton iterations and step sizes, with the plotted vectors on
 `time_s` instead of `frequency_hz` (a dc sweep: `sweep`); a measure with a
-`where` adds `where`, `covered_steps` and a per-step `covered`),
+`where` adds `where`, `covered_steps` and a per-step `covered`, and a step
+whose value is never `"value": null` with `"never": true`; the `analysis`
+holds the values at the bench's steps, a field that differs between steps
+an array of one value per step with `stepped` naming those fields; the
+`noise` entries are one per step and output, with `step` and `output`; one
+analysis of a bench with several adds `bench` and `section`),
 `BENCH.csv` (the plotted vectors, SI base units) and `BENCH.html` (the plots,
 one curve per step, magnitude-like panels above phase-like ones on a shared
 logarithmic frequency axis, limit lines or windows where a measure's limit
@@ -3505,7 +3632,7 @@ components that form a loop of voltage sources.
 | `SIM060`-`SIM068` | expression types |
 | `SIM069`-`SIM071` | transient: `analysis tran` properties (`SIM069`), windows and the time-domain functions outside `analysis tran` (`SIM070`), their arguments (`SIM071`) |
 | `SIM072` | comparisons: where they are allowed, their units, `upto`/`downto`, a limit's `where` |
-| `SIM073` | fixtures: unknown or repeated fixtures, a fixture for another target, bench statements in a fixture, `using` in a fixture |
+| `SIM073` | fixtures: unknown or repeated fixtures, a fixture for another target, bench statements in a fixture, a fixture that uses itself through others |
 | `SIM074` | `analysis dc`: the swept name, `from`, `to`, `step`, `points` |
 | `SIM075` | `ic`: the target, its analysis, `uic` |
 | `SIM076` | `sim spice` properties: the model file (`file`, or `source` with `sha256`, `member`), `subckt`, `terminals`, `dialect` |
@@ -3515,6 +3642,9 @@ components that form a loop of voltage sources.
 | `SIM089` | component `tolerance`, `match`, `match_tolerance` |
 | `SIM090`-`SIM093` | `montecarlo` and `worstcase` (`SIM090`), `tolerance` statements (`SIM091`), matched groups (`SIM092`), nothing to vary (`SIM093`) |
 | `SIM094` | `analysis noise` output, input and temperature |
+| `SIM095` | noise quantities: `noise(Q)` of something that is not a small-signal quantity of voltage probes, an unnamed quantity with several outputs |
+| `SIM096` | parameter sets per supply in part `sim` blocks: the span, the kind, its parameters |
+| `SIM097` | several analyses in a bench: two of one name, a measure or plot before the first analysis, a bench of several analyses compiled as one |
 
 ## KiCad schematic export
 
@@ -3539,7 +3669,7 @@ engineering values use a space and the shared fixed-point quantity formatter.
 | Dimension | Units |
 |---|---|
 | Voltage | `V`, `mV`, `uV`, `nV` |
-| Resistance | `mohm`, `ohm`, `kohm`, `Mohm` |
+| Resistance | `mohm`, `ohm`, `kohm`, `Mohm`, `Gohm` |
 | Capacitance | `F`, `uF`, `nF`, `pF` |
 | Inductance | `H`, `mH`, `uH`, `nH` |
 | Length | `m`, `mm`, `um` |
@@ -3556,7 +3686,7 @@ engineering values use a space and the shared fixed-point quantity formatter.
 Component values take the first seven dimensions; the others serve the
 attributes that name them (EMI facts, `sim` blocks, bench expressions). A
 compound unit is written with its slash directly after the number's unit
-(`4nV/rtHz`); `mohm` is milliohm and `Mohm` megohm.
+(`4nV/rtHz`); `mohm` is milliohm, `Mohm` megohm and `Gohm` gigaohm.
 
 Values are normalized to SI base units (dB and deg are their own base units) in the IR while retaining their source
 display unit.
@@ -3577,7 +3707,8 @@ item           = library | package_import | port | pin | pad | power_domain
                | power_state | interface | constraint | mechanical | silkscreen
                | physical_macro | no_connect | build | param | sim ;
 param          = "param", name, "=", scalar, ";" ;   (* boards and benches *)
-sim            = "sim", name, [name], sim_block ;     (* parts; kind, then unit *)
+sim            = "sim", name, [name], "{", (name, "=", sim_value, ";" | supply_set)*, "}" ;   (* parts; kind, then unit *)
+supply_set     = "supply", quantity, sim_block ;      (* opamp and diffamp blocks *)
 sim_block      = "{", (name, "=", sim_value, ";")*, "}" ;
 sim_value      = scalar, (",", scalar)* | name, sim_block ;
 bench_item     = library | package_import | component | bench_net | param
@@ -3585,7 +3716,8 @@ bench_item     = library | package_import | component | bench_net | param
 bench_net      = "net", name, [".", qualified_name], "{", endpoint*, "}" ;
 replace        = "replace", target_reference, "with", name, sim_block ;
 ignore         = "ignore", target_reference, (",", target_reference)*, ";" ;
-analysis       = "analysis", name, (";" | sim_block) ;
+analysis       = "analysis", [name, ":"], name, (";" | sim_block) ;   (* noise: output = V(...), V(...) *)
+tolerance      = "tolerance", target, (",", target)*, "=", scalar, ["match", scalar], ";" ;
 step           = "step", name, "in", scalar, (",", scalar)*, ";" ;
 let            = "let", name, "=", expression, ";" ;
 measure        = "measure", name, "=", expression, (";" | sim_block) ;

@@ -54,6 +54,7 @@ use crate::error::{AnalysisPoint, SimError};
 use crate::lu::LuError;
 use crate::mna::{Layout, Unknown};
 use crate::newton::{Context, DcPoint, Failure, Method, Model, Solver, State, dc_point, element_current};
+use crate::timing::{self, Phase};
 
 /// The state a transient run starts from (see the module docs), by name.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -213,9 +214,13 @@ impl TranResult {
     }
 }
 
-/// Divided differences of order `points.len() - 1` of unknown `k`.
+/// Divided differences of order `points.len() - 1` (at most 4) of unknown `k`.
 fn divided_difference(points: &[(f64, &[f64])], k: usize) -> f64 {
-    let mut values: Vec<f64> = points.iter().map(|(_, x)| x[k]).collect();
+    debug_assert!(points.len() <= 5, "at most a fourth divided difference");
+    let mut values = [0.0; 5];
+    for (value, (_, x)) in values.iter_mut().zip(points) {
+        *value = x[k];
+    }
     for order in 1..points.len() {
         for i in 0..points.len() - order {
             values[i] = (values[i + 1] - values[i]) / (points[i + order].0 - points[i].0);
@@ -542,6 +547,7 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             }
         };
         let x = solved.x;
+        let control = timing::span(Phase::StepControl);
         let tolerance = Tolerance { mask: &mask, scale: &scale, reltol: options.reltol };
         let lte = truncation(&history, t_new, &x, h, method, &tolerance);
         // With law elements a node can jump (a behavioural source switching
@@ -622,7 +628,9 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             *s = s.max(v.abs());
         }
         state = next_state;
+        drop(control);
         if t >= start - hmin {
+            let _span = timing::span(Phase::Storage);
             times.push(t);
             points.push(record(&state));
         }

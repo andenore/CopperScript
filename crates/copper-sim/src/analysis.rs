@@ -37,6 +37,8 @@ use crate::diagnose::diagnose;
 use crate::error::{AnalysisPoint, SimError};
 use crate::lu::{Lu, LuError};
 use crate::mna::{Layout, Mode, assemble, element_currents};
+use crate::sparse_lu::{SparseLu, SparseMatrix, factor_reusing};
+use crate::timing::{self, Phase};
 use std::f64::consts::PI;
 
 /// The frequencies of an AC analysis.
@@ -187,17 +189,44 @@ struct Point {
     currents: Vec<Complex>,
 }
 
-fn solve_point(c: &Circuit, layout: &Layout, mode: Mode, at: AnalysisPoint) -> Result<Point, SimError> {
+/// Solve one point; `factors` carries the sparse factors from point to point
+/// (a sweep's matrices share their pattern, so later points refactor).
+fn solve_point(
+    c: &Circuit,
+    layout: &Layout,
+    mode: Mode,
+    at: AnalysisPoint,
+    factors: &mut Option<SparseLu<Complex>>,
+) -> Result<Point, SimError> {
     let n = layout.size();
     let x = if n == 0 {
         Vec::new()
     } else {
-        let sys = assemble(c, layout, mode);
-        let lu = Lu::factor(sys.a, n).map_err(|e| match e {
-            LuError::NonFinite => SimError::NonFinite(at),
-            _ => SimError::Singular { at, causes: diagnose(c, layout, at.is_dc(), e) },
-        })?;
-        lu.solve(&sys.rhs).ok_or(SimError::NonFinite(at))?
+        let (sys, sparse) = {
+            let _span = timing::span(Phase::Assembly);
+            let sys = assemble(c, layout, mode);
+            let sparse = SparseMatrix::from_dense(&sys.a, n);
+            (sys, sparse)
+        };
+        let factored = {
+            let _span = timing::span(Phase::Factor);
+            factor_reusing(&sparse, factors.take())
+        };
+        match factored {
+            Some(lu) => {
+                let _span = timing::span(Phase::Solve);
+                let x = lu.solve(&sys.rhs).ok_or(SimError::NonFinite(at))?;
+                *factors = Some(lu);
+                x
+            }
+            None => {
+                let lu = Lu::factor(sys.a, n).map_err(|e| match e {
+                    LuError::NonFinite => SimError::NonFinite(at),
+                    _ => SimError::Singular { at, causes: diagnose(c, layout, at.is_dc(), e) },
+                })?;
+                lu.solve(&sys.rhs).ok_or(SimError::NonFinite(at))?
+            }
+        }
     };
     let voltages = layout.node_row.iter().map(|r| r.map_or(Complex::ZERO, |k| x[k])).collect();
     let currents = element_currents(c, layout, mode, &x);
@@ -291,7 +320,7 @@ pub fn operating_point(circuit: &Circuit) -> Result<OpResult, SimError> {
         return Ok(OpResult { probes: Probes::new(circuit, &layout), voltages, currents });
     }
     let layout = Layout::of(circuit);
-    let p = solve_point(circuit, &layout, Mode::Dc, AnalysisPoint::OperatingPoint)?;
+    let p = solve_point(circuit, &layout, Mode::Dc, AnalysisPoint::OperatingPoint, &mut None)?;
     Ok(OpResult {
         probes: Probes::new(circuit, &layout),
         voltages: p.voltages.iter().map(|z| z.re).collect(),
@@ -313,9 +342,10 @@ pub fn ac(circuit: &Circuit, sweep: &Sweep) -> Result<AcResult, SimError> {
     let layout = Layout::of(circuit);
     let mut voltages = vec![Vec::with_capacity(frequencies.len()); circuit.node_count()];
     let mut currents = vec![Vec::with_capacity(frequencies.len()); circuit.elements().len()];
+    let mut factors = None;
     for &f in &frequencies {
         let mode = Mode::Ac { omega: 2.0 * PI * f };
-        let p = solve_point(circuit, &layout, mode, AnalysisPoint::Ac { frequency: f })?;
+        let p = solve_point(circuit, &layout, mode, AnalysisPoint::Ac { frequency: f }, &mut factors)?;
         for (col, v) in voltages.iter_mut().zip(p.voltages) {
             col.push(v);
         }

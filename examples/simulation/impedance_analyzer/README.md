@@ -307,16 +307,16 @@ frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
 | `LoopPeaking` | AC | Peaking of every loop to 1 GHz |
 | `SenseBufferTrade` | AC | Trade study: OPA810 sense buffers |
 | `DcOperatingPoint` | operating point | DC levels with typical offsets |
-| `MeasurementNoiseGain1`, `MeasurementNoiseGain10`, `MeasurementNoiseGain100`, `MeasurementNoiseCurrent` | noise | Noise, SNR and contributors of each ADC channel (one output per noise analysis) |
+| `MeasurementNoise` | noise | Noise, SNR and contributors of the four ADC channels (one noise analysis with four outputs), and the noise of the computed impedance |
 | `ResistorMatching` | AC, Monte Carlo | Spread from component tolerances; what calibration removes |
 | `ResistorWorstCase` | AC, worst case | The same at the sensitivity corners |
 | `Startup` | transient | Rails ramping, coupling networks charging, input ranges, settling |
 | `Distortion` | transient | Drive-current harmonics, clipping and slew headroom |
 
-`StrayCapacitance` writes the soil out instead of using `SoilModel`: its mask
-capacitor joins the soil node `S_LP`, and a bench cannot add a pin to a bench
-net its fixture declares (a `load` model there instead changes every value in
-the 14th digit, the matrix being summed in another order).
+`StrayCapacitance` adds its mask capacitor to `SoilModel`'s soil node `S_LP`
+by declaring the net again with the capacitor's pin (nets of one name are one
+net); its values are those of the version that wrote the soil out, to the last
+digit.
 
 ### Strays
 
@@ -395,26 +395,29 @@ Equal contacts, from 150 ohm m to the board's limit:
 
 | Soil | eps_r | Usable to | 100 kHz | 300 kHz | 1 MHz | Band |
 | --- | --- | --- | --- | --- | --- | --- |
-| 150 ohm m (1.2 kohm) | 5 | full | 0.029 %, 0.0019 deg | 0.089 %, 0.012 deg | 0.82 %, 0.29 deg | 0.82 %, 0.29 deg |
-| 150 ohm m | 25 | full | 0.029 %, 0.0018 deg | 0.089 %, 0.0080 deg | 0.86 %, 0.12 deg | 0.86 %, 0.12 deg |
+| 150 ohm m (1.2 kohm) | 5 | full | 0.029 %, 0.0019 deg | 0.088 %, 0.012 deg | 0.82 %, 0.29 deg | 0.82 %, 0.29 deg |
+| 150 ohm m | 25 | full | 0.029 %, 0.0018 deg | 0.088 %, 0.0079 deg | 0.86 %, 0.12 deg | 0.86 %, 0.12 deg |
 | 150 ohm m | 40 | full | 0.029 %, 0.0017 deg | 0.088 %, 0.0051 deg | 0.81 %, 0.0082 deg | 0.81 %, 0.012 deg |
 | 200 ohm m (1.6 kohm) | 5 | 824 kHz | 0.035 %, 0.0018 deg | 0.14 %, 0.015 deg | **1.5 %**, 0.41 deg | 1.5 %, 0.41 deg |
 | 200 ohm m | 25 | 831 kHz | 0.035 %, 0.0015 deg | 0.14 %, 0.0055 deg | **1.5 %**, 0.025 deg | 1.5 %, 0.026 deg |
-| 200 ohm m | 40 | 892 kHz | 0.035 %, 0.0012 deg | 0.14 %, 0.0011 deg | **1.2 %**, 0.17 deg | 1.2 %, 0.17 deg |
-| 300 ohm m (2.4 kohm) | 5 | 560 kHz | 0.051 %, 0.0014 deg | 0.29 %, 0.018 deg | **3.7 %**, 0.52 deg | 3.7 %, 0.52 deg |
-| 300 ohm m | 25 | 587 kHz | 0.051 %, 0.0002 deg | 0.28 %, 0.013 deg | **2.7 %**, 0.53 deg | 2.7 %, 0.53 deg |
-| 300 ohm m | 40 | 667 kHz | 0.051 %, 0.0006 deg | 0.27 %, 0.033 deg | **1.7 %**, 0.77 deg | 1.7 %, 0.77 deg |
-| 500 ohm m (4 kohm) | 5 | 343 kHz | 0.10 %, 0.0012 deg | 0.77 %, 0.0054 deg | **10 %**, 0.62 deg | 10 %, 0.62 deg |
+| 200 ohm m | 40 | 892 kHz | 0.035 %, 0.0012 deg | 0.14 %, 0.0010 deg | **1.2 %**, 0.17 deg | 1.2 %, 0.17 deg |
+| 300 ohm m (2.4 kohm) | 5 | 560 kHz | 0.051 %, 0.0014 deg | 0.29 %, 0.017 deg | **3.7 %**, 0.52 deg | 3.7 %, 0.52 deg |
+| 300 ohm m | 25 | 587 kHz | 0.051 %, 0.0002 deg | 0.28 %, 0.012 deg | **2.7 %**, 0.53 deg | 2.7 %, 0.53 deg |
+| 300 ohm m | 40 | 667 kHz | 0.051 %, 0.0006 deg | 0.27 %, 0.032 deg | **1.7 %**, 0.77 deg | 1.7 %, 0.77 deg |
+| 500 ohm m (4 kohm) | 5 | 343 kHz | 0.10 %, 0.0012 deg | 0.76 %, 0.0053 deg | **10 %**, 0.62 deg | 10 %, 0.62 deg |
 | 500 ohm m | 25 | 378 kHz | 0.10 %, 0.0062 deg | 0.67 %, 0.13 deg | **3.5 %**, **2.4 deg** | 3.5 %, 2.4 deg |
 | 500 ohm m | 40 | 502 kHz | 0.099 %, 0.0097 deg | 0.56 %, 0.19 deg | **1.2 %**, **1.9 deg** | 1.2 %, 1.9 deg |
-| 1 kohm m (8 kohm) | 5 | 176 kHz | 0.34 %, 0.025 deg | **2.8 %**, 0.44 deg | **20 %**, **11 deg** | 20 %, 11 deg |
-| 1 kohm m | 25 | 207 kHz | 0.31 %, 0.062 deg | **1.5 %**, 0.96 deg | 0.060 %, **4.9 deg** | 1.8 %, 4.9 deg |
+| 1 kohm m (8 kohm) | 5 | 176 kHz | 0.34 %, 0.025 deg | **2.8 %**, 0.43 deg | **20 %**, **11 deg** | 20 %, 11 deg |
+| 1 kohm m | 25 | 207 kHz | 0.31 %, 0.062 deg | **1.5 %**, 0.95 deg | 0.060 %, **4.9 deg** | 1.8 %, 4.9 deg |
 | 1 kohm m | 40 | 316 kHz | 0.28 %, 0.084 deg | 0.69 %, 0.93 deg | **1.0 %**, **2.5 deg** | 1.0 %, 2.5 deg |
 | 1.3 kohm m (11 kohm) | 5 | 129 kHz | 0.61 %, 0.070 deg | **4.7 %**, **1.3 deg** | **16 %**, **19 deg** | 17 %, 19 deg |
 | 1.3 kohm m | 25 | 157 kHz | 0.52 %, 0.16 deg | **1.5 %**, **1.8 deg** | **2.4 %**, **5.2 deg** | 2.4 %, 5.2 deg |
 | 1.3 kohm m | 40 | 228 kHz | 0.42 %, 0.20 deg | 0.19 %, **1.4 deg** | **1.9 %**, **2.5 deg** | 1.9 %, 2.5 deg |
 
-At 10 kHz every soil here stays within 0.028 % and 0.0022 degrees. The usable
+The 300 kHz column lies between the 20-per-decade samples: `at(x, f)` solves the
+circuit at 300 kHz itself (it interpolated between 282 and 316 kHz before phase F2
+of the plan; the exact values differ by up to 0.014 degrees and 0.018 % of
+the reading). At 10 kHz every soil here stays within 0.028 % and 0.0022 degrees. The usable
 frequency falls as one over the resistivity: about
 `160 kHz x (1 kohm m / resistivity)` for the worst permittivity (`upto`:
 824 kHz at 200 ohm m, 176 kHz at 1 kohm m, 129 kHz at 1.3 kohm m; the earlier
@@ -467,8 +470,9 @@ to 1.56 V, past its linear range; the firmware reads it on gain 1 (155 mV).
 `usable_to_phase` (`upto` of the phase alone: 366 kHz for 68 kohm, 630 kHz,
 620 kHz and 799 kHz for the 47 kohm positions, full on every rated position),
 but no `usable_to_magnitude`: 39 ohm with 47 kohm contacts is 3.8 % off at
-1 kHz already, and `upto` of a comparison that fails at the first sample is a
-run-time error that stops the whole bench, not a "none". On these positions
+1 kHz already, and `upto` of a comparison that fails at the first sample was a
+run-time error that stopped the whole bench. It is now "never" (phase F2 of
+the plan); the bench has not been given the measure yet. On these positions
 the magnitude is what limits.
 
 The 47 kohm contacts of the first card design fail for two reasons in the
@@ -742,8 +746,10 @@ ADC inputs `V_MID` +56 mV (gain 1), +45 mV (gain 10 and 100), -23 mV
 
 ### MeasurementNoise: reported (no requirement in SPEC.md)
 
-Four benches, one per ADC input (a noise analysis has one output), the stake
-in soil at relative permittivity 25. Detection bandwidth 1 kHz (SPEC.md's
+One bench, `MeasurementNoise`, whose noise analysis has the four ADC inputs as
+its outputs (its measures are named `gain1_...`, `gain10_...`, `gain100_...`,
+`current_...`; the four benches it replaced gave the same numbers to the last
+digit), the stake in soil at relative permittivity 25. Detection bandwidth 1 kHz (SPEC.md's
 figure; the I/Q demodulation's noise bandwidth is one over the record length,
 so a longer record lowers the noise by the square root): the noise is the RMS
 over 1 kHz centred on the drive frequency, the signal the drive's at the same
@@ -780,8 +786,10 @@ What it means:
 
 - **The smallest signal.** 5 ohm m gives 0.59 mV peak at the sense
   electrodes (0.42 mV RMS). Referred there, the noise is 22.4 nV/rtHz at
-  1 kHz and 15 nV/rtHz from 10 kHz up, 0.71 uV RMS in 1 kHz: 55 dB, or 0.17 %
-  of the reading (one standard deviation). The gain stages add nothing that
+  1 kHz and 15 nV/rtHz from 10 kHz up, 0.71 uV RMS in 1 kHz: 55 dB. The noise
+  splits evenly between the reading's magnitude and its phase, so that is
+  0.12 % of the magnitude and 0.070 degrees (one standard deviation each; see
+  the next point). The gain stages add nothing that
   matters (gain 1 and gain 100 within 0.3 dB); gain 100 is there for the ADC's
   resolution, not for noise.
 - **What sets it.** At 5 ohm m the sense buffers and the receiver: the
@@ -791,17 +799,25 @@ What it means:
   and LP contacts, 5.6 kohm each: 9.6 nV/rtHz each) takes over; it is
   physics, not circuit. At 1.3 kohm m the drive's current noise times the soil
   impedance adds a third; it is common to both channels.
-- **Resolution of the impedance.** The drive's current noise reaches both
-  channels and cancels in `V / I` (the soil sees one current), so the
-  impedance noise is the voltage channel's noise without its drive share
-  combined with the current channel's without its drive share (by hand from
-  the measures, uncorrelated): at 5 ohm m and 1 kHz 0.17 % and 0.10 degrees
-  RMS in 1 kHz (0.070 ohm of 40 ohm); at 100 ohm m 0.010 % and 0.006 degrees;
-  at 1.3 kohm m 0.0016 % (the current channel, 0.0005 %, never matters). The
-  1 % and 1 degree accuracy is therefore not noise-limited at 1 kHz bandwidth:
-  three standard deviations at 5 ohm m and 1 kHz are 0.5 % and 0.3 degrees,
-  and a 10 Hz bandwidth (a 100 ms record per frequency) brings them to 0.05 %
-  and 0.03 degrees.
+- **Resolution of the impedance.** The bench computes the noise of the
+  impedance the firmware reports, `z1` of `FirmwareReadout` (`V_MON_1` over
+  the current read at `I_MON`), from every generator with the correlated ones
+  combined (`noise(z1)`: the ratio linearised in the two channels at each
+  frequency). The drive's current noise reaches both channels and cancels in
+  `V / I` completely (`impedance_drive_share_1khz`: 1e-30 %, round-off; the
+  soil sees one current). Relative to `|z1|` in the 1 kHz band
+  (`impedance_noise_1khz`; the phase's RMS in radians is the same number,
+  `impedance_phase_noise_1khz` in degrees): at 5 ohm m 0.12 % and 0.070
+  degrees (0.049 ohm of 40 ohm); at 100 ohm m 0.0071 % and 0.0041 degrees; at
+  1.3 kohm m 0.0012 % and 0.0007 degrees; at 100 kHz 0.081 %, 0.0054 % and
+  0.0012 %. The 1 % and 1 degree accuracy is therefore not noise-limited at
+  1 kHz bandwidth: three standard deviations at 5 ohm m and 1 kHz are 0.37 %
+  and 0.21 degrees, and a 10 Hz bandwidth (a 100 ms record per frequency)
+  brings them to 0.037 % and 0.021 degrees. (The hand combination this
+  replaces, the channels' noise without their drive shares added as
+  uncorrelated, gave 0.17 % and 0.10 degrees: it took the whole noise-to-signal
+  ratio for each of magnitude and phase, which share it, so it was high by
+  the square root of 2.)
 - **SPEC's estimate.** The current channel was estimated at 0.9 pA/rtHz (R_TIA
   alone); simulated 4.0 pA/rtHz referred to the current at 1 kHz, 1.55 pA/rtHz
   of it the transimpedance stage, the rest the drive's current noise, which
@@ -975,7 +991,7 @@ harmonic here is clipping or slewing, or the settling left in the record.
 | Common-mode error | 0.2 % at 70 dB | 0.022 % (receiver at 90 dB minimum, matched buffers); one buffer at minimum CMRR gives 66.8 dB at 100 ohm m |
 | Sense contact pole | 0.3 pF guarded node: 0.6 deg (5.6 kohm), 6 deg (56 kohm) | the node is 1.6 pF (the buffer's own 1.3 pF); equal contacts: 0.16 deg at 100 ohm m, 2.5 to 11 deg at 1 kohm m, up to 19 deg at 1.3 kohm m |
 | Transimpedance phase lag at 1 MHz | 7 deg (8 MHz) | 10.7 deg (5.3 MHz with 1.5 pF); whole channel 10.3 to 10.5 deg before calibration, 0 after |
-| Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoiseCurrent`) |
+| Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoise`) |
 | Slew rate needed | 20 V/us | 3.8 V/us at 1 MHz into 1.3 kohm m (0.61 V peak at the pump output: the strays take the current there), 2.59 V peak at 1 kHz; ADA4807 225 V/us, no harmonic from slewing (`Distortion`) |
 | Start-up | 0.8 s from the slowest network | 0.66 s to 1 mV on every ADC input (`Startup`) |
 | Guard loop stability | unknown | no peaking (guard tracking at most 100 %); a negative real part of -42.5 kohm that AC analysis cannot classify; no oscillation in `Startup` with the electrodes in air (time steps up to 1 ms, not conclusive) |
@@ -1374,6 +1390,8 @@ footprints resolved. Two of the failures are outside this example's files:
 | Benches for a module | `bench NAME for MODULE { ... }`: the module on its own, ports as nets | `copper-lang` (`a_bench_simulates_a_module_on_its_own`, `module_benches_are_found_beside_the_board`), `copper-simulate` (`a_module_bench_runs_the_module_alone_with_its_port_conditions`, `a_module_bench_gives_the_numbers_of_the_same_circuit_drawn_flat`), `copper/tests/sim_cli.rs` |
 | Bench supplies and bench models | `supply NAME { voltage = q; net = NET; }`, `model NAME: KIND { ... }` | `copper-lang` (`module_bench_supplies_and_models_are_checked`, `bench_models_and_supplies_parse`) |
 | Params in modules | `param NAME = q;` in a module | `copper-lang` (`module_params_compile_into_the_module_definition`) |
+| Several noise outputs, noise of a derived quantity (phase F2) | `output = V(V_MON_1), V(I_MON);`, `noise(V(V_MON_1), U_DIF)`, `noise(z1)` | `copper-simulate/tests/bench_language.rs` (`several_noise_outputs_and_the_noise_of_a_ratio`), `copper-lang/tests/bench_language.rs` (`noise_of_named_and_derived_quantities`), `copper-sim/tests/noise_closed_forms.rs` (`a_weighted_output_is_the_weighted_sum_of_node_voltages`) |
+| Optional fixture components (phase F2) | a net declared again adds pins; a 0 F capacitor is absent; `fixture B for T using A` | `copper-simulate/tests/bench_language.rs` (`optional_components_in_fixtures`) |
 
 Since then the plan's later phases added what this board's benches now use:
 fixtures (`using`), limits per step (`where`), `upto` and `downto`, windowed
@@ -1381,46 +1399,48 @@ reductions, noise analysis, tolerances with Monte Carlo and worst case, and
 transient analysis with op-amp limits and waveforms.
 
 Gaps and problems found while moving the benches onto them (stable binary,
-sources 03f60a26cdc7):
+sources 03f60a26cdc7), and where they stand after phases F1 and F2 of the
+[plan](../../../docs/integrated-simulation-plan.md):
 
-- **A bench cannot add a pin to a fixture's bench net**, and two bench nets
-  cannot join the same board net (SIM037: `S_LP` in `StrayCapacitance`, `GND`
-  in `MatchingTolerances`), and a capacitor of 0 F is refused, so a fixture
-  cannot hold an optional stray. `StrayCapacitance` therefore writes the soil
-  out; `MatchingTolerances` puts the LT5400's pad capacitance on `load`
-  models instead of bench capacitors. A `load` model in place of a bench
-  capacitor gives the same circuit but changes every value in the 14th digit
-  (another summation order), so it could not keep `StrayCapacitance`
-  bit-identical.
-- **`upto` and `downto` have no "never" result**: a comparison that fails at
-  the first sample is a run-time error that stops the whole bench.
-  `CalibrationCard` and `ContactImbalance` therefore report the phase's
-  usable frequency only.
-- **A bench evaluates every `let`, used or not**, and a let that is not finite
-  stops the bench: `Startup` stopped on `z_true`'s 0 / 0 at t = 0, which is
-  why `FirmwareReadout` is a fixture of its own.
-- **A matched group can only be declared on passive components.** The
-  LT5400's model is four `load` blocks; a tolerance on a part model is SIM091,
-  and `tolerance RN_HOW.resistance` would vary each unit on its own with no
-  ratio matching. `MatchingTolerances` rebuilds the network from bench
-  resistors.
-- **A fixture cannot override another fixture's param** (SIM002), so the
-  benches that step contacts as plain values declare `R_CONTACT` themselves.
-- **A noise analysis has one output**, so the noise of four ADC channels is
-  four benches, and the impedance noise (a ratio of two channels) is combined
-  by hand.
+- **A bench could not add a pin to a fixture's bench net**, and a capacitor
+  of 0 F was refused, so a fixture could not hold an optional stray. Fixed:
+  nets of one name are one net, and a 0 F capacitor is absent.
+  `StrayCapacitance` uses `SoilModel` now (same values to the last digit).
+  `MatchingTolerances` still puts the LT5400's pad capacitance on `load`
+  models; moving it to bench capacitors on `GND` would change its values in
+  the last digits (another summation order) and was not done.
+- **`upto` and `downto` had no "never" result.** Fixed: a comparison that
+  fails at the first sample gives "never", which fails a limit and is
+  reported without one. `CalibrationCard` and `ContactImbalance` still report
+  the phase's usable frequency only; a `usable_to_magnitude` could be added.
+- **A bench evaluated every `let`, used or not.** Fixed: a let nothing reads
+  is not evaluated. `FirmwareReadout` stays a fixture of its own, which no
+  longer matters to `Startup`.
+- **A matched group could only be declared on passive components.** Fixed: a
+  component of a part made of `load` blocks takes `tolerance`, `match` and
+  `match_tolerance` (its units are the members), and a bench can match model
+  parameters (`tolerance RN_HOW.resistance = 7.5% match 0.0125%;`).
+  `MatchingTolerances` still rebuilds the network from bench resistors, so
+  its results stand as they are.
+- **A fixture could not override another fixture's param** (SIM002). Fixed: a
+  fixture may use another and override its declarations. The benches that
+  step contacts as plain values still declare `R_CONTACT` themselves.
+- **A noise analysis had one output**, so the noise of four ADC channels was
+  four benches and the impedance noise was combined by hand. Fixed:
+  `MeasurementNoise` has four outputs and measures the impedance noise
+  (`noise(z1)`).
 - **One transient limit per part**: the ADA4807's slew and swing depend on its
-  supply (Tables 2 and 4) but a part has one sim block, so the 3.3 V stages
-  take the +/-5 V figures. An output current limit needs an output
-  resistance, which the ADA4807 model does not have.
-- **The analysis bounds printed** (text header and the results JSON's
-  `analysis`) are the params' defaults when the bench steps them
-  (`Distortion`: "tran 0 to 60 ms" for every step); the runs use the stepped
-  values (the CSV time axis shows them).
-- **Transient runs are slow**: roughly 10 ms per time step on this
-  circuit, so `Distortion` (9 runs of 6000 to 12000 steps) takes about 19
-  minutes.
-- There is no `Gohm` unit (`1000Mohm`).
+  supply (Tables 2 and 4). A part block can now carry parameter sets per
+  supply span (`supply 3.3V { ... }`), but the ADA4807 part has not been
+  given them, so the 3.3 V stages still take the +/-5 V figures. An output
+  current limit needs an output resistance, which the ADA4807 model does not
+  have.
+- **The analysis bounds printed** were the params' defaults when the bench
+  steps them. Fixed: `Distortion` now reads "tran 0 to 30 us..60 ms,
+  recorded from 20 us..50 ms".
+- **Transient runs were slow**: phase F1 brought `Distortion` from about 19
+  minutes to 19 s in a debug build.
+- `Gohm` exists now.
 - Not taken up yet: the negative-conductance measure of `PumpOutputImpedance`
   still covers 1 kHz to 1 GHz; a window could now restrict it.
 

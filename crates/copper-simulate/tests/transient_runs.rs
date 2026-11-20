@@ -149,3 +149,51 @@ fn rc_step_time_constant_outputs_and_errors() {
     );
     assert_eq!(runs[0].status(), Status::Error);
 }
+
+#[test]
+fn parallel_steps_equal_the_serial_run_and_report_the_first_failing_step() {
+    let bench = "bench Steps for RC {
+        replace J1 with source { out = J1.1; ref = GND; waveform = pulse { initial = 0V; pulsed = 1V; delay = 10us; width = 1ms; }; }
+        analysis tran { stop = 400us; }
+        step R_VALUE in 1kohm, 2kohm, 500ohm, 3kohm;
+        measure final = at(V(VOUT), 400us);
+        measure tau = cross(V(VOUT), 0.632121V) - 10us;
+        plot V(VOUT);
+    }";
+    let files = |bench: &str| {
+        vec![
+            (
+                "board.copper".to_owned(),
+                RC.replace("HEADER;", "p.HEADER;")
+                    .replace("use library \"tiny\";", "use library \"tiny\"; import p \"./parts\";"),
+            ),
+            ("parts/header.copper".to_owned(), HEADER.to_owned()),
+            ("benches/steps.copper".to_owned(), bench.to_owned()),
+        ]
+    };
+    // The same project, serially and on threads.
+    let both = |name: &str, bench: &str| {
+        let files = files(bench);
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, s)| (p.as_str(), s.as_str())).collect();
+        let board = project(name, &refs);
+        let design = compile_design_file(&board, false, true).unwrap();
+        let serial = copper_simulate::parallel::with_jobs(1, || simulate(&board, &design, None).unwrap());
+        let parallel = copper_simulate::parallel::with_jobs(3, || simulate(&board, &design, None).unwrap());
+        (serial, parallel)
+    };
+    let (serial, parallel) = both("parallel", bench);
+    assert_eq!(serial[0].error, None);
+    assert_eq!(serial[0].steps.len(), 4);
+    assert_eq!(serial, parallel);
+    // At 3 kohm (tau 300 us) V(VOUT) never reaches 0.99 V in 400 us, nor at 1 kohm and
+    // 2 kohm: the bench stops at its first step either way.
+    let failing = bench.replace("0.632121V", "0.99V");
+    let (serial, parallel) = both("parallel-failing", &failing);
+    assert!(
+        serial[0].error.as_deref().is_some_and(|e| e.contains("at step R_VALUE = 1 kohm")),
+        "{:?}",
+        serial[0].error
+    );
+    assert!(serial[0].steps.is_empty());
+    assert_eq!(serial, parallel);
+}

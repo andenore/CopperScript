@@ -145,16 +145,30 @@ pub fn expression_text(expression: &Expression, two_terminal: &dyn Fn(&str, &str
             None => format!("V({node})"),
         },
         ExpressionKind::Probe(Probe::Current { component, pin }) => {
-            if two_terminal(component, pin) {
-                format!("I({component})")
-            } else {
-                format!("I({component}.{pin})")
+            // A supply's current: `I(VP)` (delivered into its net), `I(VP.out)` of a replaced one.
+            if let Some(supply) = component.strip_prefix("supply ") {
+                return if pin == copper_lang::bench::SUPPLY_NET {
+                    format!("I({supply})")
+                } else {
+                    format!("I({supply}.{pin})")
+                };
             }
+            if two_terminal(component, pin) { format!("I({component})") } else { format!("I({component}.{pin})") }
         }
-        ExpressionKind::Probe(Probe::Noise { contributor }) => {
-            format!("noise({})", contributor.as_deref().unwrap_or(""))
+        ExpressionKind::Probe(Probe::Noise { contributor, quantity }) => {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(quantity) = quantity {
+                parts.push(expression_text(quantity, two_terminal));
+            }
+            if let Some(contributor) = contributor {
+                parts.push(contributor.clone());
+            }
+            format!("noise({})", parts.join(", "))
         }
-        ExpressionKind::Probe(Probe::InputNoise) => "input_noise()".to_owned(),
+        ExpressionKind::Probe(Probe::InputNoise { quantity }) => match quantity {
+            Some(quantity) => format!("input_noise({})", expression_text(quantity, two_terminal)),
+            None => "input_noise()".to_owned(),
+        },
         ExpressionKind::Call { function, arguments } => {
             let arguments: Vec<String> =
                 arguments.iter().map(|argument| expression_text(argument, two_terminal)).collect();

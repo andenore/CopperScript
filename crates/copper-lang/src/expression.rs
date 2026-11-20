@@ -248,10 +248,12 @@ pub enum Function {
     Downto,
     /// `integrate(x)`, `integrate(x, from, to)`: the integral of `x` over the axis (trapezoidal).
     Integrate,
+    /// `if(a < b, x, y)`: `x` where the comparison holds, else `y` (per sample of a swept condition).
+    If,
 }
 
 impl Function {
-    pub const ALL: [Function; 23] = [
+    pub const ALL: [Function; 24] = [
         Function::Mag,
         Function::Phase,
         Function::Re,
@@ -275,6 +277,7 @@ impl Function {
         Function::Upto,
         Function::Downto,
         Function::Integrate,
+        Function::If,
     ];
 
     pub fn name(self) -> &'static str {
@@ -302,6 +305,7 @@ impl Function {
             Function::Upto => "upto",
             Function::Downto => "downto",
             Function::Integrate => "integrate",
+            Function::If => "if",
         }
     }
 
@@ -321,7 +325,7 @@ impl Function {
         match self {
             Function::At | Function::Reference | Function::Cross | Function::Settle | Function::Thd => 2,
             Function::Harmonic => 3,
-            Function::NoiseRms | Function::NoiseShare => 3,
+            Function::NoiseRms | Function::NoiseShare | Function::If => 3,
             _ => 1,
         }
     }
@@ -354,9 +358,24 @@ pub enum Probe {
     Current { component: String, pin: String },
     /// `noise()`: the output noise density of `analysis noise`, or `noise(X)`:
     /// the part of it that component or bench model `X` contributes.
-    Noise { contributor: Option<String> },
-    /// `input_noise()`: the output noise referred to the analysis's `input`.
-    InputNoise,
+    /// `quantity` is the noisy quantity when the probe names one
+    /// (`noise(V(OUT))`, `noise(z, X)`): an output of the analysis or an
+    /// expression of voltage probes; `None` is the analysis's only output.
+    Noise { contributor: Option<String>, quantity: Option<Box<Expression>> },
+    /// `input_noise()`: the output noise referred to the analysis's `input`;
+    /// `input_noise(Q)` the noise of quantity `Q` referred to it.
+    InputNoise { quantity: Option<Box<Expression>> },
+}
+
+impl Probe {
+    /// The quantity a noise probe reads: `Some(None)` for the analysis's only
+    /// output, `Some(Some(q))` for a named one, `None` for other probes.
+    pub fn noise_quantity(&self) -> Option<Option<&Expression>> {
+        match self {
+            Probe::Noise { quantity, .. } | Probe::InputNoise { quantity } => Some(quantity.as_deref()),
+            _ => None,
+        }
+    }
 }
 
 /// What `analysis noise` tells the expression checker.
@@ -365,6 +384,8 @@ pub struct NoiseScope {
     /// The dimension of the input source's value (`Voltage` or `Current`),
     /// when the analysis names an input.
     pub input: Option<Dimension>,
+    /// How many outputs the analysis declares (`output = V(A), V(B);`).
+    pub outputs: usize,
 }
 
 /// A typed expression node.
@@ -415,6 +436,10 @@ pub trait Scope {
     fn param(&self, name: &str) -> Option<Dimension>;
     /// The type of an earlier `let`.
     fn let_type(&self, name: &str) -> Option<ExpressionType>;
+    /// The checked expression of an earlier `let` (for `noise(x)` of a let).
+    fn let_expression(&self, _name: &str) -> Option<Expression> {
+        None
+    }
     /// Every name an expression may use, for suggestions.
     fn names(&self) -> Vec<String>;
     /// A `V(...)` target.
@@ -469,15 +494,97 @@ pub fn uses_reference(expression: &Expression, uses: &dyn Fn(&str) -> bool) -> b
     match &expression.kind {
         ExpressionKind::Call { function: Function::Reference, .. } | ExpressionKind::Reference(_) => true,
         ExpressionKind::Let(name) => uses(name),
+        ExpressionKind::Probe(probe) => {
+            probe.noise_quantity().flatten().is_some_and(|quantity| uses_reference(quantity, uses))
+        }
         ExpressionKind::Call { arguments, .. } => arguments.iter().any(|argument| uses_reference(argument, uses)),
         ExpressionKind::Negate(operand) => uses_reference(operand, uses),
         ExpressionKind::Binary { left, right, .. } | ExpressionKind::Compare { left, right, .. } => {
             uses_reference(left, uses) || uses_reference(right, uses)
         }
-        ExpressionKind::Number(_)
-        | ExpressionKind::Quantity(_)
-        | ExpressionKind::Param(_)
-        | ExpressionKind::Probe(_) => false,
+        ExpressionKind::Number(_) | ExpressionKind::Quantity(_) | ExpressionKind::Param(_) => false,
+    }
+}
+
+/// Structural equality of two checked expressions, ignoring locations.
+pub fn same(a: &Expression, b: &Expression) -> bool {
+    match (&a.kind, &b.kind) {
+        (ExpressionKind::Number(x), ExpressionKind::Number(y)) => x == y,
+        (ExpressionKind::Quantity(x), ExpressionKind::Quantity(y)) => x == y,
+        (ExpressionKind::Param(x), ExpressionKind::Param(y))
+        | (ExpressionKind::Let(x), ExpressionKind::Let(y))
+        | (ExpressionKind::Reference(x), ExpressionKind::Reference(y)) => x == y,
+        (ExpressionKind::Probe(x), ExpressionKind::Probe(y)) => match (x, y) {
+            (Probe::Noise { contributor: c, quantity: q }, Probe::Noise { contributor: d, quantity: r }) => {
+                c == d && same_quantity(q.as_deref(), r.as_deref())
+            }
+            (Probe::InputNoise { quantity: q }, Probe::InputNoise { quantity: r }) => {
+                same_quantity(q.as_deref(), r.as_deref())
+            }
+            _ => x == y,
+        },
+        (ExpressionKind::Negate(x), ExpressionKind::Negate(y)) => same(x, y),
+        (ExpressionKind::Call { function: f, arguments: x }, ExpressionKind::Call { function: g, arguments: y }) => {
+            f == g && x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q))
+        }
+        (
+            ExpressionKind::Binary { operator: o, left: l, right: r },
+            ExpressionKind::Binary { operator: p, left: m, right: s },
+        ) => o == p && same(l, m) && same(r, s),
+        (
+            ExpressionKind::Compare { operator: o, left: l, right: r },
+            ExpressionKind::Compare { operator: p, left: m, right: s },
+        ) => o == p && same(l, m) && same(r, s),
+        _ => false,
+    }
+}
+
+/// Whether two noise quantities are the same (`None`: the analysis's only output).
+pub fn same_quantity(a: Option<&Expression>, b: Option<&Expression>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => same(a, b),
+        _ => false,
+    }
+}
+
+/// The noise quantities the noise probes in `expression` read, without repeats.
+pub fn noise_quantities(expression: &Expression) -> Vec<Option<&Expression>> {
+    fn walk<'e>(expression: &'e Expression, out: &mut Vec<Option<&'e Expression>>) {
+        match &expression.kind {
+            ExpressionKind::Probe(probe) => {
+                if let Some(quantity) = probe.noise_quantity()
+                    && !out.iter().any(|seen| same_quantity(*seen, quantity))
+                {
+                    out.push(quantity);
+                }
+            }
+            ExpressionKind::Call { arguments, .. } => arguments.iter().for_each(|argument| walk(argument, out)),
+            ExpressionKind::Negate(operand) => walk(operand, out),
+            ExpressionKind::Binary { left, right, .. } | ExpressionKind::Compare { left, right, .. } => {
+                walk(left, out);
+                walk(right, out);
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(expression, &mut out);
+    out
+}
+
+/// Whether `expression` holds a call of `upto` or `downto` (its value may be "never").
+pub fn may_be_never(expression: &Expression) -> bool {
+    match &expression.kind {
+        ExpressionKind::Call { function: Function::Upto | Function::Downto, .. } => true,
+        ExpressionKind::Call { arguments, .. } => arguments.iter().any(may_be_never),
+        ExpressionKind::Negate(operand) => may_be_never(operand),
+        ExpressionKind::Binary { left, right, .. } | ExpressionKind::Compare { left, right, .. } => {
+            may_be_never(left) || may_be_never(right)
+        }
+        // A let holds its own value, "never" included.
+        ExpressionKind::Let(_) => true,
+        _ => false,
     }
 }
 
@@ -544,7 +651,9 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
         ExprKind::Call { function, arguments } if function == "noise" || function == "input_noise" => {
             let probe = check_noise_probe(function, arguments, scope, &location)?;
             let units = match (&probe, scope.noise().and_then(|noise| noise.input)) {
-                (Probe::InputNoise, Some(Dimension::Current)) => Units::of(Dimension::CurrentNoiseDensity),
+                (Probe::InputNoise { .. }, Some(Dimension::Current)) => Units::of(Dimension::CurrentNoiseDensity),
+                (Probe::InputNoise { .. }, _) => Units::of(Dimension::VoltageNoiseDensity),
+                (Probe::Noise { quantity: Some(quantity), .. }, _) => noise_units(quantity.ty.units),
                 _ => Units::of(Dimension::VoltageNoiseDensity),
             };
             Ok(typed(ExpressionKind::Probe(probe), ExpressionType { units, complex: false, swept: true }))
@@ -588,6 +697,9 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
             if matches!(resolved, Function::Upto | Function::Downto) {
                 return check_upto(resolved, &arguments[0], scope, &location);
             }
+            if resolved == Function::If {
+                return check_if(arguments, scope, &location);
+            }
             let arguments: Vec<Expression> =
                 arguments.iter().map(|argument| check(argument, scope)).collect::<Result<_>>()?;
             let ty = call_type(resolved, &arguments, scope, &location)?;
@@ -626,7 +738,7 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
         ExprKind::Compare { operator, .. } => Err(error(
             "SIM072",
             format!(
-                "a comparison ({}) is allowed only as the argument of upto(...) or downto(...) and in a measure limit's where",
+                "a comparison ({}) is allowed only as the argument of upto(...) or downto(...), as the condition of if(...) and in a measure limit's where",
                 operator.symbol()
             ),
             &location,
@@ -663,6 +775,43 @@ pub fn check_comparison(expression: &Expr, scope: &dyn Scope) -> Result<Expressi
     Ok(Expression {
         location: expression.location.clone(),
         kind: ExpressionKind::Compare { operator: *operator, left: Box::new(left), right: Box::new(right) },
+        ty,
+    })
+}
+
+/// The units of a noise density of a quantity of `units`: per square root of hertz.
+pub fn noise_units(units: Units) -> Units {
+    units.times(Units::base(SECOND, 1))
+}
+
+/// `if(a OP b, x, y)`: `x` where the comparison holds, `y` elsewhere; `x`
+/// and `y` have the same units, and the result is swept when any part is.
+fn check_if(arguments: &[Expr], scope: &dyn Scope, location: &Location) -> Result<Expression> {
+    if !matches!(arguments[0].kind, ExprKind::Compare { .. }) {
+        return Err(error(
+            "SIM072",
+            "if takes a comparison as its condition: if(V(OUT) > 1V, x, y)",
+            &arguments[0].location,
+        ));
+    }
+    let condition = check_comparison(&arguments[0], scope)?;
+    let then = check(&arguments[1], scope)?;
+    let otherwise = check(&arguments[2], scope)?;
+    if then.ty.units != otherwise.ty.units {
+        return Err(error(
+            "SIM065",
+            format!("if(c, x, y) needs x and y of the same units, found {} and {}", then.ty.units, otherwise.ty.units),
+            location,
+        ));
+    }
+    let ty = ExpressionType {
+        units: then.ty.units,
+        complex: then.ty.complex || otherwise.ty.complex,
+        swept: condition.ty.swept || then.ty.swept || otherwise.ty.swept,
+    };
+    Ok(Expression {
+        location: location.clone(),
+        kind: ExpressionKind::Call { function: Function::If, arguments: vec![condition, then, otherwise] },
         ty,
     })
 }
@@ -736,6 +885,7 @@ fn call_type(
             ExpressionType::scalar(x.units.times(axis_units(scope).0))
         }
         Function::Upto | Function::Downto => unreachable!("checked by check_upto"),
+        Function::If => unreachable!("checked by check_if"),
         Function::Min | Function::Max | Function::Mean | Function::Rms | Function::Pp => {
             require_swept(function, x, scope, location)?;
             check_window(function, arguments, scope)?;
@@ -782,11 +932,32 @@ fn call_type(
                 }
             }
             if function == Function::NoiseShare {
-                if x.units != Units::of(Dimension::VoltageNoiseDensity) {
+                let quantities = noise_quantities(&arguments[0]);
+                let several = scope.noise().is_some_and(|noise| noise.outputs > 1);
+                let quantity = match quantities.as_slice() {
+                    [quantity] => *quantity,
+                    [] if !several => None,
+                    [] => {
+                        return Err(error(
+                            "SIM088",
+                            "noise_share(x, from, to) compares x with the noise of the quantity x is part of; with several outputs x must read one of them, such as noise(V(OUT), R1)",
+                            &arguments[0].location,
+                        ));
+                    }
+                    _ => {
+                        return Err(error(
+                            "SIM088",
+                            "noise_share(x, from, to) compares x with the noise of one quantity, but x reads the noise of several",
+                            &arguments[0].location,
+                        ));
+                    }
+                };
+                let wanted = quantity.map_or(Units::of(Dimension::VoltageNoiseDensity), |q| noise_units(q.ty.units));
+                if x.units != wanted {
                     return Err(error(
                         "SIM088",
                         format!(
-                            "noise_share(x, from, to) compares x with the output noise, so x must be a VoltageNoiseDensity, found {}",
+                            "noise_share(x, from, to) compares x with the noise of its quantity, so x must be a {wanted}, found {}",
                             x.units
                         ),
                         &arguments[0].location,
@@ -831,7 +1002,11 @@ fn call_type(
     })
 }
 
-/// `noise()`, `noise(X)` or `input_noise()`: probes of `analysis noise`.
+/// `noise()`, `noise(X)`, `noise(Q)`, `noise(Q, X)`, `input_noise()` or
+/// `input_noise(Q)`: probes of `analysis noise`. `Q` is the noisy quantity:
+/// an output of the analysis (`V(OUT)`), or an expression of voltage probes
+/// (a let such as `z = V(A) / V(B)`), whose noise is its small-signal
+/// response to every generator.
 fn check_noise_probe(function: &str, arguments: &[Expr], scope: &dyn Scope, location: &Location) -> Result<Probe> {
     let Some(noise) = scope.noise() else {
         return Err(error(
@@ -842,10 +1017,18 @@ fn check_noise_probe(function: &str, arguments: &[Expr], scope: &dyn Scope, loca
             location,
         ));
     };
+    let several = noise.outputs > 1;
+    let unnamed = |at: &Location| {
+        error(
+            "SIM095",
+            format!(
+                "the noise analysis has several outputs, so {function}(...) must name the quantity: {function}(V(OUT){})",
+                if function == "noise" { ", X" } else { "" }
+            ),
+            at,
+        )
+    };
     if function == "input_noise" {
-        if let Some(argument) = arguments.first() {
-            return Err(error("SIM064", "input_noise() takes no arguments", &argument.location));
-        }
         if noise.input.is_none() {
             return Err(error(
                 "SIM086",
@@ -853,25 +1036,116 @@ fn check_noise_probe(function: &str, arguments: &[Expr], scope: &dyn Scope, loca
                 location,
             ));
         }
-        return Ok(Probe::InputNoise);
+        return match arguments {
+            [] if several => Err(unnamed(location)),
+            [] => Ok(Probe::InputNoise { quantity: None }),
+            [argument] => Ok(Probe::InputNoise { quantity: Some(Box::new(noise_quantity(argument, scope)?)) }),
+            [_, extra, ..] => Err(error(
+                "SIM064",
+                "input_noise takes no argument, or the noisy quantity: input_noise(V(OUT))",
+                &extra.location,
+            )),
+        };
     }
+    let contributor = |argument: &Expr| -> Result<String> {
+        let ExprKind::Name(name) = &argument.kind else {
+            return Err(error(
+                "SIM087",
+                "noise(X) and noise(Q, X) take the name of a component or bench model as X",
+                &argument.location,
+            ));
+        };
+        scope.noise_source(name, &argument.location)
+    };
     match arguments {
-        [] => Ok(Probe::Noise { contributor: None }),
+        [] if several => Err(unnamed(location)),
+        [] => Ok(Probe::Noise { contributor: None, quantity: None }),
         [argument] => {
-            let ExprKind::Name(name) = &argument.kind else {
-                return Err(error(
-                    "SIM087",
-                    "noise(X) takes the name of a component or bench model as X",
-                    &argument.location,
-                ));
-            };
-            Ok(Probe::Noise { contributor: Some(scope.noise_source(name, &argument.location)?) })
+            // A name is a let (the noise of that quantity) or a contributor.
+            if let ExprKind::Name(name) = &argument.kind {
+                let is_let = scope.let_type(name).is_some();
+                if is_let && scope.noise_source(name, &argument.location).is_ok() {
+                    return Err(error(
+                        "SIM087",
+                        format!(
+                            "noise({name}): {} is both a let and a component or bench model; rename the let",
+                            repr(name)
+                        ),
+                        &argument.location,
+                    ));
+                }
+                if !is_let {
+                    let source = contributor(argument)?;
+                    if several {
+                        return Err(unnamed(location));
+                    }
+                    return Ok(Probe::Noise { contributor: Some(source), quantity: None });
+                }
+            }
+            Ok(Probe::Noise { contributor: None, quantity: Some(Box::new(noise_quantity(argument, scope)?)) })
         }
-        [_, extra, ..] => Err(error(
+        [quantity, source] => Ok(Probe::Noise {
+            contributor: Some(contributor(source)?),
+            quantity: Some(Box::new(noise_quantity(quantity, scope)?)),
+        }),
+        [_, _, extra, ..] => Err(error(
             "SIM064",
-            "noise takes no argument (the output noise) or one contributor, noise(X)",
+            "noise takes no argument (the output noise), a contributor noise(X), a quantity noise(Q), or both: noise(Q, X)",
             &extra.location,
         )),
+    }
+}
+
+/// The noisy quantity of `noise(Q)`: a swept expression of voltage probes,
+/// params, numbers, `+ - * /`, lets of those and `reference(...)` values
+/// (constants of the step); `SIM095` otherwise.
+fn noise_quantity(argument: &Expr, scope: &dyn Scope) -> Result<Expression> {
+    let quantity = check(argument, scope)?;
+    linear_quantity(&quantity, scope, 0)?;
+    if !quantity.ty.swept || !quantity.ty.complex {
+        return Err(error(
+            "SIM095",
+            "noise(Q) takes a small-signal quantity of the circuit, such as V(OUT) or V(A) / V(B)",
+            &argument.location,
+        ));
+    }
+    Ok(quantity)
+}
+
+/// Whether the small-signal noise of `expression` can be computed: see [`noise_quantity`].
+fn linear_quantity(expression: &Expression, scope: &dyn Scope, depth: usize) -> Result<()> {
+    let refuse = |what: &str| {
+        Err(error(
+            "SIM095",
+            format!(
+                "noise(Q) needs Q built from V(...) probes, params, numbers, + - * / and reference(...); {what} has no small-signal noise here"
+            ),
+            &expression.location,
+        ))
+    };
+    match &expression.kind {
+        ExpressionKind::Number(_) | ExpressionKind::Quantity(_) | ExpressionKind::Param(_) => Ok(()),
+        ExpressionKind::Probe(Probe::Voltage { .. }) => Ok(()),
+        ExpressionKind::Probe(Probe::Current { .. }) => {
+            refuse("a current probe I(...) (write the current as a voltage over a resistance)")
+        }
+        ExpressionKind::Probe(_) => refuse("a noise density"),
+        ExpressionKind::Call { function: Function::Reference, .. } => Ok(()),
+        ExpressionKind::Call { function, .. } => refuse(&format!("{}(...)", function.name())),
+        ExpressionKind::Negate(operand) => linear_quantity(operand, scope, depth),
+        ExpressionKind::Binary { left, right, .. } => {
+            linear_quantity(left, scope, depth)?;
+            linear_quantity(right, scope, depth)
+        }
+        ExpressionKind::Let(name) => match scope.let_expression(name) {
+            Some(inner) if depth < 64 => linear_quantity(&inner, scope, depth + 1).map_err(|mut failure| {
+                failure.message = format!("let {name}: {}", failure.message);
+                failure.location = expression.location.clone();
+                failure
+            }),
+            _ => refuse(&format!("let {name}")),
+        },
+        ExpressionKind::Reference(_) | ExpressionKind::Compare { .. } => refuse("this"),
     }
 }
 

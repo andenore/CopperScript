@@ -57,7 +57,16 @@ for the benches that name them (`using NAME`), not benches. A part with a
 `sim spice` block runs a SPICE subcircuit read natively from its model
 file; a vendor model named by URL and SHA-256 must be fetched first with
 `copper models fetch BOARD` (into `.copper-cache/spice/`): `copper sim`
-never downloads and stops with `SIM077` naming that command. See
+never downloads and stops with `SIM077` naming that command. A bench's
+steps, Monte Carlo runs and worst-case corners run on `--jobs N` threads
+(default: one per core; `--jobs 1` is serial); each run is computed as the
+serial loop computes it, so the results, tables and files do not depend on
+`N`. `--timing` (or `COPPER_SIM_TIMING=1`) prints per bench its wall time,
+the time of each step, the transient solver's work (accepted and rejected
+steps, Newton iterations, factorisations, milliseconds per accepted step) and
+the seconds spent in assembly, device evaluation, factorisation, solve, step
+control, trace storage and measure evaluation (summed over threads), and
+adds them to the JSON as `timing`. See
 [running benches](language-reference.md#running-benches),
 [SPICE subcircuits](language-reference.md#spice-subcircuits),
 [transient analysis](language-reference.md#transient-analysis),
@@ -69,6 +78,7 @@ copper sim examples/simulation/rc_filter.copper --out build/sim
 copper sim examples/simulation/howland_pump/board.copper --bench CurrentFlatness
 copper sim examples/simulation/preamp/board.copper --bench GainMonteCarlo
 copper sim examples/simulation/precision_rectifier/board.copper --out build/sim
+copper sim examples/simulation/impedance_analyzer/board.copper --bench Distortion --timing
 copper sim examples/simulation/spice_amplifier/board.copper
 copper models fetch examples/simulation/vendor_models/board.copper   # TI's OPA810 model, local only
 copper sim examples/simulation/vendor_models/board.copper

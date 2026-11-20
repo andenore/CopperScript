@@ -1,7 +1,7 @@
 // FirmwareReadout: what the firmware computes from the soil of SoilModel. Use it after
-// SoilModel (`using FrontEndPorts, SoilModel, FirmwareReadout`). It is a fixture of its
-// own because a bench evaluates every `let` it has: Startup, which runs SoilModel in
-// time from 0 V, would stop on z_true's 0 / 0 at t = 0.
+// SoilModel (`using FrontEndPorts, SoilModel, FirmwareReadout`). A bench evaluates only
+// the lets its measures and plots read, so a bench that reads none of these (Startup,
+// which runs SoilModel in time from 0 V where z_true is 0 / 0) can use it too.
 //
 // The firmware's result is (V_MON / gain) / (I_MON / R_TIA). Calibration on the card's
 // 1 kohm with 0 ohm contacts (a `reference` run in each bench) removes each channel's

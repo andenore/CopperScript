@@ -246,7 +246,7 @@ fn noise_of_an_rc_lowpass_through_the_chain() {
     assert!(close(value(&run, 0, "share"), 1.0, 1e-12));
     assert_eq!(value(&run, 0, "capacitor"), 0.0);
     assert!(close(value(&run, 0, "gain"), 1.0, 1e-6));
-    let noise = run.steps[0].noise.as_ref().expect("a noise step summary");
+    let noise = run.steps[0].noise.first().expect("a noise step summary");
     assert_eq!(noise.contributors.len(), 1);
     assert_eq!((noise.contributors[0].label.as_str(), noise.contributors[0].owner.as_str()), ("R1 thermal", "R1"));
     // JSON: the noise summary and the analysis are in the results; a nominal bench has no variation.
@@ -327,4 +327,45 @@ fn noise_and_tolerance_mistakes_are_named() {
             Err(failure) => assert!(failure.to_string().contains("SIM089"), "{attributes}: {failure}"),
         }
     }
+}
+
+#[test]
+fn parallel_runs_equal_the_serial_run() {
+    // Steps, Monte Carlo runs and worst-case corners on threads give the
+    // serial run's results, bit for bit, in the same order.
+    let board = divider("value = R_TOP; tolerance = 1%;", "value = 10kohm; tolerance = 1%;")
+        .replace("use library \"tiny\";", "use library \"tiny\";\n    param R_TOP = 10kohm;");
+    let montecarlo = "bench Spread for Divider {
+        param R_X = 1kohm;
+        component RX: RESISTOR { value = R_X; }
+        net VIN { RX.1; }
+        net GND { RX.2; }
+        analysis op;
+        step R_X in 1kohm, 2kohm, 3kohm;
+        tolerance R_TOP = 2%;
+        montecarlo { runs = 40; seed = 5; distribution = gaussian; }
+        measure v_out = V(VOUT) { min = 0.99V; max = 1.01V; }
+    }";
+    let corners = "bench Corners for Divider {
+        analysis op;
+        step R_TOP in 5kohm, 10kohm, 20kohm;
+        worstcase;
+        measure v_out = V(VOUT) { min = 0.5V; }
+        measure i_r2 = I(R2);
+    }";
+    let path = project(
+        "parallel",
+        &[("board.copper", &board), ("benches/spread.copper", montecarlo), ("benches/corners.copper", corners)],
+    );
+    let design = compile(&path);
+    let serial = copper_simulate::parallel::with_jobs(1, || simulate(&path, &design, None).unwrap());
+    let parallel = copper_simulate::parallel::with_jobs(4, || simulate(&path, &design, None).unwrap());
+    assert_eq!(serial.len(), 2);
+    for run in &serial {
+        assert!(run.error.is_none(), "{:?}", run.error);
+        assert_eq!(run.steps.len(), 3);
+    }
+    assert_eq!(serial, parallel);
+    let json = |runs: &[BenchRun]| copper_simulate::results::results_json(runs, "Divider");
+    assert_eq!(json(&serial), json(&parallel));
 }

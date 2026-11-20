@@ -307,3 +307,54 @@ fn monte_carlo_divider_ratio() {
     assert!(sample(1).iter().zip(&x).all(|(a, b)| a.to_bits() == b.to_bits()));
     assert!(sample(2).iter().zip(&x).any(|(a, b)| a.to_bits() != b.to_bits()));
 }
+
+#[test]
+fn a_weighted_output_is_the_weighted_sum_of_node_voltages() {
+    // The divider of `divider_density_shares_and_input_referred` with its two
+    // generators, R1 (30 kohm) and R2 (10 kohm), both reaching `out`: the
+    // output w V(out) has the density |w| sqrt(4 k T (R1 || R2)); w V(out) -
+    // w V(out) has none; and w (V(out) - V(in)) is the reference form.
+    use copper_sim::{Complex, NoiseTerm};
+    let (r1, r2) = (30e3, 10e3);
+    let mut c = Circuit::new();
+    let (i, o) = (c.node("in"), c.node("out"));
+    c.voltage_source("V1", i, G, SourceValue::ac(1.0, 0.0)).unwrap();
+    c.resistor("R1", i, o, r1).unwrap();
+    c.resistor("R2", o, G, r2).unwrap();
+    let sweep = Sweep::List(vec![1e3, 1e4]);
+    let w = Complex::new(0.6, -0.8); // |w| = 1
+    let weighted = |terms: Vec<NoiseTerm>, input: bool| {
+        let input = input.then(|| "V1".to_owned());
+        let spec = NoiseSpec { combination: Some(terms), input, ..NoiseSpec::new("") };
+        noise(&c, &sweep, &spec).unwrap()
+    };
+    let term = |node: &str, reference: Option<&str>, weight: Complex| NoiseTerm {
+        node: node.into(),
+        reference: reference.map(str::to_owned),
+        weights: vec![weight; 2],
+    };
+    let total = 4.0 * BOLTZMANN * T * r1 * r2 / (r1 + r2);
+    let res = weighted(vec![term("out", None, w.scale(3.0))], true);
+    for psd in &res.output_psd {
+        assert!(close(*psd, 9.0 * total, 1e-12), "{psd}");
+    }
+    // The input's transfer is weighted too: input-referred noise does not change.
+    let plain = noise(&c, &sweep, &NoiseSpec { input: Some("V1".into()), ..NoiseSpec::new("out") }).unwrap();
+    assert!(close(res.input_density().unwrap()[0], plain.input_density().unwrap()[0], 1e-12));
+    let res = weighted(vec![term("out", None, w), term("out", None, -w)], false);
+    assert!(res.output_psd.iter().all(|psd| *psd == 0.0));
+    // Such an output has no gain from the input: input-referred noise is refused.
+    let spec = NoiseSpec {
+        combination: Some(vec![term("out", None, w), term("out", None, -w)]),
+        input: Some("V1".into()),
+        ..NoiseSpec::new("")
+    };
+    assert!(matches!(noise(&c, &sweep, &spec), Err(SimError::BadReference { .. })));
+    let res = weighted(vec![term("out", Some("in"), Complex::ONE)], false);
+    let reference = noise(&c, &sweep, &NoiseSpec { reference: Some("in".into()), ..NoiseSpec::new("out") }).unwrap();
+    assert_eq!(res.output_psd, reference.output_psd);
+    // One weight per frequency.
+    let short = NoiseTerm { weights: vec![Complex::ONE], ..term("out", None, Complex::ONE) };
+    let spec = NoiseSpec { combination: Some(vec![short]), ..NoiseSpec::new("") };
+    assert!(matches!(noise(&c, &sweep, &spec), Err(SimError::BadSweep(_))));
+}

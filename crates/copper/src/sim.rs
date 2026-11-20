@@ -1,4 +1,4 @@
-//! `copper sim BOARD [--bench NAME] [--out DIR] [--locked] [--offline]`: run
+//! `copper sim BOARD [--bench NAME] [--out DIR] [--jobs N] [--timing] [--locked] [--offline]`: run
 //! the board's benches (`benches/*.copper` beside it): the analysis of each,
 //! once per step, its measures against their limits, and the results JSON,
 //! the CSV of plotted vectors and one HTML page per bench in `--out`.
@@ -14,7 +14,8 @@ use copper_simulate::{SimulateError, failed, simulate, write_outputs};
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--locked] [--offline] board";
+const USAGE: &str =
+    "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--timing] [--locked] [--offline] board";
 
 /// Where the files go without `--out`.
 const DEFAULT_OUT: &str = "build/sim";
@@ -24,7 +25,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper sim: error: {message}");
         2
     };
-    let specs = [value("--bench"), value("--out"), flag("--locked"), flag("--offline")];
+    let specs =
+        [value("--bench"), value("--out"), value("--jobs"), flag("--timing"), flag("--locked"), flag("--offline")];
     let parsed = match option_parser::parse(arguments, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
@@ -49,6 +51,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [_, extra @ ..] => return usage_error(err, &format!("unrecognized arguments: {}", extra.join(" "))),
     };
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
+    let timing = parsed.flag("--timing") || std::env::var("COPPER_SIM_TIMING").is_ok_and(|v| !v.is_empty() && v != "0");
+    copper_simulate::timing::enable(timing);
+    match parsed.value("--jobs").map(str::parse::<usize>) {
+        None => {}
+        Some(Ok(jobs)) if jobs > 0 => copper_simulate::parallel::set_jobs(jobs),
+        Some(_) => return usage_error(err, "argument --jobs: expected a positive whole number"),
+    }
     let board_path = PathBuf::from(pypath::display(&board));
     let design = match load_design(&board_path, locked, offline) {
         Ok(design) => design,
@@ -70,6 +79,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     let directory = PathBuf::from(pypath::display(parsed.value("--out").unwrap_or(DEFAULT_OUT)));
     let _ = out.write_all(copper_simulate::results::text_table(&runs).as_bytes());
+    let _ = out.write_all(copper_simulate::results::timing_text(&runs).as_bytes());
     match write_outputs(&runs, &design.electrical.name, &directory) {
         Ok(paths) => {
             let names: Vec<String> = paths

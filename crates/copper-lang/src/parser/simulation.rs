@@ -30,19 +30,14 @@ const BENCH_KEYWORDS: [&str; 19] = [
 
 impl Parser {
     /// `for TARGET` after a bench's or fixture's name: a board or a module
-    /// name; a bench may add `using FIXTURE, FIXTURE`.
-    pub(super) fn bench_target(&mut self, kind: DocumentKind) -> Result<Declaration> {
+    /// name; a bench or a fixture may add `using FIXTURE, FIXTURE`.
+    pub(super) fn bench_target(&mut self, _kind: DocumentKind) -> Result<Declaration> {
         self.expect_word("for")?;
         let location = self.current().location.clone();
         let board = self.name("board or module name")?;
         let mut fixtures = Vec::new();
         let mut fixture_locations = Vec::new();
         if self.current().kind == TokenKind::Identifier && self.current().text == "using" {
-            if kind != DocumentKind::Bench {
-                return Err(
-                    self.error("SIM073", "a fixture cannot use other fixtures; a bench names every fixture it uses")
-                );
-            }
             self.advance();
             loop {
                 fixture_locations.push(self.current().location.clone());
@@ -91,21 +86,45 @@ impl Parser {
         })
     }
 
-    /// `sim KIND [UNIT] { entries }` (the keyword is read).
+    /// `sim KIND [UNIT] { entries }` (the keyword is read). A part block may
+    /// hold parameter sets per supply: `supply 3.3V { slew_rate = ...; }`.
     pub(super) fn sim_block(&mut self, location: Location) -> Result<SimDecl> {
         let kind = self.name("sim model kind")?;
         let unit = if self.at_symbol("{") { None } else { Some(self.name("sim unit name")?) };
-        let entries = self.sim_entries()?;
+        let entries = self.sim_entries_with(true)?;
         Ok(SimDecl { location, kind, unit, entries })
     }
 
     /// `{ key = value; ... }`, a value being a scalar, a comma list, or `KIND { ... }`.
     fn sim_entries(&mut self) -> Result<Vec<SimEntry>> {
+        self.sim_entries_with(false)
+    }
+
+    /// [`Self::sim_entries`]; with `sets`, also `supply QUANTITY { key = value; ... }`
+    /// entries, kept as key `supply` with a block whose kind is the quantity
+    /// as `VALUE UNIT` (see [`crate::simulation`]).
+    fn sim_entries_with(&mut self, sets: bool) -> Result<Vec<SimEntry>> {
         self.expect_symbol("{")?;
         let mut entries: Vec<SimEntry> = Vec::new();
         while !self.at_symbol("}") {
             let token = self.current().clone();
             let key = self.name("property name")?;
+            if sets && key == "supply" && !self.at_symbol("=") {
+                let span = match self.scalar()? {
+                    Scalar::Quantity { value, unit } => format!("{value} {unit}"),
+                    _ => {
+                        return Err(self.error_at(
+                            "SIM096",
+                            "a parameter set per supply names the supply span as a voltage: supply 3.3V { ... }",
+                            &token,
+                        ));
+                    }
+                };
+                let value = SimValue::Block { kind: span, entries: self.sim_entries()? };
+                self.accept_symbol(";");
+                entries.push(SimEntry { location: token.location, key, value });
+                continue;
+            }
             if entries.iter().any(|entry| entry.key == key) {
                 return Err(self.error_at("PAR004", format!("duplicate property {}", repr(&key)), &token));
             }
@@ -176,7 +195,10 @@ impl Parser {
                 Declaration::Bench(BenchStatement::Ignore(IgnoreDecl { location, targets, target_locations }))
             }
             "analysis" => {
-                let kind = self.name("analysis kind")?;
+                let first = self.name("analysis kind")?;
+                // `analysis NAME: KIND { ... }` names one analysis of several.
+                let (name, kind) =
+                    if self.accept_symbol(":") { (Some(first), self.name("analysis kind")?) } else { (None, first) };
                 let entries = if self.accept_symbol(";") {
                     Vec::new()
                 } else if kind == "noise" {
@@ -184,7 +206,7 @@ impl Parser {
                 } else {
                     self.sim_entries()?
                 };
-                Declaration::Bench(BenchStatement::Analysis(AnalysisDecl { location, kind, entries }))
+                Declaration::Bench(BenchStatement::Analysis(AnalysisDecl { location, name, kind, entries }))
             }
             "step" => {
                 let param = self.name("param name")?;
@@ -314,19 +336,34 @@ impl Parser {
                     location,
                     kind: keyword.to_owned(),
                     target: None,
+                    others: Vec::new(),
+                    match_value: None,
                     value: None,
                     entries,
                 }))
             }
             "tolerance" => {
+                // `tolerance T = t;`, or a matched group: `tolerance A, B = t match m;`.
                 let target = self.qualified_name("param or COMPONENT.PARAMETER")?;
+                let mut others = Vec::new();
+                while self.accept_symbol(",") {
+                    others.push(self.qualified_name("component or COMPONENT.PARAMETER")?);
+                }
                 self.expect_symbol("=")?;
                 let value = self.scalar()?;
+                let match_value = if self.current().kind == TokenKind::Identifier && self.current().text == "match" {
+                    self.advance();
+                    Some(self.scalar()?)
+                } else {
+                    None
+                };
                 self.expect_symbol(";")?;
                 Declaration::Bench(BenchStatement::Variation(VariationDecl {
                     location,
                     kind: keyword.to_owned(),
                     target: Some(target),
+                    others,
+                    match_value,
                     value: Some(value),
                     entries: Vec::new(),
                 }))
@@ -420,7 +457,9 @@ impl Parser {
 
     /// The properties of `analysis noise { ... }`: like [`Self::sim_entries`],
     /// except that `output` takes a probe, `output = V(OUT);` or
-    /// `output = V(P, N);`, kept as a list of its node names.
+    /// `output = V(P, N);`, kept as a list of its node names; several probes
+    /// (`output = V(A), V(B, C);`) are kept as a block of kind `outputs`
+    /// with one `V` entry per probe.
     fn noise_entries(&mut self) -> Result<Vec<SimEntry>> {
         self.expect_symbol("{")?;
         let mut entries: Vec<SimEntry> = Vec::new();
@@ -438,14 +477,26 @@ impl Parser {
                     .get(self.index + 1)
                     .is_some_and(|next| next.kind == TokenKind::Symbol && next.text == "(");
             let value = if probe {
-                self.advance();
-                self.expect_symbol("(")?;
-                let mut nodes = vec![Scalar::Str(self.qualified_name("node name")?)];
-                while self.accept_symbol(",") {
-                    nodes.push(Scalar::Str(self.qualified_name("node name")?));
+                let mut probes: Vec<SimEntry> = Vec::new();
+                loop {
+                    let at = self.current().location.clone();
+                    self.expect_word("V")?;
+                    self.expect_symbol("(")?;
+                    let mut nodes = vec![Scalar::Str(self.qualified_name("node name")?)];
+                    while self.accept_symbol(",") {
+                        nodes.push(Scalar::Str(self.qualified_name("node name")?));
+                    }
+                    self.expect_symbol(")")?;
+                    probes.push(SimEntry { location: at, key: "V".to_owned(), value: SimValue::List(nodes) });
+                    if !self.accept_symbol(",") {
+                        break;
+                    }
                 }
-                self.expect_symbol(")")?;
-                SimValue::List(nodes)
+                if probes.len() == 1 {
+                    probes.remove(0).value
+                } else {
+                    SimValue::Block { kind: "outputs".to_owned(), entries: probes }
+                }
             } else {
                 SimValue::Scalar(self.scalar()?)
             };

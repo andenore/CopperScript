@@ -7,31 +7,39 @@
 //! { "schema": "copperscript-sim/v0.1",
 //!   "solver": { "name", "version", "method" },
 //!   "board", "status": "pass" | "fail" | "error",
-//!   "benches": [ { "name", "board", "module" (a bench of a module only), "file", "status", "error",
+//!   "benches": [ { "name", "board", "module" (a bench of a module only),
+//!     "bench", "section" (one analysis of a bench with several: the bench's name and the analysis's),
+//!     "file", "status", "error",
 //!     "analysis": { "kind": "ac", "from_hz", "to_hz", "points_per_decade" } | { "kind": "op" }
 //!                 | { "kind": "noise", "from_hz", "to_hz", "points_per_decade", "output", "input", "temperature_k" }
 //!                 | { "kind": "tran", "stop_s", "start_s", "max_step_s", "reltol", "uic" (when set) }
 //!                 | { "kind": "dc", "sweep", "units", "dimension", "from", "to", "points" },
+//!                 (the values at the bench's steps: a field that differs between steps is an
+//!                  array with one value per step, and "stepped" lists those fields)
 //!     "models": [ { "name", "kind": "component" | "supply" | "model", "part", "bench", "fidelity", "model", "inactive_parameters" } ],
 //!     "steps": [ { "index", "label", "stepped": { NAME: quantity }, "params": { NAME: quantity },
 //!                  "transient" (analysis tran only): { "accepted_steps", "rejected_steps", "newton_iterations",
 //!                                 "factorizations", "breakpoints", "smallest_step_s", "largest_step_s" } } ],
 //!     "measures": [ { "name", "expression", "units", "dimension", "limits", "where" (a scoped limit only),
 //!                     "covered_steps" (a scoped limit only), "worst_step", "status",
-//!                     "steps": [ { "value", "min", "max", "pass", "covered" (a scoped limit only) } ] } ],
+//!                     "steps": [ { "value", "min", "max", "pass", "covered" (a scoped limit only),
+//!                                  "never" (true, with "value" null: an upto or downto that never holds) } ] } ],
 //!     "plots": [ { "expression", "units", "dimension", "steps": [ { "frequency_hz": [...], "values": [...] } ] } ],
 //!               (analysis tran: "time_s" instead of "frequency_hz", every recorded time point;
 //!                analysis dc: "sweep", the swept value in SI base units)
-//!     "noise" (analysis noise only): [ { "from_hz", "to_hz", "total_rms_v",
-//!                "contributors": [ { "contributor", "owner", "rms_v", "share" } ] } ],   (one per step)
+//!     "noise" (analysis noise only): [ { "step", "output", "from_hz", "to_hz", "total_rms_v",
+//!                "contributors": [ { "contributor", "owner", "rms_v", "share" } ] } ],   (one per step and output)
 //!     "variation" (montecarlo or worstcase only): { "method": { "kind", "runs", "seed", "distribution" },
 //!                "variables": [...], "yield", "steps": [ { "index", "runs", "yield",
 //!                "measures": [ { "name", "nominal", "min", "max", "yield", "worst_run",
-//!                                "mean", "std", "values" (montecarlo) | "low_corner", "high_corner", "sensitivity" (worstcase) } ] } ] } } ] }
+//!                                "mean", "std", "values" (montecarlo) | "low_corner", "high_corner", "sensitivity" (worstcase) } ] } ] },
+//!     "timing" (copper sim --timing only): { "wall_s", "steps_s": [...], "phases": { "assembly_s", "devices_s",
+//!                "factor_s", "solve_s", "step_control_s", "storage_s", "evaluation_s" },
+//!                "factorizations": { "ordered", "refactored", "dense" } } } ] }
 //! ```
 //!
 //! The optional `noise` and `variation` fields appear only for benches that
-//! use them; with them, a measure's `steps` values are the worst run's (see
+//! use them, `timing` only when asked for; with them, a measure's `steps` values are the worst run's (see
 //! [`crate::variation`]).
 //!
 //! Values are SI base units (`units` is the base-unit text: `A`, `deg`, `dB`,
@@ -56,7 +64,9 @@ pub fn solver() -> Value {
         ("version", Value::from(copper_sim::VERSION)),
         (
             "method",
-            Value::from("linear modified nodal analysis, dense complex LU with row equilibration and partial pivoting"),
+            Value::from(
+                "modified nodal analysis, sparse LU (Markowitz order, threshold partial pivoting) with row and column equilibration; dense LU with partial pivoting for singular and nearly singular systems",
+            ),
         ),
     ])
 }
@@ -80,9 +90,42 @@ fn units_fields(units: copper_lang::expression::Units) -> Vec<(&'static str, Val
     ]
 }
 
-/// One bench as JSON.
-pub fn bench_value(run: &BenchRun) -> Value {
-    let analysis = match &run.analysis {
+/// The analyses of a bench's steps (the nominal one without steps).
+pub fn step_analyses(run: &BenchRun) -> Vec<&AnalysisRun> {
+    if run.steps.is_empty() { vec![&run.analysis] } else { run.steps.iter().map(|step| &step.analysis).collect() }
+}
+
+/// The `analysis` of a bench: the values at its steps; a field that differs
+/// between steps is an array of one value per step, listed in `stepped`.
+fn analysis_value(run: &BenchRun) -> Value {
+    let analyses = step_analyses(run);
+    let objects: Vec<Value> = analyses.iter().map(|analysis| single_analysis_value(analysis)).collect();
+    let Some(Value::Object(first)) = objects.first() else { return single_analysis_value(&run.analysis) };
+    let mut merged = Object::new();
+    let mut stepped = Vec::new();
+    for (key, value) in first.iter() {
+        let column: Vec<Value> = objects
+            .iter()
+            .map(|object| match object {
+                Value::Object(fields) => fields.get(key).cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            })
+            .collect();
+        if column.iter().all(|other| other == value) {
+            merged.insert(key.clone(), value.clone());
+        } else {
+            merged.insert(key.clone(), Value::Array(column));
+            stepped.push(Value::from(key.as_str()));
+        }
+    }
+    if !stepped.is_empty() {
+        merged.insert("stepped".to_owned(), Value::Array(stepped));
+    }
+    Value::Object(merged)
+}
+
+fn single_analysis_value(analysis: &AnalysisRun) -> Value {
+    match analysis {
         AnalysisRun::Op => object(vec![("kind", Value::from("op"))]),
         AnalysisRun::Ac { from, to, points_per_decade } => object(vec![
             ("kind", Value::from("ac")),
@@ -112,7 +155,12 @@ pub fn bench_value(run: &BenchRun) -> Value {
             entries.extend([("from", number(*from)), ("to", number(*to)), ("points", Value::from(*points as i64))]);
             object(entries)
         }
-    };
+    }
+}
+
+/// One bench as JSON.
+pub fn bench_value(run: &BenchRun) -> Value {
+    let analysis = analysis_value(run);
     let models = run
         .models
         .iter()
@@ -173,13 +221,16 @@ pub fn bench_value(run: &BenchRun) -> Value {
                 .map(|step| {
                     let m = &step.measures[k];
                     let mut entries = vec![
-                        ("value", number(m.value)),
+                        ("value", if m.never { Value::Null } else { number(m.value) }),
                         ("min", optional(m.min)),
                         ("max", optional(m.max)),
                         ("pass", m.pass.map(Value::Bool).unwrap_or(Value::Null)),
                     ];
                     if measure.scope.is_some() {
                         entries.push(("covered", Value::Bool(m.covered)));
+                    }
+                    if m.never {
+                        entries.push(("never", Value::Bool(true)));
                     }
                     object(entries)
                 })
@@ -244,6 +295,10 @@ pub fn bench_value(run: &BenchRun) -> Value {
     }
     let mut entries = vec![("name", Value::from(run.name.as_str()))];
     entries.extend(target);
+    if let Some(section) = &run.section {
+        entries.push(("bench", Value::from(run.bench_name())));
+        entries.push(("section", Value::from(section.as_str())));
+    }
     entries.extend(vec![
         ("file", Value::from(run.file.as_str())),
         ("status", Value::from(run.status().name())),
@@ -254,15 +309,88 @@ pub fn bench_value(run: &BenchRun) -> Value {
         ("measures", Value::Array(measures)),
         ("plots", Value::Array(plots)),
     ]);
-    let noise: Vec<Value> =
-        run.steps.iter().filter_map(|step| step.noise.as_ref()).map(crate::noise::step_value).collect();
+    let noise: Vec<Value> = run
+        .steps
+        .iter()
+        .enumerate()
+        .flat_map(|(index, step)| step.noise.iter().map(move |noise| crate::noise::step_value(index, noise)))
+        .collect();
     if !noise.is_empty() {
         entries.push(("noise", Value::Array(noise)));
     }
     if let Some(variation) = &run.variation {
         entries.push(("variation", crate::variation::value_of(run, variation)));
     }
+    if let Some(timing) = &run.timing {
+        let phases: Object = copper_sim::timing::Phase::ALL
+            .iter()
+            .zip(timing.phases)
+            .map(|(phase, seconds)| (format!("{}_s", phase.name()), number(seconds)))
+            .collect();
+        let counts: Object = copper_sim::timing::Counter::ALL
+            .iter()
+            .zip(timing.counts)
+            .map(|(counter, count)| (counter.name().to_owned(), Value::from(count as i64)))
+            .collect();
+        entries.push((
+            "timing",
+            object(vec![
+                ("wall_s", number(timing.wall_s)),
+                ("steps_s", Value::Array(timing.steps_s.iter().map(|s| number(*s)).collect())),
+                ("phases", Value::Object(phases)),
+                ("factorizations", Value::Object(counts)),
+            ]),
+        ));
+    }
     object(entries)
+}
+
+/// The `--timing` report: per bench its wall time, the solver's work and
+/// where the time went (phases summed over threads; `other` is the rest of
+/// the wall time: lowering, operating point bookkeeping, convergence checks).
+pub fn timing_text(runs: &[BenchRun]) -> String {
+    let mut lines = Vec::new();
+    for run in runs {
+        let Some(timing) = &run.timing else { continue };
+        let mut line = format!("TIMING {}: {:.3} s", run.name, timing.wall_s);
+        if timing.steps_s.len() > 1 {
+            let steps: Vec<String> = timing.steps_s.iter().map(|s| format!("{s:.3}")).collect();
+            line.push_str(&format!(" (steps {} s)", steps.join(", ")));
+        }
+        lines.push(line);
+        let stats: Vec<&copper_sim::TranStats> = run.steps.iter().filter_map(|step| step.transient.as_ref()).collect();
+        if !stats.is_empty() {
+            let sum = |f: fn(&copper_sim::TranStats) -> usize| stats.iter().map(|s| f(s)).sum::<usize>();
+            let accepted = sum(|s| s.accepted_steps);
+            lines.push(format!(
+                "  tran: {accepted} accepted, {} rejected, {} newton iterations, {} factorizations, {} breakpoints; {:.3} ms per accepted step",
+                sum(|s| s.rejected_steps),
+                sum(|s| s.newton_iterations),
+                sum(|s| s.factorizations),
+                sum(|s| s.breakpoints),
+                timing.wall_s * 1e3 / accepted.max(1) as f64,
+            ));
+        }
+        let total: f64 = timing.phases.iter().sum();
+        let mut parts: Vec<String> = copper_sim::timing::Phase::ALL
+            .iter()
+            .zip(timing.phases)
+            .map(|(phase, seconds)| format!("{} {seconds:.3}", phase.name()))
+            .collect();
+        parts.push(format!("other {:.3}", (timing.wall_s - total).max(0.0)));
+        lines.push(format!("  seconds: {}", parts.join(", ")));
+        let counts: Vec<String> = copper_sim::timing::Counter::ALL
+            .iter()
+            .zip(timing.counts)
+            .map(|(counter, count)| format!("{} {count}", counter.name()))
+            .collect();
+        lines.push(format!("  factorisations: {}", counts.join(", ")));
+    }
+    let mut text = lines.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text
 }
 
 /// The overall status of several benches.
@@ -334,6 +462,91 @@ pub fn axis_name(analysis: &AnalysisRun) -> &'static str {
     }
 }
 
+/// The analysis of a bench in words, at its steps: a bound that differs
+/// between steps is written as its range, `300 us..60 ms`.
+pub fn bench_analysis_text(run: &BenchRun) -> String {
+    let analyses = step_analyses(run);
+    let first = analyses[0];
+    if analyses.iter().all(|analysis| *analysis == first) {
+        return analysis_text(first);
+    }
+    let range = |values: Vec<f64>, show: &dyn Fn(f64) -> String| {
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if low == high { show(low) } else { format!("{}..{}", show(low), show(high)) }
+    };
+    let time = |t: f64| quantity_text(t, copper_lang::expression::Units::of(copper_units::Dimension::Time), 3, false);
+    let hz = |f: f64| crate::format::hertz(f);
+    match first {
+        AnalysisRun::Ac { points_per_decade, .. } => {
+            let pick = |k: usize| -> Vec<f64> {
+                analyses
+                    .iter()
+                    .filter_map(|a| match a {
+                        AnalysisRun::Ac { from, to, .. } => Some(if k == 0 { *from } else { *to }),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            format!("ac {} to {}, {points_per_decade} points per decade", range(pick(0), &hz), range(pick(1), &hz))
+        }
+        AnalysisRun::Noise { points_per_decade, output, input, kelvin, .. } => {
+            let pick = |k: usize| -> Vec<f64> {
+                analyses
+                    .iter()
+                    .filter_map(|a| match a {
+                        AnalysisRun::Noise { from, to, .. } => Some(if k == 0 { *from } else { *to }),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            format!(
+                "noise of {output}{} {} to {}, {points_per_decade} points per decade, {} K",
+                input.as_ref().map(|input| format!(" referred to {input},")).unwrap_or_default(),
+                range(pick(0), &hz),
+                range(pick(1), &hz),
+                crate::format::significant(*kelvin, 5)
+            )
+        }
+        AnalysisRun::Tran { .. } => {
+            let field = |get: &dyn Fn(&AnalysisRun) -> Option<f64>| -> Vec<f64> {
+                analyses.iter().filter_map(|a| get(a)).collect()
+            };
+            let stops = field(&|a| if let AnalysisRun::Tran { stop, .. } = a { Some(*stop) } else { None });
+            let starts = field(&|a| if let AnalysisRun::Tran { start, .. } = a { Some(*start) } else { None });
+            let steps = field(&|a| if let AnalysisRun::Tran { max_step, .. } = a { *max_step } else { None });
+            let mut text = format!("tran 0 to {}", range(stops, &time));
+            if starts.iter().any(|start| *start > 0.0) {
+                text.push_str(&format!(", recorded from {}", range(starts, &time)));
+            }
+            if !steps.is_empty() {
+                text.push_str(&format!(", max step {}", range(steps, &time)));
+            }
+            text
+        }
+        AnalysisRun::Dc { name, units, .. } => {
+            let field = |k: usize| -> Vec<f64> {
+                analyses
+                    .iter()
+                    .filter_map(|a| match a {
+                        AnalysisRun::Dc { from, to, points, .. } => Some([*from, *to, *points as f64][k]),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let show = |v: f64| quantity_text(v, *units, 4, false);
+            let count = |v: f64| format!("{v}");
+            format!(
+                "dc sweep of {name} from {} to {}, {} points",
+                range(field(0), &show),
+                range(field(1), &show),
+                range(field(2), &count)
+            )
+        }
+        AnalysisRun::Op => analysis_text(first),
+    }
+}
+
 /// The analysis in words: `ac 1 kHz to 1 MHz, 20 points per decade`.
 pub fn analysis_text(analysis: &AnalysisRun) -> String {
     match analysis {
@@ -370,8 +583,13 @@ pub fn analysis_text(analysis: &AnalysisRun) -> String {
     }
 }
 
-/// A measure value as the table shows it: four significant digits, `%` for dimensionless values.
+/// A measure value as the table shows it: four significant digits, `%` for
+/// dimensionless values; `never` for NaN, the value of an `upto` or `downto`
+/// that never holds.
 pub fn measure_text(value: f64, units: copper_lang::expression::Units) -> String {
+    if value.is_nan() {
+        return "never".to_owned();
+    }
     quantity_text(value, units, 4, true)
 }
 
@@ -383,7 +601,7 @@ pub fn text_table(runs: &[BenchRun]) -> String {
             0 | 1 if run.steps.first().is_none_or(|step| step.stepped.is_empty()) => String::new(),
             n => format!(", {n} steps"),
         };
-        lines.push(format!("BENCH {} ({}): {}{steps}", run.name, run.target(), analysis_text(&run.analysis)));
+        lines.push(format!("BENCH {} ({}): {}{steps}", run.name, run.target(), bench_analysis_text(run)));
         if let Some(error) = &run.error {
             lines.push(format!("  ERROR: {error}"));
             continue;
@@ -406,13 +624,18 @@ pub fn text_table(runs: &[BenchRun]) -> String {
                     ]
                 }
                 None => {
-                    let low = values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    let range = if values.len() > 1 {
-                        format!("{} to {}", measure_text(low, measure.units), measure_text(high, measure.units))
-                    } else {
-                        measure_text(low, measure.units)
+                    let finite: Vec<f64> = values.iter().copied().filter(|v| !v.is_nan()).collect();
+                    let never = values.len() - finite.len();
+                    let low = finite.iter().copied().fold(f64::INFINITY, f64::min);
+                    let high = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let mut range = match finite.len() {
+                        0 => "never".to_owned(),
+                        1 => measure_text(low, measure.units),
+                        _ => format!("{} to {}", measure_text(low, measure.units), measure_text(high, measure.units)),
                     };
+                    if never > 0 && !finite.is_empty() {
+                        range.push_str(&format!(", never at {never} step{}", if never == 1 { "" } else { "s" }));
+                    }
                     [measure.name.clone(), range, "none".into(), "-".into(), String::new()]
                 }
             };

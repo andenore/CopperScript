@@ -1,0 +1,318 @@
+// MeasurementNoise: noise of the four ADC channels with the stake in soil, one noise
+// analysis with the four ADC inputs as its outputs (gain 1 V_MON_1, gain 10 V_MON_10,
+// gain 100 V_MON_100, current I_MON), SoilModel at its three corners: 5 ohm m
+// (R_TRANSFER 40 ohm, the smallest signal: 0.6 mV peak at the sense electrodes),
+// 100 ohm m (800 ohm) and 1.3 kohm m (11 kohm), relative permittivity 25. Measures are
+// named by channel: gain1_..., gain10_..., gain100_..., current_...; then the noise of
+// the impedance the firmware computes.
+//
+// Detection bandwidth: the firmware demodulates I and Q over whole periods; its noise
+// bandwidth is taken as 1 kHz (SPEC.md, "Estimates the simulation must confirm"), the
+// noise in a 1 kHz band centred on the drive frequency, 500 Hz to 1.5 kHz at 1 kHz. A
+// longer record narrows the band: the noise falls with its square root. The signal is
+// the drive's (DDS 0.3 V, 15 uA peak) at the same ADC input; SNR is its RMS over the
+// band's noise RMS. Reported at 1 kHz, 10 kHz, 100 kHz and 1 MHz. Contributors are
+// grouped and given as their share of the noise power in the band at 1 kHz and at
+// 100 kHz; the HTML page ranks every contributor of every channel over the whole
+// analysis band. No limits: SPEC.md sets no noise requirement (the resolution it
+// implies is derived in README.md, "MeasurementNoise").
+//
+// Generators: thermal noise of every resistor, the soil's included (it is real noise
+// at the electrodes), of the DDS's 200 ohm and of the bias resistors; each amplifier's
+// voltage and current noise with its 1/f corner (parts/analog_*: the ADA4807 corners
+// from its Table 2, the ADA4817 and AD8130 corners fitted to their noise figures,
+// estimates). Not modelled: the AD8130's REF/FB current noise, the e_n times input
+// capacitance current, the ADC's own noise, rail noise (ideal supplies).
+// Channels: the sense buffers and the receiver at gain 1, then U_B1 (gain 1), U_G10
+// (gain 10.09), U_G10 and U_G100 (gain 10.09 each); the transimpedance amplifier U_TIA,
+// 20 kohm with 1.5 pF (SPEC.md estimated 0.9 pA/rtHz from R_TIA alone). The drive's own
+// current noise is real current through the soil: both channels see it, so it largely
+// cancels in the impedance, which the last measures compute with it.
+bench MeasurementNoise for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    analysis noise {
+        from = 100Hz; to = 2MHz; points_per_decade = 20;
+        output = V(V_MON_1), V(V_MON_10), V(V_MON_100), V(I_MON);
+    }
+    step R_TRANSFER in 40ohm, 800ohm, 11kohm;
+
+    // The voltage channels are referred to the soil's transfer voltage between the sense
+    // points, the current channel to the current into LC (the output over the transimpedance).
+    // gain1: ADC input V_MON_1.
+    let referred_gain1 = noise(V(V_MON_1)) / mag(V(V_MON_1) / V(S_HP, S_LP));
+    measure gain1_signal_1khz = mag(at(V(V_MON_1), 1kHz));
+    measure gain1_noise_1khz = noise_rms(noise(V(V_MON_1)), 500Hz, 1.5kHz);
+    measure gain1_snr_1khz = db(mag(at(V(V_MON_1), 1kHz)) / 1.41421356 / noise_rms(noise(V(V_MON_1)), 500Hz, 1.5kHz));
+    measure gain1_referred_density_1khz = at(referred_gain1, 1kHz);
+    measure gain1_signal_10khz = mag(at(V(V_MON_1), 10kHz));
+    measure gain1_noise_10khz = noise_rms(noise(V(V_MON_1)), 9.5kHz, 10.5kHz);
+    measure gain1_snr_10khz = db(mag(at(V(V_MON_1), 10kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_1)), 9.5kHz, 10.5kHz));
+    measure gain1_referred_density_10khz = at(referred_gain1, 10kHz);
+    measure gain1_signal_100khz = mag(at(V(V_MON_1), 100kHz));
+    measure gain1_noise_100khz = noise_rms(noise(V(V_MON_1)), 99.5kHz, 100.5kHz);
+    measure gain1_snr_100khz = db(mag(at(V(V_MON_1), 100kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_1)), 99.5kHz, 100.5kHz));
+    measure gain1_referred_density_100khz = at(referred_gain1, 100kHz);
+    measure gain1_signal_1mhz = mag(at(V(V_MON_1), 1MHz));
+    measure gain1_noise_1mhz = noise_rms(noise(V(V_MON_1)), 999.5kHz, 1.0005MHz);
+    measure gain1_snr_1mhz = db(mag(at(V(V_MON_1), 1MHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_1)), 999.5kHz, 1.0005MHz));
+    measure gain1_referred_density_1mhz = at(referred_gain1, 1MHz);
+    measure gain1_share_sense_buffers_1khz = noise_share(noise(V(V_MON_1), U_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), U_BLP), 500Hz, 1.5kHz);
+    measure gain1_share_receiver_1khz = noise_share(noise(V(V_MON_1), U_DIF), 500Hz, 1.5kHz);
+    measure gain1_share_adc_stages_1khz = noise_share(noise(V(V_MON_1), U_B1), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), R_B1B), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), R_B1S), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), R_AA1), 500Hz, 1.5kHz);
+    measure gain1_share_soil_1khz = noise_share(noise(V(V_MON_1), RC_HC), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), RC_HP), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), RT), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), RC_LP), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), RC_LC), 500Hz, 1.5kHz);
+    measure gain1_share_drive_1khz = noise_share(noise(V(V_MON_1), DDS), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), R_TERM), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), R_INB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), U_DRV), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), U_PMP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), U_FBB), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_1), RN_HOW), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), R_SET), 500Hz, 1.5kHz);
+    measure gain1_share_bias_resistors_1khz = noise_share(noise(V(V_MON_1), R_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_1), R_BLP), 500Hz, 1.5kHz);
+    measure gain1_share_sense_buffers_100khz = noise_share(noise(V(V_MON_1), U_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), U_BLP), 99.5kHz, 100.5kHz);
+    measure gain1_share_receiver_100khz = noise_share(noise(V(V_MON_1), U_DIF), 99.5kHz, 100.5kHz);
+    measure gain1_share_adc_stages_100khz = noise_share(noise(V(V_MON_1), U_B1), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_B1B), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_B1S), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_AA1), 99.5kHz, 100.5kHz);
+    measure gain1_share_soil_100khz = noise_share(noise(V(V_MON_1), RC_HC), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), RC_HP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), RT), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), RC_LP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), RC_LC), 99.5kHz, 100.5kHz);
+    measure gain1_share_drive_100khz = noise_share(noise(V(V_MON_1), DDS), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_TERM), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_INB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), U_DRV), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), U_PMP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), U_FBB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), RN_HOW), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_SET), 99.5kHz, 100.5kHz);
+    measure gain1_share_bias_resistors_100khz = noise_share(noise(V(V_MON_1), R_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_1), R_BLP), 99.5kHz, 100.5kHz);
+
+    // gain10: ADC input V_MON_10.
+    let referred_gain10 = noise(V(V_MON_10)) / mag(V(V_MON_10) / V(S_HP, S_LP));
+    measure gain10_signal_1khz = mag(at(V(V_MON_10), 1kHz));
+    measure gain10_noise_1khz = noise_rms(noise(V(V_MON_10)), 500Hz, 1.5kHz);
+    measure gain10_snr_1khz = db(mag(at(V(V_MON_10), 1kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_10)), 500Hz, 1.5kHz));
+    measure gain10_referred_density_1khz = at(referred_gain10, 1kHz);
+    measure gain10_signal_10khz = mag(at(V(V_MON_10), 10kHz));
+    measure gain10_noise_10khz = noise_rms(noise(V(V_MON_10)), 9.5kHz, 10.5kHz);
+    measure gain10_snr_10khz = db(mag(at(V(V_MON_10), 10kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_10)), 9.5kHz, 10.5kHz));
+    measure gain10_referred_density_10khz = at(referred_gain10, 10kHz);
+    measure gain10_signal_100khz = mag(at(V(V_MON_10), 100kHz));
+    measure gain10_noise_100khz = noise_rms(noise(V(V_MON_10)), 99.5kHz, 100.5kHz);
+    measure gain10_snr_100khz = db(mag(at(V(V_MON_10), 100kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_10)), 99.5kHz, 100.5kHz));
+    measure gain10_referred_density_100khz = at(referred_gain10, 100kHz);
+    measure gain10_signal_1mhz = mag(at(V(V_MON_10), 1MHz));
+    measure gain10_noise_1mhz = noise_rms(noise(V(V_MON_10)), 999.5kHz, 1.0005MHz);
+    measure gain10_snr_1mhz = db(mag(at(V(V_MON_10), 1MHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_10)), 999.5kHz, 1.0005MHz));
+    measure gain10_referred_density_1mhz = at(referred_gain10, 1MHz);
+    measure gain10_share_sense_buffers_1khz = noise_share(noise(V(V_MON_10), U_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), U_BLP), 500Hz, 1.5kHz);
+    measure gain10_share_receiver_1khz = noise_share(noise(V(V_MON_10), U_DIF), 500Hz, 1.5kHz);
+    measure gain10_share_adc_stages_1khz = noise_share(noise(V(V_MON_10), U_G10), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1B), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1S), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1F), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1G), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_AA10), 500Hz, 1.5kHz);
+    measure gain10_share_soil_1khz = noise_share(noise(V(V_MON_10), RC_HC), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_HP), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_10), RT), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_LP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_LC), 500Hz, 1.5kHz);
+    measure gain10_share_drive_1khz = noise_share(noise(V(V_MON_10), DDS), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_TERM), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_INB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), U_DRV), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), U_PMP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), U_FBB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), RN_HOW), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_SET), 500Hz, 1.5kHz);
+    measure gain10_share_bias_resistors_1khz = noise_share(noise(V(V_MON_10), R_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_10), R_BLP), 500Hz, 1.5kHz);
+    measure gain10_share_sense_buffers_100khz = noise_share(noise(V(V_MON_10), U_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), U_BLP), 99.5kHz, 100.5kHz);
+    measure gain10_share_receiver_100khz = noise_share(noise(V(V_MON_10), U_DIF), 99.5kHz, 100.5kHz);
+    measure gain10_share_adc_stages_100khz = noise_share(noise(V(V_MON_10), U_G10), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1B), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1S), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1F), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_G1G), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_AA10), 99.5kHz, 100.5kHz);
+    measure gain10_share_soil_100khz = noise_share(noise(V(V_MON_10), RC_HC), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_HP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), RT), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_LP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), RC_LC), 99.5kHz, 100.5kHz);
+    measure gain10_share_drive_100khz = noise_share(noise(V(V_MON_10), DDS), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_TERM), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_INB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), U_DRV), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), U_PMP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), U_FBB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), RN_HOW), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_SET), 99.5kHz, 100.5kHz);
+    measure gain10_share_bias_resistors_100khz = noise_share(noise(V(V_MON_10), R_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_10), R_BLP), 99.5kHz, 100.5kHz);
+
+    // gain100: ADC input V_MON_100.
+    let referred_gain100 = noise(V(V_MON_100)) / mag(V(V_MON_100) / V(S_HP, S_LP));
+    measure gain100_signal_1khz = mag(at(V(V_MON_100), 1kHz));
+    measure gain100_noise_1khz = noise_rms(noise(V(V_MON_100)), 500Hz, 1.5kHz);
+    measure gain100_snr_1khz = db(mag(at(V(V_MON_100), 1kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_100)), 500Hz, 1.5kHz));
+    measure gain100_referred_density_1khz = at(referred_gain100, 1kHz);
+    measure gain100_signal_10khz = mag(at(V(V_MON_100), 10kHz));
+    measure gain100_noise_10khz = noise_rms(noise(V(V_MON_100)), 9.5kHz, 10.5kHz);
+    measure gain100_snr_10khz = db(mag(at(V(V_MON_100), 10kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_100)), 9.5kHz, 10.5kHz));
+    measure gain100_referred_density_10khz = at(referred_gain100, 10kHz);
+    measure gain100_signal_100khz = mag(at(V(V_MON_100), 100kHz));
+    measure gain100_noise_100khz = noise_rms(noise(V(V_MON_100)), 99.5kHz, 100.5kHz);
+    measure gain100_snr_100khz = db(mag(at(V(V_MON_100), 100kHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_100)), 99.5kHz, 100.5kHz));
+    measure gain100_referred_density_100khz = at(referred_gain100, 100kHz);
+    measure gain100_signal_1mhz = mag(at(V(V_MON_100), 1MHz));
+    measure gain100_noise_1mhz = noise_rms(noise(V(V_MON_100)), 999.5kHz, 1.0005MHz);
+    measure gain100_snr_1mhz = db(mag(at(V(V_MON_100), 1MHz)) / 1.41421356
+        / noise_rms(noise(V(V_MON_100)), 999.5kHz, 1.0005MHz));
+    measure gain100_referred_density_1mhz = at(referred_gain100, 1MHz);
+    measure gain100_share_sense_buffers_1khz = noise_share(noise(V(V_MON_100), U_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), U_BLP), 500Hz, 1.5kHz);
+    measure gain100_share_receiver_1khz = noise_share(noise(V(V_MON_100), U_DIF), 500Hz, 1.5kHz);
+    measure gain100_share_adc_stages_1khz = noise_share(noise(V(V_MON_100), U_G10), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1B), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1S), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1F), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1G), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), U_G100), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2B), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2S), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2F), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2G), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_AA100), 500Hz, 1.5kHz);
+    measure gain100_share_soil_1khz = noise_share(noise(V(V_MON_100), RC_HC), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_HP), 500Hz, 1.5kHz) + noise_share(noise(V(V_MON_100), RT), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_LP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_LC), 500Hz, 1.5kHz);
+    measure gain100_share_drive_1khz = noise_share(noise(V(V_MON_100), DDS), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_TERM), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_INB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), U_DRV), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), U_PMP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), U_FBB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), RN_HOW), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_SET), 500Hz, 1.5kHz);
+    measure gain100_share_bias_resistors_1khz = noise_share(noise(V(V_MON_100), R_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(V_MON_100), R_BLP), 500Hz, 1.5kHz);
+    measure gain100_share_sense_buffers_100khz = noise_share(noise(V(V_MON_100), U_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), U_BLP), 99.5kHz, 100.5kHz);
+    measure gain100_share_receiver_100khz = noise_share(noise(V(V_MON_100), U_DIF), 99.5kHz, 100.5kHz);
+    measure gain100_share_adc_stages_100khz = noise_share(noise(V(V_MON_100), U_G10), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1B), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1S), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1F), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G1G), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), U_G100), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2B), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2S), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2F), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_G2G), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_AA100), 99.5kHz, 100.5kHz);
+    measure gain100_share_soil_100khz = noise_share(noise(V(V_MON_100), RC_HC), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_HP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), RT), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_LP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), RC_LC), 99.5kHz, 100.5kHz);
+    measure gain100_share_drive_100khz = noise_share(noise(V(V_MON_100), DDS), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_TERM), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_INB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), U_DRV), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), U_PMP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), U_FBB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), RN_HOW), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_SET), 99.5kHz, 100.5kHz);
+    measure gain100_share_bias_resistors_100khz = noise_share(noise(V(V_MON_100), R_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(V_MON_100), R_BLP), 99.5kHz, 100.5kHz);
+
+    // current: the current channel, ADC input I_MON.
+    let referred_current = noise(V(I_MON)) / mag(V(I_MON) / i_lc);
+    measure current_signal_1khz = mag(at(V(I_MON), 1kHz));
+    measure current_noise_1khz = noise_rms(noise(V(I_MON)), 500Hz, 1.5kHz);
+    measure current_snr_1khz = db(mag(at(V(I_MON), 1kHz)) / 1.41421356 / noise_rms(noise(V(I_MON)), 500Hz, 1.5kHz));
+    measure current_referred_density_1khz = at(referred_current, 1kHz);
+    measure current_signal_10khz = mag(at(V(I_MON), 10kHz));
+    measure current_noise_10khz = noise_rms(noise(V(I_MON)), 9.5kHz, 10.5kHz);
+    measure current_snr_10khz = db(mag(at(V(I_MON), 10kHz)) / 1.41421356
+        / noise_rms(noise(V(I_MON)), 9.5kHz, 10.5kHz));
+    measure current_referred_density_10khz = at(referred_current, 10kHz);
+    measure current_signal_100khz = mag(at(V(I_MON), 100kHz));
+    measure current_noise_100khz = noise_rms(noise(V(I_MON)), 99.5kHz, 100.5kHz);
+    measure current_snr_100khz = db(mag(at(V(I_MON), 100kHz)) / 1.41421356
+        / noise_rms(noise(V(I_MON)), 99.5kHz, 100.5kHz));
+    measure current_referred_density_100khz = at(referred_current, 100kHz);
+    measure current_signal_1mhz = mag(at(V(I_MON), 1MHz));
+    measure current_noise_1mhz = noise_rms(noise(V(I_MON)), 999.5kHz, 1.0005MHz);
+    measure current_snr_1mhz = db(mag(at(V(I_MON), 1MHz)) / 1.41421356
+        / noise_rms(noise(V(I_MON)), 999.5kHz, 1.0005MHz));
+    measure current_referred_density_1mhz = at(referred_current, 1MHz);
+    measure current_share_tia_1khz = noise_share(noise(V(I_MON), U_TIA), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), R_TIA), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), R_AAI), 500Hz, 1.5kHz);
+    measure current_share_soil_1khz = noise_share(noise(V(I_MON), RC_HC), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), RC_HP), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), RT), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), RC_LP), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), RC_LC), 500Hz, 1.5kHz);
+    measure current_share_drive_1khz = noise_share(noise(V(I_MON), DDS), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), R_TERM), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), R_INB), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), U_DRV), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), U_PMP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), U_FBB), 500Hz, 1.5kHz) + noise_share(noise(V(I_MON), RN_HOW), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), R_SET), 500Hz, 1.5kHz);
+    measure current_share_bias_resistors_1khz = noise_share(noise(V(I_MON), R_BHP), 500Hz, 1.5kHz)
+        + noise_share(noise(V(I_MON), R_BLP), 500Hz, 1.5kHz);
+    measure current_share_tia_100khz = noise_share(noise(V(I_MON), U_TIA), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_TIA), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_AAI), 99.5kHz, 100.5kHz);
+    measure current_share_soil_100khz = noise_share(noise(V(I_MON), RC_HC), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), RC_HP), 99.5kHz, 100.5kHz) + noise_share(noise(V(I_MON), RT), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), RC_LP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), RC_LC), 99.5kHz, 100.5kHz);
+    measure current_share_drive_100khz = noise_share(noise(V(I_MON), DDS), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_TERM), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_INB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), U_DRV), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), U_PMP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), U_FBB), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), RN_HOW), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_SET), 99.5kHz, 100.5kHz);
+    measure current_share_bias_resistors_100khz = noise_share(noise(V(I_MON), R_BHP), 99.5kHz, 100.5kHz)
+        + noise_share(noise(V(I_MON), R_BLP), 99.5kHz, 100.5kHz);
+
+    // The impedance the firmware computes from the gain-1 channel (z1 of FirmwareReadout:
+    // V_MON_1 over the current read at I_MON) and its noise from every generator, the
+    // correlated ones combined: the drive's current noise reaches both channels and
+    // cancels in the ratio as much as the soil's single current lets it. Relative to
+    // |z1|, as the RMS over the band: the magnitude's relative RMS, and the phase's in
+    // degrees (each carries half the noise power of the complex result).
+    let z1_noise = noise(z1) / mag(z1);
+    measure impedance_noise_1khz = noise_rms(z1_noise, 500Hz, 1.5kHz);
+    measure impedance_phase_noise_1khz = noise_rms(z1_noise, 500Hz, 1.5kHz) * 57.2957795deg;
+    measure impedance_noise_100khz = noise_rms(z1_noise, 99.5kHz, 100.5kHz);
+    measure impedance_phase_noise_100khz = noise_rms(z1_noise, 99.5kHz, 100.5kHz) * 57.2957795deg;
+    measure impedance_drive_share_1khz = noise_share(noise(z1, DDS), 500Hz, 1.5kHz)
+        + noise_share(noise(z1, R_SET), 500Hz, 1.5kHz) + noise_share(noise(z1, RN_HOW), 500Hz, 1.5kHz);
+
+    plot noise(V(V_MON_1)), noise(V(V_MON_10)), noise(V(V_MON_100)), noise(V(I_MON));
+    plot referred_gain1, referred_gain10, referred_gain100, referred_current;
+    plot z1_noise;
+}

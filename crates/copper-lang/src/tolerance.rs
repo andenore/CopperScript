@@ -10,7 +10,9 @@
 //!
 //! A bench adds tolerances of params, of model parameters and of
 //! components that declare none (`tolerance R_SET = 0.5%;`,
-//! `tolerance U1.input_offset_voltage = 25uV;`, `tolerance C1 = 10%;`), and
+//! `tolerance U1.input_offset_voltage = 25uV;`, `tolerance C1 = 10%;`),
+//! matched groups of passives and model parameters (`tolerance
+//! RN.resistance = 7.5% match 0.0125%;`: every unit of `RN` one member), and
 //! one method that uses them: `montecarlo { runs = 200; seed = 1;
 //! distribution = gaussian; }` or `worstcase;`. Without a method a bench runs
 //! at the nominal values and the declared tolerances change nothing.
@@ -235,11 +237,13 @@ pub struct Tolerance {
     pub location: Location,
 }
 
-/// A ratio-matched group of components (`match = "NAME"`).
+/// A ratio-matched group (`match = "NAME"` on components, or a bench
+/// `tolerance A, B = t match m;`): passive values and model parameters (one
+/// member per unit of a multi-unit part).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MatchGroup {
     pub name: String,
-    pub members: Vec<String>,
+    pub members: Vec<Target>,
     /// Every member's absolute tolerance.
     pub tolerance: Quantity,
     /// The tolerance of the ratio of any two members.
@@ -271,6 +275,8 @@ pub struct Variable {
     /// `R1`, `U1.input_offset_voltage`, `HOWLAND common`, `HOWLAND R3`.
     pub name: String,
     pub effect: Effect,
+    /// The matched group the variable belongs to (its common or a member's own variable).
+    pub group: Option<String>,
 }
 
 fn base(quantity: &Quantity) -> f64 {
@@ -285,17 +291,19 @@ impl Variation {
         for group in &self.groups {
             let half = base(&group.match_tolerance) / 2.0;
             let common = base(&group.tolerance) - half;
-            let members: Vec<Target> = group.members.iter().map(|m| Target::Component(m.clone())).collect();
+            let members: Vec<Target> = group.members.clone();
             if common > 0.0 {
                 out.push(Variable {
                     name: format!("{} common", group.name),
                     effect: Effect::Relative { targets: members.clone(), scale: common },
+                    group: Some(group.name.clone()),
                 });
             }
             for member in members {
                 out.push(Variable {
                     name: format!("{} {}", group.name, member.text()),
                     effect: Effect::Relative { targets: vec![member], scale: half },
+                    group: Some(group.name.clone()),
                 });
             }
         }
@@ -304,7 +312,7 @@ impl Variation {
                 Spread::Relative(q) => Effect::Relative { targets: vec![tolerance.target.clone()], scale: base(q) },
                 Spread::Absolute(q) => Effect::Absolute { target: tolerance.target.clone(), scale: base(q) },
             };
-            out.push(Variable { name: tolerance.target.text(), effect });
+            out.push(Variable { name: tolerance.target.text(), effect, group: None });
         }
         out
     }
@@ -436,11 +444,40 @@ pub(crate) fn variation(document: &Document, lookup: &Lookup) -> Result<Option<V
         }
         return Ok(None);
     };
-    // Bench tolerance statements.
+    // Bench tolerance statements, and the matched groups they declare.
     let mut bench: Vec<Tolerance> = Vec::new();
+    let mut bench_groups: Vec<MatchGroup> = Vec::new();
     for item in tolerance_statements {
         let (Some(target), Some(value)) = (&item.target, &item.value) else { continue };
+        if let Some(matched) = &item.match_value {
+            let group = bench_group(target, &item.others, value, matched, &item.location, lookup)?;
+            let taken = |member: &Target| {
+                bench_groups.iter().any(|other| other.members.contains(member))
+                    || bench.iter().any(|other| &other.target == member)
+            };
+            if let Some(member) = group.members.iter().find(|member| taken(member)) {
+                return Err(error(
+                    "SIM091",
+                    format!("{} has two tolerance statements", repr(&member.text())),
+                    &item.location,
+                ));
+            }
+            bench_groups.push(group);
+            continue;
+        }
+        if let Some(other) = item.others.first() {
+            return Err(error(
+                "SIM091",
+                format!(
+                    "tolerance {target}, {other} = ...; lists several targets, which makes a matched group: add its ratio tolerance, tolerance {target}, {other} = t match m;"
+                ),
+                &item.location,
+            ));
+        }
         let tolerance = bench_tolerance(target, value, &item.location, lookup)?;
+        if bench_groups.iter().any(|group| group.members.contains(&tolerance.target)) {
+            return Err(error("SIM091", format!("{} has two tolerance statements", repr(target)), &item.location));
+        }
         if bench.iter().any(|other| other.target == tolerance.target) {
             return Err(error("SIM091", format!("{} has two tolerance statements", repr(target)), &item.location));
         }
@@ -454,21 +491,73 @@ pub(crate) fn variation(document: &Document, lookup: &Lookup) -> Result<Option<V
         let declared = instance.properties.get(TOLERANCE).and_then(|text| stored(text));
         let Some(declared) = declared else { continue };
         let group = instance.properties.get(MATCH);
-        let overridden = bench.iter().find(|item| item.target == Target::Component(component.reference.clone()));
-        match &component.treatment {
+        let own = Target::Component(component.reference.clone());
+        let overridden = bench.iter().find(|item| item.target == own);
+        // A part with `load` blocks (a resistor network) varies the resistance of each of them.
+        let members: Vec<Target> = match &component.treatment {
             Treatment::Ignored | Treatment::Replaced(_) => continue,
-            Treatment::Passive { .. } => {}
+            Treatment::Passive { .. } => vec![own.clone()],
             Treatment::PartModel => {
+                let units = load_resistances(component, lookup);
+                if units.is_empty() {
+                    return Err(error(
+                        "SIM091",
+                        format!(
+                            "{} declares a tolerance, but it simulates with a sim model that has no load resistance; a component tolerance applies to the value of a resistor, capacitor or inductor or to the resistances of a part made of load blocks (vary a model parameter with tolerance {}.PARAMETER = ...;)",
+                            repr(&component.reference),
+                            component.reference
+                        ),
+                        &location,
+                    ));
+                }
+                units
+            }
+        };
+        if let Some(group) = bench_groups.iter().find(|group| members.iter().any(|m| group.members.contains(m))) {
+            if let Some(name) = group_name(instance) {
                 return Err(error(
                     "SIM091",
                     format!(
-                        "{} declares a tolerance, but it simulates with a sim model; a tolerance applies to the value of a resistor, capacitor or inductor (vary a model parameter with tolerance {}.PARAMETER = ...;)",
+                        "{} is in matched group {} on its component; it cannot also be in the bench's group {}",
                         repr(&component.reference),
-                        component.reference
+                        repr(name),
+                        repr(&group.name)
                     ),
                     &location,
                 ));
             }
+            // The bench's group replaces the component's own tolerance.
+            continue;
+        }
+        if matches!(component.treatment, Treatment::PartModel) {
+            match group {
+                Some(name) => {
+                    let match_tolerance = instance
+                        .properties
+                        .get(MATCH_TOLERANCE)
+                        .and_then(|text| stored(text))
+                        .unwrap_or(declared.clone());
+                    add_members(
+                        &mut groups,
+                        name,
+                        members,
+                        &declared,
+                        &match_tolerance,
+                        &component.reference,
+                        &location,
+                    )?;
+                }
+                None => tolerances.push(Tolerance {
+                    target: Target::ModelParameter {
+                        instance: component.reference.clone(),
+                        parameter: "resistance".to_owned(),
+                    },
+                    spread: Spread::Relative(declared),
+                    declared_by: "component",
+                    location: location.clone(),
+                }),
+            }
+            continue;
         }
         match (group, overridden) {
             (Some(name), Some(item)) => {
@@ -485,31 +574,7 @@ pub(crate) fn variation(document: &Document, lookup: &Lookup) -> Result<Option<V
             (Some(name), None) => {
                 let match_tolerance =
                     instance.properties.get(MATCH_TOLERANCE).and_then(|text| stored(text)).unwrap_or(declared.clone());
-                match groups.iter_mut().find(|group| &group.name == name) {
-                    Some(group) => {
-                        if group.tolerance != declared || group.match_tolerance != match_tolerance {
-                            return Err(error(
-                                "SIM092",
-                                format!(
-                                    "matched group {} has members with different tolerances: {} has {declared} and match {match_tolerance}, {} has {} and match {}",
-                                    repr(name),
-                                    component.reference,
-                                    group.members[0],
-                                    group.tolerance,
-                                    group.match_tolerance
-                                ),
-                                &location,
-                            ));
-                        }
-                        group.members.push(component.reference.clone());
-                    }
-                    None => groups.push(MatchGroup {
-                        name: name.clone(),
-                        members: vec![component.reference.clone()],
-                        tolerance: declared,
-                        match_tolerance,
-                    }),
-                }
+                add_members(&mut groups, name, members, &declared, &match_tolerance, &component.reference, &location)?;
             }
             (None, Some(_)) => {}
             (None, None) => tolerances.push(Tolerance {
@@ -526,12 +591,13 @@ pub(crate) fn variation(document: &Document, lookup: &Lookup) -> Result<Option<V
             format!(
                 "matched group {} has one simulated member ({}); a match needs two or more components",
                 repr(&group.name),
-                group.members[0]
+                group.members[0].text()
             ),
             &location,
         ));
     }
     tolerances.extend(bench);
+    groups.extend(bench_groups);
     if tolerances.is_empty() && groups.is_empty() {
         return Err(error(
             "SIM093",
@@ -543,6 +609,239 @@ pub(crate) fn variation(document: &Document, lookup: &Lookup) -> Result<Option<V
         ));
     }
     Ok(Some(Variation { method, location, tolerances, groups }))
+}
+
+/// The matched group a component's `match` names, if any.
+fn group_name(instance: &ComponentInstance) -> Option<&String> {
+    instance.properties.get(MATCH)
+}
+
+/// Add `members` of `component` to the component group `name` (`SIM092` on unequal tolerances).
+fn add_members(
+    groups: &mut Vec<MatchGroup>,
+    name: &str,
+    members: Vec<Target>,
+    tolerance: &Quantity,
+    match_tolerance: &Quantity,
+    component: &str,
+    location: &Location,
+) -> Result<()> {
+    match groups.iter_mut().find(|group| group.name == name) {
+        Some(group) => {
+            if &group.tolerance != tolerance || &group.match_tolerance != match_tolerance {
+                return Err(error(
+                    "SIM092",
+                    format!(
+                        "matched group {} has members with different tolerances: {component} has {tolerance} and match {match_tolerance}, {} has {} and match {}",
+                        repr(name),
+                        group.members[0].text(),
+                        group.tolerance,
+                        group.match_tolerance
+                    ),
+                    location,
+                ));
+            }
+            group.members.extend(members);
+        }
+        None => groups.push(MatchGroup {
+            name: name.to_owned(),
+            members,
+            tolerance: tolerance.clone(),
+            match_tolerance: match_tolerance.clone(),
+        }),
+    }
+    Ok(())
+}
+
+/// The simulator instance of each `sim` block of a component's part (`U1`,
+/// or `U1.A` on a multi-unit part) with its spec.
+fn unit_specs<'a>(component: &SimComponent, lookup: &Lookup<'a>) -> Vec<(String, &'a SimSpec)> {
+    let Some(part) = (lookup.part)(&component.part) else { return Vec::new() };
+    let count = part.sim.len();
+    part.sim
+        .iter()
+        .map(|block| {
+            let instance = match (&block.unit, count) {
+                (Some(unit), n) if n > 1 => format!("{}.{unit}", component.reference),
+                _ => component.reference.clone(),
+            };
+            (instance, &block.spec)
+        })
+        .collect()
+}
+
+/// The `resistance` of every `load` block of a part-model component that declares one.
+fn load_resistances(component: &SimComponent, lookup: &Lookup) -> Vec<Target> {
+    unit_specs(component, lookup)
+        .into_iter()
+        .filter(|(_, spec)| spec.kind == SimKind::Load && spec.parameters.contains_key("resistance"))
+        .map(|(instance, _)| Target::ModelParameter { instance, parameter: "resistance".to_owned() })
+        .collect()
+}
+
+/// A bench `tolerance A, B = t match m;`: a matched group of passives and
+/// model parameters (`COMPONENT.PARAMETER` is one member per unit that
+/// declares it; `COMPONENT.UNIT.PARAMETER` one unit).
+fn bench_group(
+    first: &str,
+    others: &[String],
+    value: &Scalar,
+    matched: &Scalar,
+    location: &Location,
+    lookup: &Lookup,
+) -> Result<MatchGroup> {
+    let tolerance = percentage(value, "a matched tolerance", location).map_err(|_| {
+        error("SIM091", "a matched group's tolerance is a percentage: tolerance A, B = 1% match 0.1%;", location)
+    })?;
+    let match_tolerance = percentage(matched, "a match tolerance", location)
+        .map_err(|_| error("SIM092", "a matched group's ratio tolerance is a percentage: ... match 0.1%;", location))?;
+    if match_tolerance.base_value() > tolerance.base_value() {
+        return Err(error(
+            "SIM092",
+            format!(
+                "match {match_tolerance} is above the tolerance {tolerance}; a ratio cannot spread more than its parts"
+            ),
+            location,
+        ));
+    }
+    let mut members: Vec<Target> = Vec::new();
+    for target in std::iter::once(first).chain(others.iter().map(String::as_str)) {
+        let found = group_members(target, location, lookup)?;
+        for member in found {
+            if members.contains(&member) {
+                return Err(error(
+                    "SIM092",
+                    format!("{} is in the matched group twice", repr(&member.text())),
+                    location,
+                ));
+            }
+            members.push(member);
+        }
+    }
+    if members.len() < 2 {
+        return Err(error(
+            "SIM092",
+            format!("tolerance {first} ... match: the group has {} member; a match needs two or more", members.len()),
+            location,
+        ));
+    }
+    let name = std::iter::once(first).chain(others.iter().map(String::as_str)).collect::<Vec<_>>().join(", ");
+    Ok(MatchGroup { name, members, tolerance, match_tolerance })
+}
+
+/// The members one target of a bench matched group stands for.
+fn group_members(target: &str, location: &Location, lookup: &Lookup) -> Result<Vec<Target>> {
+    if lookup.params.contains_key(target) {
+        return Err(error(
+            "SIM091",
+            format!("{} is a param; a matched group holds component values and model parameters", repr(target)),
+            location,
+        ));
+    }
+    if let Some(component) = lookup.components.iter().find(|component| component.reference == target) {
+        return match &component.treatment {
+            Treatment::Passive { .. } => {
+                if lookup.instance(target).and_then(group_name).is_some() {
+                    return Err(error(
+                        "SIM091",
+                        format!(
+                            "{} is in a matched group on its component; change the tolerances of that group there",
+                            repr(target)
+                        ),
+                        location,
+                    ));
+                }
+                Ok(vec![Target::Component(target.to_owned())])
+            }
+            Treatment::PartModel => {
+                let units = load_resistances(component, lookup);
+                if units.is_empty() {
+                    return Err(error(
+                        "SIM091",
+                        format!(
+                            "{} is no passive and has no load resistance; name a model parameter, {target}.PARAMETER",
+                            repr(target)
+                        ),
+                        location,
+                    ));
+                }
+                Ok(units)
+            }
+            _ => Err(error(
+                "SIM091",
+                format!("{} is not simulated as a passive or a part model in this bench", repr(target)),
+                location,
+            )),
+        };
+    }
+    let Some((instance, parameter)) = target.rsplit_once('.') else {
+        let names: Vec<&str> = lookup.components.iter().map(|component| component.reference.as_str()).collect();
+        return Err(suggesting(
+            error(
+                "SIM091",
+                format!("tolerance names {}, which is no component or COMPONENT.PARAMETER", repr(target)),
+                location,
+            ),
+            target,
+            &names,
+        ));
+    };
+    // One unit of a multi-unit part: COMPONENT.UNIT.PARAMETER.
+    let (reference, unit) = match instance.split_once('.') {
+        Some((reference, unit)) => (reference, Some(unit)),
+        None => (instance, None),
+    };
+    let specs: Vec<(String, &SimSpec)> =
+        if let Some(component) = lookup.components.iter().find(|component| component.reference == reference) {
+            match &component.treatment {
+                Treatment::PartModel => unit_specs(component, lookup)
+                    .into_iter()
+                    .filter(|(name, _)| unit.is_none_or(|unit| name == &format!("{reference}.{unit}")))
+                    .collect(),
+                _ => lookup
+                    .specs(reference)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|spec| (reference.to_owned(), spec))
+                    .collect(),
+            }
+        } else {
+            lookup.specs(reference).unwrap_or_default().into_iter().map(|spec| (reference.to_owned(), spec)).collect()
+        };
+    if specs.is_empty() {
+        return Err(error(
+            "SIM091",
+            format!(
+                "tolerance {target}: {} is no component with a sim model, unit of one, replacement or bench model",
+                repr(instance)
+            ),
+            location,
+        ));
+    }
+    let members: Vec<Target> = specs
+        .iter()
+        .filter(|(_, spec)| spec.parameters.contains_key(parameter))
+        .map(|(name, _)| Target::ModelParameter { instance: name.clone(), parameter: parameter.to_owned() })
+        .collect();
+    if members.is_empty() {
+        let mut keys: Vec<&str> = Vec::new();
+        for (_, spec) in &specs {
+            keys.extend(spec.parameters.keys().map(String::as_str));
+        }
+        return Err(suggesting(
+            error(
+                "SIM091",
+                format!(
+                    "tolerance {target}: the model of {instance} does not declare {}, so it has no nominal value to vary",
+                    repr(parameter)
+                ),
+                location,
+            ),
+            parameter,
+            &keys,
+        ));
+    }
+    Ok(members)
 }
 
 fn monte_carlo(item: &VariationDecl) -> Result<Method> {
@@ -742,7 +1041,7 @@ pub fn variation_value(variation: &Variation) -> Value {
             Value::Object(
                 vec![
                     ("name".to_owned(), text(&group.name)),
-                    ("members".to_owned(), Value::Array(group.members.iter().map(|m| text(m)).collect())),
+                    ("members".to_owned(), Value::Array(group.members.iter().map(|m| text(&m.text())).collect())),
                     ("tolerance".to_owned(), quantity_value(&group.tolerance)),
                     ("match_tolerance".to_owned(), quantity_value(&group.match_tolerance)),
                 ]

@@ -27,7 +27,7 @@ use copper_lang::expression::Units;
 use copper_units::Dimension;
 
 use crate::format::{axis_unit, hertz, quantity_text};
-use crate::results::{analysis_text, measure_text};
+use crate::results::{bench_analysis_text, measure_text};
 use crate::run::{BenchRun, LimitMark, Status};
 
 const BACKGROUND: &str = "#ffffff";
@@ -306,7 +306,10 @@ pub fn figure(run: &BenchRun) -> Option<String> {
                 // One window per distinct (point, min, max) over the steps it applies to.
                 let key = |m: &crate::run::MeasureValue| {
                     (m.min.is_some() || m.max.is_some())
-                        .then_some(m.at.map(|at| (at.to_bits(), m.min.map(f64::to_bits), m.max.map(f64::to_bits))))
+                        .then_some(
+                            m.at.filter(|at| at.is_finite())
+                                .map(|at| (at.to_bits(), m.min.map(f64::to_bits), m.max.map(f64::to_bits))),
+                        )
                         .flatten()
                 };
                 let groups = limit_groups(run, key, k);
@@ -327,7 +330,12 @@ pub fn figure(run: &BenchRun) -> Option<String> {
                         frequency,
                         min,
                         max,
-                        points: steps.iter().map(|&s| (s, run.steps[s].measures[k].value)).collect(),
+                        // A "never" value has no point to mark.
+                        points: steps
+                            .iter()
+                            .map(|&s| (s, run.steps[s].measures[k].value))
+                            .filter(|(_, value)| !value.is_nan())
+                            .collect(),
                         label: format!(
                             "{}: {range} at {}{}",
                             measure.name,
@@ -357,7 +365,7 @@ pub fn figure(run: &BenchRun) -> Option<String> {
     let plotted: Vec<&str> = run.plots.iter().map(|plot| plot.expression.as_str()).collect();
     let title = format!("{}: {}", run.name, plotted.join(", "));
     let steps = if run.steps.len() > 1 { format!("; {} steps", run.steps.len()) } else { String::new() };
-    let subtitle = format!("bench for {}; {}{steps}", run.target(), analysis_text(&run.analysis));
+    let subtitle = format!("bench for {}; {}{steps}", run.target(), bench_analysis_text(run));
     let room = WIDTH - LEFT - RIGHT;
     out.push(text_el(LEFT, 26.0, 16.0, INK, "title", "", true, &fit(&title, 16.0, room)));
     out.push(text_el(LEFT, 46.0, 12.0, MUTED, "subtitle", "", false, &fit(&subtitle, 12.0, room)));
@@ -810,7 +818,7 @@ pub fn html(run: &BenchRun, board: &str) -> String {
         page.push(format!(
             "<p class=\"sub\">bench for {}; {}{steps}</p>",
             escape(board),
-            escape(&analysis_text(&run.analysis))
+            escape(&bench_analysis_text(run))
         ));
     }
     let (limited, failing) = run.counts();
