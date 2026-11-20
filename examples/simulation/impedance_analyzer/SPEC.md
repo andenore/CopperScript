@@ -279,7 +279,7 @@ CopperLib after review.
 | Current-channel noise | About 0.9 pA per root hertz, far below 15 uA in a 1 kHz detection bandwidth | Thermal noise of 20 kohm | estimated 0.9 pA/rtHz, simulated 4.0 pA/rtHz at 1 kHz referred to the current: 1.55 pA/rtHz the transimpedance stage, the rest the drive's own current noise, which cancels in the impedance; 98 dB SNR in 1 kHz (`MeasurementNoise`) |
 | Voltage-channel noise at the smallest signal | not estimated | | simulated 22 nV/rtHz at 1 kHz, 15 nV/rtHz above 10 kHz referred to the sense electrodes; 55 to 59 dB SNR for 0.6 mV in 1 kHz: the impedance's noise 0.12 % and 0.070 degrees RMS at 5 ohm m (`MeasurementNoise`, `noise(z1)`) |
 | Slew rate needed | 20 V/us | 3.1 V peak at 1 MHz | estimated 20 V/us; simulated: the pump output peaks at 2.59 V at 1 kHz but only 0.61 V at 1 MHz (the strays take the current there), so the largest slew needed is 3.8 V/us at 1 MHz, against 225 V/us; no harmonic from slewing (`Distortion`) |
-| Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.66 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`) |
+| Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.67 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`, rails from models of the regulators) |
 | Guard loop stability | Unknown | The HC guard feeds the pump's own buffer output back to its input node through the pad capacitance | stable with the macro models: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair is 4.06 kHz with damping 0.27 in air, the mode behind the -42.5 kohm negative real part |
 
 ## Benches
@@ -307,8 +307,9 @@ model and strays, the firmware's arithmetic, the tolerances) is in fixtures
 | `GuardStability` | The poles with the electrodes in air and the HC guard connected (no pole in the right half-plane); the pump and feedback-buffer phase margins | P0 | pass |
 | `MeasurementNoise` | Noise on each ADC channel in a 1 kHz detection bandwidth at the soil corners (5, 100, 1300 ohm m); SNR, resolution, contributors (one noise analysis with the four ADC inputs as outputs), and the noise of the computed impedance | P1 | reported (no requirement) |
 | `ResistorMatching`, `ResistorWorstCase` | Monte Carlo and worst case over the tolerances and the matched network; spread of drive current, output impedance, gain before calibration and common-mode rejection; limits 1 %, 1 degree and 0.5 % after calibration | P1 | pass |
-| `Startup` | Rails ramp, coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2 | pass |
+| `Startup` | Rails from models of the regulators (TPS65130, TPS7A4901, TPS7A3001, REF2033), coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2, F4 | pass |
 | `Distortion` | Harmonics of the drive current at 1 kHz, 100 kHz and 1 MHz into 160 kohm (1.3 kohm m) and 12 kohm (100 ohm m); clipping and slew headroom | P2 | reported (no requirement) |
+| `SupplyCurrent` | Current per rail from the amplifiers' typical quiescent currents and the currents their outputs deliver: idle, and driving 1 MHz at 0.3 V and 0.65 V into dry soil and at 0.3 V into moist loam; limit 70 mA per +/-4.5 V rail (what the rails are sized for) | F4 | pass |
 | `VendorModels` | `SoilSweep` again with vendor amplifier subcircuits read by `copper`; difference from the built-in models | P3 | not written |
 | `WithLayout` | `SoilSweep` and `StrayCapacitance` with extracted trace and electrode capacitance | P5 | not written |
 

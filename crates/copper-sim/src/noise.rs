@@ -22,6 +22,7 @@
 //! | --- | --- | --- |
 //! | resistor `R` (a plain resistor, a `load` resistance, a `source` output resistance) | current between its terminals | `4 k T / R` A²/Hz |
 //! | op-amp or differential amplifier with `voltage_noise` `e_n` | `e_n` in series with `inp`: a current `gm e_n` (gm = 1 S) into the first pole node, the same injection as the offset voltage | `e_n² (1 + f_ce / f)` V²/Hz |
+//! | `regulator` or `reference` with `voltage_noise` `e_n` | `e_n` added to its command: a current `e_n` (1 S) into its 1 ohm noise node `R#nz` | `e_n² (1 + f_c / f)` V²/Hz |
 //! | op-amp with `current_noise` `i_n` | one current from each of `inp` and `inn` to ground, uncorrelated | `i_n² (1 + f_ci / f)` A²/Hz each |
 //! | diode junction | shot noise of its operating-point current across the junction | `2 q I` A²/Hz, `I` the current's magnitude |
 //! | switch | thermal noise of its resistance in its operating-point state | `4 k T / R_on` or `4 k T / R_off` A²/Hz |
@@ -38,7 +39,7 @@
 //!
 //! `f_ce` and `f_ci` are the optional 1/f corners (`voltage_noise_corner`,
 //! `current_noise_corner`): below the corner the power density rises as 1/f.
-//! The resistors inside an amplifier model (its gain and pole elements, its
+//! The resistors inside an amplifier or rail model (its gain and pole elements, its
 //! output resistance, its input resistances, and elements named
 //! `<amplifier>.<part>` that a lowering adds beside it) are noiseless: an
 //! amplifier's noise is its `e_n` and `i_n`. The voltage noise drives the
@@ -278,7 +279,12 @@ fn generators(c: &Circuit, bias: &[f64]) -> Result<Vec<Generator>, SimError> {
         .macros()
         .iter()
         .enumerate()
-        .filter(|(_, m)| matches!(m.model(), MacroModel::Opamp(_) | MacroModel::Diffamp(_)))
+        .filter(|(_, m)| {
+            matches!(
+                m.model(),
+                MacroModel::Opamp(_) | MacroModel::Diffamp(_) | MacroModel::Regulator(_) | MacroModel::Reference(_)
+            )
+        })
         .map(|(i, m)| (i, m.name()))
         .collect();
     let in_amplifier = |name: &str, owner: Option<usize>| {
@@ -376,6 +382,16 @@ fn generators(c: &Circuit, bias: &[f64]) -> Result<Vec<Generator>, SimError> {
     }
     let g = NodeId::GROUND;
     for m in c.macros() {
+        if let MacroModel::Regulator(p) | MacroModel::Reference(p) = m.model() {
+            let Some(en) = p.voltage_noise.filter(|en| *en > 0.0) else { continue };
+            let bad = |detail: String| SimError::InvalidValue { element: m.name().to_string(), detail };
+            let node = c
+                .find_node(&format!("{}#nz", m.name()))
+                .ok_or_else(|| bad("the rail model has no noise node".to_string()))?;
+            let kind = NoiseSourceKind::VoltageNoise { density: en, corner: p.voltage_noise_corner };
+            out.push(Generator { element: m.name().to_string(), kind, from: g, to: node, kelvin: None });
+            continue;
+        }
         let (MacroModel::Opamp(p) | MacroModel::Diffamp(p)) = m.model() else { continue };
         let terminal = |role: &str| m.terminals().iter().find(|(r, _)| *r == role).map(|(_, n)| *n);
         let bad = |detail: String| SimError::InvalidValue { element: m.name().to_string(), detail };

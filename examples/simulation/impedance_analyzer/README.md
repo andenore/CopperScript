@@ -80,7 +80,7 @@ AC shorts, as the standalone analog board's external supplies were. `NEG` is
 -4.48 V, the board's LDO value, where the standalone board said -4.5 V; the
 AC models do not depend on rail voltages (the transient ones clip at them).
 These port conditions are the fixture `FrontEndPorts`; `Startup` replaces the
-supplies by ramps. Converting the benches from the
+supplies by models of the board's regulators. Converting the benches from the
 standalone analog board (whose placeholder header the benches replaced by the
 DDS source) changed no result: all 488 per-step measure values and every
 plotted vector are bit-identical before and after; only the names of the
@@ -110,7 +110,8 @@ sets for the front end:
   47 kohm bias resistors and one amplifier input); the board's 1.1 uF there is
   the REF2033's output capacitor, well inside its 0 to 10 uF.
 - **Current.** At most 70 mA per rail (51.8 mA typical, 56.9 mA maximum
-  drawn).
+  drawn; simulated with typical parts: 51.8 mA idle, at most 52.3 mA while
+  driving 1 MHz, `SupplyCurrent`).
 - **Nothing on the always-on `V3V3`.** The front end's 3.3 V loads are on
   `V3V3_ANA`, which is off in sleep.
 
@@ -136,7 +137,7 @@ sees no back-power path through them.
 3. **Program the DDS after the rails are up.** The AD9833 shares the switched
    3.3 V with the front end; write its registers after `ANA_EN` rises and its
    supply has settled, and start sampling about 1 s after `ANA_EN` rises (every
-   ADC input is within 1 mV of its final value 0.66 s after it, `Startup`; see
+   ADC input is within 1 mV of its final value 0.67 s after it, `Startup`; see
    [Power cycling](#power-cycling)).
 4. **Gain range.** At 1.3 kohm m the gain-10 channel is past its linear range;
    the firmware uses gain 1 there ([SoilSweep above the rated range](#soilsweep-above-the-rated-range)).
@@ -178,8 +179,46 @@ the REF2033's own output capacitance on the board (the part allows up to
 | `V3V3_ANA` (switched 3.3 V), while measuring | 4 x ADA4807 (0.915 / 1.0 mA at 3 V) | 3.7 mA | 4.0 mA |
 | every front-end rail between measurements | off with `ANA_EN` | 0 | 0 |
 
-Quiescent currents from the data sheets; signal currents add under 2 mA (the
-guard drivers charge about 120 pF each at 1 MHz). The first version used eight
+Quiescent currents from the data sheets. The hand estimate said signal
+currents add under 2 mA (the guard drivers charge about 120 pF each at
+1 MHz). `SupplyCurrent` simulates it: every amplifier draws its typical
+quiescent current (the values in the table) and the current its output
+delivers, from the rail that sources it:
+
+| Rail | Idle (operating point) | Driving 1 MHz, 0.3 V DDS, dry / moist soil | Driving 1 MHz, 0.65 V DDS, dry soil |
+| --- | --- | --- | --- |
+| +4.5 V (`I(POS)`), mean | 51.80 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
+| -4.5 V (`-I(NEG)`), mean | 51.81 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
+| `V3V3_ANA`, mean | 3.66 mA | 5.59 / 5.23 mA | 6.09 mA |
+| `V_MID` | -4.7 uA (the ADC drivers' and TIA's bias currents flow back into the REF2033) | | |
+
+What the simulation confirms and corrects:
+
+- **+/-4.5 V: confirmed.** Idle, the simulated current is the sum of the
+  typical quiescent currents to 1 uA (the outputs carry almost no DC). The
+  signal current at 1 MHz, the worst frequency, is 0.09 to 0.22 mA at the
+  nominal drive and 0.48 mA at the top of the DDS range, a quarter of the
+  "under 2 mA" estimate: each rail carries only the half-waves its outputs
+  source. The typical load with signal is therefore 52.0 mA, the maximum
+  (data-sheet maximum quiescent currents, not simulated) about 57.4 mA, both
+  inside the 70 mA the rails are sized for (the bench's limit).
+- **`V3V3_ANA`: corrected for 1 MHz.** The idle 3.66 mA matches the hand
+  value (4 x 0.915 mA), but driving 1 MHz the four ADC-side amplifiers source
+  1.6 to 1.9 mA more at the nominal drive (2.4 mA at 0.65 V): each drives
+  49.9 ohm into 470 pF (339 ohm at 1 MHz) besides its feedback network. The
+  single-supply amplifiers sink into ground, so only the sourcing half-waves
+  reach the rail. The 470 pF take a tenth of that current at 100 kHz and a
+  thousandth at 1 kHz (not simulated). The battery budget below keeps 3.7 mA:
+  a continuous 1 MHz measurement would add about 2 mA at 3.3 V, about 2 mA
+  from the cell (under 1 % of the measuring current; estimate).
+- **`copper power-check`** passes the board (`MEASURE` and `SLEEP`), but it
+  checks power states and back-powering only; it carries no current. The
+  board's current assumptions are its declarations: VPOS_F and VNEG_F are
+  declared at a 70 mA drop across the 1 ohm post-filters (5.27 V, -5.17 V),
+  where the simulated 52.3 mA gives 5.29 V and -5.19 V, so the declared
+  values are conservative by 18 mV.
+
+The first version used eight
 ADA4817s and drew 165 mA per rail. 51.8 mA misses the battery target of about
 40 mA per rail but stays under the 70 mA ceiling the rails are sized for; the
 difference is the two sense buffers, and the trade below is why they stay. The
@@ -224,12 +263,15 @@ firmware rule 2 covers. Of the two transitions the first is simulated
 
 - **`ANA_EN` rises.** `V3V3_ANA` comes up through the load switch within its
   rise time (CT open; tens of microseconds, not read), long before the
-  converters' soft-start brings up VP, VN and `V_MID`. The 3.3 V amplifiers
-  then run for a while with `V_MID` at 0 V: their inputs sit at 0 V, inside
-  -0.2 V (simulated: the ADC drivers' inputs reach -0.14 V while the receiver's
-  output settles). The AD9833 comes up with them, and its output's DC level
-  reaches `U_DRV`'s input, 0.18 V above its unpowered rails in the simulation
-  (inside the 0.2 V rating; see [Startup](#startup-pass-settled-within-1-s)).
+  converters' soft-start brings up VP, VN and `V_MID` (simulated with models of
+  the regulators: VN leaves 0 V at 0.57 ms and regulates at 9.3 ms, VP 0.73 ms
+  and 14.3 ms, `V_MID` 5.9 ms and 10.7 ms, the REF2033 regulating only from
+  VP = 3.32 V). The 3.3 V amplifiers then run for a while with `V_MID` at 0 V:
+  their inputs sit at 0 V, inside -0.2 V (simulated: the ADC drivers' inputs
+  reach -0.17 V while the receiver's output settles). The AD9833 comes up with
+  them, and its output's DC level reaches `U_DRV`'s input, 0.18 V above its
+  unpowered rails in the simulation (inside the 0.2 V rating; see
+  [Startup](#startup-pass-settled-within-1-s)).
 - **`ANA_EN` falls.** The 52 mA load discharges VP's roughly 20 uF in a few
   milliseconds, and `V_MID` falls with VP; `V3V3_ANA` falls through the
   4 mA load and the switch's output discharge. If `V3V3_ANA` fell faster than
@@ -254,10 +296,10 @@ capacitor then charges:
 
 The slowest is 155 ms. Five time constants, 0.8 s after the rails and `V_MID`
 are up, leave under 1 % of the step (simulated: every ADC input within 1 mV
-after 0.66 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
+after 0.67 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
 periods of a 1 kHz or faster signal rejects further: a reading is valid about
-1 s after switching the rails on (firmware rule 3; the simulated 0.66 s
-includes the rails' soft-start, with estimated ramps). The shorter time constants change the
+1 s after switching the rails on (firmware rule 3; the simulated 0.67 s
+includes the rails' soft-start, from models of the regulators). The shorter time constants change the
 bench results by at most 0.1 percentage points; `PumpOutputImpedance` at 1 kHz
 falls from 29 Mohm to 6.2 Mohm, still four times its limit.
 
@@ -281,7 +323,7 @@ component of the same name takes the fixture's place):
 
 | Fixture | Holds | Used by |
 | --- | --- | --- |
-| `FrontEndPorts` | The port conditions of [Structure](#structure-the-front-end-is-a-module-the-benches-simulate-it-alone): the rails as ideal DC sources, the DDS as a 0.3 V source with 200 ohm, the electrode pads ignored | every bench but `Startup`, which ramps the rails itself |
+| `FrontEndPorts` | The port conditions of [Structure](#structure-the-front-end-is-a-module-the-benches-simulate-it-alone): the rails as ideal DC sources, the DDS as a 0.3 V source with 200 ohm, the electrode pads ignored | every bench but `Startup`, which takes its rails from models of the regulators |
 | `SoilModel` | The soil model of SPEC.md and the board strays ([Strays](#strays)), the headroom params | every bench with soil |
 | `FirmwareReadout` | What the firmware computes: `z_true`, `i_lc`, `i_meas`, `z1`, `z100` | the benches that compute the impedance |
 | `MatchingTolerances` | The tolerances, the LT5400 rebuilt as a matched group, the reference runs of `ResistorMatching` | `ResistorMatching`, `ResistorWorstCase` |
@@ -312,8 +354,9 @@ frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
 | `MeasurementNoise` | noise | Noise, SNR and contributors of the four ADC channels (one noise analysis with four outputs), and the noise of the computed impedance |
 | `ResistorMatching` | AC, Monte Carlo | Spread from component tolerances; what calibration removes |
 | `ResistorWorstCase` | AC, worst case | The same at the sensitivity corners |
-| `Startup` | transient | Rails ramping, coupling networks charging, input ranges, settling |
+| `Startup` | transient | Rails coming up from models of the regulators, coupling networks charging, input ranges, settling |
 | `Distortion` | transient | Drive-current harmonics, clipping and slew headroom |
+| `SupplyCurrent` | operating point, transient | The current per rail, idle and driving 1 MHz ([Supply current](#supply-current)) |
 
 `StrayCapacitance` adds its mask capacitor to `SoilModel`'s soil node `S_LP`
 by declaring the net again with the capacitor's pin (nets of one name are one
@@ -882,51 +925,79 @@ benches' rails are ideal), interference picked up by the stake.
 
 ### Startup: pass (settled within 1 s)
 
-The rails ramp in the order of [Power cycling](#power-cycling) with estimated
-timing (`V3V3_ANA` in 50 us, VN 1 ms to 10 ms, `V_MID` 1 ms to 7.2 ms, VP 1 ms
-to 15 ms from the LDOs' soft-start equations with the board's 10 nF NR
-capacitors; the AD9833's unprogrammed output steps to 0.34 V). The drive stays
-at DC; 2 s in time.
+The rails come from models of the board's supply parts (`sim regulator` and
+`sim reference`, built-in macro models at data-sheet values; the bench lists
+each value and its source): `ANA_EN` enables the TPS65130's boost and
+inverter, averaged converters with a 1 ms soft-start ("about 1 ms" in the data
+sheet); the post-filters feed the TPS7A4901 and TPS7A3001, each enabled when
+its input passes its EN threshold (EN tied to IN) and ramping over its
+soft-start (14 ms and 9 ms with the board's 10 nF on NR/SS); the REF2033 runs
+from VP. `V3V3_ANA` (a load switch whose rise was not read) still ramps in an
+estimated 50 us, and the AD9833's unprogrammed output steps to an estimated
+0.34 V with it. The drive stays at DC; 2 s in time.
+
+| Rail | Leaves 0 V (0.1 V) | Regulating | Estimated ramp before |
+| --- | --- | --- | --- |
+| VPOS_RAW (boost) | at once | 0.99 ms (5.3 V) | not modelled |
+| VN | 0.57 ms | 9.3 ms (-4.43 V) | 1 ms to 10 ms |
+| VP | 0.73 ms | 14.3 ms (4.45 V) | 1 ms to 15 ms |
+| `V_MID` | 5.9 ms | 10.7 ms (1.64 V) | 1 ms to 7.2 ms |
 
 | Electrodes | Settled within 1 mV: gain 1 / 10 / 100 / current | ADC inputs linear from (gain 100) | Pump output, lowest / highest | Pump node settled within 1 mV |
 | --- | --- | --- | --- | --- |
-| in air | 352 / 466 / 662 / 7 ms | 160 ms | -1.74 V / 2.16 V | 73 ms |
-| 5 ohm m | 351 / 468 / 664 / 547 ms | 160 ms | -1.59 V / 1.86 V | 688 ms |
-| 100 ohm m | 352 / 468 / 664 / 341 ms | 157 ms | -1.34 V / 1.84 V | 446 ms |
-| 1.3 kohm m | 382 / 473 / 663 / 121 ms | 162 ms | -0.38 V / 1.97 V | 76 ms |
+| in air | 356 / 470 / 666 / 11 ms | 165 ms | -1.82 V / 2.22 V | 73 ms |
+| 5 ohm m | 355 / 472 / 667 / 577 ms | 165 ms | -1.82 V / 2.15 V | 716 ms |
+| 100 ohm m | 355 / 473 / 669 / 365 ms | 162 ms | -1.53 V / 2.06 V | 449 ms |
+| 1.3 kohm m | 385 / 477 / 673 / 129 ms | 168 ms | -0.39 V / 1.46 V | 80 ms |
 
+- **Rails.** The regulator models start the rails earlier than the estimated
+  ramps did (each LDO enables as its input, rising with the converters'
+  soft-start, passes its EN threshold at about 0.35 to 0.4 ms) and bring
+  `V_MID` up later: the REF2033 needs VIN 20 mV above its 3.3 V VREF to
+  regulate, so `V_MID` reaches 1.65 V only when VP passes 3.32 V. Below that
+  the model's `V_MID` is VP less 1.67 V, an estimate (how VBIAS falls below
+  that input was not read). VP's LDO delivers up to 60 mA while its 20 uF
+  charge: the front end's 52 mA plus the ramp. Not modelled: the boost's path
+  through L1 and D1, which puts VSYS less a diode drop on the LDO's input as
+  soon as the boost's load switch closes, so VP would start sooner still; the
+  converters' switching ripple (the models are averaged) and their loops'
+  transients.
 - **Settling.** Every ADC input is within 1 mV (about one LSB) of its final
-  value 0.66 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
-  firmware rule 3 and the battery budget allow, with 0.34 s to spare (the
-  limit of the bench). The hand estimate was 0.8 s from the slowest network
-  (155 ms x 5). The slowest output is gain 100: its two 22 uF DC blocks and the
-  ADC drivers' 47 kohm couplings, not the sense inputs, which reach the
-  receiver as common mode. The current channel settles with the soil: the
-  sense couplings' 4.7 nF charge through the soil and LC (0.55 s at 5 ohm m).
-  The ADC inputs swing between their rails while the rails come up (10 mV to
-  3.22 V) and are linear (0.1 V inside the rails) from 0.16 s on; the pins
-  never leave 0 to 3.3 V.
-- **Pump.** It swings up to about 2 V either way while the coupling networks
+  value 0.67 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
+  firmware rule 3 and the battery budget allow, with 0.33 s to spare (the
+  limit of the bench). With the estimated ramps it was 0.66 s; the later
+  `V_MID` adds up to 9 ms, and 30 ms to the current channel at 5 ohm m. The
+  hand estimate was 0.8 s from the slowest network (155 ms x 5). The slowest
+  output is gain 100: its two 22 uF DC blocks and the ADC drivers' 47 kohm
+  couplings, not the sense inputs, which reach the receiver as common mode.
+  The current channel settles with the soil: the sense couplings' 4.7 nF
+  charge through the soil and LC (0.58 s at 5 ohm m). The ADC inputs swing
+  between their rails while the rails come up (10 mV to 3.22 V) and are
+  linear (0.1 V inside the rails) from 0.17 s on; the pins never leave 0 to
+  3.3 V.
+- **Pump.** It swings up to about 2.2 V either way while the coupling networks
   charge and comes back to its +24 mV operating point; in air it settles in
   73 ms, no latch-up and no oscillation in the model (the transient steps are
   up to 1 ms; a fast oscillation would need finer steps to show).
 - **Input ranges.** No amplifier input passes its absolute maximum in the
-  model, but two come close, and the README did not discuss them:
+  model, but two come close:
   - `U_DRV`'s input rises 0.18 V above its rails at 50 us and stays above VP
-    until VP passes it, about 1.5 ms (by hand: VP rises from 1 ms, the input
-    decays with `C_IN` and `R_INB`, 10 ms): the AD9833
+    until VP passes it, 0.92 ms (1.5 ms with the estimated ramps): the AD9833
     comes up with `V3V3_ANA`, before VP and VN, and its output's DC level
     (0.34 V, estimated, halved by the termination) passes `C_IN` while the
-    ADA4807 is unpowered. The rating is 0.2 V. The estimate of the AD9833's
-    reset level decides it: at the 0.65 V top of its range it would be 0.33 V,
-    through the input diodes of an unpowered amplifier, with only the
-    filter's 100 ohm in series. Switching the DDS supply on after VP, or a
-    series resistor ahead of `U_DRV`'s input, would remove it (not built).
-  - The ADC drivers' inputs (`B1_IN`, `G1_IN`) go to -0.14 V while the
-    receiver's output settles, inside -0.2 V; the 1 kohm series resistors
-    limit any current.
+    ADA4807 is unpowered. The rating is 0.2 V. The regulator models do not
+    change the peak (179 mV either way), which is set before any rail moves;
+    only how long it lasts. The estimate of the AD9833's reset level decides
+    it: at the 0.65 V top of its range it would be 0.33 V, through the input
+    diodes of an unpowered amplifier, with only the filter's 100 ohm in series.
+    Switching the DDS supply on after VP, or a series resistor ahead of
+    `U_DRV`'s input, would remove it (not built).
+  - The ADC drivers' inputs (`B1_IN`, `G1_IN`) go to -0.17 V while the
+    receiver's output settles, inside -0.2 V by 35 mV (-0.14 V with the
+    estimated ramps, whose `V_MID` came up 3.5 to 5 ms sooner); the 1 kohm series
+    resistors limit any current.
   - The sense buffers' inputs stay inside their linear range (+VS - 2.8 V)
-    once VP is up (from 10 to 14 ms; 0.19 V to spare at 5 ohm m with no
+    once VP is up (from 9 to 14 ms; 0.15 V to spare at 5 ohm m with no
     signal on top), and inside their absolute maximum throughout.
 
 ### ResistorMatching and ResistorWorstCase: pass
@@ -1044,7 +1115,7 @@ harmonic here is clipping or slewing, or the settling left in the record.
 | Transimpedance phase lag at 1 MHz | 7 deg (8 MHz) | 10.7 deg (5.3 MHz with 1.5 pF); whole channel 10.3 to 10.5 deg before calibration, 0 after |
 | Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoise`) |
 | Slew rate needed | 20 V/us | 3.8 V/us at 1 MHz into 1.3 kohm m (0.61 V peak at the pump output: the strays take the current there), 2.59 V peak at 1 kHz; ADA4807 225 V/us, no harmonic from slewing (`Distortion`) |
-| Start-up | 0.8 s from the slowest network | 0.66 s to 1 mV on every ADC input (`Startup`) |
+| Start-up | 0.8 s from the slowest network | 0.67 s to 1 mV on every ADC input (`Startup`, rails from models of the regulators) |
 | Guard loop stability | unknown | stable: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair, 4.06 kHz with damping 0.27 in air, is the guard and pump mode behind the -42.5 kohm negative real part, which therefore does not oscillate |
 | Card within 1 % and 1 deg | required, with 47 kohm contacts on every position | 47 kohm is not soil-like: 27 to 34 % and 3.7 to 5.3 deg at 1 MHz (CalibrationCard). With soil-like contacts (270 ohm on 39 ohm, 6.8 kohm on 1 kohm) at most 0.51 % and 0.23 deg (CalibrationCard) |
 | Amplifier supply | about 10 V total | ADA4817 5 to 10 V, abs. max 10.6 V; +/-4.5 V fits. ADA4807 2.7 to 11 V |
@@ -1062,8 +1133,11 @@ harmonic here is clipping or slewing, or the settling left in the record.
   common-mode range, no input protection diodes and no behaviour unpowered:
   `Startup` reports how far each input goes against its rails, it cannot
   show what the parts do there. Overload recovery from deep saturation is
-  not modelled. The rail ramps and the AD9833's level at power-up are
-  estimates, and the power-down order is not simulated.
+  not modelled. The regulators in `Startup` are macro models (the converters
+  averaged, every output stiff, the boost's input-to-output path before it
+  switches left out); `V3V3_ANA`'s load-switch ramp, the converters' soft-start
+  time and the AD9833's level at power-up are estimates, and the power-down
+  order is not simulated.
 - Stability is settled for the macro models as they are (`LoopStability`,
   `GuardStability`): every pole in the left half-plane. Real amplifiers have
   more poles than the two of the macro model, so the gain-1 driver's 49
@@ -1083,7 +1157,8 @@ harmonic here is clipping or slewing, or the settling left in the record.
   supplies make them unnecessary.
 - Power-down is a hand estimate ([Power cycling](#power-cycling)).
 - Only the front end is simulated. The benches feed its ports with ideal DC
-  rails and an ideal DDS stand-in, so converter and LDO ripple and noise, the
+  rails (`Startup`: averaged regulator models without ripple or noise) and an
+  ideal DDS stand-in, so converter and LDO ripple and noise, the
   ferrite and bulk capacitor on `V3V3_ANA`, the AD9833's images and the ADC's
   input are outside every bench.
 
@@ -1246,7 +1321,9 @@ Everything in this section is an **estimate** built on the data-sheet values
 in the facts tables and the stated assumptions; nothing has been measured. The
 measuring load uses the front end's actual supply current, 51.8 mA typical and
 56.9 mA maximum per analog rail plus 3.7 mA typical and 4.0 mA maximum on the
-switched 3.3 V ([Supply current](#supply-current)); the digital section was
+switched 3.3 V ([Supply current](#supply-current); the simulation confirms the
+analog rails within 0.5 mA and finds the switched 3.3 V up to 2 mA higher
+while driving 1 MHz, not included here); the digital section was
 first sized for an assumed 40 mA typical and 70 mA maximum per rail.
 
 ### Sleep (Standby with RTC, front end off, no USB)
@@ -1307,7 +1384,7 @@ applied below. Self-discharge of a few percent per month is not included either.
 
 The duty-cycle rows add 1 s per cycle on top of the 5 s measurement. That second
 covers the wake from Standby (2.46 mA, Table 35), HSE and PLL start, rail
-soft-start, front-end settling (0.66 s simulated from `ANA_EN` to every ADC
+soft-start, front-end settling (0.67 s simulated from `ANA_EN` to every ADC
 input within 1 mV, `Startup`, the rails' soft-start included; most of that
 second) and storing the result. The sleep current is only about 1.7 % of the duty-cycled average, so
 measurement time dominates battery life. Shortening the measurement, or
@@ -1597,8 +1674,9 @@ unchanged from the first revision are marked "as before".
   rules 1 and 2. `copper power-check` passes because neither the AD9833 nor
   the front end's amplifiers declare power domains, not because it verified
   those paths.
-- **DDS output at power-up.** The AD9833 comes up with `V3V3_ANA`, about 1 ms
-  before VP and VN, and its output's DC level drives `U_DRV`'s input above the
+- **DDS output at power-up.** The AD9833 comes up with `V3V3_ANA`, about
+  0.5 ms before VN and 0.7 ms before VP leave 0 V (`Startup`, regulator
+  models), and its output's DC level drives `U_DRV`'s input above the
   unpowered amplifier's rails: 0.18 V in `Startup`, inside the 0.2 V rating,
   with the AD9833's level at power-up estimated (0.34 V); at its 0.65 V
   maximum it would be 0.33 V. Its reset output level was not read. Remedies,

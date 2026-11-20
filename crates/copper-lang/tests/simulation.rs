@@ -585,6 +585,79 @@ fn bench_file_api() {
 }
 
 #[test]
+fn supply_current_and_rejection_parameters() {
+    let roles = "inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;";
+    let design = opamp_part(
+        "supply",
+        &format!(
+            "sim opamp {{ {roles} gbw = 1MHz; quiescent_current = 1mA; psrr = 90dB; psrr_corner = 1kHz;
+                supply 3.3V {{ quiescent_current = 0.9mA; }} }}"
+        ),
+    )
+    .unwrap();
+    let part = design.electrical.library.values().find(|part| part.name.ends_with("Amp")).unwrap();
+    let keys: Vec<&str> = part.sim[0].spec.parameters.keys().map(String::as_str).collect();
+    assert_eq!(keys, ["gbw", "quiescent_current", "psrr", "psrr_corner"]);
+    assert_eq!(part.sim[0].supply_sets[0].parameters["quiescent_current"].value.to_string(), "0.9 mA");
+    let typed = error_of(opamp_part("psrr-typed", &format!("sim opamp {{ {roles} quiescent_current = 1mV; }}")));
+    assert!(typed.contains("SIM018: sim opamp quiescent_current must be a Current"), "{typed}");
+    let negative = error_of(opamp_part("iq-negative", &format!("sim opamp {{ {roles} quiescent_current = -1mA; }}")));
+    assert!(negative.contains("SIM019"), "{negative}");
+    // A corner needs the rejection it rolls off, in the block or in every set that uses it.
+    let lone = error_of(opamp_part("psrr-corner", &format!("sim opamp {{ {roles} psrr_corner = 1kHz; }}")));
+    assert!(lone.contains("SIM102: sim opamp: psrr_corner needs a psrr"), "{lone}");
+    let in_set = format!("sim opamp {{ {roles} psrr_corner = 1kHz; supply 3.3V {{ psrr = 80dB; }} }}");
+    assert!(opamp_part("psrr-set", &in_set).is_ok());
+    let partial = format!(
+        "sim opamp {{ {roles} psrr_corner = 1kHz; supply 3.3V {{ psrr = 80dB; }} supply 10V {{ gbw = 2MHz; }} }}"
+    );
+    let failure = error_of(opamp_part("psrr-partial", &partial));
+    assert!(failure.contains("SIM102: sim opamp with its parameter set for a 10 V supply"), "{failure}");
+}
+
+#[test]
+fn supply_terminals_of_placed_amplifiers() {
+    // I(X.vp) of a replacement reads its rail current only when the model declares a quiescent current.
+    let part = format!(
+        "part Amp {{\n{OPAMP_PINS}    sim opamp {{ inp = INP; inn = INN; out = OUT; vp = VP; vn = VN; gbw = 1MHz; }}\n}}\n"
+    );
+    let board = "board A {
+    use library \"tiny\";
+    import p \"./parts\";
+    component U1: p.Amp;
+    component R1: RESISTOR { value = 1kohm; }
+    net IN { U1.INP; }
+    net OUT { U1.OUT; U1.INN; R1.1; }
+    net VP { U1.VP; }
+    net VN { U1.VN; }
+    net GND { R1.2; }
+    supply POS { voltage = 5V; net = VP; external = true; }
+    supply NEG { voltage = -5V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}
+";
+    let bench = |extra: &str| {
+        format!(
+            "bench B for A {{
+    replace U1 with opamp {{ inp = IN; inn = OUT; out = OUT; vp = VP; vn = VN; gbw = 1MHz; open_loop_gain = 100dB;{extra} }}
+    model SRC: source {{ out = IN; ref = GND; dc = 1V; }}
+    analysis op;
+    measure i = I(U1.vp);
+}}
+"
+        )
+    };
+    let path = project("supplied", &[&part], board, &[&bench(" quiescent_current = 1mA;")]);
+    let design = compile_design_file(&path, false, true).unwrap();
+    let benches = bench::load_benches(&path, &design).unwrap();
+    assert_eq!(benches.len(), 1);
+    let path = project("unsupplied", &[&part], board, &[&bench("")]);
+    let design = compile_design_file(&path, false, true).unwrap();
+    let failure = error_of(bench::load_benches(&path, &design));
+    assert!(failure.contains("SIM045: the vp terminal of the opamp model of 'U1' carries no current"), "{failure}");
+}
+
+#[test]
 fn diffamp_kind_and_new_opamp_parameters() {
     let roles = "inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;";
     let design = opamp_part(

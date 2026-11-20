@@ -65,6 +65,10 @@ pub enum SimKind {
     Diffamp,
     /// A voltage or current output with source impedance (regulator, DAC/DDS output).
     Source,
+    /// A rail model: a linear regulator, or a DC-DC converter as an averaged model.
+    Regulator,
+    /// A voltage reference.
+    Reference,
     /// R parallel C between two nodes (an ADC input).
     Load,
     /// A junction diode (Shockley, series resistance, junction capacitance, breakdown).
@@ -77,14 +81,24 @@ pub enum SimKind {
 }
 
 /// The built-in kinds a bench `replace` or `model` may name.
-pub const BUILT_IN_KINDS: [SimKind; 6] =
-    [SimKind::Opamp, SimKind::Diffamp, SimKind::Source, SimKind::Load, SimKind::Diode, SimKind::Switch];
+pub const BUILT_IN_KINDS: [SimKind; 8] = [
+    SimKind::Opamp,
+    SimKind::Diffamp,
+    SimKind::Source,
+    SimKind::Regulator,
+    SimKind::Reference,
+    SimKind::Load,
+    SimKind::Diode,
+    SimKind::Switch,
+];
 
 impl SimKind {
-    pub const ALL: [SimKind; 7] = [
+    pub const ALL: [SimKind; 9] = [
         SimKind::Opamp,
         SimKind::Diffamp,
         SimKind::Source,
+        SimKind::Regulator,
+        SimKind::Reference,
         SimKind::Load,
         SimKind::Diode,
         SimKind::Switch,
@@ -96,6 +110,8 @@ impl SimKind {
             SimKind::Opamp => "opamp",
             SimKind::Diffamp => "diffamp",
             SimKind::Source => "source",
+            SimKind::Regulator => "regulator",
+            SimKind::Reference => "reference",
             SimKind::Load => "load",
             SimKind::Diode => "diode",
             SimKind::Switch => "switch",
@@ -103,17 +119,28 @@ impl SimKind {
         }
     }
 
-    /// The pin (or node) roles; all are required. A `spice` block's roles
-    /// are its terminals' positions, so this list is empty for it.
+    /// The pin (or node) roles; all are required except the
+    /// [`SimKind::optional_roles`]. A `spice` block's roles are its
+    /// terminals' positions, so this list is empty for it.
     pub fn roles(self) -> &'static [&'static str] {
         match self {
             SimKind::Opamp => &["inp", "inn", "out", "vp", "vn"],
             SimKind::Diffamp => &["inp", "inn", "ref", "fb", "out", "vp", "vn"],
             SimKind::Source => &["out", "ref"],
+            SimKind::Regulator | SimKind::Reference => &["in", "out", "gnd"],
             SimKind::Load => &["inp", "ref"],
             SimKind::Diode => &["anode", "cathode"],
             SimKind::Switch => &["a", "b", "ctrl", "ctrl_ref"],
             SimKind::Spice => &[],
+        }
+    }
+
+    /// Roles a block may leave out: a rail model's `en`, which goes with
+    /// its `enable_threshold`.
+    pub fn optional_roles(self) -> &'static [&'static str] {
+        match self {
+            SimKind::Regulator | SimKind::Reference => &["en"],
+            _ => &[],
         }
     }
 
@@ -144,11 +171,43 @@ impl SimKind {
                 ("output_swing_from_positive_rail", Dimension::Voltage),
                 ("output_swing_from_negative_rail", Dimension::Voltage),
                 ("output_current_limit", Dimension::Current),
+                ("quiescent_current", Dimension::Current),
+                ("psrr", Dimension::Gain),
+                ("psrr_corner", Dimension::Frequency),
             ],
             SimKind::Source => &[
                 ("ac_phase", Dimension::Angle),
                 ("output_resistance", Dimension::Resistance),
                 ("output_capacitance", Dimension::Capacitance),
+            ],
+            SimKind::Regulator => &[
+                ("output_voltage", Dimension::Voltage),
+                ("dropout", Dimension::Voltage),
+                ("output_resistance", Dimension::Resistance),
+                ("output_impedance_corner", Dimension::Frequency),
+                ("psrr", Dimension::Gain),
+                ("psrr_corner", Dimension::Frequency),
+                ("output_current_limit", Dimension::Current),
+                ("soft_start", Dimension::Time),
+                ("enable_threshold", Dimension::Voltage),
+                ("quiescent_current", Dimension::Current),
+                ("efficiency", Dimension::Ratio),
+                ("voltage_noise", Dimension::VoltageNoiseDensity),
+                ("voltage_noise_corner", Dimension::Frequency),
+            ],
+            SimKind::Reference => &[
+                ("output_voltage", Dimension::Voltage),
+                ("dropout", Dimension::Voltage),
+                ("output_resistance", Dimension::Resistance),
+                ("output_impedance_corner", Dimension::Frequency),
+                ("psrr", Dimension::Gain),
+                ("psrr_corner", Dimension::Frequency),
+                ("output_current_limit", Dimension::Current),
+                ("startup_time", Dimension::Time),
+                ("enable_threshold", Dimension::Voltage),
+                ("quiescent_current", Dimension::Current),
+                ("voltage_noise", Dimension::VoltageNoiseDensity),
+                ("voltage_noise_corner", Dimension::Frequency),
             ],
             SimKind::Load => &[("resistance", Dimension::Resistance), ("capacitance", Dimension::Capacitance)],
             // `emission_coefficient` and `grading_coefficient` are plain numbers (`Ratio`).
@@ -179,6 +238,7 @@ impl SimKind {
 
     fn keys(self) -> Vec<&'static str> {
         let mut keys: Vec<&str> = self.roles().to_vec();
+        keys.extend(self.optional_roles());
         keys.extend(self.parameters().iter().map(|(name, _)| *name));
         if self == SimKind::Source {
             keys.extend(["output", "dc", "ac", "waveform"]);
@@ -539,7 +599,7 @@ pub(crate) fn lower_block(
     for entry in entries {
         let key = entry.key.as_str();
         let label = format!("sim {} {key}", kind.name());
-        if kind.roles().contains(&key) {
+        if kind.roles().contains(&key) || kind.optional_roles().contains(&key) {
             match single(entry, &label)? {
                 Scalar::Str(target) => {
                     roles.insert(key.to_owned(), (target.clone(), entry.location.clone()));
@@ -593,10 +653,19 @@ pub(crate) fn lower_block(
             return Err(error("SIM013", format!("sim {} needs the {} role", kind.name(), repr(role)), location));
         }
     }
-    let ordered: IndexMap<String, (String, Location)> =
-        kind.roles().iter().map(|role| ((*role).to_owned(), roles[*role].clone())).collect();
+    let ordered: IndexMap<String, (String, Location)> = kind
+        .roles()
+        .iter()
+        .chain(kind.optional_roles())
+        .filter_map(|role| roles.get(*role).map(|target| ((*role).to_owned(), target.clone())))
+        .collect();
     if kind == SimKind::Load && parameters.is_empty() {
         return Err(error("SIM021", "sim load needs a resistance, a capacitance, or both", location));
+    }
+    check_rail_model(kind, &parameters, roles.contains_key("en"), location)?;
+    // A part block's sets may hold the psrr its corner needs: part_models checks it with them.
+    if !allow_unmodelled {
+        check_supply_rejection(kind, &parameters, &[], location)?;
     }
     Ok(LoweredBlock { roles: ordered, unmodelled, spec: SimSpec { kind, output, parameters, waveform, spice: None } })
 }
@@ -763,6 +832,91 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
     })
 }
 
+/// The checks of a `regulator` or `reference` block that need more than one
+/// of its entries (`SIM103`).
+fn check_rail_model(
+    kind: SimKind,
+    parameters: &IndexMap<String, SimQuantity>,
+    has_enable: bool,
+    location: &Location,
+) -> Result<()> {
+    if !matches!(kind, SimKind::Regulator | SimKind::Reference) {
+        return Ok(());
+    }
+    let name = kind.name();
+    let fail = |message: String| Err(error("SIM103", message, location));
+    let Some(set_point) = parameters.get("output_voltage") else {
+        return fail(format!(
+            "sim {name} needs an output_voltage (its set point against gnd; negative for a negative rail)"
+        ));
+    };
+    if set_point.value.base_value().is_zero() {
+        return fail(format!("sim {name} output_voltage must not be zero"));
+    }
+    let resistance = parameters.get("output_resistance").is_some_and(|r| !r.value.base_value().is_zero());
+    for key in ["output_impedance_corner", "output_current_limit"] {
+        if parameters.contains_key(key) && !resistance {
+            return fail(format!("sim {name} {key} needs an output_resistance above 0 ohm"));
+        }
+    }
+    if parameters.contains_key("psrr_corner") && !parameters.contains_key("psrr") {
+        return fail(format!("sim {name} psrr_corner needs a psrr (the line rejection at low frequency)"));
+    }
+    match (parameters.contains_key("enable_threshold"), has_enable) {
+        (true, false) => {
+            return fail(format!("sim {name} enable_threshold needs the en role (the enable pin or node)"));
+        }
+        (false, true) => {
+            return fail(format!(
+                "sim {name} en needs an enable_threshold (on while V(en) - V(gnd), in the output's polarity, is above it)"
+            ));
+        }
+        _ => {}
+    }
+    if let Some(efficiency) = parameters.get("efficiency") {
+        let one = Decimal::parse("1").expect("a decimal");
+        let value = efficiency.value.base_value();
+        if value.is_zero() || value.is_negative() || *value > one {
+            return fail(format!("sim {name} efficiency must be above 0 and at most 100%, found {}", efficiency.value));
+        }
+    }
+    Ok(())
+}
+
+/// `psrr_corner` needs a `psrr`, in the block or, for each parameter set per
+/// supply, in the block and that set together (`SIM102`).
+fn check_supply_rejection(
+    kind: SimKind,
+    parameters: &IndexMap<String, SimQuantity>,
+    sets: &[SupplySet],
+    location: &Location,
+) -> Result<()> {
+    if !SUPPLY_SET_KINDS.contains(&kind) {
+        return Ok(());
+    }
+    let has = |key: &str, set: Option<&SupplySet>| {
+        parameters.contains_key(key) || set.is_some_and(|set| set.parameters.contains_key(key))
+    };
+    let mut cases: Vec<Option<&SupplySet>> = sets.iter().map(Some).collect();
+    if cases.is_empty() {
+        cases.push(None);
+    }
+    for set in cases {
+        if has("psrr_corner", set) && !has("psrr", set) {
+            let (place, at) = match set {
+                Some(set) => (format!(" with its parameter set for a {} supply", set.span), &set.location),
+                None => (String::new(), location),
+            };
+            return Err(error(
+                "SIM102",
+                format!("sim {}{place}: psrr_corner needs a psrr (the rejection at low frequency)", kind.name()),
+                at,
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A plain number for a dimensionless model parameter (`emission_coefficient = 1.8;`).
 fn plain_number(value: &Scalar, dimension: Dimension) -> Option<SimQuantity> {
     if dimension != Dimension::Ratio {
@@ -785,10 +939,21 @@ fn check_range(kind: SimKind, key: &str, value: &Quantity, location: &Location) 
             "gbw"
                 | "second_pole"
                 | "cmrr_corner"
+                | "psrr_corner"
                 | "voltage_noise_corner"
                 | "current_noise_corner"
                 | "output_current_limit"
         ) | (SimKind::Load, "resistance")
+            | (
+                SimKind::Regulator | SimKind::Reference,
+                "output_impedance_corner"
+                    | "psrr_corner"
+                    | "output_current_limit"
+                    | "soft_start"
+                    | "startup_time"
+                    | "enable_threshold"
+                    | "voltage_noise_corner"
+            )
             | (
                 SimKind::Diode,
                 "saturation_current"
@@ -805,7 +970,7 @@ fn check_range(kind: SimKind, key: &str, value: &Quantity, location: &Location) 
     let signed = matches!(
         key,
         "input_offset_voltage" | "input_bias_current" | "input_offset_current" | "ac_phase" | "threshold"
-    );
+    ) || (matches!(kind, SimKind::Regulator | SimKind::Reference) && key == "output_voltage");
     let zero = value.base_value().is_zero();
     if (positive && (zero || value.base_value().is_negative())) || (!signed && value.base_value().is_negative()) {
         let wanted = if positive { "positive" } else { "zero or positive" };
@@ -1048,6 +1213,7 @@ pub(crate) fn part_models(
         } else {
             lower_block(kind, &plain, &ValueScope::Part, true, &block.location)?
         };
+        check_supply_rejection(kind, &lowered.spec.parameters, &sets, &block.location)?;
         let mut block_pins: Vec<&str> = Vec::new();
         for (role, (pin, location)) in &lowered.roles {
             if !pins.contains_key(pin) {

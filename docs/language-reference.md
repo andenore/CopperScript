@@ -2791,9 +2791,11 @@ remains an ordinary part property.
 
 | Kind | Roles | Typed parameters (all optional) |
 | --- | --- | --- |
-| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`) |
+| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`), `quiescent_current` (A), `psrr` (dB), `psrr_corner` (Hz) |
 | `diffamp` | `inp`, `inn`, `ref`, `fb`, `out`, `vp`, `vn` | as `opamp` |
 | `source` | `out`, `ref` | `output = voltage` (default) or `current`; `dc`, `ac` (V or A, following `output`), `ac_phase` (deg), `output_resistance` (ohm), `output_capacitance` (F), `waveform = sine { ... };`, `pulse`, `pwl` or `step` ([Transient analysis](#transient-analysis)) |
+| `regulator` | `in`, `out`, `gnd`; `en` optional | `output_voltage` (V, required; negative for a negative rail), `dropout` (V), `output_resistance` (ohm), `output_impedance_corner` (Hz), `psrr` (dB), `psrr_corner` (Hz), `output_current_limit` (A), `soft_start` (s), `enable_threshold` (V), `quiescent_current` (A), `efficiency` (%), `voltage_noise` (V/rtHz), `voltage_noise_corner` (Hz) ([Rail models](#rail-models-regulator-and-reference)) |
+| `reference` | as `regulator` | as `regulator`, with `startup_time` (s) in place of `soft_start` and no `efficiency` |
 | `diode`, `switch` | `anode`, `cathode`; `a`, `b`, `ctrl`, `ctrl_ref` | see [Transient analysis](#transient-analysis) |
 | `load` | `inp`, `ref` | `resistance` (ohm), `capacitance` (F); at least one |
 
@@ -2805,6 +2807,68 @@ with its tap on `fb` sets `1 + RF/RG`. The input parameters apply to the
 `V_cm` the mean of `inp` and `inn` against ground; `cmrr_corner` makes the CMRR
 fall 20 dB per decade above that frequency (and needs `cmrr`). `second_pole`
 adds a second open-loop pole.
+
+**Supply current and rejection.** Without these parameters an amplifier's
+`vp` and `vn` pins carry no current and its output does not see its rails
+(except for clipping in tran and dc runs), as before. They are opt-in per
+block, so a part that declares neither simulates as it always did.
+
+```copper
+sim opamp {
+    inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+    gbw = 410MHz; open_loop_gain = 65dB; output_resistance = 10ohm;
+    quiescent_current = 19mA;    // into VP, out of VN
+    psrr = 80dB; psrr_corner = 10kHz;
+}
+```
+
+- `quiescent_current` (zero or positive; zero is allowed) makes the supply
+  pins carry the amplifier's current in every analysis: the quiescent current
+  flows into `vp` and out of `vn`, and the current the output delivers comes
+  from the rail on its side, into `vp` while the output sources current and
+  out of `vn` while it sinks it. The current into `vp`, `vn` and `out`
+  therefore sums to zero (input bias currents, which the model returns to
+  ground, aside); a single-supply part whose `vn` is the ground net sinks
+  into ground. `I(U1.VP)`, `I(U1.VN)` and `I(SUPPLY)` read it. The split
+  makes the circuit nonlinear (a Newton operating point, AC linearised at
+  it): a small-signal output current reaches the rail the operating point
+  sources from, and neither while the operating point is exactly 0 A. The
+  quiescent current does not depend on the rail voltage (an amplifier on a
+  rail held at 0 V still draws it). Each rail of such an amplifier needs a DC
+  path to ground, a supply, a source or a resistor to one (`SIM102` names the
+  net otherwise).
+- `psrr` adds the input-referred error `(V(vp) - V(vn) - span) / PSRR(f)`,
+  where `span` is the supply span the bench sets: the DC values of the
+  supplies and DC sources on the `vp` and `vn` nets, as for parameter sets per
+  supply, without a dc sweep's override (`SIM102` when no supply, DC source or
+  rail model sets a rail; a rail ramped by a source waveform takes that source's
+  `dc`, a rail from a `regulator` or `reference` its `output_voltage`).
+  At the nominal supply the operating point is the one without a PSRR, a dc
+  sweep of a supply moves the output by the swept deviation over the PSRR,
+  and an AC source on a rail (a rail replaced with a `source` that has an
+  `ac` value) reaches the output through it. Both rails count alike and the
+  sign is the model's (a rising span is a positive offset at `inp`).
+  `psrr_corner` makes the PSRR fall 20 dB per decade above that frequency
+  and needs `psrr` (`SIM102`).
+
+**Rails with impedance.** The bench decides how ideal the rails are. A
+supply simulated as its DC source is an AC short, so supply current changes
+no voltage. To let the rail sag and its ripple reach the outputs through the
+PSRR, drive the rail through an impedance: replace a board supply, or give a
+module's rail port a bench model, with a `source` that has an
+`output_resistance` (and `ac` for a tone, a `waveform` for a step). The
+board's own decoupling capacitors are then in the circuit:
+
+```copper
+replace POS with source { out = VP; ref = GND; dc = 4.5V; ac = 10mV; output_resistance = 0.5ohm; }
+measure rejection = db(at(V(OUT), 100kHz) / at(V(VP), 100kHz));
+measure rail_current = I(POS);
+```
+
+A rail can also come from a model of its regulator instead
+([Rail models](#rail-models-regulator-and-reference)): its set point, dropout,
+output impedance, line rejection and start-up then act, and the decoupling
+behind it carries the current the regulator delivers.
 
 Blocks may share a pin only in the same role, except `load` blocks: a load is a
 passive two-terminal element, so a pin may be the `inp` of one load and the
@@ -2837,6 +2901,95 @@ run naming the pin. The results name the set (`opamp (parameter set for a
 3.3 V supply)`), and a tolerance on a parameter a set overrides varies the
 set's value. Sets belong to part blocks only, not to a bench `replace` or
 `model`, whose parameters are written for their one use.
+
+### Rail models: regulator and reference
+
+```copper
+model U_LDOP: regulator {
+    in = VPOS_F; out = VP; gnd = GND; en = VPOS_F;    // EN tied to IN
+    output_voltage = 4.5V; dropout = 0.26V;
+    output_resistance = 20mohm; output_impedance_corner = 30kHz;
+    psrr = 70dB; psrr_corner = 10kHz;
+    output_current_limit = 200mA;
+    soft_start = 14ms; enable_threshold = 2.1V;
+    quiescent_current = 49uA;
+}
+model U_PWR_INVERTER: regulator {
+    in = VSYS; out = VNEG_RAW; gnd = GND; en = ANA_EN;
+    output_voltage = -5.24V; soft_start = 1ms; enable_threshold = 1.2V;
+    efficiency = 85%;                                 // an averaged DC-DC converter
+}
+part REF2033 {
+    ...
+    sim reference VBIAS { in = VIN; out = VBIAS; gnd = GND; output_voltage = 1.65V; dropout = 1.67V; }
+}
+```
+
+`sim regulator` is a linear regulator, or with an `efficiency` a DC-DC
+converter as an **averaged** model: its output is the regulated DC level, with
+no switching ripple and no loop dynamics of its own. `sim reference` is the
+same model for a voltage reference, with a `startup_time` instead of a
+`soft_start` and no efficiency. Both act in the operating point, ac, noise,
+transient and dc sweep analyses (loop and pz see them linearised like any
+other model; there a soft-start adds a real pole at `1000 / (2 pi t_ss)` on
+the model's internal node, which no input reaches), as part blocks, bench
+`model`s and `replace`ments. Voltages are taken against `gnd`; `output_voltage` is
+required and its sign is the rail's polarity, and every relation below holds
+in that polarity (a negative regulator's dropout limits how far its output may
+come up to its input from below). The parameters, each optional:
+
+- `dropout`: the output is at most the input less the dropout, `|V(out)| <= |V(in)| - dropout`
+  (no limit without one, so a boost or an inverter declares none). In dropout
+  the output follows the input and the line rejection is 0 dB. The output
+  never takes the wrong polarity.
+- `output_resistance` (load regulation) and `output_impedance_corner`: the
+  output impedance `R (1 + j f / f_z)`, rising 20 dB per decade above the
+  corner, which needs a resistance. The board's output capacitors are then in
+  the circuit with it.
+- `psrr` and `psrr_corner`: line rejection, `V(out)` moves by
+  `(V(in) - V_in0) / PSRR(f)` with `PSRR(f) = PSRR / (1 + j f / f_c)`, the
+  same form as an amplifier's. `V_in0` is the input the bench sets (the DC
+  values of the supplies, DC sources and rail models on the `in` net, as for
+  an amplifier's span; `SIM104` when nothing sets it), so at the nominal
+  input the operating point is the one without a PSRR and a dc sweep of the
+  input shows the line regulation.
+- `output_current_limit`: the output current is clamped to this either way;
+  at the limit the output is a current source. It needs an output resistance;
+  with an `output_impedance_corner` it holds exactly at DC (the clamp acts
+  ahead of the inductance, so a fast transient may pass it briefly).
+- `en` and `enable_threshold` go together (`SIM103`): the model is on while
+  `|V(en) - V(gnd)|` is above the threshold (either polarity: a logic level on
+  an inverting converter, or an enable tied to a negative regulator's input),
+  switching over 10 mV. Off, the reference is 0 V and the model holds its
+  output at 0 V (as an output discharge would); it draws no quiescent current.
+  The `en` terminal draws no current.
+- `soft_start` (`startup_time`): once enabled, the output ramps linearly from
+  0 V to the set point over this time (the reference charges as a
+  capacitor would, with a time constant of a thousandth of the ramp at its
+  end; the ramp is fast by at most 0.1 %); off, it falls with that time
+  constant. At an operating point the model is at its final state, so the ramp
+  acts in transient runs only (listed as inactive elsewhere); a transient run
+  that starts enabled starts at the set point.
+- `quiescent_current`: drawn from `in` to `gnd` while enabled. A linear
+  regulator's input carries the quiescent current plus the current its output
+  sources (a sunk output current returns through `gnd`). With an `efficiency`
+  the input carries `P_out / (efficiency V_in)` plus the quiescent current,
+  `P_out = (V(out) - V(gnd)) I_out`, so input power is output power over
+  efficiency (the input voltage is taken as at least 0.1 V in magnitude).
+- `voltage_noise` and `voltage_noise_corner`: output noise density, white
+  with an optional 1/f corner, in the noise analysis. The model's internal
+  resistors are noiseless.
+
+`I(X.in)`, `I(X.out)` and `I(X.gnd)` read the current into each terminal; the
+three sum to zero. A regulator's `out` counts as set to its `output_voltage`
+(when its `gnd` is the ground) for the rules that read the rails' DC values:
+an amplifier's parameter set per supply and its `psrr` span, and another
+regulator's `psrr` input. An adjustable regulator is modelled at the set
+point its divider gives: the model does not regulate through a feedback pin,
+so a part block suits fixed-output parts (`examples/simulation/impedance_analyzer/parts/power_ref2033aiddcr.copper`)
+and a bench `model` an adjustable one with the board's set point
+(`examples/simulation/impedance_analyzer/benches/startup.copper`).
+`copper_sim::regulator` documents the expansion.
 
 `sim spice { ... }` binds a part to a SPICE subcircuit instead of a built-in
 model ([SPICE subcircuits](#spice-subcircuits)). The `diode` and `switch`
@@ -3163,8 +3316,8 @@ name), subtraction needs spaces: `mag(i) / 15uA - 1`.
 | `2`, `15uA`, `1%`, `4nV/rtHz` | A dimensionless number or a quantity; `%` is dimensionless. |
 | `NAME` | A param (its nominal value) or an earlier `let` (`SIM062`). |
 | `V(node)`, `V(a, b)` | Voltage of a node against ground, or between two nodes. A node is a board net, a bench net or `COMPONENT.PIN` (`SIM039`). |
-| `I(X)`, `I(X.PIN)` | Current into a pin; `I(X)` of a two-terminal component is the current into its first pin (`SIM045`): positive when current flows from the net into the pin, so a resistor carrying current from its first pin to its second reads positive at its first pin and negative at its second. The supply pins of the built-in op-amp model carry no current. |
-| `I(X)`, `I(X.ROLE)` of a replaced component or bench model | The current into a terminal of the model the bench placed: `ROLE` is a role of its kind (`I(J_IN.out)`), and `I(X)` of a two-terminal kind (`source`, `load`, `diode`) is its first role's. The part's own pins are not the model's terminals: `I(J_IN.1)` of a replaced connector is `SIM045`, which names the roles to write instead. The supply pins of an amplifier and a switch's control pins carry no current. |
+| `I(X)`, `I(X.PIN)` | Current into a pin; `I(X)` of a two-terminal component is the current into its first pin (`SIM045`): positive when current flows from the net into the pin, so a resistor carrying current from its first pin to its second reads positive at its first pin and negative at its second. The supply pins of a built-in amplifier carry current only when its block declares `quiescent_current` ([Part `sim` blocks](#part-sim-blocks)); otherwise they read 0. |
+| `I(X)`, `I(X.ROLE)` of a replaced component or bench model | The current into a terminal of the model the bench placed: `ROLE` is a role of its kind (`I(J_IN.out)`), and `I(X)` of a two-terminal kind (`source`, `load`, `diode`) is its first role's. The part's own pins are not the model's terminals: `I(J_IN.1)` of a replaced connector is `SIM045`, which names the roles to write instead. A switch's control pins carry no current, and neither do the `vp` and `vn` roles of an amplifier unless the model declares `quiescent_current` (`SIM045` otherwise). |
 | `I(S)` of a supply | The current supply `S` delivers into its net: positive when it sources current (a loaded positive rail), negative when it sinks it. For a supply simulated as its DC source and for one replaced with a model (then also `I(S.ROLE)`, into a terminal of the model, as above). The ground supply, an ignored supply and one driven by a component have none (`SIM045`). |
 | `a < b`, `<=`, `>`, `>=`, `==`, `!=` | A comparison of two real values of the same units; allowed only as the argument of `upto` and `downto`, as the condition of `if`, and in a limit's `where` (`SIM072`). |
 | `if(a < b, x, y)` | `x` where the comparison holds and `y` where it does not, per sample when the comparison varies over the axis (equality within 1e-9 relative, as in a `where`). `x` and `y` have the same units (`SIM065`); the result is complex or swept when either is. A condition that does not vary evaluates only the branch it chooses; with one that varies, a sample of the branch not chosen there may be infinite or undefined (`if(mag(i) > 1nA, V(OUT) / i, 0ohm)`). |
@@ -3498,7 +3651,9 @@ demand equal to the limit gets 84 % of it. A dc sweep
 ([DC sweep](#dc-sweep)) clips and limits the output current the same way
 (slewing has no effect at DC). The operating point, AC and
 noise analyses use the linear model and list these parameters as inactive.
-The supply pins still carry no current.
+With a `quiescent_current` the supply pins carry the quiescent and the
+output current in every analysis, also while the output clips or is held to
+its current limit; without one they carry none.
 
 **Measurements.** Probes are real and swept over time.
 
@@ -3704,7 +3859,7 @@ bonded to, and a terminal bonded to no pin or to several is an error naming
 it. `replace` swaps in a model on the named nodes; `ignore` leaves the pins
 open. A board supply is an ideal DC voltage source from its net to ground,
 which is a short at AC, unless replaced, ignored or driven by a component.
-The op-amp and differential-amplifier models need `gbw` and `open_loop_gain`; `input_resistance_common`
+The op-amp and differential-amplifier models need `gbw` and `open_loop_gain`; their supply pins carry current with a `quiescent_current` and their outputs see the rails through a `psrr`; `input_resistance_common`
 adds a resistor from each input to ground and `input_offset_current` splits
 into the two inputs (operating point only). Slew rate, output swing,
 output current limit and source waveforms act in tran runs only (swing and
@@ -3742,6 +3897,9 @@ components that form a loop of voltage sources.
 | `SIM099` | loop gains: `loop_gain()` outside `analysis loop`, a margin of a value that is not a dimensionless complex value swept over frequency |
 | `SIM100` | `analysis pz`: its input and output, `stable()` and `damping()` outside it, a measure named `stable` |
 | `SIM101` | `V(...)` and `I(...)` in `analysis loop` or `analysis pz` |
+| `SIM102` | supply current and rejection: `psrr_corner` without a `psrr` (in the block or with a parameter set per supply); when a bench runs, a rail of an amplifier with a `quiescent_current` that has no DC path to ground, a rail a `psrr` is referred to that no supply, DC source or rail model sets |
+| `SIM103` | `regulator` and `reference` blocks: no `output_voltage` or a zero one, `output_impedance_corner` or `output_current_limit` without an `output_resistance` above 0, `psrr_corner` without a `psrr`, `en` without `enable_threshold` or the reverse, an `efficiency` outside 0 to 100 % |
+| `SIM104` | when a bench runs, a `regulator` or `reference` with a `psrr` whose input no supply, DC source or rail model sets |
 
 ## KiCad schematic export
 

@@ -41,8 +41,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              vectors and BENCH.html with the plots (one curve per step, magnitude above phase on a shared logarithmic \
              frequency axis, or a linear time axis for analysis tran; the loop gain's Bode plot for analysis loop; a map \
              and a table of the poles for analysis pz, whose built-in measure stable fails on a pole in the right \
-             half-plane) and the measures table. Exit status 1 when a measure is outside its limits or a bench cannot \
-             be solved, 2 for usage and compile errors"
+             half-plane) and the measures table. Amplifier models whose sim block declares quiescent_current draw \
+             supply current through their supply pins (I() of a supply reads it), and a psrr couples their rails to \
+             their outputs. Rail models (sim regulator and sim reference: set point, dropout, output impedance, line \
+             rejection, current limit, enable and soft-start, quiescent current; a regulator with an efficiency is an \
+             averaged DC-DC converter, without switching ripple) drive rails in every analysis. Exit status 1 when a measure is outside its limits or a bench cannot be solved, 2 for \
+             usage and compile errors"
         );
         crate::help::options(out, "sim");
         return 0;

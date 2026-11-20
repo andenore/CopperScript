@@ -47,7 +47,7 @@ Earlier research, written against the removed Python implementation, is in
 | --- | --- | --- |
 | Analyses | Operating point, AC, noise, transient, DC sweep, loop gain, poles and zeros; `step` (cartesian and zipped), `reference` runs, `ic` and `uic` | `crates/copper-sim`, `crates/copper-simulate` |
 | Statistics | `tolerance`, matched groups, `montecarlo`, `worstcase` | `copper-lang/src/tolerance.rs`, `copper-simulate/src/variation.rs` |
-| Built-in models | `sim opamp`, `diffamp`, `source`, `load`, `diode`, `switch`; op-amp clipping, slew and current limit in transient and DC sweep | `copper-sim/src/models.rs`, `devices.rs` |
+| Built-in models | `sim opamp`, `diffamp`, `source`, `load`, `diode`, `switch`, `regulator`, `reference`; supply current and PSRR; op-amp clipping, slew and current limit in transient and DC sweep | `copper-sim/src/models.rs`, `devices.rs` |
 | Vendor models | `sim spice`: SPICE3, PSpice and LTspice netlists; behavioural sources; Gummel-Poon BJT, JFET, MOSFET level 1 | `crates/copper-spice`, `copper-sim/src/semiconductors.rs`, `behavioral.rs` |
 | Bench language | `bench`, `fixture`/`using`, `supply`, `model`, `replace`, `ignore`, measures with limits and `where`, `upto`/`downto` (with a "never" result), `if()`, windowed reductions, waveforms; several analyses per bench, several noise outputs and `noise()` of a derived quantity, parameter sets per supply, matched groups on model parameters, fixtures using fixtures | `copper-lang/src/bench.rs`, `expression.rs` |
 | Output | Text table, `sim-results.json` (`copperscript-sim/v0.1`), CSV and an HTML page with plots per bench | `copper-simulate/src/results.rs`, `report.rs` |
@@ -255,6 +255,54 @@ analyzer README's "negative real part that AC analysis cannot classify" is
 settled either way.
 
 ### F4. Supply current and rails
+
+Built on 20 November 2026. Diagnostics SIM102 to SIM104.
+
+- `quiescent_current` on `sim opamp` and `diffamp`, opt-in: the supply pins
+  carry the quiescent current and the output current comes from the
+  sourcing rail, in every analysis, so `I()` of a rail is real. A rail
+  without a DC path is SIM102. The quiescent current does not depend on the
+  rail voltage: an unpowered amplifier still draws it.
+- `psrr` and `psrr_corner`, one figure for both rails.
+- A rail with impedance is a `source` with `output_resistance` in place of
+  the supply; the board's decoupling capacitors then act.
+- AC analysis of a circuit with nodes floating at DC still works: those
+  nodes are held only while the bias point is solved.
+- Analyzer bench `SupplyCurrent`: +/-4.5 V rails 51.8 mA idle and at most
+  52.3 mA driving at 1 MHz, confirming the hand estimate. The 3.3 V analog
+  rail is 3.66 mA idle but 5.2 to 6.1 mA at 1 MHz (the ADC drivers into
+  470 pF); the README said 3.7 mA and is corrected.
+- Results that moved: transient measures only, by up to 0.22 % (`Startup`)
+  and more for harmonics near the floor (`Distortion`), within the
+  integration error noted under the weak spots. Every bench keeps its
+  verdict.
+
+- `sim regulator` (roles `in`, `out`, `gnd`, optional `en`): set point,
+  dropout, output impedance with a corner, line rejection with a corner,
+  current limit, enable with soft-start, quiescent current, output noise.
+  With `efficiency` it is an averaged DC-DC converter: input power is
+  output power over efficiency, no switching ripple. `sim reference` is the
+  same model with `startup_time`. An adjustable regulator is modelled at
+  its divider's set point, not through its feedback pin.
+- The analyzer's `Startup` runs on models of the TPS65130, TPS7A4901,
+  TPS7A3001 and REF2033 instead of estimated ramps. The negative rail
+  regulates at 9.3 ms, the positive at 14.3 ms, the mid reference at
+  10.7 ms. The drive buffer input is still 0.18 V over its unpowered rail
+  (limit 0.2 V): the peak is at 50 us, before any rail moves, and still
+  rests on the estimated AD9833 power-up level. New: the ADC drivers'
+  inputs now reach 0.165 V under their rail (limit 0.2 V), up from 0.140 V.
+  All 23 limits pass.
+
+Open: no PSRR or output impedance figures on the analyzer parts (none
+cited), so its rails are stiff; rail noise in the noise benches; converter
+ripple and loop dynamics; the boost's inductor and diode path before it
+switches; quiescent current that falls with the rail (no datasheet figure
+to base it on); small-signal output current at exactly 0 A bias reaches
+neither rail; loop and pz analyses with rail models are untested;
+`copper power-check` models no current, so it neither confirms nor
+contradicts the simulated figures.
+
+Scope as planned:
 
 The op-amp models draw nothing from their supply pins, and benches drive
 rails from ideal sources. Supply current, rail sag and power-supply rejection

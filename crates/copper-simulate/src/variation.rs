@@ -336,7 +336,8 @@ fn nominal_value(context: &StepContext, nominal: &Nominal, params: &Params) -> R
                     let blocks = bench.models(context.design, component);
                     let block = blocks.get(*index).ok_or_else(|| format!("{reference} has no sim block {index}"))?;
                     // A parameter of the block's set for its supply has that set's nominal value.
-                    if let Some(set) = crate::lower::supply_set(bench, context.wiring, params, reference, block)?
+                    if let Some(set) =
+                        crate::lower::supply_set(context.design, bench, context.wiring, params, reference, block)?
                         && let Some(quantity) = set.parameters.get(parameter)
                     {
                         return Ok(value(quantity, params));

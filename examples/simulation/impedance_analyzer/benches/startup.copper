@@ -1,26 +1,51 @@
 // Startup: the front end switched on (ANA_EN rises at t = 0), 2 s in time, with the
 // electrodes in air and in soil (SoilModel at 5 ohm m, 100 ohm m and 1.3 kohm m,
-// relative permittivity 25; air is a 1 Gohm soil with 0.001 pF). The rails are
-// ramps in the order README.md ("Power cycling") documents; their timing is estimated:
-//  - V3V3_ANA through the TPS22918 load switch, CT open: 0 to 3.3 V in 50 us (README.md:
-//    "tens of microseconds, not read");
-//  - VP: the TPS65130 boost's soft-start (about 1 ms, SLVS493E 7.3.5), then the
-//    TPS7A4901 soft-start with 10 nF on NR/SS, 1.4 ms/nF (SBVS121E Eq. 1): 0 V until
-//    1 ms, linear to 4.5 V at 15 ms;
-//  - VN: the inverter's soft-start, then the TPS7A3001 with 10 nF, 0.9 ms/nF (SBVS125D
-//    Eq. 1): 0 V until 1 ms, linear to -4.48 V at 10 ms;
-//  - V_MID: the REF2033 runs from VP; taken as following VP with about 0.35 V of
-//    dropout until it regulates (estimate: its start-up was not read), 0 V until
-//    1 ms, linear to 1.65 V at 7.2 ms;
+// relative permittivity 25; air is a 1 Gohm soil with 0.001 pF). The rails come from
+// models of the board's supply parts (board.copper, "switched analog supply" to
+// "1.65 V mid-supply"), in the order README.md ("Power cycling") documents:
+//  - ANA_EN: a 0 to 3.3 V edge in 1 us at t = 0 (estimate), with the board's 100 kohm
+//    pull-down and 10 pF for the pins on it (estimate);
+//  - TPS65130 (U_PWR) from VSYS, held at 3.7 V (estimate; 3.0 to 4.5 V): two averaged
+//    converters (no switching ripple), the boost to 5.34 V and the inverter to -5.24 V
+//    (board.copper, R_FBP and R_FBN), each enabled by ANA_EN and ramping 0 to its set
+//    point in 1 ms (its soft-start, "about 1 ms", SLVS493E 7.3.5); efficiency 85 % and
+//    an enable threshold of 1.2 V are estimates (not read; the threshold places the
+//    start within the 1 us edge, the efficiency sets only VSYS's current). Not modelled:
+//    U_SW_BST between VSYS and the boost (its rise is tens of microseconds, not read),
+//    and the boost's path through L1 and D1, which puts VSYS less a diode drop on
+//    VPOS_RAW as soon as U_SW_BST closes, before the boost switches;
+//  - the 1 ohm / 10 uF post-filters and the converters' 20 uF output and the LDOs'
+//    4.7 uF input capacitors (board.copper);
+//  - TPS7A4901 (U_LDOP): 4.50 V (1.185 V (1 + 280k / 100k)), EN tied to IN with
+//    VEN(high) 2.1 V, dropout 260 mV (at 100 mA, used at every load), 49 uA ground
+//    current (SBVS121E 6.5), soft-start 1.4 ms/nF with the board's 10 nF on NR/SS
+//    (Eq. 1): 14 ms; its 10 uF output capacitor and 380 kohm divider with 10 nF
+//    feed-forward. The set point is the divider's, so the model is a bench model with
+//    the board's value, not a part block (the built-in model does not regulate through
+//    FB);
+//  - TPS7A3001 (U_LDON): -4.48 V (-1.176 V (1 + 287k / 102k)), EN tied to IN with
+//    VEN(+HI) 1.8 V (SBVS125D 6.5; the enable counts either polarity, and the negative
+//    threshold is assumed to be the same), dropout 325 mV (at 200 mA), soft-start
+//    0.9 ms/nF with 10 nF (Eq. 1): 9 ms; ground current not read; 10 uF output and its
+//    divider;
+//  - REF2033 (U_REF) from VP: its part's sim reference blocks
+//    (parts/power_ref2033aiddcr.copper), VBIAS 1.65 V on V_MID once VP passes 3.32 V,
+//    below that VP less 1.67 V (estimate); 100 nF input, 100 nF and 1 uF on V_MID,
+//    100 nF on VREF (board.copper);
+//  - V3V3_ANA through the TPS22918 load switch, CT open: still an estimated ramp, 0 to
+//    3.3 V in 50 us (README.md: "tens of microseconds, not read"); the TPS63020 behind
+//    it is always on, so no regulator model adds anything there;
 //  - the AD9833 is not yet programmed (firmware rule 3): its output steps with its
 //    supply to the middle of its 38 mV to 0.65 V range, 0.34 V (estimate), at 50 us.
-// The amplifiers clip at their rails less their output swing and slew at their slew
-// rate (parts/analog_*); their input ranges are not in the model, so the bench
-// measures every amplifier input against its rails: the absolute maximum (inputs
-// within 0.2 V of the rails for the ADA4807, Table 5; 0.5 V for the ADA4817) is a
-// limit; the ADA4817's linear common-mode range (+VS - 2.8 V) and the AD8130's
-// (+/-3.8 V at +/-5 V) are reported, with the time after which each input stays
-// inside it for good (`downto`).
+// The regulators' outputs are stiff (no output resistance was read). The amplifiers
+// clip at their rails less their output swing and slew at their slew rate
+// (parts/analog_*); their input ranges are not in the model, so the bench measures
+// every amplifier input against its rails: the absolute maximum (inputs within 0.2 V
+// of the rails for the ADA4807, Table 5; 0.5 V for the ADA4817) is a limit; the
+// ADA4817's linear common-mode range (+VS - 2.8 V) and the AD8130's (+/-3.8 V at +/-5 V)
+// are reported, with the time after which each input stays inside it for good
+// (`downto`). An amplifier draws its quiescent current whatever its rails (also at
+// 0 V); the regulators, which hold their outputs at 0 V while off, absorb it.
 //
 // Settling: the time after which each ADC input stays within 1 mV (about one LSB of
 // the 12-bit ADC on 3.3 V) of its value at 2 s (`settle`), limited to 1 s: the battery
@@ -29,10 +54,81 @@
 // inputs settle to V_MID plus their offsets.
 bench Startup for AnalogFrontEnd using SoilModel {
     supply GROUND { voltage = 0V; net = GND; }
-    model RAIL_3V3: source { out = V3V3_ANA; ref = GND; waveform = pwl { points = 0s, 0V, 50us, 3.3V; }; }
-    model RAIL_P: source { out = VP; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 15ms, 4.5V; }; }
-    model RAIL_N: source { out = VN; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 10ms, -4.48V; }; }
-    model RAIL_MID: source { out = V_MID; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 7.2ms, 1.65V; }; }
+
+    // ANA_EN and VSYS.
+    model MCU_ANA_EN: source { out = ANA_EN; ref = GND; waveform = step { final = 3.3V; rise = 1us; }; }
+    component R_ANA_EN: RESISTOR { value = 100kohm; }
+    component C_ANA_EN: CAPACITOR { value = 10pF; }
+    net ANA_EN { R_ANA_EN.1; C_ANA_EN.1; }
+    model BATTERY: source { out = VSYS; ref = GND; dc = 3.7V; }
+    component C_PWR_INN: CAPACITOR { value = 4.7uF; }
+    component C_SW_BST: CAPACITOR { value = 1uF; }
+    net VSYS { C_PWR_INN.1; C_SW_BST.1; }
+
+    // TPS65130: boost and inverter, averaged.
+    model U_PWR_BOOST: regulator {
+        in = VSYS; out = VPOS_RAW; gnd = GND; en = ANA_EN;
+        output_voltage = 5.34V; soft_start = 1ms; enable_threshold = 1.2V; efficiency = 85%;
+    }
+    model U_PWR_INVERTER: regulator {
+        in = VSYS; out = VNEG_RAW; gnd = GND; en = ANA_EN;
+        output_voltage = -5.24V; soft_start = 1ms; enable_threshold = 1.2V; efficiency = 85%;
+    }
+    component C_POS: CAPACITOR { value = 20uF; }    // C_POS1 + C_POS2
+    component C_NEG: CAPACITOR { value = 20uF; }    // C_NEG1 + C_NEG2
+    component R_PF_P: RESISTOR { value = 1ohm; }
+    component C_PF_P: CAPACITOR { value = 10uF; }
+    component C_LDOP_IN: CAPACITOR { value = 4.7uF; }
+    component R_PF_N: RESISTOR { value = 1ohm; }
+    component C_PF_N: CAPACITOR { value = 10uF; }
+    component C_LDON_IN: CAPACITOR { value = 4.7uF; }
+    net VPOS_RAW { C_POS.1; R_PF_P.1; }
+    net VPOS_F { R_PF_P.2; C_PF_P.1; C_LDOP_IN.1; }
+    net VNEG_RAW { C_NEG.1; R_PF_N.1; }
+    net VNEG_F { R_PF_N.2; C_PF_N.1; C_LDON_IN.1; }
+
+    // The +/-4.5 V LDOs, their output capacitors and feedback dividers.
+    model U_LDOP: regulator {
+        in = VPOS_F; out = VP; gnd = GND; en = VPOS_F;
+        output_voltage = 4.5V; dropout = 0.26V; soft_start = 14ms; enable_threshold = 2.1V;
+        quiescent_current = 49uA;
+    }
+    model U_LDON: regulator {
+        in = VNEG_F; out = VN; gnd = GND; en = VNEG_F;
+        output_voltage = -4.48V; dropout = 0.325V; soft_start = 9ms; enable_threshold = 1.8V;
+    }
+    component C_LDOP_OUT: CAPACITOR { value = 10uF; }
+    component R_LDOP1: RESISTOR { value = 280kohm; }
+    component R_LDOP2: RESISTOR { value = 100kohm; }
+    component C_LDOP_FF: CAPACITOR { value = 10nF; }
+    component C_LDON_OUT: CAPACITOR { value = 10uF; }
+    component R_LDON1: RESISTOR { value = 287kohm; }
+    component R_LDON2: RESISTOR { value = 102kohm; }
+    component C_LDON_FF: CAPACITOR { value = 10nF; }
+    net LDOP_FB { R_LDOP1.2; C_LDOP_FF.2; R_LDOP2.1; }
+    net LDON_FB { R_LDON1.2; C_LDON_FF.2; R_LDON2.1; }
+
+    // The REF2033 from VP: V_MID is its VBIAS.
+    component U_REF: analog.p.REF2033AIDDCR;
+    component C_REF_IN: CAPACITOR { value = 100nF; }
+    component C_REF_VREF: CAPACITOR { value = 100nF; }
+    component C_VMID1: CAPACITOR { value = 100nF; }
+    component C_VMID2: CAPACITOR { value = 1uF; }
+    net REF_3V3 { U_REF.VREF; C_REF_VREF.1; }
+
+    net VP { C_LDOP_OUT.1; R_LDOP1.1; C_LDOP_FF.1; U_REF.VIN; C_REF_IN.1; }
+    net VN { C_LDON_OUT.1; R_LDON1.1; C_LDON_FF.1; }
+    net V_MID { U_REF.VBIAS; C_VMID1.1; C_VMID2.1; }
+    net GND {
+        R_ANA_EN.2; C_ANA_EN.2; C_PWR_INN.2; C_SW_BST.2; C_POS.2; C_NEG.2; C_PF_P.2; C_LDOP_IN.2;
+        C_PF_N.2; C_LDON_IN.2; C_LDOP_OUT.2; R_LDOP2.2; C_LDON_OUT.2; R_LDON2.2;
+        U_REF.GND; C_REF_IN.2; C_REF_VREF.2; C_VMID1.2; C_VMID2.2;
+    }
+
+    // V3V3_ANA through the load switch, and the DDS: estimated ramps. A rail's dc is its
+    // final value: the run starts from the waveforms, but the ADA4807's parameter set per
+    // supply (its quiescent current) is chosen from the dc values.
+    model RAIL_3V3: source { out = V3V3_ANA; ref = GND; dc = 3.3V; waveform = pwl { points = 0s, 0V, 50us, 3.3V; }; }
     model DDS: source {
         out = DDS_OUT; ref = GND; output_resistance = 200ohm;
         waveform = pwl { points = 0s, 0V, 50us, 0.34V; };
@@ -89,6 +185,18 @@ bench Startup for AnalogFrontEnd using SoilModel {
     // AD8130 inputs: the sense buffers' outputs against its common-mode range.
     measure receiver_input_max = max(abs(V(BUF_HP)));
 
-    plot V(VP), V(V_MID), V(V3V3_ANA), V(SNS_HP), V(BUF_HP), V(PUMP), V(DRIVE);
+    // The rails: when each regulates, and how long the drive buffer's input stays above
+    // its unpowered positive rail.
+    measure boost_regulating = cross(V(VPOS_RAW), 5.3V);
+    measure positive_rail_on = cross(V(VP), 0.1V);
+    measure positive_rail_regulating = cross(V(VP), 4.45V);
+    measure negative_rail_on = cross(V(VN), -0.1V);
+    measure negative_rail_regulating = cross(V(VN), -4.43V);
+    measure mid_rail_on = cross(V(V_MID), 0.1V);
+    measure mid_rail_regulating = cross(V(V_MID), 1.64V);
+    measure drive_buffer_input_above_rail_to = downto(V(DRV_IN) < V(VP));
+    measure positive_rail_current_max = max(-I(U_LDOP.out));
+
+    plot V(VPOS_F), V(VP), V(VN), V(V_MID), V(V3V3_ANA), V(DRV_IN), V(SNS_HP), V(BUF_HP), V(PUMP), V(DRIVE);
     plot V(V_MON_1), V(V_MON_100), V(I_MON);
 }

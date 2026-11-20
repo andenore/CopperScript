@@ -70,7 +70,48 @@ pub fn diagnose(c: &Circuit, layout: &Layout, dc: bool, failure: LuError) -> Vec
     causes
 }
 
-fn floating_groups(c: &Circuit, layout: &Layout, dc: bool) -> Vec<SingularCause> {
+/// Per node: whether it is joined to ground by the elements that relate the
+/// voltages of their terminals at DC (the rule of the "no path to ground"
+/// cause; capacitors are open).
+pub fn joined_to_ground_at_dc(c: &Circuit) -> Vec<bool> {
+    let mut uf = joined(c, true);
+    let ground = uf.find(0);
+    (0..c.node_count()).map(|i| uf.find(i) == ground).collect()
+}
+
+/// The unknown nodes that are certainly floating at DC: in a group with no
+/// path to ground ([`joined_to_ground_at_dc`]'s rule) whose nodes no element
+/// touches that could act as a conductance there (a VCCS, CCCS or law
+/// output); only resistors, inductors, voltage sources, capacitors and
+/// independent current sources touch them. The DC matrix of a circuit with
+/// such a node is singular whatever the values.
+pub(crate) fn certainly_floating_at_dc(c: &Circuit, layout: &Layout) -> Vec<NodeId> {
+    let mut uf = joined(c, true);
+    let ground = uf.find(0);
+    let mut uncertain = vec![false; c.node_count()];
+    for e in c.elements() {
+        let conducts_maybe = match e.kind() {
+            ElementKind::Vccs { .. } | ElementKind::Cccs { .. } => true,
+            ElementKind::Law { law, .. } => law.output == crate::behavioral::Output::Current,
+            _ => false,
+        };
+        if conducts_maybe && let Some((a, b)) = e.kind().terminals() {
+            let (ra, rb) = (uf.find(a.index()), uf.find(b.index()));
+            uncertain[ra] = true;
+            uncertain[rb] = true;
+        }
+    }
+    (0..c.node_count())
+        .filter(|&i| layout.node_row[i].is_some())
+        .filter(|&i| {
+            let root = uf.find(i);
+            root != ground && !uncertain[root]
+        })
+        .map(NodeId)
+        .collect()
+}
+
+fn joined(c: &Circuit, dc: bool) -> UnionFind {
     let mut uf = UnionFind::new(c.node_count());
     for e in c.elements() {
         let joins = match e.kind() {
@@ -95,6 +136,11 @@ fn floating_groups(c: &Circuit, layout: &Layout, dc: bool) -> Vec<SingularCause>
             uf.union(a.index(), b.index());
         }
     }
+    uf
+}
+
+fn floating_groups(c: &Circuit, layout: &Layout, dc: bool) -> Vec<SingularCause> {
+    let mut uf = joined(c, dc);
     let ground = uf.find(0);
     let mut groups: Vec<(usize, Vec<String>)> = Vec::new();
     for (i, row) in layout.node_row.iter().enumerate() {

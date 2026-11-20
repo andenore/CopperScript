@@ -53,14 +53,44 @@
 //! in both cases the current of `U.out` is the current the amplifier delivers
 //! into `out`.
 //!
-//! Supply terminals are interned but no element is attached to them: in this
-//! linear model they carry no current. A supply node that nothing else uses
-//! is therefore not an unknown and does not make the matrix singular.
+//! Without a quiescent current or a PSRR, the supply terminals are interned
+//! but no element is attached to them: they carry no current, and a supply
+//! node that nothing else uses is not an unknown and does not make the
+//! matrix singular.
+//!
+//! **Supply current.** With `quiescent_current` `I_q` (zero allowed) the
+//! supply pins carry the amplifier's current: `U.iq`, a DC current source of
+//! `I_q` from `vp` to `vn`; `U.isrc`, a law element from `vp` to ground
+//! carrying `max(I_out, 0)`; and `U.isnk`, from ground to `vn`, carrying
+//! `max(-I_out, 0)`, where `I_out` is the current of `U.out` (what the
+//! amplifier delivers into `out`). The output stage draws `I_out` from the
+//! ground reference and the two laws return it, so the current into
+//! `vp`, `vn` and `out` sums to zero (input bias currents, which flow to
+//! ground, aside): a sourcing output draws `I_q + I_out` from `vp`, a sinking
+//! one returns `I_q + |I_out|` through `vn`. An element whose rail is the
+//! ground node is left out (a single-supply part sinks into ground). The
+//! split at `I_out = 0` has a corner: its small-signal slope is that of the
+//! side the operating point is on (1 for a sourcing output, 0 otherwise).
+//! The laws make the circuit nonlinear (Newton operating point,
+//! linearised AC). The quiescent current does not depend on the rail
+//! voltage, so an amplifier on rails held at 0 V still draws it.
+//!
+//! **Supply rejection.** A finite `PSRR` adds the input-referred error
+//! `(V(vp) - V(vn) - psrr_span) / PSRR(f)`: `U.psr`, a VCCS of `1 / PSRR`
+//! controlled by `V(vp) - V(vn)`, and `U.pso`, a DC current of
+//! `-psrr_span / PSRR`, both into `U#p1` (or, with `psrr_corner` `f_c`, into
+//! `U#ps`, which carries `rps` of 1 ohm in series with `lps` of
+//! `1 / (2 pi f_c)` henry to ground, copied into `U#p1` by `psg`, as for the
+//! CMRR): `PSRR(f) = PSRR / (1 + j f / f_c)`. At `V(vp) - V(vn) = psrr_span`
+//! the error is zero, so the operating point at the nominal supply is the
+//! one without a PSRR. Both rails count alike; the sign is the model's (a
+//! rising span adds a positive offset at `inp`).
 //!
 //! Input bias current (into both input pins, a DC current source from each
 //! input to ground) and input offset voltage (a DC current `V_os * gm` into
 //! the first pole node, which is the same as `V_os` in series with `inp`)
-//! affect the operating point only. Slew rate, output swing and output
+//! affect the operating point only (they flow to ground, not through the
+//! supply pins). Slew rate, output swing and output
 //! current limit act in transient runs only ([`crate::devices`]): the
 //! operating point and AC analyses use the linear model above; the noise
 //! densities and their 1/f corners are used by [`crate::noise`] only.
@@ -79,6 +109,7 @@
 //! Terminals `p`, `n`: a resistor (`L.r`) in parallel with a capacitor
 //! (`L.c`). The macro's current is their sum, from `p` to `n`.
 
+use crate::behavioral::{Control, Expr, Func, Law, Output, UnaryOp};
 use crate::circuit::{Circuit, ElementId, NodeId, SourceValue};
 use crate::complex::Complex;
 use crate::error::SimError;
@@ -129,6 +160,19 @@ pub struct OpampParams {
     pub output_swing_from_negative_rail: Option<f64>,
     /// Largest output current, A (needs `output_resistance > 0`). Transient only.
     pub output_current_limit: Option<f64>,
+    /// Quiescent supply current, A, drawn into `vp` and out of `vn`. Declaring
+    /// it (zero included) makes the supply pins carry current: the quiescent
+    /// current, and the output current from the rail that sources it (see
+    /// the module docs). `None`: the supply pins carry none.
+    pub quiescent_current: Option<f64>,
+    /// Power-supply rejection ratio at low frequency, V/V (linear, not dB);
+    /// `None` is infinite.
+    pub psrr: Option<f64>,
+    /// Frequency above which the PSRR falls 20 dB per decade, Hz; `None` keeps it flat.
+    pub psrr_corner: Option<f64>,
+    /// The supply span `V(vp) - V(vn)` at which the supply-rejection error is
+    /// zero, V: the span the rest of the model's parameters hold at.
+    pub psrr_span: f64,
 }
 
 impl OpampParams {
@@ -156,7 +200,25 @@ impl OpampParams {
             output_swing_from_positive_rail: None,
             output_swing_from_negative_rail: None,
             output_current_limit: None,
+            quiescent_current: None,
+            psrr: None,
+            psrr_corner: None,
+            psrr_span: 0.0,
         }
+    }
+
+    /// The power-supply rejection ratio at `frequency` (V/V), `None` when infinite.
+    pub fn psrr_at(&self, frequency: f64) -> Option<Complex> {
+        let r = self.psrr?;
+        Some(match self.psrr_corner {
+            Some(fc) => Complex::real(r) / Complex::new(1.0, frequency / fc),
+            None => Complex::real(r),
+        })
+    }
+
+    /// Whether the supply pins carry current (a quiescent current is declared).
+    pub fn draws_supply_current(&self) -> bool {
+        self.quiescent_current.is_some()
     }
 
     /// The first (dominant) pole, Hz: `GBW / A0`.
@@ -251,6 +313,21 @@ impl OpampParams {
         if let Some(f) = self.current_noise_corner {
             positive("current_noise_corner", f)?;
         }
+        if let Some(i) = self.quiescent_current {
+            non_negative("quiescent_current", i)?;
+        }
+        if let Some(r) = self.psrr {
+            positive("psrr", r)?;
+        }
+        if let Some(f) = self.psrr_corner {
+            pole("psrr_corner", f)?;
+            if self.psrr.is_none() {
+                return bad("psrr_corner needs a psrr".to_string());
+            }
+        }
+        if !self.psrr_span.is_finite() {
+            return bad(format!("psrr_span must be finite, got {}", self.psrr_span));
+        }
         Ok(())
     }
 }
@@ -264,9 +341,9 @@ pub struct OpampPins {
     pub inn: NodeId,
     /// Output.
     pub out: NodeId,
-    /// Positive supply (no current in the linear model).
+    /// Positive supply (current only with a quiescent current; read with a PSRR).
     pub vp: Option<NodeId>,
-    /// Negative supply (no current in the linear model).
+    /// Negative supply (current only with a quiescent current; read with a PSRR).
     pub vn: Option<NodeId>,
 }
 
@@ -356,6 +433,10 @@ pub enum MacroModel {
     Source(SourceParams),
     /// Built-in load.
     Load(LoadParams),
+    /// Built-in rail model: a linear regulator or an averaged converter ([`crate::regulator`]).
+    Regulator(crate::regulator::RegulatorParams),
+    /// Built-in voltage reference ([`crate::regulator`]).
+    Reference(crate::regulator::RegulatorParams),
     /// Junction diode ([`crate::devices`]).
     Diode(crate::devices::DiodeParams),
     /// Voltage-controlled switch ([`crate::devices`]).
@@ -376,6 +457,8 @@ impl MacroModel {
             MacroModel::Diffamp(_) => "diffamp",
             MacroModel::Source(_) => "source",
             MacroModel::Load(_) => "load",
+            MacroModel::Regulator(_) => "regulator",
+            MacroModel::Reference(_) => "reference",
             MacroModel::Diode(_) => "diode",
             MacroModel::Switch(_) => "switch",
             MacroModel::Bjt(_) => "bjt",
@@ -422,6 +505,10 @@ impl MacroInstance {
     /// The two-terminal current of the instance as `(element, sign)` terms.
     pub fn current_terms(&self) -> Option<&[(ElementId, f64)]> {
         self.current.as_deref()
+    }
+    /// Whether this is an amplifier whose supply pins carry current.
+    pub fn draws_supply_current(&self) -> bool {
+        matches!(&self.model, MacroModel::Opamp(p) | MacroModel::Diffamp(p) if p.draws_supply_current())
     }
 }
 
@@ -507,6 +594,16 @@ impl Circuit {
         params: &OpampParams,
     ) -> Result<usize, SimError> {
         params.validate(name)?;
+        let supplies = match (pins.vp, pins.vn) {
+            (Some(vp), Some(vn)) => Some((vp, vn)),
+            _ => None,
+        };
+        if supplies.is_none() && (params.draws_supply_current() || params.psrr.is_some()) {
+            return Err(SimError::InvalidValue {
+                element: name.to_string(),
+                detail: "quiescent_current and psrr need the supply pins vp and vn".to_string(),
+            });
+        }
         let extra = [feedback.map(|f| f.0), feedback.map(|f| f.1)];
         let terminals = [Some(pins.inp), Some(pins.inn), Some(pins.out), pins.vp, pins.vn];
         for n in terminals.into_iter().chain(extra).flatten() {
@@ -549,6 +646,28 @@ impl Circuit {
         if p.output_resistance > 0.0 {
             parts.push("buf");
             nodes.push("o");
+        }
+        if p.psrr.is_some() {
+            parts.push("psr");
+            if p.psrr_span != 0.0 {
+                parts.push("pso");
+            }
+            if p.psrr_corner.is_some() {
+                parts.extend(["rps", "lps", "psg"]);
+                nodes.extend(["ps", "psl"]);
+            }
+        }
+        let rails = supplies.filter(|_| p.draws_supply_current());
+        if let Some((vp, vn)) = rails {
+            if p.quiescent_current.is_some_and(|iq| iq > 0.0) && vp != vn {
+                parts.push("iq");
+            }
+            if !vp.is_ground() {
+                parts.push("isrc");
+            }
+            if !vn.is_ground() {
+                parts.push("isnk");
+            }
         }
         let g = NodeId::GROUND;
         let mut x = Expansion::begin(self, name, &parts, &nodes)?;
@@ -620,6 +739,34 @@ impl Circuit {
             let id = x.c.vccs(&n, g, target, pins.inn, g, half);
             x.keep(id)?;
         }
+        if let (Some(psrr), Some((vp, vn))) = (p.psrr, supplies) {
+            // Input-referred (V(vp) - V(vn) - psrr_span) / PSRR(f): see the module docs.
+            let target = match p.psrr_corner {
+                Some(fc) => {
+                    let ps = x.node("ps")?;
+                    let psl = x.node("psl")?;
+                    let n = x.part("rps");
+                    let id = x.c.resistor(&n, ps, psl, 1.0);
+                    x.keep(id)?;
+                    let n = x.part("lps");
+                    let id = x.c.inductor(&n, psl, g, 1.0 / (2.0 * PI * fc));
+                    x.keep(id)?;
+                    let n = x.part("psg");
+                    let id = x.c.vccs(&n, g, p1, ps, g, 1.0);
+                    x.keep(id)?;
+                    ps
+                }
+                None => p1,
+            };
+            let n = x.part("psr");
+            let id = x.c.vccs(&n, g, target, vp, vn, 1.0 / psrr);
+            x.keep(id)?;
+            if p.psrr_span != 0.0 {
+                let n = x.part("pso");
+                let id = x.c.current_source(&n, g, target, SourceValue::dc(-p.psrr_span / psrr));
+                x.keep(id)?;
+            }
+        }
         if p.input_offset_voltage != 0.0 {
             let n = x.part("vos");
             let id = x.c.current_source(&n, g, p1, SourceValue::dc(p.input_offset_voltage));
@@ -640,16 +787,40 @@ impl Circuit {
             last = p2;
         }
         let out_name = x.part("out");
-        if p.output_resistance > 0.0 {
+        let out = if p.output_resistance > 0.0 {
             let o = x.node("o")?;
             let n = x.part("buf");
             let id = x.c.vcvs(&n, o, g, last, g, 1.0);
             x.keep(id)?;
             let id = x.c.resistor(&out_name, o, pins.out, p.output_resistance);
-            x.keep(id)?;
+            x.keep(id)?
         } else {
             let id = x.c.vcvs(&out_name, g, pins.out, last, g, -1.0);
-            x.keep(id)?;
+            x.keep(id)?
+        };
+        if let Some((vp, vn)) = rails {
+            // Supply current: the quiescent current from vp to vn, and the
+            // current of `U.out` (what the amplifier delivers into `out`) from
+            // the rail that sources it, so that no current leaves the model
+            // through its ground reference.
+            if let Some(iq) = p.quiescent_current.filter(|iq| *iq > 0.0 && vp != vn) {
+                let n = x.part("iq");
+                let id = x.c.current_source(&n, vp, vn, SourceValue::dc(iq));
+                x.keep(id)?;
+            }
+            let delivered = Expr::Var(0);
+            let law = |value: Expr| Law::expression(Output::Current, vec![Control::Current(out)], value);
+            if !vp.is_ground() {
+                let n = x.part("isrc");
+                let id = x.c.law(&n, vp, g, law(Expr::Call(Func::Uramp, vec![delivered.clone()])));
+                x.keep(id)?;
+            }
+            if !vn.is_ground() {
+                let n = x.part("isnk");
+                let sunk = Expr::Unary(UnaryOp::Neg, Box::new(delivered));
+                let id = x.c.law(&n, g, vn, law(Expr::Call(Func::Uramp, vec![sunk])));
+                x.keep(id)?;
+            }
         }
         let mut terminals = vec![("inp", pins.inp), ("inn", pins.inn), ("out", pins.out)];
         if let Some(vp) = pins.vp {

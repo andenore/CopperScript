@@ -18,7 +18,8 @@
 //   transimpedance amplifier U_TIA (20 kohm, LC at V_MID). Each drives its ADC input
 //   through 49.9 ohm into 470 pF (anti-alias pole 6.8 MHz).
 // Supply current, typical / maximum: +/-4.5 V rails 51.8 / 56.9 mA each, V3V3_ANA
-// 3.7 / 4.0 mA (../README.md, "Supply current"). Coupling time constants are at most
+// 3.7 / 4.0 mA idle; simulated with typical parts while driving 1 MHz, up to 52.3 mA
+// and 6.1 mA (../README.md, "Supply current"; benches/supply_current.copper). Coupling time constants are at most
 // 155 ms (4.7 nF x 33 Mohm), so a reading is valid about 0.8 s after the rails and
 // V_MID come up (../README.md, "Power cycling").
 module AnalogFrontEnd {

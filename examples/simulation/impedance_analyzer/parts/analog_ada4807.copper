@@ -40,7 +40,12 @@
 // the closed-loop output impedance). Transient limits: the slew rate is the +/-5 V
 // rising figure and the swing the +/-5 V minimum (Table 2) for every instance; the
 // four 3.3 V instances would slew at 118 V/us rising (Table 4) and swing to 0.04 V of
-// their rails, which one part definition cannot hold.
+// their rails (not yet in the parameter sets below). Supply current: the typical
+// quiescent current per amplifier, 1.0 mA at +/-5 V (Table 2) and 0.915 mA at 3 V
+// (Table 4), one parameter set per supply, so the +/-4.5 V instances take the first and
+// the 3.3 V ones the second; the output current comes from the rail that sources it
+// (copper sim's supply-current model). No PSRR is given here: the data sheet's was
+// not read.
 // Footprint: KiCad Package_TO_SOT_SMD:SOT-23-6.
 part ADA4807_1ARJZ {
     category = "amplifier.opamp";
@@ -80,5 +85,7 @@ part ADA4807_1ARJZ {
         slew_rate = 225V/us;                  // Table 2, rising
         output_swing_from_positive_rail = 0.08V;   // Table 2, minimum, RL = 1 kohm
         output_swing_from_negative_rail = 0.1V;    // Table 2, minimum, RL = 1 kohm
+        supply 3V { quiescent_current = 0.915mA; }  // Table 4, typical
+        supply 10V { quiescent_current = 1.0mA; }   // Table 2 (+/-5 V), typical
     }
 }

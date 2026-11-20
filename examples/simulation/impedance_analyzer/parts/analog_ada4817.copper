@@ -39,7 +39,9 @@
 // the figure lies above the fit: 60 against 36 nV/rtHz at 100 Hz). The current noise
 // has no 1/f corner in the data sheet (FET input); none is modelled. Transient limits
 // from Table 1: slew rate 870 V/us typical, swing the minimum with RL = 1 kohm
-// (VS - 1.1 V), output current 40 mA (the linear figure).
+// (VS - 1.1 V), output current 40 mA (the linear figure). Supply current: 19 mA typical
+// per amplifier (Table 1, +/-5 V; taken at the board's +/-4.5 V, where it was not
+// read), the output current from the rail that sources it. No PSRR: not read.
 // The FB pin is the output: the board always puts FB on its OUT net, so the sim
 // block leaves FB unmodelled. Footprint: KiCad
 // Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm (unverified against the RD-8-1
@@ -84,5 +86,6 @@ part ADA4817_1ARDZ {
         output_resistance = 10ohm;            // derived from Figure 28
         output_swing_from_rail = 1.1V;        // Table 1, minimum, RL = 1 kohm
         output_current_limit = 40mA;          // Table 1, linear output current
+        quiescent_current = 19mA;             // Table 1, typical, +/-5 V
     }
 }

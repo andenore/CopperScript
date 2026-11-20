@@ -1067,6 +1067,8 @@ struct Context<'a> {
     nets: &'a [BenchNet],
     /// The model kind of each replacement (by target) and bench model (by name), for `I(...)`.
     model_kinds: &'a [(String, SimKind)],
+    /// The placed amplifier models that declare `quiescent_current`: their supply terminals carry current.
+    supplied: &'a [String],
     /// Every supply, for `I(SUPPLY)`.
     supplies: &'a [SimSupply],
 }
@@ -1240,8 +1242,13 @@ impl Context<'_> {
         let roles = kind.roles();
         // The terminals the lowering gives currents (`copper-simulate`, `lower`).
         let carrying: Vec<&str> = match kind {
+            SimKind::Opamp | SimKind::Diffamp if self.supplied.iter().any(|name| name == reference) => {
+                vec!["inp", "inn", "out", "vp", "vn"]
+            }
             SimKind::Opamp | SimKind::Diffamp => vec!["inp", "inn", "out"],
             SimKind::Switch => vec!["a", "b"],
+            // A rail model's enable draws no current.
+            SimKind::Regulator | SimKind::Reference => vec!["in", "out", "gnd"],
             _ => roles.to_vec(),
         };
         let listed = carrying.join(", ");
@@ -1258,7 +1265,7 @@ impl Context<'_> {
                 location,
             )),
             Some(role) if carrying.contains(&role) => Ok((reference.to_owned(), role.to_owned())),
-            Some(role) if roles.contains(&role) => Err(error(
+            Some(role) if roles.contains(&role) || kind.optional_roles().contains(&role) => Err(error(
                 "SIM045",
                 format!(
                     "the {} terminal of the {} model of {} carries no current in this model; I(...) reads {listed}",
@@ -2068,6 +2075,19 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             model_kinds.push((item.name.clone(), kind));
         }
     }
+    let declares_supply_current = |entries: &[SimEntry]| entries.iter().any(|entry| entry.key == "quiescent_current");
+    let mut supplied: Vec<String> = replace_declarations
+        .iter()
+        .filter(|item| declares_supply_current(&item.entries))
+        .map(|item| item.target.clone())
+        .collect();
+    for declaration in &document.declarations {
+        if let Declaration::Bench(BenchStatement::Model(item)) = declaration
+            && declares_supply_current(&item.entries)
+        {
+            supplied.push(item.name.clone());
+        }
+    }
     let context = Context {
         view: &view,
         library: &library,
@@ -2075,6 +2095,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
         bench_components: &bench_components,
         nets: &nets,
         model_kinds: &model_kinds,
+        supplied: &supplied,
         supplies: &supplies,
     };
 

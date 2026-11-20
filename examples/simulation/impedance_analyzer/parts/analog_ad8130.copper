@@ -35,7 +35,9 @@
 // Transient limits: slew rate the typical 1090 V/us; output swing 1.0 V from each
 // rail, the +/-4.0 V minimum at +/-5 V with RL = 1 kohm (Table 2) taken as headroom
 // that holds at the board's +/-4.5 V (estimate: the data sheet gives the swing at
-// +/-5 V and +/-12 V only); output current 40 mA (Table 2).
+// +/-5 V and +/-12 V only); output current 40 mA (Table 2). Supply current: 10.8 mA
+// typical (Table 2, +/-5 V; taken at +/-4.5 V, where it was not read), the output current
+// from the rail that sources it. No PSRR: not read.
 // Footprint: KiCad Package_SO:SOIC-8_3.9x4.9mm_P1.27mm.
 part AD8130ARZ {
     category = "amplifier.differential_receiver";
@@ -78,5 +80,6 @@ part AD8130ARZ {
         output_resistance = 25ohm;            // derived from Figure 76
         output_swing_from_rail = 1V;          // Table 2 at +/-5 V, RL = 1 kohm; estimate at +/-4.5 V
         output_current_limit = 40mA;          // Table 2
+        quiescent_current = 10.8mA;           // Table 2, typical, +/-5 V
     }
 }

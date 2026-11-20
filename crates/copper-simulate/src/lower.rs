@@ -54,8 +54,18 @@
 //! convention: positive into `a`) at the first pin and its negative at the
 //! second. For a macro model it is the signed sum of the currents of the
 //! model's elements attached to that pin's role, as the expansion in
-//! `copper_sim::models` defines them; the op-amp's supply pins carry no
-//! current in this linear model. `I(S)` of a supply is the current it
+//! `copper_sim::models` defines them; an amplifier's supply pins carry
+//! current only when its block declares `quiescent_current` (the quiescent
+//! current and the output current through the rail that sources it), and a
+//! rail of such an amplifier with no DC path to ground is `SIM102`. A `psrr`
+//! is referred to the rails' DC span as the bench sets them, without a dc
+//! sweep's override ([`node_dc`]). A `regulator` or `reference` adds its
+//! terminals `in`, `out`, `gnd` (and `en`, which draws no current) as
+//! `copper_sim::regulator` defines them: `I(X.in)` is its input current,
+//! `I(X.out)` the negative of what it delivers; its `psrr` is referred to its
+//! input's DC value as the bench sets it (`SIM104` when nothing sets it), and a
+//! rail model's `out` counts as set to its `output_voltage` for that rule and
+//! for parameter sets per supply. `I(S)` of a supply is the current it
 //! delivers into its net (pin [`SUPPLY_NET`] of `supply S`): positive when it
 //! sources current, the negative of its source's current from plus to minus.
 
@@ -67,7 +77,10 @@ use copper_lang::compiler::Design;
 use copper_lang::expression::Node;
 use copper_lang::model::{FlatElectricalView, PartDefinition};
 use copper_lang::simulation::{PartSimModel, SimKind, SimQuantity, SimSpec, SourceOutput, SupplySet};
-use copper_sim::{Circuit, DiffampPins, LoadParams, NodeId, OpampParams, OpampPins, SourceParams, SourceValue};
+use copper_sim::{
+    Circuit, DiffampPins, LoadParams, NodeId, OpampParams, OpampPins, RegulatorParams, RegulatorPins, SourceParams,
+    SourceValue,
+};
 use copper_units::Quantity;
 use indexmap::IndexMap;
 
@@ -269,6 +282,8 @@ type RoleCurrents = (String, Vec<(String, f64)>);
 
 struct Builder<'a> {
     circuit: Circuit,
+    design: &'a Design,
+    bench: &'a Bench,
     wiring: &'a Wiring,
     params: &'a Params,
     /// The bench runs `analysis tran`: op-amp limits and waveforms are active.
@@ -304,6 +319,50 @@ impl Builder<'_> {
 
     fn parameter(&self, spec: &SimSpec, key: &str) -> Option<f64> {
         spec.parameters.get(key).map(|quantity| self.value(quantity))
+    }
+
+    /// The supply span `V(vp) - V(vn)` an amplifier's supply rejection is
+    /// referred to: the rails' DC values as the bench sets them ([`node_dc`]),
+    /// a dc sweep's override left out, so the rejection acts on the swept
+    /// deviation (`SIM102` when no supply, DC source or rail model sets a rail).
+    fn nominal_span(&self, owner: &str, nodes: &IndexMap<String, NodeId>) -> Result<f64, String> {
+        let rail = |role: &str| -> Result<f64, String> {
+            self.nominal_dc(owner, nodes, role).map_err(|name| {
+                format!(
+                    "SIM102: {owner}: psrr refers the supply rejection to the supply span, but the voltage of its {role} pin (net {}) is set by no supply, DC source or rail model of the bench; supply that rail from a supply, a source with a dc value or a regulator",
+                    repr(&name)
+                )
+            })
+        };
+        Ok(rail("vp")? - rail("vn")?)
+    }
+
+    /// The input `V(in) - V(gnd)` a rail model's line rejection is referred
+    /// to, as [`Builder::nominal_span`] reads the rails (`SIM104`).
+    fn nominal_input(&self, owner: &str, nodes: &IndexMap<String, NodeId>) -> Result<f64, String> {
+        let pin = |role: &str| -> Result<f64, String> {
+            self.nominal_dc(owner, nodes, role).map_err(|name| {
+                format!(
+                    "SIM104: {owner}: psrr refers the line rejection to the nominal input, but the voltage of its {role} pin (net {}) is set by no supply, DC source or rail model of the bench; drive it from one",
+                    repr(&name)
+                )
+            })
+        };
+        Ok(pin("in")? - pin("gnd")?)
+    }
+
+    /// The DC voltage the bench sets on the node of `role` ([`node_dc`]),
+    /// without a dc sweep's override; the node's name when nothing sets it.
+    fn nominal_dc(&self, owner: &str, nodes: &IndexMap<String, NodeId>, role: &str) -> Result<f64, String> {
+        let nominal: Params = self
+            .params
+            .iter()
+            .filter(|(key, _)| !(key.starts_with('~') && (key.ends_with(".voltage") || key.ends_with(".dc"))))
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+        let Some(node) = nodes.get(role) else { return Err(format!("{owner}.{role}")) };
+        let name = self.circuit.node_name(*node);
+        node_dc(self.design, self.bench, self.wiring, &nominal, name).ok_or_else(|| name.to_owned())
     }
 
     /// Add a macro model of `spec` named `instance` on `nodes` (role -> node).
@@ -355,6 +414,18 @@ impl Builder<'_> {
                 params.output_swing_from_positive_rail = get("output_swing_from_positive_rail");
                 params.output_swing_from_negative_rail = get("output_swing_from_negative_rail");
                 params.output_current_limit = get("output_current_limit");
+                params.quiescent_current = get("quiescent_current");
+                params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
+                params.psrr_corner = get("psrr_corner");
+                if params.psrr_corner.is_some() && params.psrr.is_none() {
+                    return Err(format!(
+                        "SIM102: {owner}: psrr_corner needs a psrr in the sim {} block",
+                        spec.kind.name()
+                    ));
+                }
+                if params.psrr.is_some() {
+                    params.psrr_span = self.nominal_span(owner, nodes)?;
+                }
                 for key in [
                     "slew_rate",
                     "voltage_noise",
@@ -425,8 +496,10 @@ impl Builder<'_> {
                         ]),
                     ),
                     ("out".to_owned(), present(&[("out", -1.0)])),
-                    ("vp".to_owned(), Vec::new()),
-                    ("vn".to_owned(), Vec::new()),
+                    // With a quiescent current: into vp the quiescent and the sourced current,
+                    // out of vn the quiescent and the sunk current (`copper_sim::models`).
+                    ("vp".to_owned(), present(&[("iq", 1.0), ("isrc", 1.0)])),
+                    ("vn".to_owned(), present(&[("iq", -1.0), ("isnk", -1.0)])),
                     // The feedback pair of a differential amplifier has no input model.
                     ("ref".to_owned(), Vec::new()),
                     ("fb".to_owned(), Vec::new()),
@@ -462,6 +535,56 @@ impl Builder<'_> {
                     ref_terms.push((name, -1.0));
                 }
                 vec![("out".to_owned(), out_terms), ("ref".to_owned(), ref_terms)]
+            }
+            SimKind::Regulator | SimKind::Reference => {
+                let reference = spec.kind == SimKind::Reference;
+                let get = |key: &str| self.parameter(spec, key);
+                let Some(set_point) = get("output_voltage") else {
+                    return Err(format!("SIM103: {owner}: the {} model needs an output_voltage", spec.kind.name()));
+                };
+                let start_key = if reference { "startup_time" } else { "soft_start" };
+                let mut params = RegulatorParams::new(set_point);
+                params.dropout = get("dropout");
+                params.output_resistance = get("output_resistance").unwrap_or(0.0);
+                params.output_impedance_corner = get("output_impedance_corner");
+                params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
+                params.psrr_corner = get("psrr_corner");
+                params.output_current_limit = get("output_current_limit");
+                params.soft_start = get(start_key);
+                params.enable_threshold = get("enable_threshold");
+                params.quiescent_current = get("quiescent_current").unwrap_or(0.0);
+                params.efficiency = get("efficiency");
+                params.voltage_noise = get("voltage_noise");
+                params.voltage_noise_corner = get("voltage_noise_corner");
+                if params.psrr.is_some() {
+                    params.psrr_input = self.nominal_input(owner, nodes)?;
+                }
+                // The ramp acts in a transient run; elsewhere the model is at its final state.
+                if !self.transient && spec.parameters.contains_key(start_key) {
+                    inactive.push(start_key.to_owned());
+                }
+                for key in ["voltage_noise", "voltage_noise_corner"] {
+                    if spec.parameters.contains_key(key) {
+                        inactive.push(key.to_owned());
+                    }
+                }
+                let pins = RegulatorPins {
+                    input: node("in")?,
+                    out: node("out")?,
+                    gnd: node("gnd")?,
+                    en: nodes.get("en").copied(),
+                };
+                self.circuit.regulator(instance, pins, &params, reference).map_err(fail)?;
+                // `out` delivers through its output resistance, or straight from the command.
+                let delivering =
+                    if self.circuit.find_element(&format!("{instance}.out")).is_some() { "out" } else { "cmd" };
+                let named = |part: &str| format!("{instance}.{part}");
+                vec![
+                    ("in".to_owned(), vec![(named("iin"), 1.0)]),
+                    ("out".to_owned(), vec![(named(delivering), -1.0)]),
+                    ("gnd".to_owned(), vec![(named("cmd"), 1.0), (named("iin"), -1.0)]),
+                    ("en".to_owned(), Vec::new()),
+                ]
             }
             SimKind::Load => {
                 let params = LoadParams {
@@ -581,14 +704,19 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
         for node in [&pin, &net] {
             lowered.members.entry(node.clone()).or_default().push(LOOP_PROBE.to_owned());
         }
+        check_supplied_rails(&lowered)?;
         return Ok(lowered);
     }
-    lower_wired(design, bench, wiring, params)
+    let lowered = lower_wired(design, bench, wiring, params)?;
+    check_supplied_rails(&lowered)?;
+    Ok(lowered)
 }
 
 fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Result<Lowered, String> {
     let mut b = Builder {
         circuit: Circuit::with_ground(wiring.ground()),
+        design,
+        bench,
         wiring,
         params,
         transient: matches!(bench.analysis, copper_lang::bench::Analysis::Tran(_)),
@@ -670,7 +798,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
                     for (role, pin) in &block.pins {
                         nodes.insert(role.clone(), b.pin(reference, pin));
                     }
-                    let set = supply_set(bench, wiring, b.params, reference, block)?;
+                    let set = supply_set(design, bench, wiring, b.params, reference, block)?;
                     let spec = match set {
                         Some(set) => {
                             let span = set.span.to_string();
@@ -784,13 +912,44 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
     })
 }
 
-/// The DC voltage of solver node `node` as the bench sets it, when a supply
-/// or an ideal DC source sets it: the ground, a supply simulated as its DC
-/// source, a supply replaced with a voltage source to ground, or a bench
-/// model or replaced component that is a voltage source to ground (its `dc`).
-pub fn node_dc(bench: &Bench, wiring: &Wiring, params: &Params, node: &str) -> Option<f64> {
+/// An amplifier that draws supply current needs a DC path from each of its
+/// rails to ground (a supply, a source, a resistor to one); a rail with none
+/// would make the circuit singular. `SIM102`, naming the net and its pins.
+fn check_supplied_rails(b: &Lowered) -> Result<(), String> {
+    let c = &b.circuit;
+    if !c.macros().iter().any(|m| m.draws_supply_current()) {
+        return Ok(());
+    }
+    let grounded = copper_sim::diagnose::joined_to_ground_at_dc(c);
+    for m in c.macros().iter().filter(|m| m.draws_supply_current()) {
+        for (role, node) in m.terminals().iter().filter(|(role, _)| matches!(*role, "vp" | "vn")) {
+            if grounded[node.index()] {
+                continue;
+            }
+            let name = c.node_name(*node);
+            let pins = b.members.get(name).map(|members| format!(" ({})", members.join(", "))).unwrap_or_default();
+            let owner = b.owners.get(m.name()).cloned().unwrap_or_else(|| m.name().to_owned());
+            return Err(format!(
+                "SIM102: {owner}: its model draws supply current through its {role} pin, but net {}{pins} has no DC path to ground: no supply or source sets that rail (capacitors are open at DC); supply it, or leave quiescent_current out",
+                repr(name)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The DC voltage of solver node `node` as the bench sets it, when a supply,
+/// an ideal DC source or a rail model sets it: the ground, a supply simulated
+/// as its DC source, a supply replaced with a voltage source to ground, a
+/// bench model or replaced component that is a voltage source to ground (its
+/// `dc`), or the `out` of a `regulator` or `reference` whose `gnd` is the
+/// ground (its `output_voltage`: the set point, not the loaded or ramped value).
+pub fn node_dc(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params, node: &str) -> Option<f64> {
     if node == wiring.ground() {
         return Some(0.0);
+    }
+    if let Some(volts) = rail_model_dc(design, bench, wiring, params, node) {
+        return Some(volts);
     }
     let source_dc = |instance: &str, spec: &SimSpec, nodes: &IndexMap<String, Node>| -> Option<f64> {
         let voltage =
@@ -832,11 +991,43 @@ pub fn node_dc(bench: &Bench, wiring: &Wiring, params: &Params, node: &str) -> O
     None
 }
 
+/// The set point of a `regulator` or `reference` (a bench model, a
+/// replacement or a part block) whose `out` is `node` and whose `gnd` is the ground.
+fn rail_model_dc(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params, node: &str) -> Option<f64> {
+    let rail = |spec: &SimSpec| matches!(spec.kind, SimKind::Regulator | SimKind::Reference);
+    let set_point = |spec: &SimSpec| spec.parameters.get("output_voltage").map(|q| value(q, params));
+    let placed = |spec: &SimSpec, nodes: &IndexMap<String, Node>| -> Option<f64> {
+        let (out, gnd) = (nodes.get("out")?, nodes.get("gnd")?);
+        (rail(spec) && wiring.node(out) == node && wiring.node(gnd) == wiring.ground()).then(|| set_point(spec))?
+    };
+    for model in &bench.models {
+        if let Some(volts) = placed(&model.spec, &model.nodes) {
+            return Some(volts);
+        }
+    }
+    for replacement in &bench.replacements {
+        if let Some(volts) = placed(&replacement.spec, &replacement.nodes) {
+            return Some(volts);
+        }
+    }
+    for component in bench.components.iter().filter(|component| matches!(component.treatment, Treatment::PartModel)) {
+        for block in bench.models(design, component).iter().filter(|block| rail(&block.spec)) {
+            let (Some(out), Some(gnd)) = (block.pins.get("out"), block.pins.get("gnd")) else { continue };
+            let on = |pin: &str| wiring.pin_node(&component.reference, pin);
+            if on(out) == node && on(gnd) == wiring.ground() {
+                return set_point(&block.spec);
+            }
+        }
+    }
+    None
+}
+
 /// The parameter set per supply a part block of component `reference` runs
 /// with: the set whose span is nearest `V(vp) - V(vn)`, `None` when the block
 /// declares no sets. An error when the voltage of a supply pin is not set by
-/// a supply or a DC source of the bench.
+/// a supply, a DC source or a rail model of the bench.
 pub fn supply_set<'b>(
+    design: &Design,
     bench: &Bench,
     wiring: &Wiring,
     params: &Params,
@@ -849,9 +1040,9 @@ pub fn supply_set<'b>(
     let rail = |role: &str| -> Result<f64, String> {
         let pin = block.pins.get(role).ok_or_else(|| format!("{reference}: the model has no {role} role"))?;
         let node = wiring.pin_node(reference, pin);
-        node_dc(bench, wiring, params, &node).ok_or_else(|| {
+        node_dc(design, bench, wiring, params, &node).ok_or_else(|| {
             format!(
-                "{reference}: its sim block has parameter sets per supply, but the voltage of its {role} pin {pin} (net {}) is set by no supply or DC source of the bench, so the set cannot be chosen",
+                "{reference}: its sim block has parameter sets per supply, but the voltage of its {role} pin {pin} (net {}) is set by no supply, DC source or rail model of the bench, so the set cannot be chosen",
                 repr(&node)
             )
         })

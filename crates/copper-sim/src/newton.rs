@@ -62,6 +62,9 @@ use std::f64::consts::PI;
 pub const CLAMP_CONDUCTANCE: f64 = 1e3;
 /// Width of the clamp's quadratic knee, V.
 pub const CLAMP_KNEE: f64 = 0.01;
+/// The resistance that holds a node floating at DC to ground while the bias
+/// of a small-signal analysis is solved ([`linearized_at_point`]), ohm.
+const HOLD_OHMS: f64 = 1.0;
 const RELTOL: f64 = 1e-6;
 const VNTOL: f64 = 1e-9;
 const ABSTOL: f64 = 1e-12;
@@ -185,6 +188,7 @@ impl Model {
                 _ => {}
             }
         }
+        check_supplied_rails(c)?;
         if opamp_limits {
             for m in c.macros() {
                 let (MacroModel::Opamp(p) | MacroModel::Diffamp(p)) = m.model() else { continue };
@@ -280,6 +284,32 @@ impl Model {
             Unknown::Branch(e) => (None, Some(c.elements()[e].name().to_string())),
         }
     }
+}
+
+/// An amplifier whose supply pins carry current ([`crate::models`]) needs a
+/// DC path from each rail to ground; without one the matrix is singular, and
+/// with law elements in the circuit that would surface as a convergence
+/// failure. Named here instead.
+fn check_supplied_rails(c: &Circuit) -> Result<(), SimError> {
+    if !c.macros().iter().any(|m| m.draws_supply_current()) {
+        return Ok(());
+    }
+    let grounded = crate::diagnose::joined_to_ground_at_dc(c);
+    for m in c.macros().iter().filter(|m| m.draws_supply_current()) {
+        for (role, node) in m.terminals().iter().filter(|(role, _)| matches!(*role, "vp" | "vn")) {
+            if !grounded[node.index()] {
+                return Err(SimError::InvalidValue {
+                    element: m.name().to_string(),
+                    detail: format!(
+                        "its supply current flows through its {role} pin, but node {:?} has no DC path to ground \
+                         (no supply or source sets the rail; capacitors are open at DC)",
+                        c.node_name(*node)
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// [`Model::varies`] and [`Model::needed`] of `c` with `roles`.
@@ -1244,7 +1274,25 @@ pub(crate) fn linearized(c: &Circuit) -> Result<Circuit, SimError> {
 pub(crate) fn linearized_at_point(c: &Circuit) -> Result<(Circuit, Vec<f64>), SimError> {
     let m = Model::new(c, false)?;
     let mut solver = Solver::default();
-    let point = dc_point(&m, c, &mut solver, None, AnalysisPoint::OperatingPoint)?;
+    // Nodes that are certainly floating at DC (an electrode reached through
+    // capacitors only) have no operating point, but a linear circuit's AC
+    // analysis needs none. The bias the nonlinear elements are linearised at
+    // is solved with each such node held to ground through `HOLD_OHMS`: no
+    // DC current can flow between it and the rest of the circuit, so the
+    // other nodes and every element outside the floating groups solve as
+    // without the holds. The small-signal circuit itself has no holds.
+    let floating = crate::diagnose::certainly_floating_at_dc(c, &m.layout);
+    let point = if floating.is_empty() {
+        dc_point(&m, c, &mut solver, None, AnalysisPoint::OperatingPoint)?
+    } else {
+        let mut held = c.clone();
+        for node in floating {
+            held.resistor(&format!("hold {} at DC", c.node_name(node)), node, NodeId::GROUND, HOLD_OHMS)?;
+        }
+        let mh = Model::new(&held, false)?;
+        debug_assert_eq!(mh.layout.unknowns, m.layout.unknowns, "holds add no unknowns");
+        dc_point(&mh, &held, &mut solver, None, AnalysisPoint::OperatingPoint)?
+    };
     let mut out = c.clone();
     let mut bias = vec![0.0; c.elements().len()];
     for (i, e) in c.elements().iter().enumerate() {

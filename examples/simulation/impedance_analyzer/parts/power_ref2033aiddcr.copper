@@ -26,4 +26,30 @@ part REF2033AIDDCR {
     pin EN { number = "3"; domains = "digital"; directions = "input"; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
     pin VIN { number = "4"; domains = "power"; directions = "input"; voltage_min = 3.32V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
     pin VREF { number = "5"; domains = "power,analog"; directions = "output"; }
+
+    // Simulation, one reference per output, both from VIN (benches/startup.copper):
+    // set points 3.3 V and 1.65 V (Section 4); VIN >= VREF + 0.02 V to regulate (Section
+    // 6.3, no load), so a dropout of 0.02 V for VREF and of 1.67 V for VBIAS (VREF / 2
+    // needs VREF in regulation). Below that each output follows VIN less its dropout: an
+    // estimate, how the part's outputs fall below VIN = 3.32 V was not read. The 360 uA
+    // typical supply current (Section 6.5) is the whole part's, carried by the VREF unit.
+    // Noise 0.25 ppm/sqrt(Hz) at 100 Hz (Section 6.5) is 0.83 uV/sqrt(Hz) on VREF, taken
+    // as white (an estimate above and below 100 Hz); none is declared for VBIAS (not read
+    // for it). EN is read against VIN (on when EN >= VIN - 0.7 V), which the model's enable
+    // does not do; on the board it is tied to VIN, so it is unmodelled and the part always
+    // on. No output resistance, current limit or start-up time was read: both outputs are
+    // stiff and follow VIN at once.
+    sim reference VREF {
+        in = VIN; out = VREF; gnd = GND;
+        unmodelled = EN;
+        output_voltage = 3.3V;
+        dropout = 0.02V;
+        quiescent_current = 360uA;
+        voltage_noise = 0.825uV/rtHz;
+    }
+    sim reference VBIAS {
+        in = VIN; out = VBIAS; gnd = GND;
+        output_voltage = 1.65V;
+        dropout = 1.67V;
+    }
 }

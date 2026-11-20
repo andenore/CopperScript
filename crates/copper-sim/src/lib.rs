@@ -9,10 +9,11 @@
 //! | Module | Contents |
 //! | --- | --- |
 //! | [`circuit`] | named nodes with a designated ground, the flat element list (R, C, L, coupling, independent sources with DC value and AC phasor, VCVS, VCCS, CCCS, CCVS), sign conventions |
-//! | [`models`] | built-in macro models expanded into primitives: `opamp` (finite gain, GBW, optional second pole, finite CMRR with an optional corner, input capacitance and resistance, output resistance), `diffamp` (the same with a second, feedback input pair), `source` (Thevenin or Norton), `load` (R parallel C) |
+//! | [`models`] | built-in macro models expanded into primitives: `opamp` (finite gain, GBW, optional second pole, finite CMRR and PSRR with optional corners, input capacitance and resistance, output resistance, supply current: quiescent plus the output current through the rail that sources it), `diffamp` (the same with a second, feedback input pair), `source` (Thevenin or Norton), `load` (R parallel C) |
 //! | [`mna`] | modified nodal analysis: unknowns, stamps, element currents |
 //! | [`analysis`] | linear operating point and AC sweeps (decade, octave, linear, list) with results probed by node and element name |
 //! | [`measure`] | magnitude, phase (unwrapped), dB, min/max/mean, value at a frequency with log interpolation, first crossing, loop-gain margins |
+//! | [`regulator`] | the rail models `regulator` (a linear regulator or an averaged DC-DC converter: set point, dropout, output impedance with a corner, line rejection with a corner, current limit, enable and soft-start, quiescent current or efficiency, output noise) and `reference` (the same without efficiency) |
 //! | [`noise`] | small-signal noise by the adjoint method: resistor thermal noise, amplifier voltage and current noise with 1/f corners, per-contributor output densities, input-referred density, band integration |
 //! | [`rng`] | a deterministic seeded generator (SplitMix64) for Monte Carlo runs |
 //! | [`complex`] | complex numbers |
@@ -60,6 +61,7 @@ pub mod models;
 pub mod newton;
 pub mod noise;
 pub mod real_lu;
+pub mod regulator;
 pub mod rng;
 pub mod semiconductors;
 pub mod sparse_lu;
@@ -87,6 +89,7 @@ pub use models::{
 pub use noise::{
     NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,
 };
+pub use regulator::{RegulatorParams, RegulatorPins};
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, MosParams};
 pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
 pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};

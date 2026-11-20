@@ -1,0 +1,41 @@
+// SupplyCurrent: the front end's current per rail (README.md, "Supply current"). Every
+// amplifier draws its typical quiescent current (parts/analog_*: ADA4817 19 mA, AD8130
+// 10.8 mA, ADA4807 1.0 mA on +/-4.5 V and 0.915 mA on 3.3 V) plus the current its output
+// delivers, from the rail that sources it; the rails are FrontEndPorts' ideal supplies,
+// so I(POS) is the current the TPS7A4901 would deliver.
+//  - idle: the operating point with the DDS at its DC level (0 V), as DcOperatingPoint;
+//  - driving: the DDS at 1 MHz, where the guard drivers and sense buffers charge their
+//    strays hardest, at its nominal 0.3 V peak and at 0.65 V (the top of the AD9833's
+//    range), into dry soil (1.3 kohm m: R_TRANSFER 11 kohm, the largest pump swing) and
+//    into moist loam (100 ohm m: 800 ohm); the rail currents averaged over ten periods
+//    after the drive has settled (20 us to 30 us, as in Distortion).
+// The hand estimate (README.md) is 51.8 mA per +/-4.5 V rail and 3.7 mA on V3V3_ANA
+// typical, with signal currents "under 2 mA". The rails are sized for 70 mA per rail
+// (board.copper: the TPS65130 inductor currents, and VPOS_F / VNEG_F declared at a 70 mA
+// drop across the 1 ohm post-filters): that is the limit.
+bench SupplyCurrent for AnalogFrontEnd using FrontEndPorts, SoilModel {
+    param A_DDS = 0.3V;
+    param HAND_ESTIMATE = 51.8mA;
+    model DDS: source {
+        out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm;
+        waveform = sine { amplitude = A_DDS; frequency = 1MHz; };
+    }
+    step R_TRANSFER, A_DDS in (11kohm, 0.3V), (11kohm, 0.65V), (800ohm, 0.3V);
+
+    analysis idle: op;
+    measure positive_rail = I(POS) { max = 70mA; }
+    measure negative_rail = -I(NEG) { max = 70mA; }
+    measure analog_3v3 = I(ANALOG_3V3);
+    measure mid_reference = I(MID);
+    measure positive_against_hand = I(POS) - HAND_ESTIMATE;
+
+    analysis driving: tran { stop = 30us; start = 20us; max_step = 5ns; }
+    measure positive_mean = mean(I(POS)) { max = 70mA; }
+    measure negative_mean = -mean(I(NEG)) { max = 70mA; }
+    measure positive_signal = mean(I(POS)) - HAND_ESTIMATE;
+    measure negative_signal = -mean(I(NEG)) - HAND_ESTIMATE;
+    measure positive_peak = max(I(POS));
+    measure negative_peak = -min(I(NEG));
+    measure analog_3v3_mean = mean(I(ANALOG_3V3));
+    plot I(POS), I(NEG), I(ANALOG_3V3);
+}
