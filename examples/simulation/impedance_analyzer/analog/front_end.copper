@@ -1,0 +1,219 @@
+// Soil impedance analyzer: the analog front end (../SPEC.md), as a module. The board
+// (../board.copper, ImpedanceAnalyzer) instantiates it beside the digital and power
+// section and connects its ports; the benches in ../benches/ simulate this module on
+// its own (bench NAME for AnalogFrontEnd), supplying its rails and the DDS signal at
+// the ports. Every rail is switched with ANA_EN on the board: VP, VN and V_MID (the
+// REF2033 runs from VP) and V3V3_ANA, the switched 3.3 V of the ADC drivers and the
+// transimpedance amplifier. Nothing here draws from the always-on 3.3 V.
+//
+// Signal path, stage by stage (values and reasons in ../README.md, "The circuit"):
+//   DDS_OUT -> 3rd-order LC low-pass (3 MHz) terminated in 200 ohm, which also halves the
+//   DDS amplitude to 0.15 V peak -> AC coupling (16 Hz) -> unity buffer U_DRV ->
+//   improved Howland pump (U_PMP, feedback buffer U_FBB, LT5400 network, R_SET) ->
+//   regulated node PUMP -> 100 nF blocking capacitor -> HC electrode.
+//   HP and LP electrodes -> 4.7 nF, 33 Mohm bias -> FET followers U_BHP, U_BLP, which
+//   also drive the HP and LP guards -> AD8130 receiver at gain 1 (V_D).
+//   ADC drivers on 0 V / 3.3 V, centred on V_MID, so that no output can leave the ADC
+//   range: U_B1 (gain 1), U_G10 (gain 10), U_G100 (gain 10 on V_10), and the
+//   transimpedance amplifier U_TIA (20 kohm, LC at V_MID). Each drives its ADC input
+//   through 49.9 ohm into 470 pF (anti-alias pole 6.8 MHz).
+// Supply current, typical / maximum: +/-4.5 V rails 51.8 / 56.9 mA each, V3V3_ANA
+// 3.7 / 4.0 mA (../README.md, "Supply current"). Coupling time constants are at most
+// 155 ms (4.7 nF x 33 Mohm), so a reading is valid about 0.8 s after the rails and
+// V_MID come up (../README.md, "Power cycling").
+module AnalogFrontEnd {
+    use library "tiny";
+    import p "../parts";
+
+    // The boundary to the digital and power section, nets of the same names on the board.
+    port DDS_OUT: input;      // AD9833 VOUT, unfiltered: 38 mV to 0.65 V, 200 ohm on chip
+    port V_MON_1: output;     // sense voltage, gain 1    -> PA1, ADC2_IN2
+    port V_MON_10: output;    // sense voltage, gain 10   -> PA6, ADC2_IN3
+    port V_MON_100: output;   // sense voltage, gain 100  -> PA7, ADC2_IN4
+    port I_MON: output;       // current measurement      -> PA2, ADC1_IN3
+    port V_MID: power_in;     // 1.65 V, REF2033 VBIAS (switched)
+    port VP: power_in;        // +4.50 V, TPS7A4901 (switched)
+    port VN: power_in;        // -4.48 V, TPS7A3001 (switched)
+    port V3V3_ANA: power_in;  // switched 3.3 V: ADC drivers and transimpedance amplifier
+    port GND: power_in;
+
+    param C_COMP = 2.2pF;    // pump loop compensation, across R4 and across R2
+    param C_FB_TIA = 1.5pF;  // transimpedance feedback capacitance
+    param R_GUARD = 49.9ohm; // series resistor from each guard driver to its guard
+
+    // ---- DDS reconstruction filter: 3rd-order Butterworth, 3 MHz, 200 ohm both ends ----
+    // The AD9833's own 200 ohm is the source termination; R_TERM is the load.
+    component C_F1: CAPACITOR { value = 270pF; }
+    component L_F1: INDUCTOR { value = 22uH; }
+    component C_F2: CAPACITOR { value = 270pF; }
+    component R_TERM: RESISTOR { value = 200ohm; }
+
+    // ---- AC coupling (16 Hz) and the drive buffer ----
+    component C_IN: CAPACITOR { value = 1uF; }
+    component R_INB: RESISTOR { value = 10kohm; }
+    component U_DRV: p.ADA4807_1ARJZ;   // unity buffer: the pump's R1 needs a low source impedance
+
+    // ---- Improved Howland current pump: I = V(DRV_BUF) / R_SET = 15 uA peak ----
+    component RN_HOW: p.LT5400AIMS8E_1;   // R1 DRV_BUF-PFB, R2 HC_FB-PFB, R3 NFB-N_DC, R4 DRIVE-NFB
+    component R_SET: RESISTOR { value = 10kohm; tolerance = 0.1%; }
+    component C_NDC: CAPACITOR { value = 4.7uF; }   // DC gain 1 for offsets; see README
+    component C_CMP_N: CAPACITOR { value = C_COMP; } // across R4: loop compensation, C0G
+    component C_CMP_P: CAPACITOR { value = C_COMP; } // across R2: keeps the bridge balanced
+    component U_PMP: p.ADA4807_1ARJZ;   // drives R_SET
+    component U_FBB: p.ADA4807_1ARJZ;   // buffers PUMP into R2 and drives the HC guard
+    component R_GHC: RESISTOR { value = R_GUARD; }
+    component C_BLK: CAPACITOR { value = 100nF; }   // C0G or film: no DC through the soil
+
+    // ---- Electrodes and probe access ----
+    component E_HC1: p.ELECTRODE_PAD_8MM;
+    component E_HP1: p.ELECTRODE_PAD_8MM;
+    component E_LP1: p.ELECTRODE_PAD_8MM;
+    component E_LC1: p.ELECTRODE_PAD_8MM;
+    component J_PROBE: p.PROBE_HEADER_1X08;
+
+    // ---- Sense buffers: AC coupled, low input capacitance, each drives its guard ----
+    component C_CHP: CAPACITOR { value = 4.7nF; }
+    component R_BHP: RESISTOR { value = 33Mohm; }
+    component U_BHP: p.ADA4817_1ARDZ;
+    component R_GHP: RESISTOR { value = R_GUARD; }
+    component C_CLP: CAPACITOR { value = 4.7nF; }
+    component R_BLP: RESISTOR { value = 33Mohm; }
+    component U_BLP: p.ADA4817_1ARDZ;
+    component R_GLP: RESISTOR { value = R_GUARD; }
+
+    // ---- Differential receiver, gain 1 ----
+    component U_DIF: p.AD8130ARZ;
+
+    // ---- ADC drivers on V3V3_ANA around V_MID: AC coupled (1 uF, 47 kohm: 3.4 Hz) ----
+    // Each input passes 1 kohm so that an overloaded stage before it cannot push more
+    // than a few mA into the input protection.
+    component C_B1: CAPACITOR { value = 1uF; }
+    component R_B1B: RESISTOR { value = 47kohm; }
+    component R_B1S: RESISTOR { value = 1kohm; }
+    component U_B1: p.ADA4807_1ARJZ;
+    component C_G1: CAPACITOR { value = 1uF; }
+    component R_G1B: RESISTOR { value = 47kohm; }
+    component R_G1S: RESISTOR { value = 1kohm; }
+    component U_G10: p.ADA4807_1ARJZ;
+    component R_G1F: RESISTOR { value = 9.09kohm; }
+    component R_G1G: RESISTOR { value = 1kohm; }
+    component C_G1G: CAPACITOR { value = 22uF; }   // DC gain 1, so V_10 sits at V_MID
+    component C_G2: CAPACITOR { value = 1uF; }
+    component R_G2B: RESISTOR { value = 47kohm; }
+    component R_G2S: RESISTOR { value = 1kohm; }
+    component U_G100: p.ADA4807_1ARJZ;
+    component R_G2F: RESISTOR { value = 9.09kohm; }
+    component R_G2G: RESISTOR { value = 1kohm; }
+    component C_G2G: CAPACITOR { value = 22uF; }
+
+    // ---- Transimpedance amplifier on V3V3_ANA: LC held at V_MID, 20 kohm ----
+    component U_TIA: p.ADA4807_1ARJZ;
+    component R_TIA: RESISTOR { value = 20kohm; tolerance = 0.1%; }
+    component C_TIA: CAPACITOR { value = C_FB_TIA; } // C0G
+
+    // ---- Anti-alias and ADC source impedance: 49.9 ohm into 470 pF (6.8 MHz) ----
+    component R_AA1: RESISTOR { value = 49.9ohm; }
+    component C_AA1: CAPACITOR { value = 470pF; }
+    component R_AA10: RESISTOR { value = 49.9ohm; }
+    component C_AA10: CAPACITOR { value = 470pF; }
+    component R_AA100: RESISTOR { value = 49.9ohm; }
+    component C_AA100: CAPACITOR { value = 470pF; }
+    component R_AAI: RESISTOR { value = 49.9ohm; }
+    component C_AAI: CAPACITOR { value = 470pF; }
+
+    // ---- Supply decoupling: 100 nF at every supply pin, 10 uF bulk per rail ----
+    component C_DRV_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_DRV.VP; }
+    component C_DRV_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_DRV.VN; }
+    component C_PMP_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_PMP.VP; }
+    component C_PMP_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_PMP.VN; }
+    component C_FBB_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_FBB.VP; }
+    component C_FBB_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_FBB.VN; }
+    component C_BHP_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_BHP.VP; }
+    component C_BHP_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_BHP.VN; }
+    component C_BLP_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_BLP.VP; }
+    component C_BLP_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_BLP.VN; }
+    component C_DIF_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_DIF.VP; }
+    component C_DIF_N: CAPACITOR { value = 100nF; role = decoupling; decouples = U_DIF.VN; }
+    component C_B1_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_B1.VP; }
+    component C_G10_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_G10.VP; }
+    component C_G100_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_G100.VP; }
+    component C_TIA_P: CAPACITOR { value = 100nF; role = decoupling; decouples = U_TIA.VP; }
+    component C_BULK_P: CAPACITOR { value = 10uF; }
+    component C_BULK_N: CAPACITOR { value = 10uF; }
+
+    // ---- Drive path ----
+    net DDS_OUT { port.DDS_OUT; C_F1.1; L_F1.1; }
+    net DDS_FILT { L_F1.2; C_F2.1; R_TERM.1; C_IN.1; }
+    net DRV_IN { C_IN.2; R_INB.1; U_DRV.INP; }
+    net DRV_BUF { U_DRV.OUT; U_DRV.INN; RN_HOW.R1A; }
+    net PFB { RN_HOW.R1B; RN_HOW.R2B; U_PMP.INP; C_CMP_P.2; }
+    net HC_FB { U_FBB.OUT; U_FBB.INN; RN_HOW.R2A; C_CMP_P.1; R_GHC.1; }
+    net NFB { RN_HOW.R3A; RN_HOW.R4B; U_PMP.INN; C_CMP_N.2; }
+    net N_DC { RN_HOW.R3B; C_NDC.1; }
+    net DRIVE { U_PMP.OUT; RN_HOW.R4A; C_CMP_N.1; R_SET.1; }
+    net PUMP { R_SET.2; U_FBB.INP; C_BLK.1; }
+    net E_HC { C_BLK.2; E_HC1.E; J_PROBE.HC; }
+    net GUARD_HC { R_GHC.2; J_PROBE.GUARD_HC; }
+
+    // ---- Sense path ----
+    net E_HP { E_HP1.E; C_CHP.1; J_PROBE.HP; }
+    net SNS_HP { C_CHP.2; R_BHP.1; U_BHP.INP; }
+    net BUF_HP { U_BHP.OUT; U_BHP.FB; U_BHP.INN; R_GHP.1; U_DIF.INP; }
+    net GUARD_HP { R_GHP.2; J_PROBE.GUARD_HP; }
+    net E_LP { E_LP1.E; C_CLP.1; J_PROBE.LP; }
+    net SNS_LP { C_CLP.2; R_BLP.1; U_BLP.INP; }
+    net BUF_LP { U_BLP.OUT; U_BLP.FB; U_BLP.INN; R_GLP.1; U_DIF.INN; }
+    net GUARD_LP { R_GLP.2; J_PROBE.GUARD_LP; }
+    net V_D { U_DIF.OUT; U_DIF.FB; C_B1.1; C_G1.1; }
+
+    // ---- ADC drivers ----
+    net B1_C { C_B1.2; R_B1B.1; R_B1S.1; }
+    net B1_IN { R_B1S.2; U_B1.INP; }
+    net V_1 { U_B1.OUT; U_B1.INN; R_AA1.1; }
+    net G1_C { C_G1.2; R_G1B.1; R_G1S.1; }
+    net G1_IN { R_G1S.2; U_G10.INP; }
+    net G1_FB { U_G10.INN; R_G1F.2; R_G1G.1; }
+    net G1_RC { R_G1G.2; C_G1G.1; }
+    net V_10 { U_G10.OUT; R_G1F.1; R_AA10.1; C_G2.1; }
+    net G2_C { C_G2.2; R_G2B.1; R_G2S.1; }
+    net G2_IN { R_G2S.2; U_G100.INP; }
+    net G2_FB { U_G100.INN; R_G2F.2; R_G2G.1; }
+    net G2_RC { R_G2G.2; C_G2G.1; }
+    net V_100 { U_G100.OUT; R_G2F.1; R_AA100.1; }
+    net E_LC { E_LC1.E; J_PROBE.LC; U_TIA.INN; R_TIA.2; C_TIA.2; }
+    net V_TIA { U_TIA.OUT; R_TIA.1; C_TIA.1; R_AAI.1; }
+    net V_MON_1 { R_AA1.2; C_AA1.1; port.V_MON_1; }
+    net V_MON_10 { R_AA10.2; C_AA10.1; port.V_MON_10; }
+    net V_MON_100 { R_AA100.2; C_AA100.1; port.V_MON_100; }
+    net I_MON { R_AAI.2; C_AAI.1; port.I_MON; }
+
+    // ---- Rails and references ----
+    net V_MID { port.V_MID; R_B1B.2; R_G1B.2; R_G2B.2; U_TIA.INP; }
+    net V3V3_ANA {
+        port.V3V3_ANA;
+        U_B1.VP; U_B1.DISABLE; U_G10.VP; U_G10.DISABLE; U_G100.VP; U_G100.DISABLE; U_TIA.VP; U_TIA.DISABLE;
+        C_B1_P.1; C_G10_P.1; C_G100_P.1; C_TIA_P.1;
+    }
+    net VP {
+        port.VP; C_BULK_P.1;
+        U_DRV.VP; U_DRV.DISABLE; U_PMP.VP; U_PMP.DISABLE; U_FBB.VP; U_FBB.DISABLE;
+        U_BHP.VP; U_BHP.PD; U_BLP.VP; U_BLP.PD; U_DIF.VP; U_DIF.PD;
+        C_DRV_P.1; C_PMP_P.1; C_FBB_P.1; C_BHP_P.1; C_BLP_P.1; C_DIF_P.1;
+    }
+    net VN {
+        port.VN; C_BULK_N.1;
+        U_DRV.VN; U_PMP.VN; U_FBB.VN; U_BHP.VN; U_BHP.EP; U_BLP.VN; U_BLP.EP; U_DIF.VN;
+        C_DRV_N.1; C_PMP_N.1; C_FBB_N.1; C_BHP_N.1; C_BLP_N.1; C_DIF_N.1;
+    }
+    net GND {
+        port.GND; J_PROBE.GND;
+        C_F1.2; C_F2.2; R_TERM.2; R_INB.2; C_NDC.2; RN_HOW.EP;
+        R_BHP.2; R_BLP.2; U_DIF.REF;
+        U_B1.VN; U_G10.VN; U_G100.VN; U_TIA.VN; C_G1G.2; C_G2G.2;
+        C_AA1.2; C_AA10.2; C_AA100.2; C_AAI.2;
+        C_BULK_P.2; C_BULK_N.2;
+        C_DRV_P.2; C_DRV_N.2; C_PMP_P.2; C_PMP_N.2; C_FBB_P.2; C_FBB_N.2; C_BHP_P.2; C_BHP_N.2;
+        C_BLP_P.2; C_BLP_N.2; C_DIF_P.2; C_DIF_N.2; C_B1_P.2; C_G10_P.2; C_G100_P.2; C_TIA_P.2;
+    }
+    no_connect U_BHP.NC, U_BLP.NC { reason = "ADA4817 pin 5 has no internal connection"; }
+}

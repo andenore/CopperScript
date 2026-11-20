@@ -1,0 +1,23 @@
+// A small-signal silicon diode for the precision rectifier example, with
+// 1N4148-like round numbers (saturation current, emission coefficient,
+// series resistance, junction capacitance, reverse breakdown). Illustrative,
+// not data-sheet facts.
+part DIODE_SMALL_SIGNAL {
+    category = "semiconductor.diode";
+    manufacturer = "Example (1N4148-like)";
+    pin A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin K { number = "2"; domains = "analog"; directions = "passive"; }
+
+    sim diode {
+        anode = A; cathode = K;
+        saturation_current = 2.5nA;
+        emission_coefficient = 1.75;
+        series_resistance = 0.6ohm;
+        junction_capacitance = 4pF;
+        junction_potential = 0.6V;
+        grading_coefficient = 0.45;
+        transit_time = 6ns;
+        breakdown_voltage = 100V;
+        breakdown_current = 100uA;
+    }
+}

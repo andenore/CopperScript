@@ -1,0 +1,28 @@
+// Texas Instruments OPA810 with TI's own PSpice model.
+//
+// OPA810_VENDOR runs TI's own PSpice model, which is not part of this
+// repository: the block pins TI's model archive (SBOMB73) by URL and SHA-256
+// and names the model file inside it. Fetch it with
+// `copper models fetch examples/simulation/vendor_models/board.copper`
+// (into .copper-cache/spice/, under TI's terms; do not commit or share it);
+// `copper sim` never downloads and fails with SIM077 until it is cached.
+//
+// opa810_macro.copper is the same amplifier as the built-in macro model.
+part OPA810_VENDOR {
+    category = "amplifier.opamp";
+    manufacturer = "Texas Instruments (OPA810)";
+    pin OUT { number = "1"; domains = "analog"; directions = "output"; }
+    pin VN  { number = "2"; domains = "power"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin INN { number = "4"; domains = "analog"; directions = "input"; }
+    pin VP  { number = "5"; domains = "power"; directions = "input"; }
+
+    sim spice {
+        source = "https://www.ti.com/lit/zip/SBOMB73";
+        sha256 = "bee7ec13330e01d291d3e05c3b703647af276f3b174a51d40680d36905c4a0a0";
+        member = "opa810_a.lib";
+        subckt = "OPA810";
+        dialect = pspice;
+        terminals = INP, INN, OUT, VP, VN;
+    }
+}

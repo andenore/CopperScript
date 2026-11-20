@@ -1,0 +1,38 @@
+* A behavioural op-amp written for the CopperScript examples, in the PSpice
+* dialect (VALUE, LIMIT, IF, TABLE, I() probes, R_NOISELESS). Its design
+* values, which the benches check:
+*   open-loop gain      100 dB (1 mS into 100 Mohm)
+*   gain-bandwidth      10 MHz (1 mS into 15.915 pF)
+*   slew rate           10 V/us (the input stage limited to 159.15 uA)
+*   voltage noise       4.99 nV/rtHz, white (a 1.5 kohm thermal resistor)
+*   output              10 ohm, 0.3 V from either rail, 30 mA current limit
+*   supply current      1.5 mA quiescent plus the output current
+* Pins: non-inverting input, inverting input, positive supply, negative
+* supply, output.
+.SUBCKT BEHAVIOURAL_OPAMP INP INN VCC VEE OUT
+.PARAM GM=1M A0=1E5 GBW=10MEG SR=10E6 RSW=0.3 ILIM=30M IQ=1.5M
+.PARAM CP={GM/(2*PI*GBW)} IMAX={SR*CP}
+* Mid-supply reference.
+E_MID MID 0 VALUE={(V(VCC)+V(VEE))/2}
+* Input: the noise resistor, common-mode and differential capacitance.
+R_EN INP N_INP 1.5K
+C_CMP N_INP MID C_UNIT 2P
+C_CMN INN MID 2P
+C_DIFF N_INP INN 1P
+* Transconductance stage, slew limited, into the dominant pole.
+G_IN MID N_P VALUE={LIMIT(GM*V(N_INP,INN), -IMAX, IMAX)}
+R_P N_P MID R_NOISELESS {A0/GM}
+C_P N_P MID {CP}
+* Output buffer with swing limits, output resistance and current sense.
+E_OUT N_O MID VALUE={LIMIT(V(N_P,MID), V(VEE,MID)+RSW, V(VCC,MID)-RSW)}
+R_O N_O N_S R_NOISELESS 10
+V_SENSE N_S OUT 0
+* Current limit: beyond ILIM the sensed current pulls the pole node back.
+G_LIM N_P MID TABLE {I(V_SENSE)} = (-1, -2000) ({-ILIM}, 0) ({ILIM}, 0) (1, 2000)
+* Supply currents: the quiescent current and the output current from the rail that sources it.
+G_Q VCC VEE VALUE={IQ}
+G_SRC VCC 0 VALUE={IF(I(V_SENSE) > 0, I(V_SENSE), 0)}
+G_SNK 0 VEE VALUE={IF(I(V_SENSE) < 0, -I(V_SENSE), 0)}
+.MODEL R_NOISELESS RES (T_ABS=-273.15)
+.MODEL C_UNIT CAP (C=1)
+.ENDS BEHAVIOURAL_OPAMP

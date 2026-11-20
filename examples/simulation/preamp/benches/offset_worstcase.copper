@@ -1,0 +1,26 @@
+// Output offset of the preamp (../board.copper) at its worst corners.
+//
+// At DC the coupling capacitor is open, so the input sits on R_B alone and
+// the output offset is (1 + R_F/R_G) (V_os - I_b R_B) + I_b R_F, the bias
+// current drawn out of both inputs:
+//   nominal  11 (10 uV - 1 nA * 100 kohm) + 1 nA * 10 kohm  = -0.98 mV
+// With V_os within +-60 uV and I_b within 0.5 nA to 1.5 nA (data-sheet
+// style limits, given here as bench tolerances) and the resistors within
+// their tolerances (the matched pair moves the gain to 11.002 at most):
+//   low   11.002 (-50 uV - 1.5 nA * 101 kohm) + 1.5 nA * 9.992 kohm = -2.202 mV
+//   high  11.002 ( 70 uV - 0.5 nA *  99 kohm) + 0.5 nA * 10.01 kohm = +0.2305 mV
+// R_B ten times R_F || R_G is the design flaw this bench shows: a bias-current
+// compensated input (R_B = 909 ohm) would leave mostly V_os.
+bench OffsetWorstCase for LowNoisePreamp {
+    replace J_IN with source { out = J_IN.1; ref = GND; }
+    ignore J_OUT, J_PWR;
+
+    analysis op;
+
+    tolerance U1.input_offset_voltage = 0.06mV;  // +-60 uV
+    tolerance U1.input_bias_current = 0.5nA;
+    worstcase;
+
+    measure offset = V(VOUT) { min = -2.5mV; max = 2.5mV; }
+    measure input_bias_drop = V(INP);
+}

@@ -1,0 +1,94 @@
+// Startup: the front end switched on (ANA_EN rises at t = 0), 2 s in time, with the
+// electrodes in air and in soil (SoilModel at 5 ohm m, 100 ohm m and 1.3 kohm m,
+// relative permittivity 25; air is a 1 Gohm soil with 0.001 pF). The rails are
+// ramps in the order README.md ("Power cycling") documents; their timing is estimated:
+//  - V3V3_ANA through the TPS22918 load switch, CT open: 0 to 3.3 V in 50 us (README.md:
+//    "tens of microseconds, not read");
+//  - VP: the TPS65130 boost's soft-start (about 1 ms, SLVS493E 7.3.5), then the
+//    TPS7A4901 soft-start with 10 nF on NR/SS, 1.4 ms/nF (SBVS121E Eq. 1): 0 V until
+//    1 ms, linear to 4.5 V at 15 ms;
+//  - VN: the inverter's soft-start, then the TPS7A3001 with 10 nF, 0.9 ms/nF (SBVS125D
+//    Eq. 1): 0 V until 1 ms, linear to -4.48 V at 10 ms;
+//  - V_MID: the REF2033 runs from VP; taken as following VP with about 0.35 V of
+//    dropout until it regulates (estimate: its start-up was not read), 0 V until
+//    1 ms, linear to 1.65 V at 7.2 ms;
+//  - the AD9833 is not yet programmed (firmware rule 3): its output steps with its
+//    supply to the middle of its 38 mV to 0.65 V range, 0.34 V (estimate), at 50 us.
+// The amplifiers clip at their rails less their output swing and slew at their slew
+// rate (parts/analog_*); their input ranges are not in the model, so the bench
+// measures every amplifier input against its rails: the absolute maximum (inputs
+// within 0.2 V of the rails for the ADA4807, Table 5; 0.5 V for the ADA4817) is a
+// limit; the ADA4817's linear common-mode range (+VS - 2.8 V) and the AD8130's
+// (+/-3.8 V at +/-5 V) are reported, with the time after which each input stays
+// inside it for good (`downto`).
+//
+// Settling: the time after which each ADC input stays within 1 mV (about one LSB of
+// the 12-bit ADC on 3.3 V) of its value at 2 s (`settle`), limited to 1 s: the battery
+// budget (README.md, "Current budget and battery life") and firmware rule 3 allow
+// 1 s from ANA_EN to the first sample. The drive is held at its DC level, so the ADC
+// inputs settle to V_MID plus their offsets.
+bench Startup for AnalogFrontEnd using SoilModel {
+    supply GROUND { voltage = 0V; net = GND; }
+    model RAIL_3V3: source { out = V3V3_ANA; ref = GND; waveform = pwl { points = 0s, 0V, 50us, 3.3V; }; }
+    model RAIL_P: source { out = VP; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 15ms, 4.5V; }; }
+    model RAIL_N: source { out = VN; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 10ms, -4.48V; }; }
+    model RAIL_MID: source { out = V_MID; ref = GND; waveform = pwl { points = 0s, 0V, 1ms, 0V, 7.2ms, 1.65V; }; }
+    model DDS: source {
+        out = DDS_OUT; ref = GND; output_resistance = 200ohm;
+        waveform = pwl { points = 0s, 0V, 50us, 0.34V; };
+    }
+    ignore E_HC1, E_HP1, E_LP1, E_LC1;
+
+    analysis tran { stop = 2s; max_step = 1ms; }
+    step R_TRANSFER, C_TRANSFER in (1000Mohm, 0.001pF), (40ohm, 27.8pF), (800ohm, 27.8pF), (11kohm, 27.8pF);
+
+    // ADC inputs: settling and the linear range (0.1 V inside each rail, as in SoilModel).
+    measure settle_gain1 = settle(V(V_MON_1), 1mV) { max = 1s; }
+    measure settle_gain10 = settle(V(V_MON_10), 1mV) { max = 1s; }
+    measure settle_gain100 = settle(V(V_MON_100), 1mV) { max = 1s; }
+    measure settle_current = settle(V(I_MON), 1mV) { max = 1s; }
+    measure final_gain100 = at(V(V_MON_100), 2s);
+    measure linear_gain1_from = downto(abs(V(V_MON_1) - 1.65V) < 1.55V);
+    measure linear_gain10_from = downto(abs(V(V_MON_10) - 1.65V) < 1.55V);
+    measure linear_gain100_from = downto(abs(V(V_MON_100) - 1.65V) < 1.55V);
+    measure linear_current_from = downto(abs(V(I_MON) - 1.65V) < 1.55V);
+    measure lowest_adc_input = min(V(V_MON_100));
+    measure highest_adc_input = max(V(V_MON_100));
+
+    // Pump: how far it swings while the coupling networks charge, and where it ends.
+    measure pump_output_max = max(V(DRIVE));
+    measure pump_output_min = min(V(DRIVE));
+    measure pump_node_max = max(abs(V(PUMP)));
+    measure pump_node_final = at(V(PUMP), 2s);
+    measure settle_pump_node = settle(V(PUMP), 1mV);
+
+    // ADA4807 inputs against their absolute maximum (rails +/- 0.2 V).
+    measure drive_buffer_input_over = max(V(DRV_IN) - V(VP)) { max = 0.2V; }
+    measure drive_buffer_input_under = max(V(VN) - V(DRV_IN)) { max = 0.2V; }
+    measure pump_inputs_over = max(V(NFB) - V(VP)) { max = 0.2V; }
+    measure pump_inputs_under = max(V(VN) - V(PFB)) { max = 0.2V; }
+    measure feedback_buffer_input_over = max(V(PUMP) - V(VP)) { max = 0.2V; }
+    measure feedback_buffer_input_under = max(V(VN) - V(PUMP)) { max = 0.2V; }
+    measure adc_driver_inputs_over = max(V(G2_IN) - V(V3V3_ANA)) { max = 0.2V; }
+    measure adc_driver_inputs_under = max(-V(G2_IN)) { max = 0.2V; }
+    measure gain1_input_over = max(V(B1_IN) - V(V3V3_ANA)) { max = 0.2V; }
+    measure gain1_input_under = max(-V(B1_IN)) { max = 0.2V; }
+    measure gain10_input_over = max(V(G1_IN) - V(V3V3_ANA)) { max = 0.2V; }
+    measure gain10_input_under = max(-V(G1_IN)) { max = 0.2V; }
+    measure tia_input_over = max(V(E_LC) - V(V3V3_ANA)) { max = 0.2V; }
+    measure tia_input_under = max(-V(E_LC)) { max = 0.2V; }
+    measure tia_reference_over = max(V(V_MID) - V(V3V3_ANA)) { max = 0.2V; }
+    // ADA4817 sense buffers: absolute maximum (rails +/- 0.5 V) and linear range.
+    measure sense_input_over = max(V(SNS_HP) - V(VP)) { max = 0.5V; }
+    measure sense_input_under = max(V(VN) - V(SNS_HP)) { max = 0.5V; }
+    measure sense_lp_input_over = max(V(SNS_LP) - V(VP)) { max = 0.5V; }
+    measure sense_lp_input_under = max(V(VN) - V(SNS_LP)) { max = 0.5V; }
+    measure sense_input_above_linear = max(V(SNS_HP) - V(VP) + 2.8V, 15ms, 2s);   // once VP is up
+    measure sense_input_linear_from = downto(V(SNS_HP) < V(VP) - 2.8V);
+    measure sense_lp_input_linear_from = downto(V(SNS_LP) < V(VP) - 2.8V);
+    // AD8130 inputs: the sense buffers' outputs against its common-mode range.
+    measure receiver_input_max = max(abs(V(BUF_HP)));
+
+    plot V(VP), V(V_MID), V(V3V3_ANA), V(SNS_HP), V(BUF_HP), V(PUMP), V(DRIVE);
+    plot V(V_MON_1), V(V_MON_100), V(I_MON);
+}

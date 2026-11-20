@@ -1,0 +1,19 @@
+// A single op-amp simulated with a SPICE subcircuit from a local model file
+// (../models/behavioural_opamp.lib, written for this example; its design
+// values are in the file's header). Not the model of any real part.
+part OPAMP_SPICE {
+    category = "amplifier.opamp";
+    manufacturer = "Example (behavioural SPICE model)";
+    pin INN { number = "2"; domains = "analog"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin VN  { number = "4"; domains = "power"; directions = "input"; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin VP  { number = "7"; domains = "power"; directions = "input"; }
+
+    sim spice {
+        file = "../models/behavioural_opamp.lib";
+        subckt = "BEHAVIOURAL_OPAMP";
+        dialect = pspice;
+        terminals = INP, INN, VP, VN, OUT;
+    }
+}

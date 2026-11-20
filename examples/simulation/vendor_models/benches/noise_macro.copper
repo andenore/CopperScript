@@ -1,0 +1,9 @@
+// Output noise of the macro-model stage (../board.copper), referred to the input.
+bench NoiseMacro for VendorModels {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_PWR;
+    analysis noise { from = 10Hz; to = 10MHz; points_per_decade = 10; output = V(OUT_M); input = J_IN; }
+    measure en_in_1khz = at(input_noise(), 1kHz);
+    measure en_in_100khz = at(input_noise(), 100kHz);
+    plot input_noise();
+}

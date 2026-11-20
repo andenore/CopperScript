@@ -1,0 +1,34 @@
+// A non-inverting amplifier of gain 1 + R_F / R_G = 10 whose op-amp is a
+// SPICE subcircuit read from a local model file (parts/opamp.copper,
+// models/behavioural_opamp.lib): `sim spice` in place of the built-in
+// `sim opamp`. The benches check the subcircuit through the whole chain:
+// benches/operating_point.copper (DC gain, supply current from the pin
+// currents), benches/frequency_response.copper (closed-loop gain and
+// bandwidth), benches/step.copper (slew rate and settling) and
+// benches/noise.copper (output and input-referred noise). Run them with
+// `copper sim examples/simulation/spice_amplifier/board.copper`.
+board SpiceAmplifier {
+    use library "tiny";
+    import p "./parts";
+
+    component U1: p.OPAMP_SPICE;
+    component R_F: RESISTOR { value = 9kohm; }
+    component R_G: RESISTOR { value = 1kohm; }
+    component R_LOAD: RESISTOR { value = 2kohm; }
+    component C_VP: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VP; }
+    component C_VN: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VN; }
+    component J_IN: p.HEADER_2;   // signal input
+    component J_OUT: p.HEADER_2;  // output
+    component J_PWR: p.HEADER_3;  // +15 V, ground, -15 V
+
+    net VIN { J_IN.1; U1.INP; }
+    net FB { U1.INN; R_F.2; R_G.1; }
+    net OUT { U1.OUT; R_F.1; R_LOAD.1; J_OUT.1; }
+    net VP { J_PWR.1; U1.VP; C_VP.1; }
+    net VN { J_PWR.3; U1.VN; C_VN.1; }
+    net GND { J_PWR.2; J_IN.2; J_OUT.2; R_G.2; R_LOAD.2; C_VP.2; C_VN.2; }
+
+    supply POS { voltage = 15V; net = VP; external = true; }
+    supply NEG { voltage = -15V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

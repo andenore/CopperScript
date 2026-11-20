@@ -1,0 +1,31 @@
+// Precision half-wave rectifier (a "superdiode"). U1 drives the diode D1, and
+// the feedback from the output OUT to U1's inverting input cancels the
+// diode's drop: OUT follows the positive half of VIN without the 0.6 V loss
+// of a plain diode, and rests at 0 V through R_LOAD in the negative half.
+// There the loop is open, so U1's output AMP swings to its negative rail;
+// at every rising zero crossing it must slew back up past a diode drop
+// before OUT moves, which delays the output and distorts it at high
+// frequency. benches/half_wave.copper runs it in time (`copper sim board.copper`).
+board PrecisionRectifier {
+    use library "tiny";
+    import p "./parts";
+
+    component U1: p.OPAMP_GENERIC;
+    component D1: p.DIODE_SMALL_SIGNAL;
+    component R_LOAD: RESISTOR { value = 10kohm; }
+    component C_U1P: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VP; }
+    component C_U1N: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VN; }
+    component J_IN: p.HEADER_2;   // signal input
+    component J_PWR: p.HEADER_3;  // +5 V, ground, -5 V
+
+    net VIN { J_IN.1; U1.INP; }
+    net AMP { U1.OUT; D1.A; }
+    net OUT { D1.K; U1.INN; R_LOAD.1; }
+    net VP { J_PWR.1; U1.VP; C_U1P.1; }
+    net VN { J_PWR.3; U1.VN; C_U1N.1; }
+    net GND { J_PWR.2; J_IN.2; R_LOAD.2; C_U1P.2; C_U1N.2; }
+
+    supply POS { voltage = 5V; net = VP; external = true; }
+    supply NEG { voltage = -5V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

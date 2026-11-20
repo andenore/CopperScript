@@ -1,0 +1,40 @@
+// A low-noise sensor preamp: an AC-coupled non-inverting stage of gain
+// 1 + R_F / R_G = 11 with a 159 kHz feedback pole (R_F, C_F), behind a
+// 100 ohm output resistor. R_F and R_G are a matched pair (a thin-film
+// network: 0.1 % absolute, 0.02 % ratio), so the gain is set by their ratio
+// to about 0.02 %; the other parts carry ordinary tolerances.
+//
+// benches/noise.copper: output and input-referred noise, the contributors.
+// benches/gain_montecarlo.copper: the gain spread over 200 boards.
+// benches/offset_worstcase.copper: the output offset at the worst corners.
+// Run them with `copper sim examples/simulation/preamp/board.copper`.
+board LowNoisePreamp {
+    use library "tiny";
+    import p "./parts";
+
+    component U1: p.OPAMP_LOW_NOISE;
+    component C_IN: CAPACITOR { value = 10uF; tolerance = 20%; }   // input coupling
+    component R_B: RESISTOR { value = 100kohm; tolerance = 1%; }   // input bias return
+    component R_G: RESISTOR { value = 1kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
+    component R_F: RESISTOR { value = 10kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
+    component C_F: CAPACITOR { value = 100pF; tolerance = 5%; }    // feedback pole, 159 kHz
+    component R_OUT: RESISTOR { value = 100ohm; tolerance = 1%; }  // isolates cable capacitance
+    component C_VP: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VP; }
+    component C_VN: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VN; }
+    component J_IN: p.HEADER_2;   // sensor
+    component J_OUT: p.HEADER_2;  // to the ADC
+    component J_PWR: p.HEADER_3;  // +5 V, ground, -5 V
+
+    net VIN { J_IN.1; C_IN.1; }
+    net INP { C_IN.2; R_B.1; U1.INP; }
+    net INN { R_G.1; R_F.2; C_F.2; U1.INN; }
+    net OUT { U1.OUT; R_F.1; C_F.1; R_OUT.1; }
+    net VOUT { R_OUT.2; J_OUT.1; }
+    net VP { J_PWR.1; U1.VP; C_VP.1; }
+    net VN { J_PWR.3; U1.VN; C_VN.1; }
+    net GND { J_PWR.2; J_IN.2; J_OUT.2; R_B.2; R_G.2; C_VP.2; C_VN.2; }
+
+    supply POS { voltage = 5V; net = VP; external = true; }
+    supply NEG { voltage = -5V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

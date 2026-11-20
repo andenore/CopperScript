@@ -1,0 +1,84 @@
+// Analog Devices ADA4807-1ARJZ-R7: 180 MHz, 1 mA, rail-to-rail input and output
+// op-amp, 6-lead SOT-23. The low-power amplifier of the front end: the DDS buffer and
+// the pump and its feedback buffer on +/-4.5 V, and the four ADC drivers (gain 1,
+// gain 10, gain 10, transimpedance) on 0 V / 3.3 V, whose outputs therefore cannot
+// leave the ADC's 0 to 3.3 V range.
+// Source, read in this session: ADA4807-1/ADA4807-2/ADA4807-4 data sheet Rev. B,
+// fetched from the LCSC listing C208024,
+// sha256 8f615c78af71a04a65bcbec5508e94a5c9c60e5725d6b832187184c6ce3a9800.
+//   Figure 6 and Table 7 p. 10: SOT-23 pinout (1 VOUT, 2 -VS, 3 +IN, 4 -IN,
+//     5 DISABLE active low, 6 +VS).
+//   Table 2 pp. 3-4 (+/-5 V, 25 C): -3 dB bandwidth 180 MHz (G = +1, 20 mV p-p),
+//     28 MHz at 2 V p-p; slew rate 225/250 V/us (rise/fall, 5 V step); input voltage
+//     noise 3.1 nV/rtHz at 100 kHz, 3.3 nV/rtHz at 1 kHz, 5.8 nV/rtHz at 10 Hz, 1/f
+//     corner 29 Hz; input current noise 0.7 pA/rtHz at 100 kHz, 10 pA/rtHz at 10 Hz,
+//     1/f corner 2 kHz; HD2/HD3 -141/-144 dBc at 1 kHz, -112/-115 dBc at 100 kHz,
+//     -95/-79 dBc at 1 MHz (2 V p-p); offset +/-20 uV typ, +/-125 uV max; input bias
+//     current -1.2 uA typ, -1.6 uA max; open-loop gain 120 min / 130 typ dB; input
+//     resistance 45 Mohm common mode, 35 kohm differential; input capacitance 1 pF
+//     common mode, 1 pF differential; input common-mode range -VS - 0.2 V to
+//     +VS + 0.2 V; CMRR 96 min / 110 typ dB; saturated output swing (RL = 1 kohm)
+//     +VS - 0.08 V min / +VS - 0.04 V typ and -VS + 0.1 V min / -VS + 0.07 V typ;
+//     linear output current 50 mA sourcing, 60 mA sinking; short-circuit current
+//     80 mA; supply 2.7 V to 11 V, 1.0 mA typ / 1.1 mA max per amplifier; DISABLE
+//     high enables (> 1.7 V at +/-5 V).
+//   Table 4 pp. 7-8 (3 V): bandwidth 165 MHz; slew rate 118/237 V/us (rise/fall, 2 V
+//     step); the same noise and corners as Table 2; open-loop gain 104 min / 113 typ
+//     dB; CMRR 92 min / 110 typ dB; output swing +VS - 0.04 V and -VS + 0.04 V min;
+//     0.915 mA typ, 1.0 mA max.
+//   Table 5 p. 9: supply 11 V; input voltage +/-VS +/- 0.2 V; differential input
+//     +/-1.4 V.
+//   Figure 23 p. 15: open-loop gain and phase (+/-2.5 V): unity-gain crossing near
+//     200 MHz with about 55 degrees of phase margin.
+//   Figure 25 p. 15: CMRR flat near -110 dB to about 20 kHz, about -78 dB at 1 MHz.
+//   Page 25: DISABLE needs no connection logic beyond a pull to +VS to stay on.
+// Derived, not data-sheet numbers (see ../README.md): gbw 180 MHz is the G = +1
+// bandwidth read as a single-pole gain-bandwidth; second_pole 300 MHz gives the
+// 55 degree margin of Figure 23; cmrr_corner 25 kHz fits Figure 25. No output
+// resistance is given; the model has none (unverified), so it has no output current
+// limit either (the model needs an output resistance for one; Figure 54 p. 22 shows
+// the closed-loop output impedance). Transient limits: the slew rate is the +/-5 V
+// rising figure and the swing the +/-5 V minimum (Table 2) for every instance; the
+// four 3.3 V instances would slew at 118 V/us rising (Table 4) and swing to 0.04 V of
+// their rails, which one part definition cannot hold.
+// Footprint: KiCad Package_TO_SOT_SMD:SOT-23-6.
+part ADA4807_1ARJZ {
+    category = "amplifier.opamp";
+    manufacturer = "Analog Devices";
+    footprint = "Package_TO_SOT_SMD:SOT-23-6";
+    source_document = "ADA4807-1/ADA4807-2/ADA4807-4 3.1 nV/rtHz, 1 mA, 180 MHz, Rail-to-Rail Input/Output Amplifiers";
+    source_revision = "Rev. B";
+    source_location = "Table 2 pp. 3-4; Table 4 pp. 7-8; Table 5 p. 9; Table 7 p. 10; figures 23, 25 p. 15; Figure 54 p. 22";
+    source_url = "https://www.lcsc.com/product-detail/C208024.html";
+    source_checksum = "sha256:8f615c78af71a04a65bcbec5508e94a5c9c60e5725d6b832187184c6ce3a9800";
+
+    pin OUT     { number = "1"; domains = "analog"; directions = "output"; }
+    pin VN      { number = "2"; domains = "power"; directions = "input"; absolute_min = "VP-11V"; }
+    pin INP     { number = "3"; domains = "analog"; directions = "input"; absolute_min = "VN-0.2V"; absolute_max = "VP+0.2V"; }
+    pin INN     { number = "4"; domains = "analog"; directions = "input"; absolute_min = "VN-0.2V"; absolute_max = "VP+0.2V"; }
+    pin DISABLE { number = "5"; domains = "power"; directions = "input"; }
+    pin VP      { number = "6"; domains = "power"; directions = "input"; absolute_max = "VN+11V"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        unmodelled = DISABLE;
+        gbw = 180MHz;                         // derived: the G = +1 bandwidth
+        open_loop_gain = 113dB;               // the 3 V figure; 130 dB at +/-5 V
+        second_pole = 300MHz;                 // derived from Figure 23
+        cmrr = 110dB;
+        cmrr_corner = 25kHz;                  // derived from Figure 25
+        input_capacitance_common = 1pF;
+        input_capacitance_differential = 1pF;
+        input_resistance_common = 45Mohm;
+        input_resistance_differential = 35kohm;
+        input_bias_current = -1.2uA;
+        input_offset_voltage = 0.02mV;
+        voltage_noise = 3.1nV/rtHz;           // Table 2, 100 kHz
+        voltage_noise_corner = 29Hz;          // Table 2
+        current_noise = 0.7pA/rtHz;           // Table 2, 100 kHz
+        current_noise_corner = 2kHz;          // Table 2
+        slew_rate = 225V/us;                  // Table 2, rising
+        output_swing_from_positive_rail = 0.08V;   // Table 2, minimum, RL = 1 kohm
+        output_swing_from_negative_rail = 0.1V;    // Table 2, minimum, RL = 1 kohm
+    }
+}

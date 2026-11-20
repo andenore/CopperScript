@@ -1,0 +1,38 @@
+// Analog Devices AD9833BRMZ: 25 MHz DDS with a 10-bit DAC, 10-lead MSOP (RM-10).
+// Source, read in this session: AD9833 data sheet Rev. F (Rev. G changed only the
+// ordering guide), copy from rlocman.ru of the ADI PDF (analog.com was unreachable),
+// sha256 43c7422669583dc356b98288bef26c1f1921383a341aae88fd81490dee7b7ae6.
+//   Table 4 p. 6: pin numbers and functions. Table 3 p. 5: VDD to AGND/DGND -0.3 to
+//   +6 V, AGND to DGND +-0.3 V, CAP/2.5V 2.75 V, digital and analog I/O -0.3 V to
+//   VDD + 0.3 V. Table 1 p. 3: VDD 2.3 to 5.5 V, IDD 4.5 mA typ / 5.5 mA max at
+//   25 MHz; VOUT 38 mV min to 0.65 V max; VINH 2.0 V / VINL 0.7 V at 2.7-3.6 V supply.
+//   Table 2 p. 4: MCLK period 40 ns min, high/low 16 ns min; SCLK period 25 ns min.
+//   Pin 10: 200 ohm on-chip load, no external load needed.
+// Support (Table 4, Figure 2): 0.1 uF plus 10 uF from VDD to AGND; 100 nF from
+// CAP/2.5V to DGND (VDD > 2.7 V); Figure 2 test circuit shows 10 nF on COMP towards
+// VDD (label position only, no stated requirement).
+// Footprint: KiCad Package_SO:MSOP-10_3x3mm_P0.5mm (JEDEC MO-187 BA); the ADI RM-10
+// outline was not compared land by land.
+part AD9833BRMZ {
+    category = "semiconductor.dds";
+    manufacturer = "Analog Devices";
+    footprint = "Package_SO:MSOP-10_3x3mm_P0.5mm";
+    source_document = "AD9833 Low Power, 12.65 mW, 2.3 V to 5.5 V, Programmable Waveform Generator";
+    source_revision = "Rev. F";
+    source_location = "Tables 1-4, Figure 2, pp. 3-6";
+    source_url = "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9833.pdf";
+    source_checksum = "sha256:43c7422669583dc356b98288bef26c1f1921383a341aae88fd81490dee7b7ae6";
+
+    pin COMP { number = "1"; domains = "analog"; directions = "passive"; connection = required; }
+    pin VDD { number = "2"; domains = "power"; directions = "input"; voltage_min = 2.3V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    // Output of the on-chip 2.5 V regulator for the digital core; bypass only.
+    pin CAP_2V5 { number = "3"; domains = "analog"; directions = "passive"; connection = required; absolute_max = 2.75V; }
+    pin DGND { number = "4"; domains = "ground"; directions = "input"; }
+    // Thresholds are the 2.7-3.6 V supply row of Table 1; at 4.5-5.5 V VINH is 2.8 V.
+    pin MCLK { number = "5"; domains = "digital,clock"; directions = "input"; io_supply = VDD; vih = 2V; vil = 0.7V; absolute_min = -0.3V; absolute_max = "VDD+0.3V"; }
+    pin SDATA { number = "6"; domains = "digital"; directions = "input"; io_supply = VDD; vih = 2V; vil = 0.7V; absolute_min = -0.3V; absolute_max = "VDD+0.3V"; }
+    pin SCLK { number = "7"; domains = "digital,clock"; directions = "input"; io_supply = VDD; vih = 2V; vil = 0.7V; absolute_min = -0.3V; absolute_max = "VDD+0.3V"; }
+    pin FSYNC { number = "8"; domains = "digital"; directions = "input"; io_supply = VDD; vih = 2V; vil = 0.7V; absolute_min = -0.3V; absolute_max = "VDD+0.3V"; }
+    pin AGND { number = "9"; domains = "ground"; directions = "input"; }
+    pin VOUT { number = "10"; domains = "analog"; directions = "output"; absolute_min = -0.3V; absolute_max = "VDD+0.3V"; }
+}

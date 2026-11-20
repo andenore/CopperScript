@@ -1,0 +1,32 @@
+// Texas Instruments TPS22918DBVR: 1-5.5 V, 2 A, 52 mOhm load switch with adjustable rise
+// time and quick output discharge, 6-pin SOT-23 (DBV).
+// Source, read in this session: TPS22918 data sheet SLVSD76C (July 2017), ti.com,
+// sha256 1b28eb58003d28b18bf919a15734056f296a499bebee2bd493a1e4358c4dfb1c.
+//   Pin Functions p. 4: 1 VIN, 2 GND, 3 ON (active high, do not leave floating), 4 CT
+//   (may float), 5 QOD (tie to VOUT for the internal discharge, float to disable),
+//   6 VOUT. Section 6.1: VIN, VOUT, ON -0.3 to 6 V; 2 A continuous at 70 degC.
+//   Section 6.3: VIN 0-5.5 V (EC from 1 V); ON VIH 1 V min, VIL 0.5 V max; CIN 1 uF.
+//   Section 6.5: quiescent 8.3 uA typ / 15 uA max at 3.3 V; shutdown 0.5 uA typ /
+//   3.5 uA max at 3.3 V (4.5 uA max at 5 V); ON leakage 0.1 uA; RON 53 mOhm typ at
+//   3.3 V, 200 mA. Section 12: TPS22918DBVR, SOT-23 (DBV), -40 to 105 degC.
+// Chosen over the TPS22917 (10 nA shutdown) because its ON threshold (VIL 0.5 V) is
+// above the STM32's guaranteed VOL of 0.4 V; the TPS22917's 0.35 V is not. No internal
+// pull-down on ON: every ON net on this board has an external one.
+// Footprint: KiCad Package_TO_SOT_SMD:SOT-23-6.
+part TPS22918DBVR {
+    category = "power.switch.load";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_TO_SOT_SMD:SOT-23-6";
+    source_document = "TPS22918 5.5-V, 2-A, 52-mOhm On-Resistance Load Switch";
+    source_revision = "SLVSD76C";
+    source_location = "Pin Functions p. 4; sections 6.1-6.5; section 12";
+    source_url = "https://www.ti.com/lit/ds/symlink/tps22918.pdf";
+    source_checksum = "sha256:1b28eb58003d28b18bf919a15734056f296a499bebee2bd493a1e4358c4dfb1c";
+
+    pin VIN { number = "1"; domains = "power"; directions = "input"; voltage_min = 1V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+    pin ON { number = "3"; domains = "digital"; directions = "input"; connection = required; vih = 1V; vil = 0.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    pin CT { number = "4"; connection = optional; }
+    pin QOD { number = "5"; domains = "power"; directions = "passive"; connection = optional; absolute_min = -0.3V; absolute_max = 6V; }
+    pin VOUT { number = "6"; domains = "power"; directions = "output"; absolute_min = -0.3V; absolute_max = 6V; }
+}

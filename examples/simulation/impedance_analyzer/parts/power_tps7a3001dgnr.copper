@@ -1,0 +1,33 @@
+// Texas Instruments TPS7A3001DGNR: -36 V, -200 mA, low-noise negative LDO, adjustable,
+// 8-pin HVSSOP PowerPAD (DGN).
+// Source, read in this session: TPS7A30 data sheet SBVS125D (June 2015), ti.com,
+// sha256 b60d6fd8d7220e9f8a4dcfeaa7438a5e5e419ef589e1ea85e9d04781f2203ae5.
+//   Section 5 p. 4: DGN pin functions (DNC must not be connected to any net; NC open or
+//   GND; PowerPAD open or GND; EN may be tied to IN). Section 6.1 p. 5: IN to GND -36 to
+//   +0.3 V; EN to GND -36 to +36 V. Section 6.3 p. 6: VIN -35 to -3 V, IOUT 0-200 mA.
+//   Section 6.5: VFB -1.176 V; dropout 325 mV at 200 mA; VEN(+HI) 1.8 V min; noise
+//   17.5 uVRMS at -5 V out (CNR = CFF = 10 nF); COUT >= 2.2 uF.
+//   R1 = R2 (VOUT / VFB - 1), divider >= 5 uA.
+// Footprint: KiCad Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm; the DGN0008D
+// land pattern in this data sheet shows a 1.57 x 1.89 mm exposed pad. Pad 9 is the
+// PowerPAD; with a negative regulator it must still go to GND, never to IN.
+part TPS7A3001DGNR {
+    category = "power.regulator.ldo.negative";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm";
+    source_document = "TPS7A30 -36-V, -200-mA, Ultralow-Noise, Negative Linear Regulator";
+    source_revision = "SBVS125D";
+    source_location = "Section 5 p. 4; sections 6.1-6.5 pp. 5-7";
+    source_url = "https://www.ti.com/lit/ds/symlink/tps7a30.pdf";
+    source_checksum = "sha256:b60d6fd8d7220e9f8a4dcfeaa7438a5e5e419ef589e1ea85e9d04781f2203ae5";
+
+    pin OUT { number = "1"; domains = "power"; directions = "output"; }
+    pin FB { number = "2"; domains = "analog"; directions = "input"; }
+    pin NC { number = "3"; connection = optional; }
+    pin GND { number = "4"; domains = "ground"; directions = "input"; }
+    pin EN { number = "5"; domains = "digital"; directions = "input"; absolute_min = -36V; absolute_max = 36V; }
+    pin NR_SS { number = "6"; domains = "analog"; directions = "passive"; }
+    pin DNC { number = "7"; connection = do_not_connect; }
+    pin IN { number = "8"; domains = "power"; directions = "input"; voltage_min = -35V; voltage_max = -3V; absolute_min = -36V; absolute_max = 0.3V; }
+    pin PAD { number = "9"; domains = "ground"; directions = "passive"; }
+}

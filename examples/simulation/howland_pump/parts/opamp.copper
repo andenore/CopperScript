@@ -1,0 +1,25 @@
+// A single op-amp shaped like the ADA4817-1, local to the Howland example.
+// The pinout and every sim value are illustrative round numbers in the range
+// of the ADA4817-1 data sheet (gain-bandwidth, open-loop gain, common-mode
+// input capacitance, voltage and current noise); they are not data-sheet
+// facts and not a qualified model of the part.
+part OPAMP_ADA4817_LIKE {
+    category = "amplifier.opamp";
+    manufacturer = "Example (ADA4817-1-like)";
+    pin INN { number = "2"; domains = "analog"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin VN  { number = "4"; domains = "power"; directions = "input"; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin NC  { number = "7"; connection = do_not_connect; }
+    pin VP  { number = "8"; domains = "power"; directions = "input"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        unmodelled = NC;
+        gbw = 400MHz;
+        open_loop_gain = 65dB;
+        input_capacitance_common = 1.3pF;
+        voltage_noise = 4nV/rtHz;
+        current_noise = 2.5fA/rtHz;
+    }
+}

@@ -1,0 +1,21 @@
+// DcOperatingPoint: the DC levels the AC benches assume, with each amplifier's typical
+// input offset and bias current from its sim block (ADA4807 20 uV and -1.2 uA, ADA4817
+// 0.4 mV and 2 pA, AD8130 0.4 mV and 0.5 uA; one sign, the model's). The pump's
+// regulated node sits near 0 V because C_NDC gives the pump unity DC gain (README.md,
+// "DC path"); the 10 Mohm to ground that SPEC.md proposed would instead turn the pump's
+// offset current into volts. Limits: the pump and receiver within 50 mV of 0 V; the
+// ADC inputs within 100 mV of V_MID (the AC headroom limits assume 75 mV).
+bench DcOperatingPoint for AnalogFrontEnd using FrontEndPorts, SoilModel {
+    analysis op;
+
+    param V_MID_NOMINAL = 1.65V;
+    measure pump_node = V(PUMP) { min = -50mV; max = 50mV; }
+    measure pump_output = V(DRIVE) { min = -50mV; max = 50mV; }
+    measure sense_buffer_hp = V(BUF_HP) { min = -50mV; max = 50mV; }
+    measure receiver = V(V_D) { min = -50mV; max = 50mV; }
+    measure adc_gain1 = V(V_MON_1) - V_MID_NOMINAL { min = -100mV; max = 100mV; }
+    measure adc_gain10 = V(V_MON_10) - V_MID_NOMINAL { min = -100mV; max = 100mV; }
+    measure adc_gain100 = V(V_MON_100) - V_MID_NOMINAL { min = -100mV; max = 100mV; }
+    measure adc_current = V(I_MON) - V_MID_NOMINAL { min = -100mV; max = 100mV; }
+    measure lc_electrode = V(E_LC);
+}

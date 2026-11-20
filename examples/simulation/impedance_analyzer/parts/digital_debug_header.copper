@@ -1,0 +1,18 @@
+// SWD + UART + BOOT0 debug header, 1 x 8, 2.54 mm. Pin order is this board's choice:
+// 1 V3V3 (target reference), 2 SWDIO, 3 SWCLK, 4 NRST, 5 GND, 6 UART TX (MCU out),
+// 7 UART RX (MCU in), 8 BOOT0 (pull high for the ST USB DFU bootloader).
+// Orderable header for the footprint: Samtec TSW-108-07-G-S (unverified: part number
+// pattern from memory, not checked against the Samtec catalogue in this session).
+// Footprint: KiCad Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical.
+part DEBUG_HEADER_1X08 {
+    category = "connector.debug.swd_uart";
+    footprint = "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical";
+    pin VREF { number = "1"; domains = "power"; directions = "passive"; }
+    pin SWDIO { number = "2"; domains = "digital"; directions = "passive"; }
+    pin SWCLK { number = "3"; domains = "digital"; directions = "passive"; }
+    pin NRST { number = "4"; domains = "digital"; directions = "passive"; }
+    pin GND { number = "5"; domains = "ground"; directions = "passive"; }
+    pin TX { number = "6"; domains = "digital"; directions = "passive"; }
+    pin RX { number = "7"; domains = "digital"; directions = "passive"; }
+    pin BOOT0 { number = "8"; domains = "digital"; directions = "passive"; }
+}

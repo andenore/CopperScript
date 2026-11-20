@@ -1,0 +1,11 @@
+// One soil electrode: a single exposed copper pad on the stake, ENIG finish. It is a
+// one-pad part because exposed copper artwork has no net (SPEC.md, "Board shape and
+// layout notes"). Pad 8 mm x 8 mm, mask opening the same size; the four pads sit on
+// a 20 mm pitch. There is no orderable part: the pad is board copper.
+// Footprint: none yet; a project footprint with one 8 x 8 mm SMD pad and a matching
+// mask opening is still to be drawn.
+part ELECTRODE_PAD_8MM {
+    category = "electrode.pad";
+    assembled = false;
+    pin E { number = "1"; domains = "analog"; directions = "passive"; }
+}

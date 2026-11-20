@@ -1,0 +1,61 @@
+// Texas Instruments TPS65130RGER: positive boost plus negative inverting buck-boost
+// converter in one IC, 2.7-5.5 V in, 24-pin VQFN (RGE0024B) with thermal pad.
+// Source, read in this session: TPS6513x data sheet SLVS493E (April 2022), ti.com,
+// sha256 e8360b9509047317416cfd9163a09d8cdf5c8accbd4e702ad6a43292ef48e0ed.
+//   Table 5-1 p. 3: pin numbers. Section 6.1 p. 4: VIN, INN -0.3 to 6 V; VPOS and INP
+//   -0.3 to 17 V; VNEG -17 V to VIN + 0.3 V; ENN, ENP, FBP, FBN, CN, CP, PSP, PSN, BSW
+//   -0.3 V to VIN + 0.3 V; OUTN to INN 24 V. Section 6.3: VIN 2.7-5.5 V, VPOS VIN + 0.5 V
+//   to 15 V, VNEG -15 V to -2 V. Section 6.5: VFBP 1.213 V, VFBN 0 V, VREF 1.213 V;
+//   TPS65130 switch current limits 700 / 800 / 900 mA min / typ / max (boost and inverter;
+//   the TPS65131 is the 1.8 A option, same pins). Section 6.6: oscillator
+//   1250 / 1380 / 1500 kHz min / typ / max. Section 7.4.1: PSP/PSN low = power save off
+//   (fixed-frequency PWM). Section 8.2: 4.7 uH inductors (3.3-6.8 uH), CP 10 nF,
+//   CN 4.7 nF, VREF 220 nF, feed-forward C = 6.8 us / R1 and 7.5 us / R3, divider current
+//   5-10 uA. Section 8.2.3: RC or LC filter from INN to VIN, ferrite for fast input edges.
+//   Section 9.1: AGND to the PGND plane, PGND plane to the thermal pad.
+// Footprint: KiCad Package_DFN_QFN:VQFN-24-1EP_4x4mm_P0.5mm_EP2.45x2.45mm, whose 2.45 mm
+// exposed pad matches the RGE0024B drawing (pp. 31-33); pad 25 is the thermal pad.
+// No manufacturer reference layout geometry is bound (Figure 9-1 is a placement sketch).
+part TPS65130RGER {
+    category = "power.regulator.dual_boost_inverting";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_DFN_QFN:VQFN-24-1EP_4x4mm_P0.5mm_EP2.45x2.45mm";
+    source_document = "TPS6513x Dual, Positive and Negative Output DC-DC Converter";
+    source_revision = "SLVS493E";
+    source_location = "Table 5-1 p. 3; sections 6.1-6.6 pp. 4-6; section 8.2 pp. 11-15; section 9 p. 26";
+    source_url = "https://www.ti.com/lit/ds/symlink/tps65131.pdf";
+    source_checksum = "sha256:e8360b9509047317416cfd9163a09d8cdf5c8accbd4e702ad6a43292ef48e0ed";
+    switching_frequency_min = 1250kHz;
+    switching_frequency_max = 1500kHz;
+
+    // Boost switch node: L1 to INP, D1 from INP to VPOS.
+    pin INP_1 { number = "1"; domains = "power"; directions = "passive"; emi_role = switch; absolute_min = -0.3V; absolute_max = 17V; }
+    pin INP_24 { number = "24"; domains = "power"; directions = "passive"; emi_role = switch; absolute_min = -0.3V; absolute_max = 17V; }
+    pin PGND_2 { number = "2"; domains = "ground"; directions = "input"; emi_role = hot_return; }
+    pin PGND_3 { number = "3"; domains = "ground"; directions = "input"; emi_role = hot_return; }
+    pin VIN { number = "4"; domains = "power"; directions = "input"; voltage_min = 2.7V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    // Inverter switch input (power input of the inverting stage).
+    pin INN_5 { number = "5"; domains = "power"; directions = "input"; emi_role = hot_supply; voltage_min = 2.7V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    pin INN_6 { number = "6"; domains = "power"; directions = "input"; emi_role = hot_supply; voltage_min = 2.7V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    // Gate drive for an optional input PMOS; leave floating when unused (section 8.2.2.5).
+    pin BSW { number = "7"; domains = "digital"; directions = "output"; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin ENP { number = "8"; domains = "digital"; directions = "input"; io_supply = VIN; vih = 1.4V; vil = 0.4V; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin PSP { number = "9"; domains = "digital"; directions = "input"; io_supply = VIN; vih = 1.4V; vil = 0.4V; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin ENN { number = "10"; domains = "digital"; directions = "input"; io_supply = VIN; vih = 1.4V; vil = 0.4V; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin PSN { number = "11"; domains = "digital"; directions = "input"; io_supply = VIN; vih = 1.4V; vil = 0.4V; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin NC_12 { number = "12"; connection = optional; }
+    // Inverter switch node: OUTN to L2 (to ground) and D2 (to VNEG).
+    pin OUTN_13 { number = "13"; domains = "power"; directions = "passive"; emi_role = switch; }
+    pin OUTN_14 { number = "14"; domains = "power"; directions = "passive"; emi_role = switch; }
+    pin VNEG { number = "15"; domains = "power"; directions = "input"; absolute_min = -17V; absolute_max = "VIN+0.3V"; }
+    pin FBN { number = "16"; domains = "analog"; directions = "input"; emi_role = feedback; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    // 1.213 V reference; 220 nF bypass and the lower resistor of the VNEG divider.
+    pin VREF { number = "17"; domains = "analog"; directions = "output"; }
+    pin CN { number = "18"; domains = "analog"; directions = "passive"; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin AGND { number = "19"; domains = "ground"; directions = "input"; }
+    pin NC_20 { number = "20"; connection = optional; }
+    pin CP { number = "21"; domains = "analog"; directions = "passive"; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin FBP { number = "22"; domains = "analog"; directions = "input"; emi_role = feedback; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin VPOS { number = "23"; domains = "power"; directions = "input"; absolute_min = -0.3V; absolute_max = 17V; }
+    pin EP { number = "25"; domains = "ground"; directions = "passive"; }
+}

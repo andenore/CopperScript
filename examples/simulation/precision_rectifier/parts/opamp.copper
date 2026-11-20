@@ -1,0 +1,22 @@
+// A generic single op-amp for the precision rectifier example. The sim
+// values are round illustrative numbers (10 MHz, 100 dB, 5 V/us, 0.2 V from
+// either rail, 25 mA), not the data of any part and not a qualified model.
+part OPAMP_GENERIC {
+    category = "amplifier.opamp";
+    manufacturer = "Example (generic)";
+    pin INN { number = "2"; domains = "analog"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin VN  { number = "4"; domains = "power"; directions = "input"; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin VP  { number = "7"; domains = "power"; directions = "input"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        gbw = 10MHz;
+        open_loop_gain = 100dB;
+        slew_rate = 5V/us;
+        output_resistance = 10ohm;
+        output_swing_from_rail = 0.2V;
+        output_current_limit = 25mA;
+    }
+}

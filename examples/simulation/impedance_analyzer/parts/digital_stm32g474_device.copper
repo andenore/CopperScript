@@ -1,0 +1,167 @@
+// Formatted by a one-off script from the vendor data below, read on 2026-11-19 (the
+// script is not kept); when a source changes, re-check every pad, not just one.
+//
+// STM32G474 die (DIE469), the pads bonded in the 48-pin packages only.
+// Sources, all read in this session:
+//   DS12288 Rev 3 (April 2020), STM32G474xB/xC/xE datasheet, LCSC copy of the ST PDF,
+//   sha256 fc2b93c56927c8043333199e0b6fd3d6bd2f42fd76d488f6be912490d635093e.
+//   Table 11 (I/O structure legend), Table 12 (pin definition, LQFP48 column, I/O
+//   structure), Table 13 (alternate functions), Table 14 (voltage characteristics),
+//   Table 17 (general operating conditions), Table 57/58 (I/O levels), Table 69/70 (ADC).
+//   st.com itself could not be reached from this session; the current revision may be newer.
+//   ST STM32_open_pin_data commit 45c04599e2e0a788c5ed9b6218dc5a28a36041f7:
+//   mcu/STM32G474C(B-C-E)Tx.xml (sha256 72512025...d64493) for pins and additional
+//   functions, mcu/IP/GPIO-STM32G47x_gpio_v1_0_Modes.xml (sha256 9e1cb791...57c4c0c) for AF
+//   numbers. Every mux below agrees with DS12288 Table 13 where the table text was legible
+//   (PA8, PA15, PB3, PB5 checked by hand).
+// Not modelled: peripherals and mux options this board does not use (I2C, FDCAN, HRTIM,
+// OPAMP, COMP, DAC, most timers); FT pin limits relative to VDDA (written relative to VDD).
+device STM32G474 {
+    vendor = "STMicroelectronics";
+    family = "STM32G4";
+    source_document = "STM32G474xB STM32G474xC STM32G474xE datasheet";
+    source_revision = "DS12288 Rev 3";
+    source_url = "https://www.st.com/resource/en/datasheet/stm32g474ce.pdf";
+    source_location = "Tables 11-14, 17, 57-58, 69-70";
+    source_checksum = "sha256:fc2b93c56927c8043333199e0b6fd3d6bd2f42fd76d488f6be912490d635093e";
+
+    // Table 17: VDD 1.71 to 3.6 V; VDDA 1.62 to 3.6 V for the ADC; VBAT 1.55 to 3.6 V.
+    power_domain VDDIO { supply_pads = "VDD"; voltage_min = 1.71V; voltage_max = 3.6V; }
+    power_domain ANALOG { supply_pads = "VDDA"; voltage_min = 1.62V; voltage_max = 3.6V; }
+
+    // Table 14: every main supply (VDD, VDDA, VBAT, VREF+) -0.3 to 4.0 V; VREF+ may exceed
+    // VDDA by at most 0.4 V. Section 3.11.1: VREF+ between 2 V and VDDA when VDDA >= 2 V.
+    pad VDD { domains = "power"; directions = "input"; voltage_min = 1.71V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }
+    pad VSS { domains = "ground"; directions = "input"; }
+    pad VDDA { domains = "power"; directions = "input"; voltage_min = 1.62V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }
+    pad VSSA { domains = "ground"; directions = "input"; }
+    pad VREF_PLUS { domains = "power"; directions = "input"; voltage_min = 2V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = "VDDA+0.4V, 4V"; }
+    pad VBAT { domains = "power"; directions = "input"; voltage_min = 1.55V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }
+    // PG10-NRST: bidirectional reset with a permanent 25-55 kohm pull-up (Table 61).
+    pad NRST { domains = "digital"; directions = "bidirectional"; drive_modes = "open_drain"; traits = "reset,gpio"; power_domain = VDDIO; internal_pull = "up"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT
+
+    // GPIO: Table 57 VIH 0.7 VDD / VIL 0.3 VDD (FT_c: 0.25 VDD); Table 58 VOH VDD - 0.4 V and
+    // VOL 0.4 V at 8 mA, VDD >= 2.7 V. TT pins are clamped to VDD, FT pins are 5 V tolerant.
+    pad PC13 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT
+    pad PC14 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,osc32_in"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT
+    pad PC15 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,osc32_out"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT
+    pad PF0 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio,osc_in"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_fa
+    pad PF1 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio,osc_out"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_a
+    pad PA0 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA1 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA2 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_a
+    pad PA3 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA4 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA5 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA6 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA7 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB0 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB1 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB2 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB10 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB11 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB12 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB13 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB14 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PB15 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = clamped; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 3.6V; absolute_min = -0.3V; absolute_max = 4V; }  // TT_a
+    pad PA8 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_a
+    pad PA9 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_fda
+    pad PA10 { domains = "digital,analog"; directions = "bidirectional,passive"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_fda
+    pad PA11 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,usb_dm"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_u
+    pad PA12 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,usb_dp"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_u
+    pad PA13 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,swdio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PA14 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,swclk"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PA15 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PB3 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT
+    pad PB4 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.25*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5V; absolute_min = -0.3V; absolute_max = 5.5V; }  // FT_c
+    pad PB5 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PB6 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.25*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5V; absolute_min = -0.3V; absolute_max = 5.5V; }  // FT_c
+    pad PB7 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PB8 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio,boot0"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+    pad PB9 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull,open_drain"; traits = "gpio"; power_domain = VDDIO; unpowered = tolerant; internal_pull = "up,down"; io_supply = VDD; vih = "0.7*VDD"; vil = "0.3*VDD"; voh = "VDD-0.4V"; vol = 0.4V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = "VDD+4V"; }  // FT_f
+
+    peripheral SPI1: spi {
+        signal SCK: output;
+        signal MOSI: output;
+        signal MISO: input { required = false; }
+        signal NSS: output { required = false; }
+    }
+    peripheral USART1: uart { signal TX: output; signal RX: input; }
+    // Full-speed device PHY with embedded DP pull-up (DS12288 section 3.34).
+    peripheral USB: usb { signal DP: bidirectional; signal DM: bidirectional; }
+    peripheral SWD: debug {
+        signal SWDIO: bidirectional;
+        signal SWCLK: input;
+        signal SWO: output { required = false; }
+    }
+    peripheral TIM1: timer { signal CH1: output; }
+    peripheral RCC: clock { signal MCO: output; }
+    peripheral HSE: oscillator { signal OSC_IN: passive; signal OSC_OUT: passive; }
+    peripheral ADC1: adc {
+        signal IN1: passive { required = false; }
+        signal IN2: passive { required = false; }
+        signal IN3: passive { required = false; }
+        signal IN4: passive { required = false; }
+        signal IN5: passive { required = false; }
+        signal IN10: passive { required = false; }
+        signal IN11: passive { required = false; }
+        signal IN12: passive { required = false; }
+        signal IN14: passive { required = false; }
+        signal IN15: passive { required = false; }
+    }
+    peripheral ADC2: adc {
+        signal IN1: passive { required = false; }
+        signal IN2: passive { required = false; }
+        signal IN3: passive { required = false; }
+        signal IN4: passive { required = false; }
+        signal IN10: passive { required = false; }
+        signal IN12: passive { required = false; }
+        signal IN13: passive { required = false; }
+        signal IN14: passive { required = false; }
+        signal IN15: passive { required = false; }
+        signal IN17: passive { required = false; }
+    }
+
+    mux PA5: SPI1.SCK { selector = "AF5"; }
+    mux PB3: SPI1.SCK { selector = "AF5"; }
+    mux PA7: SPI1.MOSI { selector = "AF5"; }
+    mux PB5: SPI1.MOSI { selector = "AF5"; }
+    mux PA6: SPI1.MISO { selector = "AF5"; }
+    mux PB4: SPI1.MISO { selector = "AF5"; }
+    mux PA4: SPI1.NSS { selector = "AF5"; }
+    mux PA15: SPI1.NSS { selector = "AF5"; }
+    mux PA9: USART1.TX { selector = "AF7"; }
+    mux PB6: USART1.TX { selector = "AF7"; }
+    mux PA10: USART1.RX { selector = "AF7"; }
+    mux PB7: USART1.RX { selector = "AF7"; }
+    // USB_DP/USB_DM have no AF number (Table 12 additional functions).
+    mux PA12: USB.DP { selector = "additional"; }
+    mux PA11: USB.DM { selector = "additional"; }
+    mux PA13: SWD.SWDIO { selector = "AF0"; }
+    mux PA14: SWD.SWCLK { selector = "AF0"; }
+    mux PB3: SWD.SWO { selector = "AF0"; }
+    mux PA8: TIM1.CH1 { selector = "AF6"; }
+    mux PA8: RCC.MCO { selector = "AF0"; }
+    mux PF0: HSE.OSC_IN { selector = "additional"; }
+    mux PF1: HSE.OSC_OUT { selector = "additional"; }
+    mux PA0: ADC1.IN1 { selector = "analog"; }
+    mux PA1: ADC1.IN2 { selector = "analog"; }
+    mux PA2: ADC1.IN3 { selector = "analog"; }
+    mux PA3: ADC1.IN4 { selector = "analog"; }
+    mux PB14: ADC1.IN5 { selector = "analog"; }
+    mux PF0: ADC1.IN10 { selector = "analog"; }
+    mux PB12: ADC1.IN11 { selector = "analog"; }
+    mux PB1: ADC1.IN12 { selector = "analog"; }
+    mux PB11: ADC1.IN14 { selector = "analog"; }
+    mux PB0: ADC1.IN15 { selector = "analog"; }
+    mux PA0: ADC2.IN1 { selector = "analog"; }
+    mux PA1: ADC2.IN2 { selector = "analog"; }
+    mux PA6: ADC2.IN3 { selector = "analog"; }
+    mux PA7: ADC2.IN4 { selector = "analog"; }
+    mux PF1: ADC2.IN10 { selector = "analog"; }
+    mux PB2: ADC2.IN12 { selector = "analog"; }
+    mux PA5: ADC2.IN13 { selector = "analog"; }
+    mux PB11: ADC2.IN14 { selector = "analog"; }
+    mux PB15: ADC2.IN15 { selector = "analog"; }
+    mux PA4: ADC2.IN17 { selector = "analog"; }
+}

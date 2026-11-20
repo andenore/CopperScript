@@ -1,0 +1,88 @@
+// Analog Devices ADA4817-1ARDZ: 1 GHz FastFET op-amp, FET input, 8-lead SOIC with an
+// exposed pad (RD-8-1). Every amplifier of the analog front end except the
+// differential receiver.
+// Source, read in this session: ADA4817-1/ADA4817-2 data sheet, Chinese edition Rev. A
+// (the translation of the English data sheet; the English PDF could not be downloaded
+// from analog.com), fetched from the LCSC listing C208248,
+// sha256 4b39e9ba567d0f2b97f9ed34ce4b3e6f9f90be8a7957e098836f178cdd99fccb.
+//   Figure 2 / Figure 6 and its table p. 6: SOIC pinout (1 FB, 2 -IN, 3 +IN, 4 -VS,
+//     5 NC, 6 OUT, 7 +VS, 8 PD); the exposed pad floats inside and may go to ground
+//     or to the negative supply, or stay open (p. 17).
+//   Table 1 p. 3 (+/-5 V, 25 C): GBW 410 MHz; open-loop gain 62 min / 65 typ dB
+//     (RL = 1 kohm); input capacitance 1.3 pF common mode, 0.1 pF differential;
+//     input resistance 500 Gohm; input bias current 2 pA typ, 20 pA max; offset
+//     0.4 mV typ, 2 mV max; noise 4 nV/rtHz and 2.5 fA/rtHz at 100 kHz; slew rate
+//     870 V/us; input common-mode range -VS to +VS - 2.8 V; CMRR 77 min / 90 typ dB
+//     (VCM +/-0.5 V); output swing -VS + 1.1 to +VS - 1.1 V min, -VS + 1 to
+//     +VS - 1 V typ (RL = 1 kohm); linear output current 40 mA; supply 5 V to 10 V
+//     total, 19 mA typ / 21 mA max per amplifier; PD enabled at > +VS - 1 V
+//     (Table 8 p. 16: > 4 V at +/-5 V).
+//   Absolute maximum p. 5: supply 10.6 V; inputs -VS - 0.5 V to +VS + 0.5 V.
+//   Figure 27 p. 11: CMRR flat at -90 dB to about 300 kHz, then rising about
+//     20 dB per decade (-80 dB at 1 MHz).
+//   Figure 33 p. 12: open-loop phase near -90 degrees from 1 MHz to 50 MHz, about
+//     -125 degrees at the 410 MHz crossing.
+//   Figure 28 p. 11: closed-loop output impedance (G = 1) about 0.25 ohm at 10 MHz
+//     and 2 ohm at 100 MHz.
+//   Page 17: FB is a dedicated feedback pin next to -IN so that the feedback trace
+//     is short; it carries the output. Bypass each supply pin with 0.1 uF (0508)
+//     close to the pin, plus 10 uF.
+//   Figure 30 p. 11: input voltage noise against frequency: about 175 nV/rtHz at 10 Hz,
+//     60 at 100 Hz, 12 at 1 kHz, 5.4 at 10 kHz, 4 from 1 MHz (read from the graph).
+//   Table 1: linear output current 40 mA (1 % output error); short-circuit current
+//     100/170 mA (sinking/sourcing).
+// Derived, not data-sheet numbers (a fit, see ../README.md): second_pole 600 MHz
+// from the phase at crossing (-125 degrees = -90 - atan(410/600)); cmrr_corner
+// 300 kHz from Figure 27; output_resistance 10 ohm = closed-loop output impedance
+// times open-loop gain at 10 MHz and 100 MHz; voltage_noise_corner 8 kHz fits
+// Figure 30 at 1 kHz and 10 kHz with the 4 nV/rtHz of Table 1 (below about 300 Hz
+// the figure lies above the fit: 60 against 36 nV/rtHz at 100 Hz). The current noise
+// has no 1/f corner in the data sheet (FET input); none is modelled. Transient limits
+// from Table 1: slew rate 870 V/us typical, swing the minimum with RL = 1 kohm
+// (VS - 1.1 V), output current 40 mA (the linear figure).
+// The FB pin is the output: the board always puts FB on its OUT net, so the sim
+// block leaves FB unmodelled. Footprint: KiCad
+// Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm (unverified against the RD-8-1
+// land pattern).
+part ADA4817_1ARDZ {
+    category = "amplifier.opamp";
+    manufacturer = "Analog Devices";
+    footprint = "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm";
+    source_document = "ADA4817-1/ADA4817-2 Low Noise, 1 GHz FastFET Op Amps (Chinese edition)";
+    source_revision = "Rev. A";
+    source_location = "Table 1 p. 3; pin table p. 6; figures 27, 28, 30, 33; pp. 16-17";
+    source_url = "https://www.lcsc.com/product-detail/C208248.html";
+    source_checksum = "sha256:4b39e9ba567d0f2b97f9ed34ce4b3e6f9f90be8a7957e098836f178cdd99fccb";
+
+    pin FB  { number = "1"; domains = "analog"; directions = "passive"; }
+    pin INN { number = "2"; domains = "analog"; directions = "input"; absolute_min = "VN-0.5V"; absolute_max = "VP+0.5V"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; absolute_min = "VN-0.5V"; absolute_max = "VP+0.5V"; }
+    pin VN  { number = "4"; domains = "power"; directions = "input"; absolute_min = "VP-10.6V"; }
+    pin NC  { number = "5"; connection = do_not_connect; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin VP  { number = "7"; domains = "power"; directions = "input"; absolute_max = "VN+10.6V"; }
+    pin PD  { number = "8"; domains = "power"; directions = "input"; }
+    pin EP  { number = "9"; domains = "power"; directions = "passive"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        unmodelled = FB, PD, NC, EP;
+        gbw = 410MHz;
+        open_loop_gain = 65dB;
+        second_pole = 600MHz;                 // derived from Figure 33, see above
+        cmrr = 90dB;
+        cmrr_corner = 300kHz;                 // derived from Figure 27
+        input_capacitance_common = 1.3pF;
+        input_capacitance_differential = 0.1pF;
+        input_resistance_common = 500000Mohm;   // 500 Gohm
+        input_bias_current = 2pA;
+        input_offset_voltage = 0.4mV;
+        voltage_noise = 4nV/rtHz;             // Table 1, 100 kHz
+        voltage_noise_corner = 8kHz;          // estimate: fit to Figure 30, see above
+        current_noise = 2.5fA/rtHz;           // Table 1, 100 kHz
+        slew_rate = 870V/us;                  // Table 1
+        output_resistance = 10ohm;            // derived from Figure 28
+        output_swing_from_rail = 1.1V;        // Table 1, minimum, RL = 1 kohm
+        output_current_limit = 40mA;          // Table 1, linear output current
+    }
+}

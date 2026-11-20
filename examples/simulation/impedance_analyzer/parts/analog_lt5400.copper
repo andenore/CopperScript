@@ -1,0 +1,54 @@
+// Analog Devices (Linear Technology) LT5400AIMS8E-1#PBF: quad matched resistor network,
+// four 10 kohm resistors, 8-lead MSOP with an exposed pad. The four gain resistors of
+// the improved Howland pump.
+// Source, read in this session: LT5400 data sheet Rev. A (5400fa), fetched from
+// static.datasheets.com, sha256 e654231c3a40fee470e9c2e5c15305265dfee2f9cc1b09028ffce051f49b6612.
+//   Pin configuration p. 2: R1 between pins 1 and 8, R2 between 2 and 7, R3 between
+//     3 and 6, R4 between 4 and 5; the exposed pad (pin 9) floats.
+//   Available options p. 2: LT5400-1 is 10 kohm / 10 kohm, ratio 1:1.
+//   Order information p. 2: LT5400AIMS8E-1#PBF, A grade, -40 C to 85 C.
+//   Electrical characteristics p. 3: matching ratio of any resistor to any other
+//     +/-0.0125 % (A grade, -40 C to 85 C), +/-0.010 % at 25 C; absolute tolerance
+//     +/-7.5 %; distributed capacitance 5.5 pF resistor to exposed pad, 1.4 pF
+//     resistor to resistor.
+//   Applications p. 4: tie the exposed pad to a quiet AC ground; it shields the
+//     resistors from each other.
+// Model: four ideal 10 kohm resistors plus the 5.5 pF to the exposed pad split as
+// 2.75 pF at each end of each resistor (an approximation of a distributed
+// capacitance). The 1.4 pF between resistors is left out: which resistors are
+// adjacent is not stated, and with the pad on ground it is mostly shielded.
+// Footprint: KiCad Package_SO:MSOP-8-1EP_3x3mm_P0.65mm_EP1.68x1.88mm (unverified
+// against the MS8E land pattern).
+part LT5400AIMS8E_1 {
+    category = "passive.network";
+    manufacturer = "Analog Devices";
+    footprint = "Package_SO:MSOP-8-1EP_3x3mm_P0.65mm_EP1.68x1.88mm";
+    source_document = "LT5400 Quad Matched Resistor Network";
+    source_revision = "Rev. A (5400fa)";
+    source_location = "p. 2 pin configuration and order information; p. 3 electrical characteristics; p. 4";
+    source_url = "https://static.datasheets.com/doc/3140298-analog-devices-lt5400ahms8e-4-pbf-ds.pdf";
+    source_checksum = "sha256:e654231c3a40fee470e9c2e5c15305265dfee2f9cc1b09028ffce051f49b6612";
+
+    pin R1A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin R2A { number = "2"; domains = "analog"; directions = "passive"; }
+    pin R3A { number = "3"; domains = "analog"; directions = "passive"; }
+    pin R4A { number = "4"; domains = "analog"; directions = "passive"; }
+    pin R4B { number = "5"; domains = "analog"; directions = "passive"; }
+    pin R3B { number = "6"; domains = "analog"; directions = "passive"; }
+    pin R2B { number = "7"; domains = "analog"; directions = "passive"; }
+    pin R1B { number = "8"; domains = "analog"; directions = "passive"; }
+    pin EP  { number = "9"; domains = "ground"; directions = "passive"; }
+
+    sim load R1 { inp = R1A; ref = R1B; resistance = 10kohm; }
+    sim load R2 { inp = R2A; ref = R2B; resistance = 10kohm; }
+    sim load R3 { inp = R3A; ref = R3B; resistance = 10kohm; }
+    sim load R4 { inp = R4A; ref = R4B; resistance = 10kohm; }
+    sim load C1A { inp = R1A; ref = EP; capacitance = 2.75pF; }
+    sim load C1B { inp = R1B; ref = EP; capacitance = 2.75pF; }
+    sim load C2A { inp = R2A; ref = EP; capacitance = 2.75pF; }
+    sim load C2B { inp = R2B; ref = EP; capacitance = 2.75pF; }
+    sim load C3A { inp = R3A; ref = EP; capacitance = 2.75pF; }
+    sim load C3B { inp = R3B; ref = EP; capacitance = 2.75pF; }
+    sim load C4A { inp = R4A; ref = EP; capacitance = 2.75pF; }
+    sim load C4B { inp = R4B; ref = EP; capacitance = 2.75pF; }
+}

@@ -1,0 +1,60 @@
+// SoilSweep: the impedance the firmware computes against the soil's true transfer
+// impedance, 1 kHz to 1 MHz, all four contacts equal, relative permittivity 5, 25 and
+// 40, over the whole soil range of the board: saline soil (5 ohm m: R_TRANSFER
+// 40 ohm), moist loam (100 ohm m: 800 ohm), 150, 200, 300 and 500 ohm m (1.2, 1.6, 2.4
+// and 4 kohm), dry loam (1 kohm m: 8 kohm) and the board's limit (1.3 kohm m: 11 kohm,
+// drive impedance about 160 kohm). The soil, the strays and the firmware's arithmetic
+// are the SoilModel fixture (soil_model.copper).
+//
+// SPEC.md ("Usable range") rates 1 % and 1 degree up to 100 ohm m, so the accuracy
+// limits apply where R_TRANSFER <= 800 ohm; above it the result degrades at the top of
+// the band and is reported without accuracy limits. usable_to_magnitude and
+// usable_to_phase give the frequency up to which 1 % and 1 degree hold from 1 kHz on
+// (`upto`, interpolated between the 20-per-decade samples; 1 MHz when they hold over
+// the whole band). The errors are also reported at 10 kHz, 100 kHz, 300 kHz and
+// 1 MHz. The current error (SPEC.md: 0.5 % after calibration) and the compliance
+// (headroom) limits apply at every step: the driest soil is where the pump runs at its
+// largest swing. The gain-10 channel is past its linear range above 1 kohm m by
+// design (the firmware uses gain 1 there), so its limit applies in the rated range.
+bench SoilSweep for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_TRANSFER in 40ohm, 800ohm, 1.2kohm, 1.6kohm, 2.4kohm, 4kohm, 8kohm, 11kohm;
+    step C_TRANSFER in 5.56pF, 27.8pF, 44.5pF;     // eps_r 5, 25, 40
+    // Calibration on the calibration card's 1 kohm with 0 ohm contacts (1 mohm: a link).
+    reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF; }
+
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    measure mag_error_gain1 = max(abs(mag(e1) - 1)) { max = 1%; where R_TRANSFER <= 800ohm; }
+    measure phase_error_gain1 = max(abs(phase(e1))) { max = 1deg; where R_TRANSFER <= 800ohm; }
+    measure mag_error_gain100 = max(abs(mag(e100) - 1)) { max = 1%; where R_TRANSFER <= 800ohm; }
+    measure phase_error_gain100 = max(abs(phase(e100))) { max = 1deg; where R_TRANSFER <= 800ohm; }
+    measure usable_to_magnitude = upto(abs(mag(e1) - 1) < 1%);
+    measure usable_to_phase = upto(abs(phase(e1)) < 1deg);
+    measure mag_error_10khz = abs(mag(at(e1, 10kHz)) - 1);
+    measure phase_error_10khz = abs(phase(at(e1, 10kHz)));
+    measure mag_error_100khz = abs(mag(at(e1, 100kHz)) - 1);
+    measure phase_error_100khz = abs(phase(at(e1, 100kHz)));
+    measure mag_error_300khz = abs(mag(at(e1, 300kHz)) - 1);
+    measure phase_error_300khz = abs(phase(at(e1, 300kHz)));
+    measure mag_error_1mhz = abs(mag(at(e1, 1MHz)) - 1);
+    measure phase_error_1mhz = abs(phase(at(e1, 1MHz)));
+    let ei = i_meas / i_lc / reference(i_meas / i_lc, CARD);
+    measure current_error = max(abs(mag(ei) - 1)) { max = 0.5%; }
+    measure uncalibrated_phase_1mhz = phase(at(z1 / z_true, 1MHz));   // what calibration removed
+    measure common_mode_ratio = max(mag(V(E_LP)) / mag(V(E_HP, E_LP)));
+    measure soil_current_1khz = mag(at(i_lc, 1kHz));
+    measure soil_current_1mhz = mag(at(i_lc, 1MHz));
+
+    // Headroom (SoilModel): compliance at every step.
+    measure pump_node_peak = max(mag(V(PUMP))) { max = PUMP_SWING; }
+    measure drive_peak = max(mag(V(DRIVE))) { max = PUMP_SWING; }
+    measure sense_input_peak = max(mag(V(SNS_HP))) { max = CM_TOP; }
+    measure adc_gain1_peak = max(mag(V(V_MON_1))) { max = ADC_LINEAR; }
+    measure adc_gain10_peak = max(mag(V(V_MON_10))) { max = ADC_LINEAR; where R_TRANSFER <= 800ohm; }
+    measure adc_current_peak = max(mag(V(I_MON))) { max = ADC_LINEAR; }
+
+    plot abs(mag(e1) - 1), abs(phase(e1));
+    plot mag(z_true), phase(z_true), phase(z1 / z_true);
+    plot mag(i_lc), mag(V(PUMP));
+}

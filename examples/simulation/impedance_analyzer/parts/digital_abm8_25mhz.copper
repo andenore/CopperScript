@@ -1,0 +1,27 @@
+// Abracon ABM8-25.000MHZ-10-D1G-T: 25 MHz fundamental crystal, CL 10 pF, -40 to +85 degC,
+// +-10 ppm at 25 degC, +-15 ppm over temperature, 3.2 x 2.5 mm ceramic SMD, 1000/reel.
+// Source, read in this session: Abracon ABM8 data sheet, revised 07-29-20, abracon.com,
+// sha256 564ac331d8bf38b4ae1222444b0d9cfea3a6ba29148a8be906b2e0ffe40471d8.
+//   Page 1: fundamental 8-54 MHz; ESR 50 ohm max for 20.000-29.999 MHz (Table 1); C0 3 pF
+//   max; drive level 10 uW typ, 100 uW max; part-number code: CL in pF ("10"), D =
+//   -40 to +85 degC, 1 = +-10 ppm, G = +-15 ppm, -T = 1000-piece reel.
+//   The ordering code is composed from that table; a web search found it listed by RS
+//   (stock number 240-3465). Distributor stock was not checked.
+// unverified: pad functions. The outline drawing is graphics only; the 1/3 crystal,
+// 2/4 ground assignment below is the usual ABM8 connection taken from memory.
+// HSE fit (DS12288 Rev 3 Table 44, Gmcritmax 1.5 mA/V): gm_crit = 4 ESR (2 pi f)^2
+// (C0 + CL)^2 = 4 x 50 x (2 pi 25 MHz)^2 x (13 pF)^2 = 0.83 mA/V, below the limit.
+// Footprint: KiCad Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm.
+part ABM8_25MHZ_10_D1G_T {
+    category = "passive.crystal";
+    manufacturer = "Abracon";
+    footprint = "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm";
+    source_document = "ABM8 3.2 x 2.5 x 0.8 mm ceramic SMD crystal";
+    source_revision = "revised 07-29-20";
+    source_url = "https://abracon.com/Resonators/abm8.pdf";
+    source_checksum = "sha256:564ac331d8bf38b4ae1222444b0d9cfea3a6ba29148a8be906b2e0ffe40471d8";
+    pin XTAL1 { number = "1"; domains = "analog,clock"; directions = "passive"; }  // unverified
+    pin GND_2 { number = "2"; domains = "ground"; directions = "passive"; }        // unverified
+    pin XTAL2 { number = "3"; domains = "analog,clock"; directions = "passive"; }  // unverified
+    pin GND_4 { number = "4"; domains = "ground"; directions = "passive"; }        // unverified
+}

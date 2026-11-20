@@ -1,0 +1,15 @@
+// The setup the Howland pump benches share: the input connector J_IN as a
+// 0.15 V source, the output and power connectors ignored (the supplies hold
+// the rails), and the load R_LOAD on the output connector's signal pin. A
+// bench names it with `using LoadedPump` and overrides what it changes: its
+// own `replace J_IN` (a waveform, a source resistance) or `param R_LOAD_VALUE`.
+fixture LoadedPump for HowlandPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0.15V; }
+    ignore J_OUT, J_PWR;  // connectors; the supplies hold the rails
+
+    // The load, on the output connector's signal pin.
+    param R_LOAD_VALUE = 1kohm;
+    component R_LOAD: RESISTOR { value = R_LOAD_VALUE; }
+    net J_OUT.1 { R_LOAD.1; }
+    net GND { R_LOAD.2; }
+}

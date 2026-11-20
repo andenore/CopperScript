@@ -1,0 +1,32 @@
+// Load-current flatness of the Howland pump (../board.copper) against the
+// nominal 15 uA from 1 kHz to 1 MHz, for a 100 ohm, 1 kohm and 10 kohm load.
+//
+// This pump is good for loads up to about 10 kohm. Two things set that limit
+// (see output_impedance.copper, which measures them):
+//  - the 65 dB open-loop gain leaves the current 2 / (2 + A0) = 0.11 % low and
+//    caps the output impedance near R_SET * A0 / 3 = 5.9 Mohm;
+//  - the buffer's 1.3 pF common-mode input capacitance sits on the load node
+//    and is only 122 kohm at 1 MHz.
+// A 150 kohm load loses 2.6 % of the current at 1 kHz and 40 % at 1 MHz.
+// Larger loads need the current measured, not assumed, and the load node
+// guarded: see ../../impedance_analyzer/SPEC.md.
+//
+// The load and the connectors are the LoadedPump fixture (loaded_pump.copper).
+bench CurrentFlatness for HowlandPump using LoadedPump {
+    // The input connector becomes a 0.15 V peak source (in place of the fixture's).
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        ac = 0.15V;
+        waveform = sine { amplitude = 0.15V; frequency = 10kHz; };
+    }
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_LOAD_VALUE in 100ohm, 1kohm, 10kohm;
+
+    let i_load = I(R_LOAD);
+    let i_nominal = 0.15V / R_SET;  // 15 uA
+    measure flatness = max(abs(mag(i_load) / 15uA - 1)) { max = 1%; }
+    measure nominal_error = abs(mag(at(i_load, 1kHz)) / i_nominal - 1) { max = 0.5%; }
+    measure phase_error = max(abs(phase(i_load))) { max = 10deg; }
+    plot mag(i_load), phase(i_load);
+}

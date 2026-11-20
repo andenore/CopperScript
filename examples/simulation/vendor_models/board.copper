@@ -1,0 +1,36 @@
+// Two non-inverting stages of gain 1 + R_F / R_G = 10 on +/-12 V, one with
+// TI's OPA810 PSpice model (U_VENDOR, parts/opa810.copper, fetched into the
+// project cache: `copper models fetch examples/simulation/vendor_models/board.copper`)
+// and one with the built-in macro model at the product page's figures
+// (U_MACRO). The benches put the two side by side: benches/frequency.copper
+// (closed-loop bandwidth), benches/step.copper (slew rate), benches/noise_vendor.copper
+// and benches/noise_macro.copper (output noise). The vendor model is not in
+// the repository; without the cached file `copper sim` stops with SIM077.
+board VendorModels {
+    use library "tiny";
+    import p "./parts";
+
+    component U_VENDOR: p.OPA810_VENDOR;
+    component U_MACRO: p.OPA810_MACRO;
+    component R_FV: RESISTOR { value = 900ohm; }
+    component R_GV: RESISTOR { value = 100ohm; }
+    component R_FM: RESISTOR { value = 900ohm; }
+    component R_GM: RESISTOR { value = 100ohm; }
+    component R_LV: RESISTOR { value = 1kohm; }
+    component R_LM: RESISTOR { value = 1kohm; }
+    component J_IN: p.HEADER_2;   // signal input, both stages
+    component J_PWR: p.HEADER_3;  // +12 V, ground, -12 V
+
+    net VIN { J_IN.1; U_VENDOR.INP; U_MACRO.INP; }
+    net FB_V { U_VENDOR.INN; R_FV.2; R_GV.1; }
+    net OUT_V { U_VENDOR.OUT; R_FV.1; R_LV.1; }
+    net FB_M { U_MACRO.INN; R_FM.2; R_GM.1; }
+    net OUT_M { U_MACRO.OUT; R_FM.1; R_LM.1; }
+    net VP { J_PWR.1; U_VENDOR.VP; U_MACRO.VP; }
+    net VN { J_PWR.3; U_VENDOR.VN; U_MACRO.VN; }
+    net GND { J_PWR.2; J_IN.2; R_GV.2; R_GM.2; R_LV.2; R_LM.2; }
+
+    supply POS { voltage = 12V; net = VP; external = true; }
+    supply NEG { voltage = -12V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

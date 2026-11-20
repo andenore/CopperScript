@@ -1,0 +1,24 @@
+// Abracon ABS07-32.768KHZ-7-T: 32.768 kHz tuning-fork crystal, CL 7 pF, +-20 ppm at
+// 25 degC, -40 to +85 degC, 3.2 x 1.5 mm ceramic SMD, 3000/reel. STM32 LSE for the RTC.
+// Source, read in this session: Abracon ABS07 data sheet, revised 08-10-22, abracon.com,
+// sha256 5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1.
+//   Page 1: ESR 70 kohm max (-40 to +85 degC); C0 0.9-1.2 pF typ, 2.0 pF max; drive
+//   0.1 uW typ, 0.5 uW max; parabolic temperature coefficient about -0.04 ppm/degC^2.
+//   Page 3: option codes "7" = 7 pF and "-T" = 3k reel; blank tolerance = +-20 ppm,
+//   blank temperature range = -40 to +85 degC.
+// LSE fit (DS12288 Rev 3 Table 45): gm_crit = 4 ESR (2 pi f)^2 (C0 + CL)^2 =
+// 4 x 70 kohm x (2 pi 32.768 kHz)^2 x (2 pF + 7 pF)^2 = 0.96 uA/V with the maximum C0.
+// That is below Gmcritmax 1.7 uA/V for LSEDRV = 10 (medium-high drive, 500 nA typ); low
+// drive (0.5 uA/V) and medium-low drive (0.75 uA/V) are not enough.
+// Two terminals, no polarity. Footprint: KiCad Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm.
+part ABS07_32768KHZ_7_T {
+    category = "passive.crystal";
+    manufacturer = "Abracon";
+    footprint = "Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm";
+    source_document = "ABS07 32.768kHz SMD Crystal";
+    source_revision = "revised 08-10-22";
+    source_url = "https://abracon.com/Resonators/ABS07.pdf";
+    source_checksum = "sha256:5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1";
+    pin 1 { number = "1"; domains = "analog,clock"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "analog,clock"; directions = "passive"; }
+}

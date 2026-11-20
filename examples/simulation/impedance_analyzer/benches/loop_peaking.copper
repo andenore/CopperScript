@@ -1,0 +1,23 @@
+// LoopPeaking: every feedback loop of the front end, closed as on the board, swept
+// past its crossover (1 kHz to 1 GHz) with SoilSweep's moist loam (100 ohm m,
+// relative permittivity 25) attached. AC analysis cannot find unstable poles; peaking
+// of a closed-loop response above its in-band value is the warning sign the simulator
+// can give (README.md, "What the simulation cannot tell"). Limit: at most 1 dB of
+// peaking (112 %), about 60 degrees of phase margin or more for a second-order loop.
+// U_FBB (a follower of PUMP) sits inside the pump loop, which pump_current covers.
+bench LoopPeaking for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    param R_SET_NOMINAL = 10kohm;
+
+    analysis ac { from = 1kHz; to = 1GHz; points_per_decade = 20; }
+
+    measure drive_buffer = max(mag(V(DRV_BUF) / V(DRV_IN))) { max = 112%; }
+    measure pump_current = max(mag(i_lc * R_SET_NOMINAL / V(DRV_BUF))) { max = 112%; }
+    measure sense_buffer_hp = max(mag(V(BUF_HP) / V(SNS_HP))) { max = 112%; }
+    measure guard_hp = max(mag(V(GUARD_HP) / V(E_HP))) { max = 112%; }
+    measure receiver = max(mag(V(V_D) / V(BUF_HP, BUF_LP))) { max = 112%; }
+    measure gain1_driver = max(mag(V(V_1) / V(B1_IN))) { max = 112%; }
+    measure gain10_stage = max(mag(V(V_10) / V(G1_IN))) / 10.09 { max = 112%; }
+    measure gain100_stage = max(mag(V(V_100) / V(G2_IN))) / 10.09 { max = 112%; }
+    measure transimpedance = max(mag(V(V_TIA) / i_lc)) / R_TIA_NOMINAL { max = 112%; }
+    plot mag(V(V_TIA) / i_lc) / R_TIA_NOMINAL, mag(V(V_10) / V(G1_IN)) / 10.09, mag(i_lc * R_SET_NOMINAL / V(DRV_BUF));
+}

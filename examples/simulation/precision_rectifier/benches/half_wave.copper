@@ -1,0 +1,31 @@
+// The precision rectifier (../board.copper) on a 1 V, 1 kHz sine, in time.
+//
+// An ideal half-wave rectifier passes the positive half exactly: its peak is
+// the input's, 1 V, its mean over whole periods 1 V / pi = 0.3183 V, and its
+// harmonics up to the 9th give a THD of 43.5 %. In the negative half the
+// open loop drives U1's output to the -5 V rail less its 0.2 V headroom.
+// When the input crosses zero going up, U1 slews at 5 V/us from there to a
+// diode drop above OUT, about 5.4 V, so OUT lags the input by over a
+// microsecond. When it crosses going down, U1's output falls at 5 V/us and
+// pulls OUT negative through the diode's junction capacitance and stored
+// charge for a moment (the turn-off kick, about -24 mV into 10 kohm); after
+// that OUT rests at 0 V.
+bench HalfWave for PrecisionRectifier {
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        waveform = sine { amplitude = 1V; frequency = 1kHz; };
+    }
+    ignore J_PWR;  // the supplies hold the rails
+
+    // Recorded from 0.9 ms (inside the first negative half) to 3 ms: two whole periods from 1 ms.
+    analysis tran { stop = 3ms; start = 0.9ms; max_step = 1us; }
+
+    measure peak = max(V(OUT)) { min = 0.995V; max = 1.005V; }
+    measure negative_half = max(abs(V(OUT)), 1.6ms, 1.95ms) { max = 1mV; }
+    measure turn_off_kick = min(V(OUT));
+    measure average = mean(V(OUT), 1ms, 3ms) { min = 0.313V; max = 0.3185V; }
+    measure amp_clip = min(V(AMP)) { min = -4.82V; max = -4.78V; }
+    measure output_delay = cross(V(OUT), 10mV) - cross(V(VIN), 10mV) { max = 2us; }
+    measure distortion = thd(V(OUT), 1kHz) { min = 42%; max = 45%; }
+    plot V(VIN), V(OUT), V(AMP);
+}

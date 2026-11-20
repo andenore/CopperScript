@@ -2,8 +2,9 @@
 
 `board.copper` is the electrical board. The `copper sim` command, the ngspice
 backend, the simulation plans and the model preparation script were removed
-with the Python implementation (last Python commit `b16122a`), so this example
-can no longer be simulated. The circuit and the last recorded simulation
+with the Python implementation (last Python commit `b16122a`). The Rust
+`copper sim` (phase P0) has built-in models only and this board has no bench,
+so this example is not simulated today. The circuit and the last recorded simulation
 evidence stay here as reference.
 
 ## Circuit

@@ -1,0 +1,20 @@
+// Noise of the amplifier (../board.copper) with its input driven by an ideal source.
+//
+// The subcircuit's only noisy element is its 1.5 kohm input resistor,
+// 4.99 nV/rtHz, amplified by the noise gain 10: 49.9 nV/rtHz at the output.
+// R_G adds 4.07 nV/rtHz * R_F / R_G = 36.6 nV/rtHz and R_F its own
+// 12.2 nV/rtHz; together sqrt(49.9^2 + 36.6^2 + 12.2^2) = 63.1 nV/rtHz at
+// the output, 6.31 nV/rtHz referred to the input. The noise is white.
+bench Noise for SpiceAmplifier {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_OUT, J_PWR;
+    analysis noise {
+        from = 100Hz; to = 100kHz; points_per_decade = 10;
+        output = V(OUT);
+        input = J_IN;
+    }
+    measure en_out_10khz = at(noise(), 10kHz) { min = 62nV/rtHz; max = 64.2nV/rtHz; }
+    measure en_in_10khz = at(input_noise(), 10kHz) { min = 6.2nV/rtHz; max = 6.42nV/rtHz; }
+    measure amplifier_share = noise_share(noise(U1), 1kHz, 100kHz) { min = 61%; max = 64%; }
+    plot noise(), noise(U1), noise(R_G), noise(R_F);
+}

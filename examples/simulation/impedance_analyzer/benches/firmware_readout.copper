@@ -1,0 +1,17 @@
+// FirmwareReadout: what the firmware computes from the soil of SoilModel. Use it after
+// SoilModel (`using FrontEndPorts, SoilModel, FirmwareReadout`). It is a fixture of its
+// own because a bench evaluates every `let` it has: Startup, which runs SoilModel in
+// time from 0 V, would stop on z_true's 0 / 0 at t = 0.
+//
+// The firmware's result is (V_MON / gain) / (I_MON / R_TIA). Calibration on the card's
+// 1 kohm with 0 ohm contacts (a `reference` run in each bench) removes each channel's
+// own frequency response; the errors a bench reports after it are what calibration
+// cannot remove. The three gain channels share everything upstream of the receiver,
+// so gain 1 and gain 100 bracket them.
+fixture FirmwareReadout for AnalogFrontEnd {
+    let z_true = V(S_HP, S_LP) / (I(RT) + I(CT));   // the soil's transfer impedance
+    let i_lc = I(RC_LC) + I(CC_LC);                  // the current arriving at the LC electrode
+    let i_meas = -V(I_MON) / R_TIA_NOMINAL;          // the TIA inverts
+    let z1 = V(V_MON_1) / i_meas;                    // per gain channel
+    let z100 = V(V_MON_100) / 100 / i_meas;
+}

@@ -1,0 +1,22 @@
+// JST S2B-PH-SM4-TB(LF)(SN): PH series, 2.0 mm pitch, 2-circuit side-entry SMT header,
+// used here as the battery connector (one protected Li-ion/LiPo cell).
+// Facts from CopperLib main jst/ph-s2b-sm4, verified there against JST ePH.pdf (sha256
+// 447624f4f2f7d37c58c1eaa7ee314ad757fe7aff48f6186491ef6f69fbc00b96): 2 A per contact
+// (AWG #24), 100 V, -40 to +105 degC; pad 1 is the "No. 1 circuit" end. The JST PDF
+// could not be fetched in this session (the server returned HTML), so these facts are
+// reused, not re-verified. The pinned CopperLib revision (50655ef) does not contain the
+// part; once the pin moves, import CopperLib's definition instead of this copy.
+// Polarity is this board's assignment: pin 1 = BAT+, pin 2 = BAT-. Cells sold with PH
+// plugs do not share one convention; check every cell before plugging it in.
+// Footprint: KiCad Connector_JST:JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal.
+part JST_S2B_PH_SM4_TB {
+    category = "connector.battery";
+    manufacturer = "JST";
+    footprint = "Connector_JST:JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal";
+    source_document = "JST PH connector catalogue, ePH.pdf (via CopperLib jst/ph-s2b-sm4)";
+    source_url = "https://www.jst-mfg.com/product/pdf/eng/ePH.pdf";
+    pin BAT_P { number = "1"; domains = "power"; directions = "passive"; }
+    pin BAT_N { number = "2"; domains = "ground"; directions = "passive"; }
+    // Two reinforcement lands, both numbered MP; mechanical, tied to GND here.
+    pin MP { number = "MP"; domains = "ground"; directions = "passive"; connection = optional; }
+}

@@ -1,0 +1,17 @@
+// FrontEndPorts: what the board around the module supplies at its ports (README.md,
+// "Structure"), shared by every bench that runs the front end powered and settled.
+// The rails are ideal DC sources, which are AC shorts; the AD9833 is a 0.3 V source
+// with its 200 ohm on chip. The four electrode pads are ignored: every bench puts its
+// own load (the soil model of soil_model.copper, a test source, or nothing) on the
+// electrode nets. A bench that drives another node overrides DDS with ac = 0 V
+// (`model DDS: source { ...; ac = 0V; ... }`); Startup ramps the rails itself and
+// does not use this fixture.
+fixture FrontEndPorts for AnalogFrontEnd {
+    supply POS { voltage = 4.5V; net = VP; }
+    supply NEG { voltage = -4.48V; net = VN; }
+    supply ANALOG_3V3 { voltage = 3.3V; net = V3V3_ANA; }
+    supply MID { voltage = 1.65V; net = V_MID; }
+    supply GROUND { voltage = 0V; net = GND; }
+    model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }
+    ignore E_HC1, E_HP1, E_LP1, E_LC1;   // the pads are nodes of the bench's load
+}

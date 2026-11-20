@@ -1,0 +1,5 @@
+part HEADER_2 {
+    category = "connector.header";
+    pin 1 { number = "1"; domains = "analog"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "ground"; directions = "passive"; }
+}

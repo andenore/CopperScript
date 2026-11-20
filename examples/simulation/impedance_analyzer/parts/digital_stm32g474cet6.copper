@@ -1,0 +1,68 @@
+// Formatted from vendor data with the device file; see digital_stm32g474_device.copper for sources.
+//
+// STM32G474CET6: 512 KB flash, LQFP48 7 x 7 mm, -40 to 85 degC ambient (suffix 6).
+// All 48 pin numbers from DS12288 Rev 3 Table 12 (LQFP48 column), cross-checked pin by
+// pin against ST open pin data STM32G474C(B-C-E)Tx.xml. The UFQFPN48 numbering differs
+// (VSS on the exposed pad); do not reuse this part for the CEU6.
+// Footprint: KiCad Package_QFP:LQFP-48_7x7mm_P0.5mm (JEDEC MS-026 BBC); the ST package
+// drawing (DS12288 section 7) was not compared land by land in this session.
+part STM32G474CET6 {
+    category = "semiconductor.mcu";
+    manufacturer = "STMicroelectronics";
+    footprint = "Package_QFP:LQFP-48_7x7mm_P0.5mm";
+    device = STM32G474;
+    source_document = "STM32G474xB STM32G474xC STM32G474xE datasheet";
+    source_revision = "DS12288 Rev 3";
+    source_location = "Table 12, LQFP48 column";
+    source_url = "https://www.st.com/resource/en/datasheet/stm32g474ce.pdf";
+    source_checksum = "sha256:fc2b93c56927c8043333199e0b6fd3d6bd2f42fd76d488f6be912490d635093e";
+
+    pin VBAT { number = "1"; bond = VBAT; }
+    pin PC13 { number = "2"; bond = PC13; }
+    pin PC14_OSC32_IN { number = "3"; bond = PC14; }
+    pin PC15_OSC32_OUT { number = "4"; bond = PC15; }
+    pin PF0_OSC_IN { number = "5"; bond = PF0; }
+    pin PF1_OSC_OUT { number = "6"; bond = PF1; }
+    pin PG10_NRST { number = "7"; bond = NRST; }
+    pin PA0 { number = "8"; bond = PA0; }
+    pin PA1 { number = "9"; bond = PA1; }
+    pin PA2 { number = "10"; bond = PA2; }
+    pin PA3 { number = "11"; bond = PA3; }
+    pin PA4 { number = "12"; bond = PA4; }
+    pin PA5 { number = "13"; bond = PA5; }
+    pin PA6 { number = "14"; bond = PA6; }
+    pin PA7 { number = "15"; bond = PA7; }
+    pin PB0 { number = "16"; bond = PB0; }
+    pin PB1 { number = "17"; bond = PB1; }
+    pin PB2 { number = "18"; bond = PB2; }
+    pin VSSA { number = "19"; bond = VSSA; }
+    pin VREF_PLUS { number = "20"; bond = VREF_PLUS; }
+    pin VDDA { number = "21"; bond = VDDA; }
+    pin PB10 { number = "22"; bond = PB10; }
+    pin VSS_23 { number = "23"; bond = VSS; }
+    pin VDD_24 { number = "24"; bond = VDD; }
+    pin PB11 { number = "25"; bond = PB11; }
+    pin PB12 { number = "26"; bond = PB12; }
+    pin PB13 { number = "27"; bond = PB13; }
+    pin PB14 { number = "28"; bond = PB14; }
+    pin PB15 { number = "29"; bond = PB15; }
+    pin PA8 { number = "30"; bond = PA8; }
+    pin PA9 { number = "31"; bond = PA9; }
+    pin PA10 { number = "32"; bond = PA10; }
+    pin PA11 { number = "33"; bond = PA11; }
+    pin PA12 { number = "34"; bond = PA12; }
+    pin VSS_35 { number = "35"; bond = VSS; }
+    pin VDD_36 { number = "36"; bond = VDD; }
+    pin PA13 { number = "37"; bond = PA13; }
+    pin PA14 { number = "38"; bond = PA14; }
+    pin PA15 { number = "39"; bond = PA15; }
+    pin PB3 { number = "40"; bond = PB3; }
+    pin PB4 { number = "41"; bond = PB4; }
+    pin PB5 { number = "42"; bond = PB5; }
+    pin PB6 { number = "43"; bond = PB6; }
+    pin PB7 { number = "44"; bond = PB7; }
+    pin PB8_BOOT0 { number = "45"; bond = PB8; }
+    pin PB9 { number = "46"; bond = PB9; }
+    pin VSS_47 { number = "47"; bond = VSS; }
+    pin VDD_48 { number = "48"; bond = VDD; }
+}

@@ -1,0 +1,123 @@
+// StrayCapacitance: the layout strays at SoilSweep's moist loam (100 ohm m), relative
+// permittivity 5, 25 and 40, inside the rating and beyond it (SPEC.md, "Usable range"):
+//  - each guarded electrode node (HC, HP, LP) with residual capacitance to ground
+//    beside its 20 pF to its driven guard (C_TO_GROUND; the buffer's own 1.3 pF is in
+//    its model, on top), and with the guards grounded instead (C_TO_GUARD 0.001 pF:
+//    the 20 pF then goes to ground too, 20.3 pF);
+//  - soil to ground copper through the solder mask near LP (C_MASK; 0.001 pF is none).
+//    A 20 um mask (relative permittivity 3.5) gives 1.5 pF per mm2, so 0.2 pF is about
+//    0.13 mm2: the buried part carries no ground copper on its outer layers (README.md,
+//    "Strays").
+// The rating allows up to 1 pF of residual and 0.2 pF of mask coupling with driven
+// guards; the accuracy limits apply to those steps (`where`). The first four tuples
+// are the rated corners; the rest are the study: residual 0.3, 5 and 20 pF and
+// grounded guards, each with 0, 10 and 100 pF of mask coupling, then the residual and
+// the mask coupling alone, up to where 1 % and 1 degree are lost. usable_to_magnitude
+// and usable_to_phase give the frequency up to which 1 % and 1 degree hold (`upto`).
+// The headroom limits apply at every step; the pump headroom with the largest drive
+// impedance is in SoilSweep. The soil is SoilModel's, written out (see below).
+bench StrayCapacitance for AnalogFrontEnd using FrontEndPorts {
+    // The soil and strays of SoilModel (soil_model.copper), written out here because the
+    // mask capacitor CM_LP joins the soil node S_LP: a bench cannot add a pin to a bench
+    // net its fixture declares (SIM037), and a load model on S_LP instead changes every
+    // value in the 14th digit (the matrix is summed in another order).
+    ignore J_PROBE;   // the soil is on the electrode nets
+
+    param PITCH = 20mm;
+    param PAD_RADIUS = 4.5mm;
+    param R_TRANSFER = 800ohm;
+    param C_TRANSFER = 27.8pF;
+    param R_CONTACT = R_TRANSFER * 2 * 3.14159265 * PITCH / (4 * PAD_RADIUS);
+    param C_CONTACT = C_TRANSFER * 4 * PAD_RADIUS / (2 * 3.14159265 * PITCH);
+    param R_TIA_NOMINAL = 20kohm;     // the firmware's value of R_TIA
+    param C_TO_GUARD = 20pF;
+    param C_TO_GROUND = 0.3pF;
+    param C_MASK = 0.001pF;
+
+    // The soil: a contact per electrode, the transfer impedance between S_HP and S_LP.
+    component RC_HC: RESISTOR { value = R_CONTACT; }
+    component CC_HC: CAPACITOR { value = C_CONTACT; }
+    component RC_HP: RESISTOR { value = R_CONTACT; }
+    component CC_HP: CAPACITOR { value = C_CONTACT; }
+    component RT: RESISTOR { value = R_TRANSFER; }
+    component CT: CAPACITOR { value = C_TRANSFER; }
+    component RC_LP: RESISTOR { value = R_CONTACT; }
+    component CC_LP: CAPACITOR { value = C_CONTACT; }
+    component RC_LC: RESISTOR { value = R_CONTACT; }
+    component CC_LC: CAPACITOR { value = C_CONTACT; }
+    net E_HC { RC_HC.1; CC_HC.1; CG_HC.1; C0_HC.1; }
+    net E_HP { RC_HP.1; CC_HP.1; CG_HP.1; C0_HP.1; }
+    net S_HP { RC_HC.2; CC_HC.2; RC_HP.2; CC_HP.2; RT.1; CT.1; }
+    net S_LP { RT.2; CT.2; RC_LP.2; CC_LP.2; RC_LC.1; CC_LC.1; CM_LP.1; }
+    net E_LP { RC_LP.1; CC_LP.1; CG_LP.1; C0_LP.1; }
+    net E_LC { RC_LC.2; CC_LC.2; C0_LC.1; }
+
+    // Board strays (README.md, "Strays"): node to own guard, residual node to ground,
+    // guard to the ground layer; LC sits in ground.
+    component CG_HC: CAPACITOR { value = C_TO_GUARD; }
+    component C0_HC: CAPACITOR { value = C_TO_GROUND; }
+    component GG_HC: CAPACITOR { value = 100pF; }
+    component CG_HP: CAPACITOR { value = C_TO_GUARD; }
+    component C0_HP: CAPACITOR { value = C_TO_GROUND; }
+    component GG_HP: CAPACITOR { value = 100pF; }
+    component CG_LP: CAPACITOR { value = C_TO_GUARD; }
+    component C0_LP: CAPACITOR { value = C_TO_GROUND; }
+    component GG_LP: CAPACITOR { value = 100pF; }
+    component C0_LC: CAPACITOR { value = 20pF; }
+    component CM_LP: CAPACITOR { value = C_MASK; }   // soil near LP to ground copper through solder mask
+    net GUARD_HC { CG_HC.2; GG_HC.1; }
+    net GUARD_HP { CG_HP.2; GG_HP.1; }
+    net GUARD_LP { CG_LP.2; GG_LP.1; }
+    net GND { C0_HC.2; GG_HC.2; C0_HP.2; GG_HP.2; C0_LP.2; GG_LP.2; C0_LC.2; CM_LP.2; }
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step C_TRANSFER in 5.56pF, 27.8pF, 44.5pF;     // eps_r 5, 25, 40
+    step C_TO_GUARD, C_TO_GROUND, C_MASK in
+        (20pF, 0.3pF, 0.001pF), (20pF, 0.3pF, 0.2pF), (20pF, 1pF, 0.001pF), (20pF, 1pF, 0.2pF),
+        (20pF, 0.3pF, 10pF), (20pF, 0.3pF, 100pF), (20pF, 5pF, 0.001pF), (20pF, 5pF, 10pF), (20pF, 5pF, 100pF),
+        (20pF, 20pF, 0.001pF), (20pF, 20pF, 10pF), (20pF, 20pF, 100pF),
+        (0.001pF, 20.3pF, 0.001pF), (0.001pF, 20.3pF, 10pF), (0.001pF, 20.3pF, 100pF),
+        (20pF, 0.5pF, 0.001pF), (20pF, 1.5pF, 0.001pF), (20pF, 2pF, 0.001pF), (20pF, 3pF, 0.001pF),
+        (20pF, 4pF, 0.001pF),
+        (20pF, 0.3pF, 0.1pF), (20pF, 0.3pF, 0.3pF), (20pF, 0.3pF, 0.5pF), (20pF, 0.3pF, 1pF),
+        (20pF, 0.3pF, 2pF);
+    reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF;
+        C_MASK = 0.001pF; }
+
+    let z_true = V(S_HP, S_LP) / (I(RT) + I(CT));   // the soil's transfer impedance
+    let i_lc = I(RC_LC) + I(CC_LC);                  // the current arriving at the LC electrode
+    let i_meas = -V(I_MON) / R_TIA_NOMINAL;          // the TIA inverts
+    let z1 = V(V_MON_1) / i_meas;                    // what the firmware computes, per gain channel
+    let z100 = V(V_MON_100) / 100 / i_meas;
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    measure mag_error_gain1 = max(abs(mag(e1) - 1)) {
+        max = 1%; where C_TO_GUARD == 20pF and C_TO_GROUND <= 1pF and C_MASK <= 0.2pF; }
+    measure phase_error_gain1 = max(abs(phase(e1))) {
+        max = 1deg; where C_TO_GUARD == 20pF and C_TO_GROUND <= 1pF and C_MASK <= 0.2pF; }
+    measure mag_error_gain100 = max(abs(mag(e100) - 1)) {
+        max = 1%; where C_TO_GUARD == 20pF and C_TO_GROUND <= 1pF and C_MASK <= 0.2pF; }
+    measure phase_error_gain100 = max(abs(phase(e100))) {
+        max = 1deg; where C_TO_GUARD == 20pF and C_TO_GROUND <= 1pF and C_MASK <= 0.2pF; }
+    measure usable_to_magnitude = upto(abs(mag(e1) - 1) < 1%);
+    measure usable_to_phase = upto(abs(phase(e1)) < 1deg);
+    measure mag_error_10khz = abs(mag(at(e1, 10kHz)) - 1);
+    measure phase_error_10khz = abs(phase(at(e1, 10kHz)));
+    measure mag_error_100khz = abs(mag(at(e1, 100kHz)) - 1);
+    measure phase_error_100khz = abs(phase(at(e1, 100kHz)));
+    measure mag_error_1mhz = abs(mag(at(e1, 1MHz)) - 1);
+    measure phase_error_1mhz = abs(phase(at(e1, 1MHz)));
+
+    // Headroom: as in SoilModel.
+    param PUMP_SWING = 4.5V - 0.1V;
+    param CM_TOP = 4.5V - 2.8V;
+    param ADC_LINEAR = 1.65V - 0.1V - 0.075V;
+    measure pump_node_peak = max(mag(V(PUMP))) { max = PUMP_SWING; }
+    measure drive_peak = max(mag(V(DRIVE))) { max = PUMP_SWING; }
+    measure sense_input_peak = max(mag(V(SNS_HP))) { max = CM_TOP; }
+    measure adc_gain1_peak = max(mag(V(V_MON_1))) { max = ADC_LINEAR; }
+    measure adc_gain10_peak = max(mag(V(V_MON_10))) { max = ADC_LINEAR; }
+    measure adc_current_peak = max(mag(V(I_MON))) { max = ADC_LINEAR; }
+
+    plot abs(mag(e1) - 1), abs(phase(e1));
+}

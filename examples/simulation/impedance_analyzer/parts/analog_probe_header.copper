@@ -1,0 +1,18 @@
+// Probe access: 1 x 8 pin header, 2.54 mm, carrying the four electrodes, the three
+// driven guards and ground, for debugging and for external leads. Each electrode pin
+// sits next to its guard pin so that a coaxial lead can take the guard on its shield.
+// Orderable part: Samtec TSW-108-07-G-S (unverified: part-number pattern from memory,
+// not checked against a Samtec data sheet in this session).
+// Footprint: KiCad Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical.
+part PROBE_HEADER_1X08 {
+    category = "connector.header";
+    footprint = "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical";
+    pin HC       { number = "1"; domains = "analog"; directions = "passive"; }
+    pin GUARD_HC { number = "2"; domains = "analog"; directions = "passive"; }
+    pin HP       { number = "3"; domains = "analog"; directions = "passive"; }
+    pin GUARD_HP { number = "4"; domains = "analog"; directions = "passive"; }
+    pin LP       { number = "5"; domains = "analog"; directions = "passive"; }
+    pin GUARD_LP { number = "6"; domains = "analog"; directions = "passive"; }
+    pin LC       { number = "7"; domains = "analog"; directions = "passive"; }
+    pin GND      { number = "8"; domains = "ground"; directions = "passive"; }
+}

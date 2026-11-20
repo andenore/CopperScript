@@ -1,0 +1,29 @@
+// Texas Instruments REF2033AIDDCR: dual-output reference, VREF 3.3 V and VBIAS = VREF / 2
+// = 1.65 V, 5-pin SOT-23-THIN (DDC).
+// Source, read in this session: REF20xx data sheet SBOS600F (July 2026), ti.com,
+// sha256 2b21e0c5aea93ed74f4a6bd7c4c1f4f3e39ca87c338f699ef51998df424a3dff.
+//   Section 4 p. 3: REF2033 VREF 3.3 V, VBIAS 1.65 V. Figure 5-1 p. 4: 1 VBIAS, 2 GND,
+//   3 EN, 4 VIN, 5 VREF; enabled when EN >= VIN - 0.7 V. Section 6.1 p. 5: VIN -0.3 to
+//   6 V; EN -0.3 V to VIN + 0.3 V. Section 6.3: VIN VREF + 0.02 V to 5.5 V (no load).
+//   Section 6.5 p. 6: both outputs +-0.05 % initial; sink and source 20 mA; noise
+//   0.25 ppm/sqrt(Hz) at 100 Hz; stable with 0 to 10 uF on each output; 360 uA typ supply.
+//   Section 9.4: 0.1 uF ceramic at VIN, VREF and VBIAS.
+//   Section 12: REF2033AIDDCR, SOT-23-THIN (DDC), 3000-unit reel, -40 to 125 degC.
+// Footprint: KiCad Package_TO_SOT_SMD:TSOT-23-5 (DDC is TI's 5-pin SOT-23-THIN); the
+// DDC land pattern was not compared.
+part REF2033AIDDCR {
+    category = "power.reference";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_TO_SOT_SMD:TSOT-23-5";
+    source_document = "REF20xx Low-Drift, Low-Power, Dual-Output, VREF and VREF / 2 Voltage References";
+    source_revision = "SBOS600F";
+    source_location = "Sections 4, 5, 6.1-6.5, 9.4, 12";
+    source_url = "https://www.ti.com/lit/pdf/sbos600";
+    source_checksum = "sha256:2b21e0c5aea93ed74f4a6bd7c4c1f4f3e39ca87c338f699ef51998df424a3dff";
+
+    pin VBIAS { number = "1"; domains = "power,analog"; directions = "output"; }
+    pin GND { number = "2"; domains = "ground"; directions = "input"; }
+    pin EN { number = "3"; domains = "digital"; directions = "input"; absolute_min = -0.3V; absolute_max = "VIN+0.3V"; }
+    pin VIN { number = "4"; domains = "power"; directions = "input"; voltage_min = 3.32V; voltage_max = 5.5V; absolute_min = -0.3V; absolute_max = 6V; }
+    pin VREF { number = "5"; domains = "power,analog"; directions = "output"; }
+}

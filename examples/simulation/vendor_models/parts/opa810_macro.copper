@@ -1,0 +1,22 @@
+// Texas Instruments OPA810 as the built-in macro model, with the figures of
+// TI's product page (ti.com/product/OPA810, parametrics): GBW 70 MHz, slew
+// rate 200 V/us, voltage noise 9.5 nV/rtHz at 1 kHz. The open-loop gain is
+// not among them; 112 dB is an assumption of this example. Compared with
+// TI's own model (opa810_vendor.copper) by the benches.
+part OPA810_MACRO {
+    category = "amplifier.opamp";
+    manufacturer = "Texas Instruments (OPA810)";
+    pin OUT { number = "1"; domains = "analog"; directions = "output"; }
+    pin VN  { number = "2"; domains = "power"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin INN { number = "4"; domains = "analog"; directions = "input"; }
+    pin VP  { number = "5"; domains = "power"; directions = "input"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        gbw = 70MHz;              // product page
+        open_loop_gain = 112dB;   // assumption
+        slew_rate = 200V/us;      // product page
+        voltage_noise = 9.5nV/rtHz;  // product page, at 1 kHz
+    }
+}

@@ -1,0 +1,32 @@
+// Noise of the Howland pump's load current (../board.copper) into 1 kohm,
+// from a 50 ohm signal source, 1 kHz to 1 MHz.
+//
+// The load node's noise voltage over the load is the noise of the current
+// the load sees. The load's own thermal noise is sqrt(4 k T / 1 kohm) =
+// 4.07 pA/rtHz of it: a current source drives a high impedance, so all of the
+// load's noise stays across the load. The pump adds the current noise of each
+// 10 kohm resistor, sqrt(4 k T / 10 kohm) = 1.29 pA/rtHz each for R_SENSE
+// and the four network resistors (the 12.9 nV/rtHz of a network resistor
+// drives a current through R_SET), and the amplifiers' 4 nV/rtHz over
+// 10 kohm. In total about 5.1 pA/rtHz, flat: 5.1 nA RMS over the 1 MHz
+// band, 69 dB below the 15 uA peak signal. Two thirds of the noise power is
+// the load's; the pump's own noise is set by its 10 kohm resistors.
+//
+// The load and the connectors are the LoadedPump fixture (loaded_pump.copper);
+// the source here has the 50 ohm output resistance.
+bench MeasurementNoise for HowlandPump using LoadedPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0.15V; output_resistance = 50ohm; }
+
+    analysis noise { from = 1kHz; to = 1MHz; points_per_decade = 20; output = V(LOAD); input = J_IN; }
+
+    let i_noise = noise() / R_LOAD_VALUE;
+    measure i_noise_10khz = at(i_noise, 10kHz) { max = 6pA/rtHz; }
+    measure i_noise_rms = noise_rms(i_noise, 1kHz, 1MHz);
+    measure snr_peak = db(15uA / noise_rms(i_noise, 1kHz, 1MHz)) { min = 60dB; }
+    measure load_share = noise_share(noise(R_LOAD), 1kHz, 1MHz);
+    measure network_share = noise_share(noise(R1), 1kHz, 1MHz) + noise_share(noise(R2), 1kHz, 1MHz)
+        + noise_share(noise(R3), 1kHz, 1MHz) + noise_share(noise(R4), 1kHz, 1MHz);
+    measure sense_share = noise_share(noise(R_SENSE), 1kHz, 1MHz);
+    measure amplifier_share = noise_share(noise(U1), 1kHz, 1MHz) + noise_share(noise(U2), 1kHz, 1MHz);
+    plot i_noise, noise(R_LOAD) / R_LOAD_VALUE, noise(R_SENSE) / R_LOAD_VALUE;
+}

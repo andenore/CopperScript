@@ -1,0 +1,15 @@
+// Murata BLM18PG221SN1D: 0603 chip ferrite bead for supply filtering.
+// unverified: the Murata specification was not fetched in this session; the impedance
+// (220 ohm at 100 MHz), rated current and DC resistance are not declared here and must
+// be checked against the Murata BLM18PG data sheet before ordering.
+// dc_power_path lets ERC follow the DC feed from the upstream rail; it is not an
+// impedance model (see the language reference, Supplies).
+// Footprint: KiCad Inductor_SMD:L_0603_1608Metric (pads 1, 2).
+part BLM18PG221SN1D {
+    category = "passive.ferrite";
+    manufacturer = "Murata";
+    footprint = "Inductor_SMD:L_0603_1608Metric";
+    dc_power_path = "1,2";
+    pin 1 { number = "1"; domains = "power"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "power"; directions = "passive"; }
+}

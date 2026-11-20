@@ -1,0 +1,63 @@
+// CalibrationCard: the stake pressed onto the calibration card (SPEC.md, "Blocks"):
+// 0.1 % reference resistors of 39 ohm, 1 kohm and 10 kohm between the sense pads, each
+// with 0 ohm contacts (a link, 1 mohm here) or with a resistor in series with every pad.
+//  - Rated positions (SPEC.md requires 1 % and 1 degree): 39 ohm and 1 kohm with 0 ohm
+//    or soil-like contacts (about 7 times the reference: 270 ohm and 6.8 kohm, because
+//    soil contacts are 6.98 times the transfer impedance for this electrode geometry,
+//    soil_model.copper; they stand for 5 ohm m and 126 ohm m soil), and 10 kohm with
+//    0 ohm contacts. The accuracy limits apply to these (`where R_CONTACT <= 6.8kohm`).
+//  - Outside the rated range, reported without accuracy limits: 68 kohm on 10 kohm
+//    (soil-like, about 1.26 kohm m, the dry end of the soil range; kept as a check of
+//    the degraded range: on the bench its error should match this simulation, which
+//    tests the sense nodes' capacitance), and 47 kohm on every reference, the contacts
+//    of the first card design. Those are not soil-like: on 39 ohm they make the common
+//    mode 1200 times the sense voltage, and 47 kohm against a sense node's 1.6 pF is a
+//    2.1 MHz pole whatever the reference.
+// Calibration uses the 1 kohm position with 0 ohm contacts (reference CARD). The card
+// is modelled with the soil network of SoilModel: R_TRANSFER is the reference resistor
+// with 0.5 pF across it (card pads and resistor; unverified estimate), R_CONTACT the
+// series resistors with 0.2 pF across each. The short and open positions are not
+// simulated: a short has no impedance to compare against, and an open card gives no
+// current. The errors are reported over the band and at 10 kHz, 100 kHz and 1 MHz. The
+// headroom limits apply at every position: 68 kohm gives the card's largest pump swing.
+// The 10 kohm positions (150 mV) drive the gain-10 channel to the edge of its range, as
+// 1.3 kohm m soil does: the firmware reads them on gain 1, so gain 10 is reported.
+bench CalibrationCard for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    param C_TRANSFER = 0.5pF;
+    param R_CONTACT = 1mohm;
+    param C_CONTACT = 0.2pF;
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    // Zipped: each card position with the contacts it has; the rated ones first.
+    step R_TRANSFER, R_CONTACT in (39ohm, 1mohm), (39ohm, 270ohm), (1kohm, 1mohm), (1kohm, 6.8kohm),
+        (10kohm, 1mohm), (10kohm, 68kohm), (39ohm, 47kohm), (1kohm, 47kohm), (10kohm, 47kohm);
+    reference CARD { R_TRANSFER = 1kohm; R_CONTACT = 1mohm; }
+
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    measure mag_error_gain1 = max(abs(mag(e1) - 1)) { max = 1%; where R_CONTACT <= 6.8kohm; }
+    measure phase_error_gain1 = max(abs(phase(e1))) { max = 1deg; where R_CONTACT <= 6.8kohm; }
+    measure mag_error_gain100 = max(abs(mag(e100) - 1)) { max = 1%; where R_CONTACT <= 6.8kohm; }
+    measure phase_error_gain100 = max(abs(phase(e100))) { max = 1deg; where R_CONTACT <= 6.8kohm; }
+    // usable_to_phase: the frequency up to which 1 degree holds from 1 kHz on (`upto`). The
+    // same for the magnitude cannot be written: 39 ohm with 47 kohm contacts is 3.8 % off
+    // at 1 kHz already, and `upto` of a comparison that fails at the first sample stops
+    // the whole bench; its magnitude is read from the plotted error instead.
+    measure usable_to_phase = upto(abs(phase(e1)) < 1deg);
+    measure mag_error_10khz = abs(mag(at(e1, 10kHz)) - 1);
+    measure phase_error_10khz = abs(phase(at(e1, 10kHz)));
+    measure mag_error_100khz = abs(mag(at(e1, 100kHz)) - 1);
+    measure phase_error_100khz = abs(phase(at(e1, 100kHz)));
+    measure mag_error_1mhz = abs(mag(at(e1, 1MHz)) - 1);
+    measure phase_error_1mhz = abs(phase(at(e1, 1MHz)));
+
+    // Headroom (SoilModel).
+    measure pump_node_peak = max(mag(V(PUMP))) { max = PUMP_SWING; }
+    measure drive_peak = max(mag(V(DRIVE))) { max = PUMP_SWING; }
+    measure sense_input_peak = max(mag(V(SNS_HP))) { max = CM_TOP; }
+    measure adc_gain1_peak = max(mag(V(V_MON_1))) { max = ADC_LINEAR; }
+    measure adc_gain10_peak = max(mag(V(V_MON_10)));   // past its range on 10 kohm by design: the firmware uses gain 1
+    measure adc_current_peak = max(mag(V(I_MON))) { max = ADC_LINEAR; }
+
+    plot abs(mag(e1) - 1), abs(phase(e1));
+}

@@ -1,0 +1,15 @@
+// Closed-loop response of both stages (../board.copper): gain 10, so the
+// -3 dB point is near GBW / 10 = 7 MHz for a single-pole amplifier.
+bench Frequency for VendorModels {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_PWR;
+    analysis ac { from = 1kHz; to = 300MHz; points_per_decade = 50; }
+    let vendor = V(OUT_V) / V(VIN);
+    let macro = V(OUT_M) / V(VIN);
+    measure vendor_gain_1khz = mag(at(vendor, 1kHz)) { min = 9.98; max = 10.0; }
+    measure macro_gain_1khz = mag(at(macro, 1kHz)) { min = 9.98; max = 10.0; }
+    measure vendor_bandwidth = cross(db(vendor), 16.99dB);
+    measure macro_bandwidth = cross(db(macro), 16.99dB);
+    measure peaking_vendor = max(db(vendor)) - db(at(vendor, 1kHz));
+    plot mag(vendor), mag(macro), phase(vendor), phase(macro);
+}

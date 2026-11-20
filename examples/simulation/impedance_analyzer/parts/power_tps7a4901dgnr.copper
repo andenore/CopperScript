@@ -1,0 +1,35 @@
+// Texas Instruments TPS7A4901DGNR: 36 V, 150 mA, low-noise positive LDO, adjustable,
+// 8-pin HVSSOP PowerPAD (DGN).
+// Source, read in this session: TPS7A49 data sheet SBVS121E (May 2015), ti.com,
+// sha256 f69e957b22bcc2db72149f57c96501aedeb4ed214f016c98f562d71411474182.
+//   Section 5 p. 4: DGN pin functions (DNC must not be connected to any net; NC open or
+//   GND; PowerPAD open or GND; EN may be tied to IN, VEN <= VIN). Section 6.1 p. 5: IN
+//   to GND -0.3 to 36 V; EN to GND -0.3 to 36 V; EN to IN +0.3 V max. Section 6.3: VIN
+//   3-35 V, IOUT 0-150 mA, CIN and COUT >= 2.2 uF, CNR and CFF 10 nF nominal, lower
+//   feedback resistor <= 237 kohm. Section 6.5 p. 6: VEN(high) 2.1 V, VEN(low) 0.4 V;
+//   VFB 1.185 V; dropout 260 mV at 100 mA; ground current 49 uA typ / 100 uA max at no
+//   load; noise 15.4 uVRMS (10 Hz-100 kHz, CNR = 10 nF); feedback network current >= 5 uA.
+//   Section 9.1.1: R1 = R2 (VOUT / VFB - 1).
+// Footprint: KiCad Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm; the DGN0008G
+// land pattern (drawing 4225480/C) shows a 1.57 x 1.89 mm exposed pad. Pad 9 is the
+// PowerPAD.
+part TPS7A4901DGNR {
+    category = "power.regulator.ldo";
+    manufacturer = "Texas Instruments";
+    footprint = "Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm";
+    source_document = "TPS7A49 36-V, 150-mA, Ultralow-Noise, Positive Linear Regulator";
+    source_revision = "SBVS121E";
+    source_location = "Section 5 p. 4; sections 6.1-6.5 pp. 5-6; section 9.1.1";
+    source_url = "https://www.ti.com/lit/ds/symlink/tps7a49.pdf";
+    source_checksum = "sha256:f69e957b22bcc2db72149f57c96501aedeb4ed214f016c98f562d71411474182";
+
+    pin OUT { number = "1"; domains = "power"; directions = "output"; }
+    pin FB { number = "2"; domains = "analog"; directions = "input"; }
+    pin NC { number = "3"; connection = optional; }
+    pin GND { number = "4"; domains = "ground"; directions = "input"; }
+    pin EN { number = "5"; domains = "digital"; directions = "input"; vih = 2.1V; vil = 0.4V; absolute_min = -0.3V; absolute_max = "IN+0.3V, 36V"; }
+    pin NR_SS { number = "6"; domains = "analog"; directions = "passive"; }
+    pin DNC { number = "7"; connection = do_not_connect; }
+    pin IN { number = "8"; domains = "power"; directions = "input"; voltage_min = 3V; voltage_max = 35V; absolute_min = -0.3V; absolute_max = 36V; }
+    pin PAD { number = "9"; domains = "ground"; directions = "passive"; }
+}

@@ -1,0 +1,27 @@
+// A low-noise precision op-amp, local to the preamp example. Every sim value
+// is an illustrative round number in the range of low-noise bipolar-input
+// amplifiers of the OPA209 / ADA4077 class; none is a data-sheet fact and
+// this is not a qualified model of any part.
+part OPAMP_LOW_NOISE {
+    category = "amplifier.opamp";
+    manufacturer = "Example (low-noise precision op-amp)";
+    pin INN { number = "2"; domains = "analog"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin VN  { number = "4"; domains = "power"; directions = "input"; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin VP  { number = "7"; domains = "power"; directions = "input"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        gbw = 18MHz;
+        open_loop_gain = 120dB;
+        input_capacitance_common = 2pF;
+        input_bias_current = 1nA;
+        input_offset_voltage = 0.01mV;  // 10 uV
+        voltage_noise = 2.2nV/rtHz;
+        voltage_noise_corner = 5Hz;
+        current_noise = 0.5pA/rtHz;
+        current_noise_corner = 200Hz;
+        output_resistance = 20ohm;
+    }
+}

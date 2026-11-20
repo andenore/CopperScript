@@ -1,0 +1,19 @@
+// onsemi MBR120VLSFT1G: 20 V, 1 A Schottky rectifier, SOD-123FL (case 498), 3000/reel.
+// Source, read in this session: onsemi MBR120VLSFT1/D Rev. 5 (June 2025), onsemi.com,
+// sha256 717107ed0521d640b073a8f7af1663db515320f1f25406c2cc147eaffe226b72.
+//   Page 1: ordering information, cathode band polarity. Page 2: VRRM / VRWM / VR 20 V,
+//   IF(AV) 1 A. Used as the TPS65131 boost and inverter rectifiers (D1, D2), which see
+//   at most VPOS (6 V) and VIN + |VNEG| (about 11.3 V) in reverse.
+// The data sheet does not number the two terminals; the numbering follows the KiCad
+// Diode_SMD:D_SOD-123F footprint, where pad 1 is the cathode.
+part MBR120VLSFT1G {
+    category = "semiconductor.diode.schottky";
+    manufacturer = "onsemi";
+    footprint = "Diode_SMD:D_SOD-123F";
+    source_document = "MBR120VLSF, NRVB120VLSF Surface Mount Schottky Power Rectifier";
+    source_revision = "MBR120VLSFT1/D Rev. 5";
+    source_url = "https://www.onsemi.com/download/data-sheet/pdf/mbr120vlsft1-d.pdf";
+    source_checksum = "sha256:717107ed0521d640b073a8f7af1663db515320f1f25406c2cc147eaffe226b72";
+    pin K { number = "1"; domains = "power"; directions = "passive"; }
+    pin A { number = "2"; domains = "power"; directions = "passive"; }
+}

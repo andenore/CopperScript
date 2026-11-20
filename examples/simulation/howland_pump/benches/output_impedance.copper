@@ -1,0 +1,20 @@
+// Output impedance of the Howland pump (../board.copper): the input is held
+// at 0 V and a 1 uA test current is pushed into the load node, so the node
+// voltage divided by 1 uA is the impedance the load sees in parallel.
+//
+// Expected: about R_SET * A0 / 3 = 5.9 Mohm at 1 kHz (finite open-loop gain),
+// falling to about 110 kohm at 1 MHz, where the buffer's 1.3 pF input
+// capacitance (122 kohm) dominates over the gain-bandwidth limit
+// R_SET * GBW / (3 f) = 1.3 Mohm.
+bench OutputImpedance for HowlandPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0V; }
+    replace J_OUT with source { out = J_OUT.1; ref = GND; output = current; ac = 1uA; }
+    ignore J_PWR;
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+
+    let z_out = V(LOAD) / 1uA;
+    measure z_out_1khz = mag(at(z_out, 1kHz)) { min = 5Mohm; }
+    measure z_out_1mhz = mag(at(z_out, 1MHz)) { min = 100kohm; }
+    plot mag(z_out), phase(z_out);
+}

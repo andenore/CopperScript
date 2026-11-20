@@ -1,0 +1,48 @@
+// Distortion: the drive current in time, harmonics and THD at 1 kHz, 100 kHz and
+// 1 MHz, into the largest drive impedance (1.3 kohm m: R_TRANSFER 11 kohm, contacts
+// 77 kohm, about 160 kohm between HC and LC) and into moist loam (100 ohm m: 800 ohm,
+// about 12 kohm), SoilModel at relative permittivity 25. The op-amp models are linear
+// except for their transient limits (parts/analog_*: output swing from the rails, slew
+// rate, output current for the ADA4817 and AD8130), so any harmonic here comes from
+// clipping or slewing. The DDS runs at its nominal 0.3 V peak (0.15 V after the filter,
+// 15 uA) and, into the largest drive impedance, at 0.65 V, the top of the AD9833's
+// output range (README.md, "Structure"), which a wrong setting could produce.
+//
+// Each run starts with the sine at t = 0 and records ten periods after the coupling
+// networks have mostly settled (1 kHz: 50 ms to 60 ms; 100 kHz: 200 us to 300 us;
+// 1 MHz: 20 us to 30 us); what is left of their settling leaks into the harmonics as
+// a floor near 0.001 % (-100 dB). Reported without limits: SPEC.md sets no distortion
+// requirement (the firmware's I/Q demodulation takes the fundamental). Headroom is the
+// pump output's distance from its clipping level (VP less 0.08 V); the slew rate
+// needed is 2 pi f times the pump output's peak.
+bench Distortion for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    param F_DRIVE = 1kHz;
+    param A_DDS = 0.3V;
+    param T_STOP = 60ms;
+    param T_START = 50ms;
+    param T_STEP = 5us;
+    model DDS: source {
+        out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm;
+        waveform = sine { amplitude = A_DDS; frequency = F_DRIVE; };
+    }
+
+    analysis tran { stop = T_STOP; start = T_START; max_step = T_STEP; }
+    // About 200 samples per period; ten periods recorded.
+    step F_DRIVE, T_STOP, T_START, T_STEP in (1kHz, 60ms, 50ms, 5us), (100kHz, 300us, 200us, 50ns),
+        (1MHz, 30us, 20us, 5ns);
+    // Zipped: the largest drive impedance at the nominal and the largest DDS amplitude,
+    // moist loam at the nominal amplitude.
+    step R_TRANSFER, A_DDS in (11kohm, 0.3V), (11kohm, 0.65V), (800ohm, 0.3V);
+
+    measure current_fundamental = harmonic(i_lc, F_DRIVE, 1);
+    measure current_thd = thd(i_lc, F_DRIVE);
+    measure current_h2 = harmonic(i_lc, F_DRIVE, 2) / harmonic(i_lc, F_DRIVE, 1);
+    measure current_h3 = harmonic(i_lc, F_DRIVE, 3) / harmonic(i_lc, F_DRIVE, 1);
+    measure pump_output_peak = max(abs(V(DRIVE)));
+    measure pump_headroom = 4.42V - max(abs(V(DRIVE)));
+    measure slew_needed = 6.2831853 * F_DRIVE * max(abs(V(DRIVE)));
+    measure gain1_thd = thd(V(V_MON_1), F_DRIVE);
+    measure gain10_thd = thd(V(V_MON_10), F_DRIVE);
+    measure current_channel_thd = thd(V(I_MON), F_DRIVE);
+    plot i_lc, V(DRIVE), V(PUMP), V(V_MON_1);
+}

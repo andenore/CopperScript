@@ -1,0 +1,33 @@
+// Noise of the preamp (../board.copper) with a 1 kohm sensor on its input.
+//
+// Hand estimate at 1 kHz, gain G = 11 (the coupling capacitor is 16 ohm and
+// R_B = 100 kohm leaves the sensor's 1 kohm nearly unloaded), output density:
+//   sensor 1 kohm thermal   4.07 nV * 11 * 100/101   = 44.3 nV/rtHz
+//   R_G 1 kohm thermal      4.07 nV * R_F / R_G      = 40.7 nV/rtHz
+//   op-amp voltage noise    2.2 nV * 11              = 24.2 nV/rtHz
+//   R_F 10 kohm thermal     12.9 nV                  = 12.9 nV/rtHz
+//   current noise, R_B, R_OUT                         ~ 9 nV/rtHz together
+// in total about 67 nV/rtHz at the output, 6.1 nV/rtHz referred to the
+// sensor. R_G is as noisy as the sensor itself: a 100 ohm / 1 kohm divider
+// would take it down to a third.
+bench MeasurementNoise for LowNoisePreamp {
+    // The sensor: a 1 kohm source on the input connector.
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1mV; output_resistance = 1kohm; }
+    ignore J_OUT, J_PWR;
+
+    analysis noise {
+        from = 1Hz; to = 1MHz; points_per_decade = 20;
+        output = V(VOUT);
+        input = J_IN;
+        temperature = 27degC;
+    }
+
+    measure en_out_1khz = at(noise(), 1kHz) { max = 75nV/rtHz; }
+    measure en_in_1khz = at(input_noise(), 1kHz) { max = 7nV/rtHz; }
+    measure vn_audio = noise_rms(noise(), 10Hz, 20kHz) { max = 0.012mV; }
+    measure sensor_share = noise_share(noise(J_IN), 10Hz, 20kHz);
+    measure r_g_share = noise_share(noise(R_G), 10Hz, 20kHz);
+    measure amplifier_share = noise_share(noise(U1), 10Hz, 20kHz) { max = 25%; }
+    measure gain_1khz = mag(at(V(VOUT) / V(J_IN.1), 1kHz));
+    plot noise(), input_noise(), noise(J_IN), noise(R_G), noise(U1);
+}

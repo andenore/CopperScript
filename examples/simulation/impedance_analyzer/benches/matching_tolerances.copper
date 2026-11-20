@@ -1,0 +1,106 @@
+// MatchingTolerances: the component tolerances of the front end and the
+// reference runs that ResistorMatching (Monte Carlo) and ResistorWorstCase (worst case)
+// share. Use it after FrontEndPorts, SoilModel and FirmwareReadout.
+//
+// Tolerances:
+//  - LT5400 network (RN_HOW): +/-7.5 % absolute, +/-0.0125 % ratio of any resistor to
+//    any other (A grade, -40 to 85 C; LT5400 data sheet Rev. A p. 3). The part's model
+//    is four `load` blocks, and a matched group can only be declared on passive
+//    components (a part model with a tolerance is SIM091), so the network is ignored
+//    here and rebuilt from four matched bench resistors and the part model's eight
+//    2.75 pF to its exposed pad (ground).
+//  - R_SET and R_TIA: 0.1 %, declared on the module's components (README.md, "The
+//    circuit").
+//  - Everything below is an assumption, stated here because the module gives no
+//    tolerance for it: resistors 1 % (thick film); C0G capacitors 5 % (C_BLK, C_TIA,
+//    C_CMP_N, C_CMP_P, the filter's C_F1 and C_F2, the anti-alias C_AA*); X7R
+//    coupling capacitors 10 % (C_IN, C_NDC, C_CHP, C_CLP, C_B1, C_G1, C_G2); the 22 uF
+//    DC blocks 20 %; the filter inductor 10 %. Supply decoupling is left out (an AC
+//    short either way).
+// Not varied: amplifier parameters (their CMRR, offsets and gain are single model
+// values; SenseCommonMode covers a minimum-CMRR buffer), the AD9833's amplitude and
+// its 200 ohm.
+//
+// Soil: SoilModel's at 5 ohm m, 100 ohm m and 1.3 kohm m (relative permittivity 25);
+// each bench declares R_CONTACT a plain param (a fixture cannot override another's
+// param) and steps it with R_TRANSFER, 6.98 times it, so that the reference runs can
+// change the transfer resistance alone. References:
+//  - CARD: calibration on the card's 1 kohm with 0 ohm contacts, as in every bench.
+//  - LOAD2: the same board with another soil (2 kohm, 14 kohm contacts); two loads
+//    give the pump's Norton output impedance at E_HC,
+//    (V2 - V1) / (I1 - I2), node strays included, as PumpOutputImpedance measures it.
+//  - SHORT: the transfer resistance shorted (1 mohm) with the step's contacts: the
+//    sense electrodes then carry only the common mode (the LC contact's drop), and
+//    its ratio to V_MON_1 is the sense path's common-mode rejection in place.
+fixture MatchingTolerances for AnalogFrontEnd {
+    ignore RN_HOW;
+    component RN_R1: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
+    component RN_R2: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
+    component RN_R3: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
+    component RN_R4: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
+    net DRV_BUF { RN_R1.1; }    // R1: DRV_BUF to PFB
+    net PFB { RN_R1.2; RN_R2.2; }  // R2: HC_FB to PFB
+    net HC_FB { RN_R2.1; }
+    net NFB { RN_R3.1; RN_R4.2; }  // R3: NFB to N_DC, R4: DRIVE to NFB
+    net N_DC { RN_R3.2; }
+    net DRIVE { RN_R4.1; }
+    // The part model's 2.75 pF from each end to the pad (on GND), as load models: a
+    // bench net joining GND here would clash with SoilModel's (SIM037).
+    model RN_C1A: load { inp = DRV_BUF; ref = GND; capacitance = 2.75pF; }
+    model RN_C1B: load { inp = PFB; ref = GND; capacitance = 2.75pF; }
+    model RN_C2A: load { inp = HC_FB; ref = GND; capacitance = 2.75pF; }
+    model RN_C2B: load { inp = PFB; ref = GND; capacitance = 2.75pF; }
+    model RN_C3A: load { inp = NFB; ref = GND; capacitance = 2.75pF; }
+    model RN_C3B: load { inp = N_DC; ref = GND; capacitance = 2.75pF; }
+    model RN_C4A: load { inp = DRIVE; ref = GND; capacitance = 2.75pF; }
+    model RN_C4B: load { inp = NFB; ref = GND; capacitance = 2.75pF; }
+
+    // Assumed tolerances (see above).
+    tolerance R_TERM = 1%;
+    tolerance R_INB = 1%;
+    tolerance R_BHP = 1%;
+    tolerance R_BLP = 1%;
+    tolerance R_B1B = 1%;
+    tolerance R_G1B = 1%;
+    tolerance R_G2B = 1%;
+    tolerance R_G1F = 1%;
+    tolerance R_G1G = 1%;
+    tolerance R_G2F = 1%;
+    tolerance R_G2G = 1%;
+    tolerance R_AA1 = 1%;
+    tolerance R_AA10 = 1%;
+    tolerance R_AA100 = 1%;
+    tolerance R_AAI = 1%;
+    tolerance C_BLK = 5%;
+    tolerance C_TIA = 5%;
+    tolerance C_CMP_N = 5%;
+    tolerance C_CMP_P = 5%;
+    tolerance C_F1 = 5%;
+    tolerance C_F2 = 5%;
+    tolerance C_AA1 = 5%;
+    tolerance C_AA10 = 5%;
+    tolerance C_AA100 = 5%;
+    tolerance C_AAI = 5%;
+    tolerance C_IN = 10%;
+    tolerance C_NDC = 10%;
+    tolerance C_CHP = 10%;
+    tolerance C_CLP = 10%;
+    tolerance C_B1 = 10%;
+    tolerance C_G1 = 10%;
+    tolerance C_G2 = 10%;
+    tolerance C_G1G = 20%;
+    tolerance C_G2G = 20%;
+    tolerance L_F1 = 10%;
+
+    reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF; }
+    reference LOAD2 { R_TRANSFER = 2kohm; R_CONTACT = 14kohm; }
+    reference SHORT { R_TRANSFER = 1mohm; }
+
+    let i_hc = I(RC_HC) + I(CC_HC);                  // the current leaving E_HC into the soil
+    let z10 = V(V_MON_10) / 10.09 / i_meas;          // the gain-10 channel (9.09 kohm / 1 kohm + 1)
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    let ei = i_meas / i_lc / reference(i_meas / i_lc, CARD);
+    let z_out = (reference(V(E_HC), LOAD2) - V(E_HC)) / (i_hc - reference(i_hc, LOAD2));
+    let rejection = reference(V(E_LP) / V(V_MON_1), SHORT);
+}

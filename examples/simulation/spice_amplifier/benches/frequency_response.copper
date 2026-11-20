@@ -1,0 +1,21 @@
+// Closed-loop frequency response of the amplifier (../board.copper).
+//
+// The subcircuit is a single-pole amplifier: 100 dB from a 100 Hz pole, a
+// 10 MHz gain-bandwidth. With the output divider k = 0.994 (10 ohm into
+// 1.667 kohm) and beta = 0.1, the closed loop is 9.999 at low frequency;
+// alone, the pole would put the -3 dB point at f_p (1 + A0 k beta) = 994 kHz.
+// The model's input capacitances (2 pF from each input to mid-supply, 1 pF
+// between them) feed the input forward to the inverting node, which lifts
+// the response: the nodal solution of the whole network by hand (four
+// nodes, the model's elements and R_F, R_G, R_LOAD) gives the -3 dB point
+// at 1.0203 MHz and a phase of -46.19 deg at 994 kHz.
+bench FrequencyResponse for SpiceAmplifier {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_OUT, J_PWR;
+    analysis ac { from = 1kHz; to = 100MHz; points_per_decade = 100; }
+    let gain = V(OUT) / V(VIN);
+    measure gain_1khz = mag(at(gain, 1kHz)) { min = 9.997; max = 10.0; }
+    measure bandwidth = cross(db(gain), 16.99dB) { min = 1.010MHz; max = 1.030MHz; }
+    measure phase_at_994khz = phase(at(gain, 994kHz)) { min = -46.5deg; max = -45.9deg; }
+    plot mag(gain), phase(gain);
+}

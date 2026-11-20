@@ -1,0 +1,15 @@
+// AC bench for the RC fixture in ../rc_filter.copper: R1 = 1 kohm, C1 = 100 nF,
+// so the corner is 1/(2 pi R C) = 1.5915 kHz, where the gain is -3.01 dB and
+// the phase -45 deg. Run it with `copper sim examples/simulation/rc_filter.copper`.
+bench RcCorner for SimulationRCFilter {
+    // The board's INPUT supply holds VIN at 1 V, which is an AC short. The
+    // bench swaps it for a source with the same DC level and a 1 V AC stimulus.
+    replace INPUT with source { out = VIN; ref = GND; dc = 1V; ac = 1V; }
+
+    analysis ac { from = 10Hz; to = 100kHz; points_per_decade = 50; }
+
+    let h = V(VOUT) / V(VIN);
+    measure gain_at_corner = db(at(h, 1.5915kHz)) { min = -3.1dB; max = -2.9dB; }
+    measure phase_at_corner = phase(at(h, 1.5915kHz)) { min = -46deg; max = -44deg; }
+    plot db(h), phase(h);
+}

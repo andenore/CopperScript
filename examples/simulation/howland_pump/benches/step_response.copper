@@ -1,0 +1,26 @@
+// The Howland pump (../board.copper) in time: a 0.15 V input step with a
+// 10 ns rise, for a 100 ohm, 1 kohm and 10 kohm load. The current settles to
+// its 15 uA (less the 0.11 % of the finite open-loop gain) within 1 % in
+// under 100 ns at every load. It overshoots first, by about 22 % at
+// 100 ohm, 18 % at 1 kohm and not at all at 10 kohm: the loops are stable,
+// but the load current peaks above the 1 MHz that flatness.copper covers
+// (an ac sweep to 300 MHz shows it rising to 2.8 times 15 uA past 2 MHz at
+// 100 ohm), and a fast edge excites that peak. The overshoot is a study
+// value without a limit; a source slower than about 50 ns does not see it.
+//
+// The load and the connectors are the LoadedPump fixture (loaded_pump.copper).
+bench StepResponse for HowlandPump using LoadedPump {
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        waveform = step { final = 0.15V; at = 100ns; rise = 10ns; };
+    }
+
+    analysis tran { stop = 2us; max_step = 2ns; }
+    step R_LOAD_VALUE in 100ohm, 1kohm, 10kohm;
+
+    let i_load = I(R_LOAD);
+    measure settled_current = at(i_load, 2us) { min = 14.9uA; max = 15.1uA; }
+    measure settling_time = settle(i_load, 0.15uA) - 100ns { max = 200ns; }
+    measure overshoot_ratio = overshoot(i_load);
+    plot i_load, V(DRIVE);
+}

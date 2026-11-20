@@ -1,0 +1,28 @@
+// Gain spread of the preamp (../board.copper) over 200 boards.
+//
+// The stage gain 1 + R_F / R_G depends only on the ratio of the matched
+// pair: within its 0.02 % ratio tolerance the gain stays within
+// (10/11) * 0.02 % = 0.018 % of its nominal value, whatever the 0.1 %
+// absolute tolerance does; the nominal is 0.003 % below 11 (C_F and the
+// finite loop gain at 1 kHz). At 100 kHz the 159 kHz feedback pole (C_F,
+// 5 %) and the gain-bandwidth (+-30 % here) spread the gain by about a
+// percent. At the ADC, R_OUT (1 %) and the ADC's input resistance (stepped)
+// divide the output: 1 % low into 10 kohm.
+bench GainMonteCarlo for LowNoisePreamp {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_OUT, J_PWR;
+    param R_ADC = 10kohm;
+    model ADC: load { inp = VOUT; ref = GND; resistance = R_ADC; capacitance = 20pF; }
+
+    analysis ac { from = 100Hz; to = 1MHz; points_per_decade = 20; }
+    step R_ADC in 10kohm, 1Mohm;
+
+    tolerance U1.gbw = 30%;
+    montecarlo { runs = 200; seed = 7; distribution = gaussian; }
+
+    let h = V(OUT) / V(INP);
+    measure gain_error_1khz = mag(at(h, 1kHz)) / 11 - 1 { min = -0.02%; max = 0.02%; }
+    measure gain_100khz = db(at(h, 100kHz)) { min = 18.9dB; max = 19.5dB; }
+    measure adc_gain_error_1khz = mag(at(V(VOUT) / V(INP), 1kHz)) / 11 - 1 { min = -1.5%; max = 0.5%; }
+    plot db(h), phase(h);
+}

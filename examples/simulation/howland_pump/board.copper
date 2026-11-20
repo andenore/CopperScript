@@ -1,0 +1,48 @@
+// Improved Howland current pump with a buffer in the positive feedback path.
+// U1 drives the load through R_SENSE; U2 buffers the load voltage back to U1's
+// non-inverting input, so the feedback network draws no load current. With the
+// four gain resistors matched, U1's output is V_IN + V_LOAD and the load
+// current is V_IN / R_SET: 0.15 V peak / 10 kohm = 15 uA peak.
+// benches/flatness.copper checks that current from 1 kHz to 1 MHz for loads
+// up to 10 kohm; benches/output_impedance.copper shows what limits larger
+// loads; benches/resistor_matching.copper and benches/noise.copper add the
+// tolerances and the noise. Run them with `copper sim board.copper`.
+board HowlandPump {
+    use library "tiny";
+    import p "./parts";
+
+    param R_GAIN = 10kohm;  // the four matched gain resistors
+    param R_SET = 10kohm;   // sets the load current: I = V_IN / R_SET
+
+    component U1: p.OPAMP_ADA4817_LIKE;  // drives the load
+    component U2: p.OPAMP_ADA4817_LIKE;  // buffers the load voltage
+    // R1 to R4 are one matched network (0.1 % absolute, 0.01 % ratio, LT5400 class):
+    // the pump's output impedance rests on their ratios (benches/resistor_matching.copper).
+    component R1: RESISTOR { value = R_GAIN; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.01%; }  // input to U1+
+    component R2: RESISTOR { value = R_GAIN; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.01%; }  // buffered load voltage to U1+
+    component R3: RESISTOR { value = R_GAIN; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.01%; }  // U1- to ground
+    component R4: RESISTOR { value = R_GAIN; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.01%; }  // U1 output to U1-
+    component R_SENSE: RESISTOR { value = R_SET; tolerance = 0.1%; }  // U1 output to the load
+    component C_U1P: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VP; }
+    component C_U1N: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VN; }
+    component C_U2P: CAPACITOR { value = 100nF; role = decoupling; decouples = U2.VP; }
+    component C_U2N: CAPACITOR { value = 100nF; role = decoupling; decouples = U2.VN; }
+    component J_IN: p.HEADER_2;   // signal input
+    component J_OUT: p.HEADER_2;  // the load
+    component J_PWR: p.HEADER_3;  // +5 V, ground, -5 V
+
+    net VIN { J_IN.1; R1.1; }
+    net PFB { R1.2; R2.1; U1.INP; }
+    net NFB { R3.1; R4.2; U1.INN; }
+    net DRIVE { U1.OUT; R4.1; R_SENSE.1; }
+    net LOAD { R_SENSE.2; U2.INP; J_OUT.1; }
+    net BUF { U2.OUT; U2.INN; R2.2; }
+    net VP { J_PWR.1; U1.VP; U2.VP; C_U1P.1; C_U2P.1; }
+    net VN { J_PWR.3; U1.VN; U2.VN; C_U1N.1; C_U2N.1; }
+    net GND { J_PWR.2; J_IN.2; J_OUT.2; R3.2; C_U1P.2; C_U1N.2; C_U2P.2; C_U2N.2; }
+    no_connect U1.NC, U2.NC { reason = "no internal connection"; }
+
+    supply POS { voltage = 5V; net = VP; external = true; }
+    supply NEG { voltage = -5V; net = VN; external = true; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}

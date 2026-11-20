@@ -1,0 +1,17 @@
+// A 1.8 V input step into both stages (../board.copper): 18 V out, from
+// -9 V to 9 V. A single pole at 7 MHz alone would start the output at
+// 18 V / 22.7 ns = 790 V/us, above the 200 V/us slew rate, so both slew;
+// the slope is read from 20 % to 80 % of the step (-5.4 V to 5.4 V).
+bench Step for VendorModels {
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        waveform = step { initial = -0.9V; final = 0.9V; at = 100ns; rise = 1ns; };
+    }
+    ignore J_PWR;
+    analysis tran { stop = 400ns; max_step = 0.2ns; }
+    measure vendor_slew = 10.8V / (cross(V(OUT_V), 5.4V) - cross(V(OUT_V), -5.4V));
+    measure macro_slew = 10.8V / (cross(V(OUT_M), 5.4V) - cross(V(OUT_M), -5.4V));
+    measure vendor_final = at(V(OUT_V), 390ns) { min = 8.95V; max = 9.05V; }
+    measure macro_final = at(V(OUT_M), 390ns) { min = 8.95V; max = 9.05V; }
+    plot V(VIN), V(OUT_V), V(OUT_M);
+}

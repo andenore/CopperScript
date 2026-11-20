@@ -1,0 +1,43 @@
+// ResistorWorstCase: ResistorMatching's measures at the sensitivity corners of the
+// tolerances in MatchingTolerances (matching_tolerances.copper): every tolerance at
+// each end with the others nominal, then each measure at the corner that raises it and
+// at the one that lowers it. This assumes each measure is monotonic in each tolerance;
+// an error measure such as max(abs(...)) can be worse between the corners (README.md,
+// "ResistorMatching").
+//
+// What the tolerances move, and what calibration removes:
+//  - the drive current (R_SET, and R_TERM against the AD9833's own 200 ohm, which
+//    halve the DDS amplitude): not calibrated, and not needed: the current is measured;
+//  - the pump's output impedance at E_HC (LT5400 ratio, C_NDC): sets how much of the
+//    current reaches the soil, not the accuracy;
+//  - the gain of each channel before calibration (R_TIA against the firmware's 20 kohm,
+//    the gain resistors, the coupling and anti-alias parts): calibration on the card
+//    removes it, because the board is calibrated with its own parts (every reference
+//    run is the same board as the run it calibrates);
+//  - the common-mode rejection of the sense path (the coupling networks of HP and LP):
+//    not calibrated.
+// Limits from SPEC.md, after calibration: 1 % and 1 degree on the rated soils
+// (R_TRANSFER <= 800 ohm), current error 0.5 % on every soil. The rest is reported.
+bench ResistorWorstCase for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout, MatchingTolerances {
+    param R_CONTACT = 5.59kohm;    // plain, stepped with R_TRANSFER (MatchingTolerances)
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_TRANSFER, R_CONTACT in (40ohm, 279ohm), (800ohm, 5.59kohm), (11kohm, 76.8kohm);
+    worstcase;
+
+    measure drive_current_1khz = mag(at(i_lc, 1kHz));
+    measure z_out_1khz = mag(at(z_out, 1kHz));
+    measure z_out_10khz = mag(at(z_out, 10kHz));
+    measure gain1_error_uncalibrated = mag(at(z1 / z_true, 10kHz)) - 1;
+    measure gain10_error_uncalibrated = mag(at(z10 / z_true, 10kHz)) - 1;
+    measure gain100_error_uncalibrated = mag(at(z100 / z_true, 10kHz)) - 1;
+    measure phase_uncalibrated_1mhz = phase(at(z1 / z_true, 1MHz));
+    measure mag_error_gain1 = max(abs(mag(e1) - 1)) { max = 1%; where R_TRANSFER <= 800ohm; }
+    measure phase_error_gain1 = max(abs(phase(e1))) { max = 1deg; where R_TRANSFER <= 800ohm; }
+    measure mag_error_gain100 = max(abs(mag(e100) - 1)) { max = 1%; where R_TRANSFER <= 800ohm; }
+    measure phase_error_gain100 = max(abs(phase(e100))) { max = 1deg; where R_TRANSFER <= 800ohm; }
+    measure current_error = max(abs(mag(ei) - 1)) { max = 0.5%; }
+    measure cmrr_10khz = db(at(rejection, 10kHz));
+    measure cmrr_1mhz = db(at(rejection, 1MHz));
+    plot abs(mag(e1) - 1), abs(phase(e1)), mag(z_out);
+}

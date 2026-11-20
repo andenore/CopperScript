@@ -1,0 +1,82 @@
+// Analog Devices AD8130ARZ: 270 MHz active-feedback differential receiver, 8-lead SOIC.
+// The differential stage (instrumentation amplifier) of the sense path.
+// Source, read in this session: AD8129/AD8130 data sheet Rev. C, fetched from the LCSC
+// listing C126440, sha256 6dc4365a8e5c002ba8f7ccf0c27db818c399d745c7eca7937b3db1a36ff2f019.
+//   Figure 1 p. 1: pinout (1 +IN, 2 -VS, 3 PD, 4 REF, 5 FB, 6 OUT, 7 +VS, 8 -IN);
+//     VOUT = VIN (1 + RF/RG) with RF from OUT to FB and RG from FB to REF (Figure 3);
+//     no external components for G = +1 (FB to OUT, REF to the output reference).
+//   Table 2 p. 5-6 (+/-5 V, 25 C, AD8130 column): -3 dB bandwidth 270 MHz typ at
+//     G = +1 (VOUT <= 0.3 V p-p); slew rate 1090 V/us; input noise 12.5 nV/rtHz;
+//     input current noise 1 pA/rtHz (+IN, -IN); CMRR dc to 100 kHz 90 min / 110 typ dB,
+//     80 dB min at 2 MHz, 70 dB typ at 10 MHz; common-mode range +/-3.8 V; differential
+//     operating range +/-2.5 V; input resistance 6 Mohm differential, 4 Mohm common
+//     mode; input capacitance 3 pF differential, 4 pF common mode; open-loop gain
+//     74 dB typ; offset 0.4 mV typ, 1.8 mV max; input bias current +/-0.5 uA typ,
+//     +/-2 uA max (+IN, -IN); output swing +/-3.6 V (150 ohm) / +/-4.0 V (1 kohm);
+//     supply +/-2.25 V to +/-12.6 V, 10.8 mA typ, 11.6 mA max; PD enabled at
+//     VIH >= +VS - 1.5 V.
+//   Table 2: slew rate 950 min / 1090 typ V/us; output current 40 mA; short-circuit
+//     current -60/+55 mA; input current noise of REF and FB 1.4 pA/rtHz.
+//   Figure 66 p. 20: input current noise against frequency: about 17 pA/rtHz at 10 Hz,
+//     5.5 at 100 Hz, 2 at 1 kHz, 0.9 above 10 kHz (read from the graph).
+//   Figure 67 p. 20: input voltage noise against frequency (AD8130): about 55 nV/rtHz
+//     at 10 Hz, 18 at 100 Hz, 13.2 at 1 kHz, 12.5 above 10 kHz (read from the graph).
+//   Figure 74 p. 22: open-loop gain and phase, phase margin 58 degrees at G = +1.
+//   Figure 76 p. 22: closed-loop output impedance (G = +1) about 0.1 ohm at 1 MHz.
+// Derived, not data-sheet numbers (see ../README.md): gbw 270 MHz is the G = +1
+// bandwidth read as a single-pole gain-bandwidth; second_pole 430 MHz gives the
+// 58 degree phase margin at 270 MHz; cmrr 90 dB with cmrr_corner 630 kHz is the
+// guaranteed minimum (90 dB to 100 kHz, 80 dB at 2 MHz) fitted with one corner, so
+// it is below the typical curve; output_resistance 25 ohm = Figure 76 times the
+// open-loop gain at 1 MHz; voltage_noise_corner 110 Hz fits Figure 67 at 100 Hz and
+// 1 kHz, current_noise_corner 3 kHz fits Figure 66 at 100 Hz and 1 kHz (estimates). The
+// FB/REF pair has no input capacitance, resistance, bias current or noise in the
+// model (the data sheet gives no input model for it; its 1.4 pA/rtHz is left out).
+// Transient limits: slew rate the typical 1090 V/us; output swing 1.0 V from each
+// rail, the +/-4.0 V minimum at +/-5 V with RL = 1 kohm (Table 2) taken as headroom
+// that holds at the board's +/-4.5 V (estimate: the data sheet gives the swing at
+// +/-5 V and +/-12 V only); output current 40 mA (Table 2).
+// Footprint: KiCad Package_SO:SOIC-8_3.9x4.9mm_P1.27mm.
+part AD8130ARZ {
+    category = "amplifier.differential_receiver";
+    manufacturer = "Analog Devices";
+    footprint = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm";
+    source_document = "AD8129/AD8130 Low Cost 270 MHz Differential Receiver Amplifiers";
+    source_revision = "Rev. C";
+    source_location = "Figure 1 p. 1; Table 2 pp. 5-6; figures 66, 67 p. 20; figures 74, 76 p. 22";
+    source_url = "https://www.lcsc.com/product-detail/C126440.html";
+    source_checksum = "sha256:6dc4365a8e5c002ba8f7ccf0c27db818c399d745c7eca7937b3db1a36ff2f019";
+
+    pin INP { number = "1"; domains = "analog"; directions = "input"; }
+    pin VN  { number = "2"; domains = "power"; directions = "input"; }
+    pin PD  { number = "3"; domains = "power"; directions = "input"; }
+    pin REF { number = "4"; domains = "analog"; directions = "input"; }
+    pin FB  { number = "5"; domains = "analog"; directions = "input"; }
+    pin OUT { number = "6"; domains = "analog"; directions = "output"; }
+    pin VP  { number = "7"; domains = "power"; directions = "input"; }
+    pin INN { number = "8"; domains = "analog"; directions = "input"; }
+
+    sim diffamp {
+        inp = INP; inn = INN; ref = REF; fb = FB; out = OUT; vp = VP; vn = VN;
+        unmodelled = PD;
+        gbw = 270MHz;                         // derived: the G = +1 bandwidth
+        open_loop_gain = 74dB;
+        second_pole = 430MHz;                 // derived from Figure 74
+        cmrr = 90dB;                          // guaranteed minimum, dc to 100 kHz
+        cmrr_corner = 630kHz;                 // derived: 80 dB minimum at 2 MHz
+        input_capacitance_common = 4pF;
+        input_capacitance_differential = 3pF;
+        input_resistance_common = 4Mohm;
+        input_resistance_differential = 6Mohm;
+        input_bias_current = 0.5uA;
+        input_offset_voltage = 0.4mV;
+        voltage_noise = 12.5nV/rtHz;          // Table 2, f >= 10 kHz
+        voltage_noise_corner = 110Hz;         // estimate: fit to Figure 67
+        current_noise = 1pA/rtHz;             // Table 2, +IN and -IN, f >= 100 kHz
+        current_noise_corner = 3kHz;          // estimate: fit to Figure 66
+        slew_rate = 1090V/us;                 // Table 2, typical
+        output_resistance = 25ohm;            // derived from Figure 76
+        output_swing_from_rail = 1V;          // Table 2 at +/-5 V, RL = 1 kohm; estimate at +/-4.5 V
+        output_current_limit = 40mA;          // Table 2
+    }
+}

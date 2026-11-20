@@ -1,0 +1,42 @@
+// SenseBufferTrade: what the sense buffers' 19 mA buy. SoilSweep's soil (100 ohm m and
+// 1 kohm m, relative permittivity 25) with both sense buffers replaced by a model of
+// the TI OPA810 (3.7 mA typ, 4.6 mA max at +/-5 V; data sheet ZHCSK40D (SBOS799D):
+// 70 MHz GBWP, 120 dB open-loop gain, 2 pF common-mode / 0.5 pF differential input
+// capacitance, CMRR 100 dB with a corner near 2 kHz falling to about 42 dB at 1 MHz
+// (Figure 7-50), phase margin about 60 degrees (Figure 7-42, second pole derived),
+// about 4 ohm open-loop output impedance mid band (Figure 7-49)). Compare with
+// SoilSweep (100 ohm m and 1 kohm m), which runs the ADA4817. Reported, no limits: this is a
+// trade study of a part the board does not use (README.md, "Supply current").
+//
+// The soil, the strays and the firmware's arithmetic are the SoilModel and
+// FirmwareReadout fixtures; calibration on the card's 1 kohm with 0 ohm contacts
+// (reference CARD).
+bench SenseBufferTrade for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    replace U_BHP with opamp {
+        inp = SNS_HP; inn = BUF_HP; out = BUF_HP; vp = VP; vn = VN;
+        gbw = 70MHz; open_loop_gain = 120dB; second_pole = 120MHz;
+        cmrr = 100dB; cmrr_corner = 2kHz; input_capacitance_common = 2pF; input_capacitance_differential = 0.5pF;
+        input_resistance_common = 12000Mohm; output_resistance = 4ohm;
+    }
+    replace U_BLP with opamp {
+        inp = SNS_LP; inn = BUF_LP; out = BUF_LP; vp = VP; vn = VN;
+        gbw = 70MHz; open_loop_gain = 120dB; second_pole = 120MHz;
+        cmrr = 100dB; cmrr_corner = 2kHz; input_capacitance_common = 2pF; input_capacitance_differential = 0.5pF;
+        input_resistance_common = 12000Mohm; output_resistance = 4ohm;
+    }
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_TRANSFER in 800ohm, 8kohm;
+    // Calibration on the calibration card's 1 kohm with 0 ohm contacts (1 mohm: a link).
+    reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF; }
+
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    measure mag_error_gain1 = max(abs(mag(e1) - 1));
+    measure phase_error_gain1 = max(abs(phase(e1)));
+    measure mag_error_gain100 = max(abs(mag(e100) - 1));
+    measure phase_error_gain100 = max(abs(phase(e100)));
+    let guard_error = V(GUARD_HP) / V(E_HP);
+    measure guard_tracking_1mhz = mag(at(guard_error, 1MHz));
+    plot abs(mag(e1) - 1), abs(phase(e1));
+}

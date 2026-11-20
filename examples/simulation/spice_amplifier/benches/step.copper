@@ -1,0 +1,19 @@
+// The amplifier's (../board.copper) response to a 0.5 V input step.
+//
+// The subcircuit's input stage delivers at most 159 uA into its 15.9 pF pole
+// capacitor: 10 V/us. A 0.5 V step overdrives it (1 mS * 0.5 V = 500 uA)
+// until the error falls to 0.159 V, at 3.4 V out, so the output slews at
+// 10 V/us from 0.5 V to 3 V and then settles with the closed-loop time
+// constant, 1 / (2 pi 994 kHz) = 0.16 us, to 0.5 V * 9.999 = 4.9995 V.
+bench Step for SpiceAmplifier {
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        waveform = step { initial = 0V; final = 0.5V; at = 1us; rise = 1ns; };
+    }
+    ignore J_OUT, J_PWR;
+    analysis tran { stop = 5us; max_step = 5ns; }
+    measure slew = 2.5V / (cross(V(OUT), 3V) - cross(V(OUT), 0.5V)) { min = 9.8V/us; max = 10.2V/us; }
+    measure final = at(V(OUT), 4.9us) { min = 4.998V; max = 5.001V; }
+    measure settling = settle(V(OUT), 10mV) { max = 2.5us; }
+    plot V(VIN), V(OUT);
+}

@@ -1,0 +1,78 @@
+// SoilModel: the stake in soil (SPEC.md, "Benches") with the board strays, shared by
+// every bench that puts the stake in soil. Use it after FrontEndPorts (`using
+// FrontEndPorts, SoilModel`); FirmwareReadout (firmware_readout.copper) adds what the
+// firmware computes from it.
+//
+// Soil model: a contact resistance in series with each electrode, the transfer
+// impedance between the two sense points S_HP and S_LP, and a capacitor across each for
+// the soil's permittivity. For 8 mm pads (equivalent radius r = 4.5 mm) on a 20 mm pitch
+// a: R_TRANSFER = rho / (2 pi a) and R_CONTACT = rho / (4 r), so the contacts are
+// R_TRANSFER * 2 pi a / (4 r) = 6.98 R_TRANSFER whatever the soil; every soil resistor R
+// has C = eps0 eps_r rho / R across it, so C_TRANSFER = eps0 eps_r 2 pi a = 1.113 pF *
+// eps_r and C_CONTACT = C_TRANSFER * 4 r / (2 pi a). A bench steps R_TRANSFER and
+// C_TRANSFER; the contacts are derived params and follow them. The defaults are moist
+// loam: 100 ohm m (800 ohm), relative permittivity 25. A bench may override R_CONTACT
+// and C_CONTACT with plain params (the calibration card) or redeclare the contact
+// components (ContactImbalance).
+
+fixture SoilModel for AnalogFrontEnd {
+    ignore J_PROBE;   // the soil is on the electrode nets
+
+    param PITCH = 20mm;
+    param PAD_RADIUS = 4.5mm;
+    param R_TRANSFER = 800ohm;
+    param C_TRANSFER = 27.8pF;
+    param R_CONTACT = R_TRANSFER * 2 * 3.14159265 * PITCH / (4 * PAD_RADIUS);
+    param C_CONTACT = C_TRANSFER * 4 * PAD_RADIUS / (2 * 3.14159265 * PITCH);
+    param R_TIA_NOMINAL = 20kohm;     // the firmware's value of R_TIA
+
+    // The soil: a contact per electrode, the transfer impedance between S_HP and S_LP.
+    component RC_HC: RESISTOR { value = R_CONTACT; }
+    component CC_HC: CAPACITOR { value = C_CONTACT; }
+    component RC_HP: RESISTOR { value = R_CONTACT; }
+    component CC_HP: CAPACITOR { value = C_CONTACT; }
+    component RT: RESISTOR { value = R_TRANSFER; }
+    component CT: CAPACITOR { value = C_TRANSFER; }
+    component RC_LP: RESISTOR { value = R_CONTACT; }
+    component CC_LP: CAPACITOR { value = C_CONTACT; }
+    component RC_LC: RESISTOR { value = R_CONTACT; }
+    component CC_LC: CAPACITOR { value = C_CONTACT; }
+    net E_HC { RC_HC.1; CC_HC.1; CG_HC.1; C0_HC.1; }
+    net E_HP { RC_HP.1; CC_HP.1; CG_HP.1; C0_HP.1; }
+    net S_HP { RC_HC.2; CC_HC.2; RC_HP.2; CC_HP.2; RT.1; CT.1; }
+    net S_LP { RT.2; CT.2; RC_LP.2; CC_LP.2; RC_LC.1; CC_LC.1; }
+    net E_LP { RC_LP.1; CC_LP.1; CG_LP.1; C0_LP.1; }
+    net E_LC { RC_LC.2; CC_LC.2; C0_LC.1; }
+
+    // Board strays (README.md, "Strays"): each guarded node (HC, HP, LP) to its own guard
+    // (C_TO_GUARD) and, residually, to ground (C_TO_GROUND); each guard to the ground
+    // layer; LC sits in ground. StrayCapacitance steps the first two.
+    param C_TO_GUARD = 20pF;
+    param C_TO_GROUND = 0.3pF;
+    component CG_HC: CAPACITOR { value = C_TO_GUARD; }
+    component C0_HC: CAPACITOR { value = C_TO_GROUND; }
+    component GG_HC: CAPACITOR { value = 100pF; }
+    component CG_HP: CAPACITOR { value = C_TO_GUARD; }
+    component C0_HP: CAPACITOR { value = C_TO_GROUND; }
+    component GG_HP: CAPACITOR { value = 100pF; }
+    component CG_LP: CAPACITOR { value = C_TO_GUARD; }
+    component C0_LP: CAPACITOR { value = C_TO_GROUND; }
+    component GG_LP: CAPACITOR { value = 100pF; }
+    component C0_LC: CAPACITOR { value = 20pF; }
+    net GUARD_HC { CG_HC.2; GG_HC.1; }
+    net GUARD_HP { CG_HP.2; GG_HP.1; }
+    net GUARD_LP { CG_LP.2; GG_LP.1; }
+    net GND { C0_HC.2; GG_HC.2; C0_HP.2; GG_HP.2; C0_LP.2; GG_LP.2; C0_LC.2; }
+
+    // Headroom. The AC solver does not clip, so the AC benches check node amplitudes
+    // against the amplifiers' linear range (the transient benches clip; see Distortion).
+    // Pump (ADA4807 on +/-4.5 V, DC 0 V): output within 0.1 V of the rails. Sense
+    // buffers (ADA4817): input common mode up to +VS - 2.8 V. ADC drivers (ADA4807 on
+    // 0 V / 3.3 V, DC at V_MID plus up to 75 mV from 1.6 uA bias current into 47 kohm):
+    // linear while the output stays 0.1 V inside the rails, so the peak AC at each ADC
+    // input must stay below 1.65 V - 0.1 V - 0.075 V. Beyond that the stage clips at its
+    // own rails, which keeps the ADC pin inside 0 to 3.3 V.
+    param PUMP_SWING = 4.5V - 0.1V;
+    param CM_TOP = 4.5V - 2.8V;
+    param ADC_LINEAR = 1.65V - 0.1V - 0.075V;
+}

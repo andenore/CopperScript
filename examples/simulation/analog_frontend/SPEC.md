@@ -57,7 +57,10 @@ the standard bounded routing workflow; do not add board-specific routing repairs
 ## Simulation and delivery
 
 This section is the original delivery specification. Only the board source is
-deliverable now; there is no simulator in the `copper` binary.
+deliverable now. `copper sim` (phase P0 of the
+[integrated simulation plan](../../../docs/integrated-simulation-plan.md)) runs
+benches with built-in models only; this board has no bench, and its vendor
+models need phase P3.
 
 Deliver board source, separate bias/AC, biased-step and cold-start plans, a
 bounded corner matrix, and fresh offline reports. Corners include supply endpoints,

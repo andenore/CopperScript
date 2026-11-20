@@ -1,0 +1,110 @@
+// ContactImbalance: unequal contacts. SoilModel's soil at 5 ohm m and 100 ohm m,
+// relative permittivity 5, 25 and 40. An unequal sense contact turns the common-mode
+// voltage (about 7 times the sense voltage, the drop across the LC contact) into a
+// differential error through its pole against the node's capacitance; an unequal LC
+// contact changes the current the LP node's capacitance takes from the soil before LC.
+// Calibration cannot remove either: the contacts change at every insertion. A changed
+// contact keeps its R C = rho eps, so its capacitance scales with R_CONTACT / R_C_xx.
+//
+// Each contact is R_CONTACT * F + D: a factor F (the HC contact has only a factor) and
+// an offset D. Two groups of steps, zipped:
+//  - rated imbalances (SPEC.md, "Usable range"): all equal, HC 10 times worse, the HP
+//    or the LP contact 100 ohm above or below the soil's value, the LC contact 200 ohm
+//    above or below it, and the worst combinations of the two (the signs that add,
+//    README.md, "ContactImbalance"). The accuracy limits apply to these (`where` all
+//    factors but HC's are 100 %);
+//  - outside the rated range, reported without accuracy limits: one of HP, LP and LC
+//    105 % to 1000 % of the others, so that the rule in README.md ("ContactImbalance")
+//    can be read off: phase error proportional to frequency and to the contact
+//    difference.
+// The errors are reported over the band and at 10 kHz, 100 kHz and 1 MHz, the signed
+// phase at 1 MHz (an HP contact that is too high gives a negative phase, LP and LC
+// positive), and usable_to_phase, the frequency up to which 1 degree holds (`upto`).
+// The same for the magnitude cannot be written: a sense contact tens of kohm too high
+// is over 1 % off at 1 kHz already, and `upto` of a comparison that fails at the first
+// sample stops the whole bench. The headroom limits apply at every step: a 10 times
+// worse HC or LC contact gives the largest pump and sense swings.
+bench ContactImbalance for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    param F_HC = 100%;               // HC contact factor
+    param F_HP = 100%;               // HP, LP, LC: factors and offsets
+    param F_LP = 100%;
+    param F_LC = 100%;
+    param D_HP = 0ohm;
+    param D_LP = 0ohm;
+    param D_LC = 0ohm;
+    param R_C_HC = R_CONTACT * F_HC;
+    param C_C_HC = C_CONTACT / F_HC;
+    param R_C_HP = R_CONTACT * F_HP + D_HP;
+    param C_C_HP = C_CONTACT * R_CONTACT / (R_CONTACT + D_HP) / F_HP;
+    param R_C_LP = R_CONTACT * F_LP + D_LP;
+    param C_C_LP = C_CONTACT * R_CONTACT / (R_CONTACT + D_LP) / F_LP;
+    param R_C_LC = R_CONTACT * F_LC + D_LC;
+    param C_C_LC = C_CONTACT * R_CONTACT / (R_CONTACT + D_LC) / F_LC;
+
+    // The contacts of SoilModel, with their own values.
+    component RC_HC: RESISTOR { value = R_C_HC; }
+    component CC_HC: CAPACITOR { value = C_C_HC; }
+    component RC_HP: RESISTOR { value = R_C_HP; }
+    component CC_HP: CAPACITOR { value = C_C_HP; }
+    component RC_LP: RESISTOR { value = R_C_LP; }
+    component CC_LP: CAPACITOR { value = C_C_LP; }
+    component RC_LC: RESISTOR { value = R_C_LC; }
+    component CC_LC: CAPACITOR { value = C_C_LC; }
+
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_TRANSFER in 40ohm, 800ohm;
+    step C_TRANSFER in 5.56pF, 27.8pF, 44.5pF;     // eps_r 5, 25, 40
+    step F_HC, D_HP, D_LP, D_LC, F_HP, F_LP, F_LC in
+        // rated: equal, HC 10 times, HP, LP +/-100 ohm, LC +/-200 ohm, three combinations
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 100%), (1000%, 0ohm, 0ohm, 0ohm, 100%, 100%, 100%),
+        (100%, 100ohm, 0ohm, 0ohm, 100%, 100%, 100%), (100%, -100ohm, 0ohm, 0ohm, 100%, 100%, 100%),
+        (100%, 0ohm, 100ohm, 0ohm, 100%, 100%, 100%), (100%, 0ohm, -100ohm, 0ohm, 100%, 100%, 100%),
+        (100%, 0ohm, 0ohm, 200ohm, 100%, 100%, 100%), (100%, 0ohm, 0ohm, -200ohm, 100%, 100%, 100%),
+        (100%, 100ohm, 0ohm, 200ohm, 100%, 100%, 100%), (100%, -100ohm, 0ohm, 200ohm, 100%, 100%, 100%),
+        (100%, 0ohm, 100ohm, 200ohm, 100%, 100%, 100%),
+        // outside the rating: HP, then LP, then LC 105 % to 1000 % of the others
+        (100%, 0ohm, 0ohm, 0ohm, 105%, 100%, 100%), (100%, 0ohm, 0ohm, 0ohm, 110%, 100%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 120%, 100%, 100%), (100%, 0ohm, 0ohm, 0ohm, 150%, 100%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 200%, 100%, 100%), (100%, 0ohm, 0ohm, 0ohm, 500%, 100%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 1000%, 100%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 105%, 100%), (100%, 0ohm, 0ohm, 0ohm, 100%, 110%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 120%, 100%), (100%, 0ohm, 0ohm, 0ohm, 100%, 150%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 200%, 100%), (100%, 0ohm, 0ohm, 0ohm, 100%, 500%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 1000%, 100%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 105%), (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 110%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 120%), (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 150%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 200%), (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 500%),
+        (100%, 0ohm, 0ohm, 0ohm, 100%, 100%, 1000%);
+    reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF;
+        F_HC = 100%; F_HP = 100%; F_LP = 100%; F_LC = 100%; D_HP = 0ohm; D_LP = 0ohm; D_LC = 0ohm; }
+
+    let e1 = z1 / z_true / reference(z1 / z_true, CARD);       // after calibration
+    let e100 = z100 / z_true / reference(z100 / z_true, CARD);
+    measure mag_error_gain1 = max(abs(mag(e1) - 1)) {
+        max = 1%; where F_HP == 100% and F_LP == 100% and F_LC == 100%; }
+    measure phase_error_gain1 = max(abs(phase(e1))) {
+        max = 1deg; where F_HP == 100% and F_LP == 100% and F_LC == 100%; }
+    measure mag_error_gain100 = max(abs(mag(e100) - 1)) {
+        max = 1%; where F_HP == 100% and F_LP == 100% and F_LC == 100%; }
+    measure phase_error_gain100 = max(abs(phase(e100))) {
+        max = 1deg; where F_HP == 100% and F_LP == 100% and F_LC == 100%; }
+    measure usable_to_phase = upto(abs(phase(e1)) < 1deg);
+    measure mag_error_10khz = abs(mag(at(e1, 10kHz)) - 1);
+    measure phase_error_10khz = abs(phase(at(e1, 10kHz)));
+    measure mag_error_100khz = abs(mag(at(e1, 100kHz)) - 1);
+    measure phase_error_100khz = abs(phase(at(e1, 100kHz)));
+    measure mag_error_1mhz = abs(mag(at(e1, 1MHz)) - 1);
+    measure phase_error_1mhz = abs(phase(at(e1, 1MHz)));
+    measure signed_phase_1mhz = phase(at(e1, 1MHz));
+    measure common_mode_ratio = max(mag(V(E_LP)) / mag(V(E_HP, E_LP)));
+
+    // Headroom (SoilModel).
+    measure pump_node_peak = max(mag(V(PUMP))) { max = PUMP_SWING; }
+    measure drive_peak = max(mag(V(DRIVE))) { max = PUMP_SWING; }
+    measure sense_input_peak = max(mag(V(SNS_HP))) { max = CM_TOP; }
+    measure adc_gain1_peak = max(mag(V(V_MON_1))) { max = ADC_LINEAR; }
+    measure adc_gain10_peak = max(mag(V(V_MON_10))) { max = ADC_LINEAR; }
+    measure adc_current_peak = max(mag(V(I_MON))) { max = ADC_LINEAR; }
+
+    plot abs(mag(e1) - 1), abs(phase(e1));
+}

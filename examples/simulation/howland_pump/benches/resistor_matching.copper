@@ -1,0 +1,24 @@
+// Load-current accuracy of the Howland pump (../board.copper) over 200
+// boards with the board's tolerances: the R1 to R4 network at 0.1 % absolute
+// and 0.01 % ratio, R_SENSE at 0.1 %.
+//
+// The current is V_IN / R_SENSE, so R_SENSE's 0.1 % moves it by up to
+// 0.1 %. The network's ratio error eps leaves a finite output impedance
+// R_SET / eps: at 0.01 % about 100 Mohm, beside the 5.9 Mohm the 65 dB
+// open-loop gain leaves (output_impedance.copper). The output impedance
+// therefore varies by about +-12 % between boards, and the current into
+// 10 kohm by a few parts per million more than the nominal 0.28 % shortfall.
+// A 0.1 % ratio network (resistors bought separately) would give
+// 10 Mohm-class mismatch terms: try match_tolerance = 0.1% on the board.
+//
+// The source, the load and the connectors are the LoadedPump fixture (loaded_pump.copper).
+bench ResistorMatching for HowlandPump using LoadedPump {
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_LOAD_VALUE in 1kohm, 10kohm;
+    montecarlo { runs = 200; seed = 1; }
+
+    let i_load = I(R_LOAD);
+    measure current_error = abs(mag(at(i_load, 1kHz)) / 15uA - 1) { max = 0.5%; }
+    measure flatness = max(abs(mag(i_load) / 15uA - 1)) { max = 1%; }
+    plot mag(i_load);
+}

@@ -1,0 +1,430 @@
+// Soil impedance analyzer (SPEC.md): the whole board. Battery powered: one protected
+// Li-ion/LiPo cell (3.0-4.2 V) on J_BAT, USB-C for charging and data. This file holds the
+// digital and power section (STM32G474, AD9833 DDS, charger, every rail, the 1.65 V
+// mid-supply reference) and instantiates the analog front end, module AnalogFrontEnd in
+// analog/front_end.copper (pump, sense buffers, guards, amplifiers, electrodes, probe
+// header), whose ports meet the nets of the same names here:
+//   DDS_OUT    AD9833 VOUT, unfiltered (the front end filters, buffers and terminates it)
+//   V_MON_1    sense voltage, gain 1    -> PA1, ADC2_IN2 (fast channel)
+//   V_MON_10   sense voltage, gain 10   -> PA6, ADC2_IN3 (fast channel)
+//   V_MON_100  sense voltage, gain 100  -> PA7, ADC2_IN4 (fast channel)
+//   I_MON      current measurement      -> PA2, ADC1_IN3 (fast channel)
+//   V_MID      1.65 V mid-supply reference (REF2033 VBIAS), switched with the analog rails
+//   VP, VN     +4.5 V and -4.48 V low-noise analog rails, off between measurements
+//   V3V3_ANA   switched 3.3 V of the ADC drivers and the transimpedance amplifier: DDS_SW
+//              (U_SW_DDS, on with ANA_EN) through FB_ANA
+//   GND
+// Power domains: always on = BAT, VSYS, V3V3, V3V3A. Switched by ANA_EN (PB10, pulled
+// down) = BOOST_IN, VPOS_RAW/VNEG_RAW and their filtered rails, VP, VN, V_MID, DDS_SW
+// with V3V3_DDS and V3V3_ANA. Firmware rules (README.md, "Firmware rules"): drive the DDS
+// SPI and MCLK pins low before ANA_EN goes low; keep PA1, PA2, PA6 and PA7 in analog mode
+// without pull-up whenever ANA_EN is low, Standby included.
+// Part choices, clock tree, ADC, rails, sleep and battery budget: README.md.
+// Electrical evidence only: no placement, routing, layout or hardware qualification.
+board ImpedanceAnalyzer {
+    use library "tiny";
+    import p "./parts";
+    import analog "./analog";
+    import usbc "github.com/andenore/CopperLib/packages/parts/gct/usb4105";
+    import esd "github.com/andenore/CopperLib/packages/parts/ti/tpd4e1u06";
+    import chg "github.com/andenore/CopperLib/packages/parts/ti/bq24072";
+    import bb "github.com/andenore/CopperLib/packages/parts/ti/tps63020";
+
+    // ---------------------------------------------------------------- USB-C, USB 2.0
+    component J_USB: usbc.GCT_USB4105_GF_A;
+    // Rd = 5.1 kohm on each CC pin: the board is a sink.
+    component R_CC1: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC2: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    // ESD on D+, D-, CC1, CC2 (VRWM 5.5 V). VBUS goes only to the charger (IN rated 28 V).
+    component U_ESD: esd.TPD4E1U06DBVR;
+
+    // ---------------------------------------------------------------- battery and charger
+    // One protected cell (protection IC and FET inside the pack); this board adds no
+    // cell protection of its own.
+    component J_BAT: p.JST_S2B_PH_SM4_TB;
+    // BQ24072: linear charger with power path. OUT (VSYS) runs the board from USB while
+    // the cell charges; without USB, OUT = BAT through the internal FET.
+    // EN2 = 0, EN1 = PB13: 0 = USB100 (reset default, 285 kohm internal pull-down),
+    // 1 = USB500 (450-500 mA) after enumeration.
+    component U_CHG: chg.BQ24072RGTR;
+    component C_CHG_IN: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; role = decoupling; decouples = U_CHG.IN; }
+    component C_CHG_OUT: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    component C_CHG_BAT: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    // ICHG = 890 A*ohm / 2.94 kohm = 303 mA (0.15 C for a 2000 mAh cell); precharge and
+    // termination 30 mA.
+    component R_ISET: RESISTOR { value = 2.94kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    // Only used in ILIM mode (EN2/EN1 = 1/0), which this board never selects: 1525 / 3.24k = 0.47 A.
+    component R_ILIM: RESISTOR { value = 3.24kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    // Safety timer: fast charge 10 x 48 s/kohm x 68 kohm = 9.1 h, precharge 0.9 h; enough
+    // for 2000 mAh at 303 mA. Larger cells need a lower charge time or a larger RTMR.
+    component R_TMR: RESISTOR { value = 68kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    // TS: 10 kohm NTC (Murata NCP18XH103F03RB, B 3380 K) next to J_BAT: charging only
+    // between about 0 and 50 degC. It senses the board, not the cell.
+    component TH_BAT: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+
+    // Battery voltage: switched divider, no drain while BAT_SENSE_EN (PB0) is low.
+    // 100k / 100k gives VBAT / 2 (2.1 V at 4.2 V); 100 nF holds the node for a long sample.
+    component U_SW_VB: p.TPS22918DBVR;
+    component C_SW_VB: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_SW_VB.VIN; }
+    component R_VB1: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_VB2: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component C_VB: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component R_VB_EN: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }  // ON pull-down
+
+    // ---------------------------------------------------------------- 3.3 V, always on
+    // TPS63020 buck-boost from VSYS (3.0-4.5 V): forced PWM at 2.2-2.6 MHz while measuring
+    // (PS/SYNC = PB11 high), power save in sleep (PB11 low or floating: 100 kohm pull-down).
+    component U_BB: bb.TPS63020DSJR;
+    component L3: INDUCTOR { value = 1.5uH; footprint = "Inductor_SMD:L_Coilcraft_XxL4020"; }  // Coilcraft XFL4020-152ME (TI Table 2)
+    component C_BB_IN1: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; role = decoupling; decouples = U_BB.VIN_10; }
+    component C_BB_IN2: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    component C_BB_VINA: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_BB.VINA; }
+    component C_BB_OUT1: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }  // Murata GRM188R60J226MEA0L
+    component C_BB_OUT2: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_BB_OUT3: CAPACITOR { value = 22uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    // VOUT = 0.5 V (1 + 1M / 180k) = 3.28 V (TI Table 3).
+    component R_BB1: RESISTOR { value = 1Mohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_BB2: RESISTOR { value = 180kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_BB_PS: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component FB_A: p.BLM18PG221SN1D;  // V3V3 -> V3V3A (VDDA, VREF+)
+
+    // ---------------------------------------------------------------- switched analog supply
+    // ANA_EN (PB10, 100 kohm pull-down) enables the boost input switch, both TPS65130
+    // stages and the DDS supply switch, which also feeds V3V3_ANA. With it low nothing
+    // feeds the analog rails: the boost has no DC path from VSYS (U_SW_BST open, reverse
+    // blocking) and the inverter's internal PMOS is off (SLVS493E 7.3.4).
+    component R_ANA_EN: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component U_SW_BST: p.TPS22918DBVR;
+    component C_SW_BST: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_SW_BST.VIN; }
+
+    // TPS65130: boost to +5.34 V and inverter to -5.24 V, 1.25-1.5 MHz fixed-frequency PWM
+    // (PSP = PSN = low: no power-save pulse skipping, which would land in the band).
+    // 0.7 A minimum switch limit; at 3.0 V in and 70 mA per rail (above the analog load's
+    // 56.9 mA maximum) TI Eq. 3 and 4 give 0.20 A and 0.30 A peak inductor current.
+    component U_PWR: p.TPS65130RGER { switching_frequency = 1380kHz; }  // typical; 1250-1500 kHz
+    component FB_PWR: p.BLM18PG221SN1D;  // INN-to-VIN filter, ferrite for fast input edges (8.2.3.2)
+    component C_PWR_VIN: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_PWR.VIN; }
+    component C_PWR_INN: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; role = decoupling; decouples = U_PWR.INN_5; }
+    component C_PWR_L1: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }  // C1, boost inductor input
+    // Coilcraft XFL4020-472MEB, 4.7 uH (TI: 4.7 uH typical, 3.3-6.8 uH).
+    component L1: INDUCTOR { value = 4.7uH; footprint = "Inductor_SMD:L_Coilcraft_XxL4020"; }
+    component L2: INDUCTOR { value = 4.7uH; footprint = "Inductor_SMD:L_Coilcraft_XxL4020"; }
+    component D1: p.MBR120VLSFT1G;
+    component D2: p.MBR120VLSFT1G;
+    component C_POS1: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+    component C_POS2: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+    component C_NEG1: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+    component C_NEG2: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+    // VPOS = 1.213 V (1 + 442k / 130k) = 5.34 V, at least VIN + 0.5 V = 5.0 V with VSYS at
+    // its 4.5 V maximum (BAT 4.23 V + 0.27 V on USB); feed-forward 6.8 us / 442k = 15 pF.
+    component R_FBP1: RESISTOR { value = 442kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_FBP2: RESISTOR { value = 130kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component C_FFP: CAPACITOR { value = 15pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    // VNEG = -1.213 V x 562k / 130k = -5.24 V; feed-forward 7.5 us / 562k = 13 pF.
+    component R_FBN1: RESISTOR { value = 562kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_FBN2: RESISTOR { value = 130kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component C_FFN: CAPACITOR { value = 13pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_PWR_VREF: CAPACITOR { value = 220nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_PWR_CP: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_PWR_CN: CAPACITOR { value = 4.7nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }  // C0G
+
+    // RC post-filters ahead of the LDOs: 1 ohm and 10 uF, corner 16 kHz, about -39 dB at
+    // the 1.38 MHz switching frequency, on top of the LDO's own rejection.
+    component R_PF_P: p.FEED_RESISTOR_0603 { value = 1ohm; }
+    component C_PF_P: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+    component R_PF_N: p.FEED_RESISTOR_0603 { value = 1ohm; }
+    component C_PF_N: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_1206_3216Metric"; }
+
+    // ---------------------------------------------------------------- +-4.5 V analog LDOs
+    // 150 mA and 200 mA parts for the analog load of 51.8 mA typ / 56.9 mA max per rail. EN is tied to IN:
+    // the inputs exist only while ANA_EN is high, and EN must not exceed IN.
+    // VP = 1.185 V (1 + 280k / 100k) = 4.50 V.
+    component U_LDOP: p.TPS7A4901DGNR;
+    component C_LDOP_IN: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; role = decoupling; decouples = U_LDOP.IN; }
+    component C_LDOP_OUT: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    component C_LDOP_NR: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_LDOP_FF: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component R_LDOP1: RESISTOR { value = 280kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_LDOP2: RESISTOR { value = 100kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    // VN = -1.176 V (1 + 287k / 102k) = -4.48 V.
+    component U_LDON: p.TPS7A3001DGNR;
+    component C_LDON_IN: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; role = decoupling; decouples = U_LDON.IN; }
+    component C_LDON_OUT: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+    component C_LDON_NR: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_LDON_FF: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component R_LDON1: RESISTOR { value = 287kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_LDON2: RESISTOR { value = 102kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+
+    // ---------------------------------------------------------------- 1.65 V mid-supply
+    // REF2033 from VP: off with the analog rails. VBIAS = 1.65 V +-0.05 %, sources and
+    // sinks 20 mA. Its 3.3 V VREF output is unused (bypassed only).
+    component U_REF: p.REF2033AIDDCR;
+    component C_REF_IN: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_REF.VIN; }
+    component C_REF_VREF: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_VMID1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_VMID2: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+
+    // ---------------------------------------------------------------- MCU
+    component U_MCU: p.STM32G474CET6;
+    component C_VDD24: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VDD_24; }
+    component C_VDD36: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VDD_36; }
+    component C_VDD48: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VDD_48; }
+    component C_VDD_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_VBAT: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VBAT; }
+    component C_VDDA1: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VDDA; }
+    component C_VDDA2: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VDDA; }
+    component C_VREFP1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VREF_PLUS; }
+    component C_VREFP2: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_MCU.VREF_PLUS; }
+    component C_NRST: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }  // DS12288 Figure 27
+    component R_BOOT0: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }  // boot from flash
+    // HSE 25 MHz, CL 10 pF: 12 pF per leg assumes about 4 pF of pin and board stray each.
+    component Y1: p.ABM8_25MHZ_10_D1G_T;
+    component C_Y1: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_Y2: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    // LSE 32.768 kHz for the RTC wake-up from Standby (LSI is 29.5-34 kHz over
+    // temperature, DS12288 Table 48). CL 7 pF: 8.2 pF per leg with about 2.6 pF stray.
+    component Y2: p.ABS07_32768KHZ_7_T;
+    component C_LSE1: CAPACITOR { value = 8.2pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_LSE2: CAPACITOR { value = 8.2pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+
+    // ---------------------------------------------------------------- DDS (switched supply)
+    component U_DDS: p.AD9833BRMZ;
+    component U_SW_DDS: p.TPS22918DBVR;  // V3V3 -> DDS supply, on with ANA_EN
+    component C_SW_DDS: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_SW_DDS.VIN; }
+    component FB_DDS: p.BLM18PG221SN1D;
+    component R_MCLK: RESISTOR { value = 33ohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }  // source termination, 25 MHz
+    component C_DDS_VDD1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = U_DDS.VDD; }
+    component C_DDS_VDD2: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; role = decoupling; decouples = U_DDS.VDD; }
+    component C_DDS_CAP: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }  // CAP/2.5V to DGND
+    component C_DDS_COMP: CAPACITOR { value = 10nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }  // COMP to VDD
+
+    // ---------------------------------------------------------------- analog front end
+    // Its 3.3 V ADC drivers and transimpedance amplifier (3.7 mA typ, 4.0 mA max) run from
+    // the DDS switch's output through their own ferrite, so they are off in sleep. The
+    // TPS22918 carries 2 A; DDS plus front end draw 8.2 mA typ, 9.5 mA max.
+    module AFE: analog.AnalogFrontEnd;
+    component FB_ANA: p.BLM18PG221SN1D;  // DDS_SW -> V3V3_ANA
+    component C_ANA_BULK: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0805_2012Metric"; }
+
+    // ---------------------------------------------------------------- connectors
+    component J_DEBUG: p.DEBUG_HEADER_1X08;
+
+    // ================================================================= nets
+    // USB and charger
+    net VBUS { J_USB.VBUS_A4; J_USB.VBUS_A9; J_USB.VBUS_B4; J_USB.VBUS_B9; U_CHG.IN; C_CHG_IN.1; }
+    net CC1 { J_USB.CC1; R_CC1.1; U_ESD.D2_P; }
+    net CC2 { J_USB.CC2; R_CC2.1; U_ESD.D2_N; }
+    net USB_DP { J_USB.DP1; J_USB.DP2; U_ESD.D1_P; U_MCU.PA12; }
+    net USB_DM { J_USB.DN1; J_USB.DN2; U_ESD.D1_N; U_MCU.PA11; }
+    net BAT { J_BAT.BAT_P; U_CHG.BAT_2; U_CHG.BAT_3; C_CHG_BAT.1; U_SW_VB.VIN; C_SW_VB.1; }
+    net VSYS {
+        U_CHG.OUT_10; U_CHG.OUT_11; C_CHG_OUT.1;
+        U_BB.VIN_10; U_BB.VIN_11; U_BB.VINA; U_BB.EN; C_BB_IN1.1; C_BB_IN2.1; C_BB_VINA.1;
+        U_SW_BST.VIN; C_SW_BST.1;
+        U_PWR.INN_5; U_PWR.INN_6; C_PWR_INN.1; FB_PWR.1;
+    }
+    net CHG_ISET { U_CHG.ISET; R_ISET.1; }
+    net CHG_ILIM { U_CHG.ILIM; R_ILIM.1; }
+    net CHG_TMR { U_CHG.TMR; R_TMR.1; }
+    net CHG_TS { U_CHG.TS; TH_BAT.1; }
+    net CHG_EN1 { U_CHG.EN1; U_MCU.PB13; }
+    // Open drain, pulled up by the MCU's internal 25-55 kohm pull-ups (no current in sleep).
+    net CHG_STAT { U_CHG.CHG; U_MCU.PB7; }
+    net CHG_PGOOD { U_CHG.PGOOD; U_MCU.PB9; }
+
+    // Battery voltage sense
+    net BAT_SENSE_EN { U_MCU.PB0; U_SW_VB.ON; R_VB_EN.1; }
+    net BAT_SW { U_SW_VB.VOUT; U_SW_VB.QOD; R_VB1.1; }
+    net BAT_SENSE { R_VB1.2; R_VB2.1; C_VB.1; U_MCU.PB1; }
+
+    // 3.3 V
+    net BB_L1 { U_BB.L1_8; U_BB.L1_9; L3.1; }
+    net BB_L2 { U_BB.L2_6; U_BB.L2_7; L3.2; }
+    net BB_FB { U_BB.FB; R_BB1.2; R_BB2.1; }
+    net BB_PS { U_BB.PS_SYNC; R_BB_PS.1; U_MCU.PB11; }
+    net V3V3 {
+        U_BB.VOUT_4; U_BB.VOUT_5; C_BB_OUT1.1; C_BB_OUT2.1; C_BB_OUT3.1; R_BB1.1;
+        U_MCU.VDD_24; U_MCU.VDD_36; U_MCU.VDD_48; U_MCU.VBAT;
+        C_VDD24.1; C_VDD36.1; C_VDD48.1; C_VDD_BULK.1; C_VBAT.1;
+        FB_A.1; U_SW_DDS.VIN; C_SW_DDS.1;
+        J_DEBUG.VREF;
+    }
+    net V3V3A { FB_A.2; U_MCU.VDDA; U_MCU.VREF_PLUS; C_VDDA1.1; C_VDDA2.1; C_VREFP1.1; C_VREFP2.1; }
+
+    // Switched analog supply
+    net ANA_EN { U_MCU.PB10; R_ANA_EN.1; U_SW_BST.ON; U_PWR.ENP; U_PWR.ENN; U_SW_DDS.ON; }
+    net BOOST_IN { U_SW_BST.VOUT; U_SW_BST.QOD; C_PWR_L1.1; L1.1; }
+    net VSYS_PWR { FB_PWR.2; U_PWR.VIN; C_PWR_VIN.1; }
+    net SW_BOOST { L1.2; U_PWR.INP_1; U_PWR.INP_24; D1.A; }
+    net VPOS_RAW { D1.K; U_PWR.VPOS; C_POS1.1; C_POS2.1; R_FBP1.1; C_FFP.1; R_PF_P.1; }
+    net FBP { U_PWR.FBP; R_FBP1.2; C_FFP.2; R_FBP2.1; }
+    net SW_INV { U_PWR.OUTN_13; U_PWR.OUTN_14; L2.1; D2.K; }
+    net VNEG_RAW { D2.A; U_PWR.VNEG; C_NEG1.1; C_NEG2.1; R_FBN1.1; C_FFN.1; R_PF_N.1; }
+    net FBN { U_PWR.FBN; R_FBN1.2; C_FFN.2; R_FBN2.1; }
+    net PWR_VREF { U_PWR.VREF; R_FBN2.2; C_PWR_VREF.1; }
+    net PWR_CP { U_PWR.CP; C_PWR_CP.1; }
+    net PWR_CN { U_PWR.CN; C_PWR_CN.1; }
+
+    // LDOs
+    net VPOS_F { R_PF_P.2; C_PF_P.1; U_LDOP.IN; U_LDOP.EN; C_LDOP_IN.1; }
+    net VP { U_LDOP.OUT; C_LDOP_OUT.1; R_LDOP1.1; C_LDOP_FF.1; U_REF.VIN; U_REF.EN; C_REF_IN.1; AFE.VP; }
+    net LDOP_FB { U_LDOP.FB; R_LDOP1.2; C_LDOP_FF.2; R_LDOP2.1; }
+    net LDOP_NR { U_LDOP.NR_SS; C_LDOP_NR.1; }
+    net VNEG_F { R_PF_N.2; C_PF_N.1; U_LDON.IN; U_LDON.EN; C_LDON_IN.1; }
+    net VN { U_LDON.OUT; C_LDON_OUT.1; R_LDON1.1; C_LDON_FF.1; AFE.VN; }
+    net LDON_FB { U_LDON.FB; R_LDON1.2; C_LDON_FF.2; R_LDON2.1; }
+    net LDON_NR { U_LDON.NR_SS; C_LDON_NR.1; }
+
+    // Mid-supply reference
+    net V_MID { U_REF.VBIAS; C_VMID1.1; C_VMID2.1; AFE.V_MID; }
+    net REF_3V3 { U_REF.VREF; C_REF_VREF.1; }
+
+    // MCU support
+    net NRST { U_MCU.PG10_NRST; C_NRST.1; J_DEBUG.NRST; }
+    net BOOT0 { U_MCU.PB8_BOOT0; R_BOOT0.1; J_DEBUG.BOOT0; }
+    net HSE_IN { U_MCU.PF0_OSC_IN; Y1.XTAL1; C_Y1.1; }
+    net HSE_OUT { U_MCU.PF1_OSC_OUT; Y1.XTAL2; C_Y2.1; }
+    net LSE_IN { U_MCU.PC14_OSC32_IN; Y2.1; C_LSE1.1; }
+    net LSE_OUT { U_MCU.PC15_OSC32_OUT; Y2.2; C_LSE2.1; }
+    net SWDIO { U_MCU.PA13; J_DEBUG.SWDIO; }
+    net SWCLK { U_MCU.PA14; J_DEBUG.SWCLK; }
+    net UART_TX { U_MCU.PA9; J_DEBUG.TX; }
+    net UART_RX { U_MCU.PA10; J_DEBUG.RX; }
+
+    // DDS: SPI1 (mode 2: SCLK idles high, data on the falling edge) and MCLK from TIM1_CH1
+    // on PA8 (150 MHz / 6 = 25 MHz). FSYNC is on PA4, which has no reset pull-up (PA15
+    // does), so nothing drives the unpowered DDS while the MCU boots.
+    net DDS_SW { U_SW_DDS.VOUT; U_SW_DDS.QOD; FB_DDS.1; FB_ANA.1; }
+    net V3V3_ANA { FB_ANA.2; C_ANA_BULK.1; AFE.V3V3_ANA; }
+    net V3V3_DDS { FB_DDS.2; U_DDS.VDD; C_DDS_VDD1.1; C_DDS_VDD2.1; C_DDS_COMP.2; }
+    net MCLK_SRC { U_MCU.PA8; R_MCLK.1; }
+    net DDS_MCLK { R_MCLK.2; U_DDS.MCLK; }
+    net DDS_SCLK { U_MCU.PB3; U_DDS.SCLK; }
+    net DDS_SDATA { U_MCU.PB5; U_DDS.SDATA; }
+    net DDS_FSYNC { U_MCU.PA4; U_DDS.FSYNC; }
+    net DDS_COMP { U_DDS.COMP; C_DDS_COMP.1; }
+    net DDS_CAP { U_DDS.CAP_2V5; C_DDS_CAP.1; }
+    net DDS_OUT { U_DDS.VOUT; AFE.DDS_OUT; }
+
+    // Analog front end to the ADCs. In sleep the front end is unpowered and these pins
+    // face the outputs of unpowered ADA4807s through 49.9 ohm: they stay in analog mode
+    // with no pull-up (README.md, "Firmware rules").
+    net V_MON_1 { U_MCU.PA1; AFE.V_MON_1; }
+    net V_MON_10 { U_MCU.PA6; AFE.V_MON_10; }
+    net V_MON_100 { U_MCU.PA7; AFE.V_MON_100; }
+    net I_MON { U_MCU.PA2; AFE.I_MON; }
+
+    net GND {
+        J_USB.GND_A1; J_USB.GND_A12; J_USB.GND_B1; J_USB.GND_B12; J_USB.SHIELD;
+        R_CC1.2; R_CC2.2; U_ESD.GND;
+        J_BAT.BAT_N; J_BAT.MP;
+        U_CHG.VSS; U_CHG.EP; U_CHG.CE; U_CHG.EN2; U_CHG.TD;
+        C_CHG_IN.2; C_CHG_OUT.2; C_CHG_BAT.2; R_ISET.2; R_ILIM.2; R_TMR.2; TH_BAT.2;
+        U_SW_VB.GND; C_SW_VB.2; R_VB2.2; C_VB.2; R_VB_EN.2;
+        U_BB.GND; U_BB.PGND; C_BB_IN1.2; C_BB_IN2.2; C_BB_VINA.2;
+        C_BB_OUT1.2; C_BB_OUT2.2; C_BB_OUT3.2; R_BB2.2; R_BB_PS.2;
+        R_ANA_EN.2; U_SW_BST.GND; C_SW_BST.2;
+        U_PWR.PGND_2; U_PWR.PGND_3; U_PWR.AGND; U_PWR.EP; U_PWR.PSP; U_PWR.PSN;
+        C_PWR_VIN.2; C_PWR_INN.2; C_PWR_L1.2; L2.2;
+        C_POS1.2; C_POS2.2; C_NEG1.2; C_NEG2.2; R_FBP2.2;
+        C_PWR_VREF.2; C_PWR_CP.2; C_PWR_CN.2;
+        C_PF_P.2; C_PF_N.2;
+        U_LDOP.GND; U_LDOP.PAD; C_LDOP_IN.2; C_LDOP_OUT.2; C_LDOP_NR.2; R_LDOP2.2;
+        U_LDON.GND; U_LDON.PAD; C_LDON_IN.2; C_LDON_OUT.2; C_LDON_NR.2; R_LDON2.2;
+        U_REF.GND; C_REF_IN.2; C_REF_VREF.2; C_VMID1.2; C_VMID2.2;
+        U_MCU.VSS_23; U_MCU.VSS_35; U_MCU.VSS_47; U_MCU.VSSA;
+        C_VDD24.2; C_VDD36.2; C_VDD48.2; C_VDD_BULK.2; C_VBAT.2;
+        C_VDDA1.2; C_VDDA2.2; C_VREFP1.2; C_VREFP2.2;
+        C_NRST.2; R_BOOT0.2; Y1.GND_2; Y1.GND_4; C_Y1.2; C_Y2.2; C_LSE1.2; C_LSE2.2;
+        U_SW_DDS.GND; C_SW_DDS.2;
+        U_DDS.AGND; U_DDS.DGND; C_DDS_VDD1.2; C_DDS_VDD2.2; C_DDS_CAP.2;
+        C_ANA_BULK.2; J_DEBUG.GND; AFE.GND;
+    }
+
+    no_connect U_PWR.BSW { reason = "input disconnect is U_SW_BST; TPS65130 SLVS493E 8.2.2.5: leave BSW floating"; }
+    no_connect U_MCU.PC13 { reason = "unused GPIO"; }
+    no_connect U_MCU.PA0, U_MCU.PA3, U_MCU.PB14 { reason = "spare ADC1/ADC2 fast channels, kept free for the analog side"; }
+    no_connect U_MCU.PA5, U_MCU.PA15, U_MCU.PB2, U_MCU.PB12, U_MCU.PB15 { reason = "unused GPIO"; }
+    no_connect U_MCU.PB4, U_MCU.PB6 { reason = "unused GPIO (UCPD CC pins, FT_c)"; }
+
+    // Peripheral selections (lowered to AF selectors; ERC checks the mux and conflicts).
+    configure U_MCU.SPI1 as DDS_SPI { SCK = PB3; MOSI = PB5; NSS = PA4; }
+    configure U_MCU.TIM1 as DDS_CLOCK { CH1 = PA8; }
+    configure U_MCU.USART1 as DEBUG_UART { TX = PA9; RX = PA10; }
+    configure U_MCU.USB as USB_FS { DP = PA12; DM = PA11; }
+    configure U_MCU.SWD as DEBUG_SWD { SWDIO = PA13; SWCLK = PA14; }
+    configure U_MCU.HSE as HSE_25MHZ { OSC_IN = PF0_OSC_IN; OSC_OUT = PF1_OSC_OUT; }
+    configure U_MCU.ADC1 as CURRENT_ADC { IN3 = PA2; IN12 = PB1; }
+    configure U_MCU.ADC2 as VOLTAGE_ADC { IN2 = PA1; IN3 = PA6; IN4 = PA7; }
+
+    // ================================================================= supplies
+    supply VBUS { voltage = 5V; external = true; }  // USB host, 4.75-5.25 V at the port
+    supply BAT { voltage = 3.7V; external = true; }  // the cell, 3.0-4.2 V
+    // BQ24072 OUT: BAT without USB, BAT + 0.225 V (3.4 V below 3.2 V) on USB: 3.0-4.5 V.
+    supply VSYS { voltage = 3.7V; source = U_CHG.OUT_10; }
+    supply VSYS_PWR { voltage = 3.7V; net = VSYS_PWR; }  // VSYS through FB_PWR
+    supply V3V3 { voltage = 3.3V; source = U_BB.VOUT_4; }
+    supply V3V3A { voltage = 3.3V; net = V3V3A; }  // V3V3 through FB_A
+    supply BAT_SW { voltage = 3.7V; source = U_SW_VB.VOUT; }
+    supply BOOST_IN { voltage = 3.7V; source = U_SW_BST.VOUT; }
+    supply DDS_SW { voltage = 3.3V; source = U_SW_DDS.VOUT; }
+    supply V3V3_DDS { voltage = 3.3V; net = V3V3_DDS; }  // DDS_SW through FB_DDS
+    supply V3V3_ANA { voltage = 3.3V; net = V3V3_ANA; }  // DDS_SW through FB_ANA
+    // The boost and inverter outputs leave the TPS65130 through D1 and D2; the IC has no
+    // output pin on these nets (VPOS and VNEG are sense inputs), so they are declared as
+    // established rails.
+    supply VPOS_RAW { voltage = 5.34V; external = true; }
+    supply VNEG_RAW { voltage = -5.24V; external = true; }
+    supply VPOS_F { voltage = 5.27V; net = VPOS_F; }  // VPOS_RAW through R_PF_P at 70 mA
+    supply VNEG_F { voltage = -5.17V; net = VNEG_F; }  // VNEG_RAW through R_PF_N at 70 mA
+    supply VP { voltage = 4.5V; source = U_LDOP.OUT; }
+    supply VN { voltage = -4.48V; source = U_LDON.OUT; }
+    supply V_MID { voltage = 1.65V; source = U_REF.VBIAS; }
+    supply REF_3V3 { voltage = 3.3V; source = U_REF.VREF; }
+    supply GND { voltage = 0V; external = true; }
+
+    // Steady states for `copper power-check`: measuring on the cell, and asleep with only
+    // the always-on domain powered. USB may or may not be present in either.
+    power_state MEASURE {
+        VBUS = unknown; BAT = on; VSYS = on; VSYS_PWR = on; V3V3 = on; V3V3A = on;
+        BAT_SW = unknown; BOOST_IN = on; DDS_SW = on; V3V3_DDS = on; V3V3_ANA = on;
+        VPOS_RAW = on; VNEG_RAW = on; VPOS_F = on; VNEG_F = on; VP = on; VN = on;
+        V_MID = on; REF_3V3 = on; GND = on;
+    }
+    power_state SLEEP {
+        VBUS = unknown; BAT = on; VSYS = on; VSYS_PWR = on; V3V3 = on; V3V3A = on;
+        BAT_SW = off; BOOST_IN = off; DDS_SW = off; V3V3_DDS = off; V3V3_ANA = off;
+        VPOS_RAW = off; VNEG_RAW = off; VPOS_F = off; VNEG_F = off; VP = off; VN = off;
+        V_MID = off; REF_3V3 = off; GND = on;
+    }
+
+    // ================================================================= switcher layout intent
+    // TI SLVS493E section 9.1 asks for the input and output capacitors, inductors and
+    // rectifiers "as close as possible" and the feedback dividers next to FBP and VREF,
+    // without numbers. The distances below are this board's engineering limits (one part
+    // body plus a land between the switching pin and the part), not TI values; review the
+    // placed copper by hand. No hard macro or reference geometry is bound. The TPS63020
+    // has the same open item (SLVS916I section 10).
+    constraint max_distance(C_PWR_INN, U_PWR.INN_5) { distance = 3mm; }
+    constraint max_distance(L1, U_PWR.INP_1) { distance = 4mm; }
+    constraint max_distance(D1, U_PWR.INP_24) { distance = 4mm; }
+    constraint max_distance(L2, U_PWR.OUTN_13) { distance = 4mm; }
+    constraint max_distance(D2, U_PWR.OUTN_14) { distance = 4mm; }
+    constraint max_distance(C_POS1, D1) { distance = 4mm; }
+    constraint max_distance(C_NEG1, D2) { distance = 4mm; }
+    constraint max_distance(C_PWR_VIN, U_PWR.VIN) { distance = 2mm; }
+    constraint max_distance(R_FBP2, U_PWR.FBP) { distance = 3mm; }
+    constraint max_distance(R_FBN2, U_PWR.VREF) { distance = 3mm; }
+    constraint max_distance(C_PWR_VREF, U_PWR.VREF) { distance = 2mm; }
+    constraint max_distance(L3, U_BB.L1_8) { distance = 3mm; }
+    constraint max_distance(C_BB_IN1, U_BB.VIN_10) { distance = 3mm; }
+    constraint max_distance(C_BB_OUT1, U_BB.VOUT_4) { distance = 3mm; }
+    constraint max_distance(C_BB_VINA, U_BB.VINA) { distance = 2mm; }
+    // Keep the switchers away from the ADC reference, the DDS and the crystals.
+    constraint min_distance(U_PWR, U_MCU) { distance = 15mm; }
+    constraint min_distance(U_PWR, U_DDS) { distance = 15mm; }
+    constraint min_distance(U_BB, U_DDS) { distance = 10mm; }
+    constraint min_distance(L1, Y1) { distance = 10mm; }
+    constraint min_distance(L2, Y1) { distance = 10mm; }
+    constraint min_distance(L3, Y2) { distance = 10mm; }
+}
