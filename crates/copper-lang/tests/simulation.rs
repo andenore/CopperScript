@@ -159,7 +159,19 @@ fn howland_example_board_and_bench() {
 
     let benches = load_benches(&board, &design).unwrap();
     let names: Vec<&str> = benches.iter().map(|bench| bench.name.as_str()).collect();
-    assert_eq!(names, ["CurrentFlatness", "MeasurementNoise", "OutputImpedance", "ResistorMatching", "StepResponse"]);
+    assert_eq!(
+        names,
+        [
+            "CurrentFlatness",
+            "MeasurementNoise",
+            "OutputImpedance",
+            "ResistorMatching",
+            "Stability.pump",
+            "Stability.buffer",
+            "Stability.poles",
+            "StepResponse"
+        ]
+    );
     let bench = &benches[0];
     assert_eq!(bench.name, "CurrentFlatness");
     let treatment = |reference: &str| {
@@ -563,8 +575,8 @@ fn bench_file_api() {
     let board = example("howland_pump/board.copper");
     let design = compile_example("howland_pump/board.copper");
     let sources = bench::bench_sources(&board);
-    // Five benches and the LoadedPump fixture they share.
-    assert_eq!(sources.len(), 6);
+    // Six benches and the LoadedPump fixture they share.
+    assert_eq!(sources.len(), 7);
     // flatness.copper uses the fixture; compile_bench_file finds it beside the bench.
     let bench = compile_bench_file(&sources[0], &design).unwrap();
     assert_eq!(bench.board, "HowlandPump");

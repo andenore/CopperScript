@@ -46,6 +46,19 @@ pub enum AnalysisRun {
         to: f64,
         points: usize,
     },
+    /// The loop gain at the probe `probe` (`U1.OUT`), its net `net`.
+    Loop {
+        from: f64,
+        to: f64,
+        points_per_decade: u32,
+        probe: String,
+        net: String,
+    },
+    /// Poles, and the zeros of `output` per unit of `input` when named.
+    Pz {
+        input: Option<String>,
+        output: Option<String>,
+    },
 }
 
 impl AnalysisRun {
@@ -56,6 +69,8 @@ impl AnalysisRun {
             AnalysisRun::Noise { .. } => "noise",
             AnalysisRun::Tran { .. } => "tran",
             AnalysisRun::Dc { .. } => "dc",
+            AnalysisRun::Loop { .. } => "loop",
+            AnalysisRun::Pz { .. } => "pz",
         }
     }
 }
@@ -81,6 +96,8 @@ pub struct StepRun {
     pub noise: Vec<crate::noise::NoiseStep>,
     /// The solver's work in a transient run (`analysis tran`).
     pub transient: Option<copper_sim::TranStats>,
+    /// The poles and zeros (`analysis pz`), with the nodes each pole dominates in the bench's terms.
+    pub pole_zero: Option<crate::stability::PoleZeroStep>,
 }
 
 /// A measure at one step.
@@ -714,6 +731,20 @@ pub fn analysis_run(analysis: &Analysis, params: &Params) -> AnalysisRun {
             to: value(&dc.to, params),
             points: dc_values(dc, params).map(|(values, _)| values.len()).unwrap_or(0),
         },
+        Analysis::Loop(item) => AnalysisRun::Loop {
+            from: value(&item.from, params),
+            to: value(&item.to, params),
+            points_per_decade: item.points_per_decade,
+            probe: item.probe.to_string(),
+            net: item.net.to_string(),
+        },
+        Analysis::Pz(item) => AnalysisRun::Pz {
+            input: item.input.as_ref().map(|input| input.name.clone()),
+            output: item.output.as_ref().map(|(output, reference)| match reference {
+                Some(reference) => format!("V({output}, {reference})"),
+                None => format!("V({output})"),
+            }),
+        },
     }
 }
 
@@ -724,7 +755,8 @@ pub(crate) fn solve_point(lowered: &Lowered, analysis: &Analysis, params: &Param
     let solution = match analysis {
         Analysis::Ac { .. } => copper_sim::ac(&lowered.circuit, &sweep).map(Solution::Ac),
         Analysis::Noise(noise) => crate::noise::solve_sweep(lowered, noise, &sweep).map(Solution::Noise),
-        _ => return Err("only an ac or noise analysis is solved at one frequency".to_owned()),
+        Analysis::Loop(_) => copper_sim::loop_gain(&lowered.circuit, &sweep, lower::LOOP_PROBE).map(Solution::Loop),
+        _ => return Err("only an ac, noise or loop analysis is solved at one frequency".to_owned()),
     };
     let _ = params;
     solution.map_err(|error| explain(&error, lowered))
@@ -792,6 +824,17 @@ fn solve(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Re
             let mut options = crate::transient::options(tran, params);
             crate::transient::initial_conditions(bench, &lowered, params, &mut options.initial);
             copper_sim::transient(&lowered.circuit, &options).map(|result| Solution::Tran(Box::new(result)))
+        }
+        Analysis::Loop(item) => {
+            let sweep = Sweep::Decade {
+                start: value(&item.from, params),
+                stop: value(&item.to, params),
+                points_per_decade: item.points_per_decade as usize,
+            };
+            copper_sim::loop_gain(&lowered.circuit, &sweep, lower::LOOP_PROBE).map(Solution::Loop)
+        }
+        Analysis::Pz(item) => {
+            crate::stability::solve(&lowered, bench, item).map(|result| Solution::Pz(Box::new(result)))
         }
         Analysis::Dc(_) => unreachable!("solved above"),
     }
@@ -873,6 +916,10 @@ pub(crate) fn run_step(
         noise: crate::noise::summary(&solution, &lowered, &bench.analysis),
         transient: match &solution {
             Solution::Tran(result) => Some(result.stats().clone()),
+            _ => None,
+        },
+        pole_zero: match &solution {
+            Solution::Pz(result) => Some(crate::stability::PoleZeroStep::new(result, &lowered)),
             _ => None,
         },
     };

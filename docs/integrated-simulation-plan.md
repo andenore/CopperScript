@@ -45,7 +45,7 @@ Earlier research, written against the removed Python implementation, is in
 
 | Area | What works | Where |
 | --- | --- | --- |
-| Analyses | Operating point, AC, noise, transient, DC sweep; `step` (cartesian and zipped), `reference` runs, `ic` and `uic` | `crates/copper-sim`, `crates/copper-simulate` |
+| Analyses | Operating point, AC, noise, transient, DC sweep, loop gain, poles and zeros; `step` (cartesian and zipped), `reference` runs, `ic` and `uic` | `crates/copper-sim`, `crates/copper-simulate` |
 | Statistics | `tolerance`, matched groups, `montecarlo`, `worstcase` | `copper-lang/src/tolerance.rs`, `copper-simulate/src/variation.rs` |
 | Built-in models | `sim opamp`, `diffamp`, `source`, `load`, `diode`, `switch`; op-amp clipping, slew and current limit in transient and DC sweep | `copper-sim/src/models.rs`, `devices.rs` |
 | Vendor models | `sim spice`: SPICE3, PSpice and LTspice netlists; behavioural sources; Gummel-Poon BJT, JFET, MOSFET level 1 | `crates/copper-spice`, `copper-sim/src/semiconductors.rs`, `behavioral.rs` |
@@ -202,6 +202,35 @@ fixture like the others; its four noise benches become one; the hand-combined
 impedance noise in its README is replaced by a measure.
 
 ### F3. Stability analysis
+
+Built on 20 November 2026. Diagnostics SIM098 to SIM101.
+
+- `analysis loop { from; to; points_per_decade; probe = COMPONENT.PIN; }`:
+  loop gain by Tian's method with a 0 V probe in series with the pin, so the
+  operating point does not change. Measures `loop_gain()`, `phase_margin`,
+  `gain_margin`, `crossover`, `phase_crossover` ("never" without a crossing);
+  a Bode plot by default.
+- `analysis pz;` gives the poles of the linearised circuit, the nets each
+  dominates, a built-in `stable` measure and `damping()`; with `input` and
+  `output` also the zeros. Dense: infinite eigenvalues deflated, QR, then
+  each pole refined on the circuit's own matrices. No dependencies
+  (`copper-sim/src/eigen.rs`).
+- Howland pump: phase margin 20 to 30 degrees across loads (limit 15),
+  pole pair near 69 MHz with damping 0.18 to 0.26; the two agree through
+  the second-order relation and with the step overshoot.
+- Analyzer: every amplifier loop has at least 49 degrees (limit 45); no
+  right-half-plane pole in soil or with the electrodes in air. The guard
+  loop question is settled: stable, least-damped mode 4.06 kHz with damping
+  0.27. `LoopPeaking` under-reports the gain-1 driver's loop (its own closed
+  loop peaks 23 % at 135 MHz).
+
+Open: zeros are not refined (up to 7e-4 error rebuilding a stiff transfer
+function); at most 1500 unknowns; a margin at a two-way break (a resistor
+pin, not an amplifier output) is not a stability margin; Monte Carlo and
+worst case with loop or pz sections are untested; the HTML pole map and
+Bode pages were not looked at.
+
+Scope as planned:
 
 AC analysis cannot tell whether a loop oscillates. The analyzer's guard loop
 and the Howland pump's 22 % step overshoot are judged by peaking today.

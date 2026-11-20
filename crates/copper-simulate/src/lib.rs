@@ -27,6 +27,7 @@ pub mod report;
 pub mod results;
 pub mod run;
 pub mod spice;
+pub mod stability;
 pub mod transient;
 pub mod variation;
 

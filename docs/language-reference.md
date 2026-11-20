@@ -2982,6 +2982,8 @@ bench CurrentFlatness for HowlandPump {
 | `analysis ac { from; to; points_per_decade; }`, `analysis op;` | One analysis, or several, each with its own measures and plots ([Several analyses](#several-analyses); `SIM040`, `SIM097`). `0 < from < to`; `points_per_decade` is 1 to 10000. `analysis NAME: KIND { ... }` names one of several. |
 | `analysis tran { stop; start; max_step; reltol; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
 | `analysis dc { sweep = NAME; from; to; step; }` (or `points = N;`) | Operating points over a swept param, source or supply ([DC sweep](#dc-sweep); `SIM074`). |
+| `analysis loop { from; to; points_per_decade; probe = U1.OUT; }` | The loop gain at a component pin, read through a 0 V probe in series with it ([Stability analysis](#stability-analysis); `SIM098`). |
+| `analysis pz;`, `analysis pz { input = SRC; output = V(OUT); }` | The poles of the linearised circuit, and the zeros of `V(OUT)` per unit of `SRC`; the built-in measure `stable` ([Stability analysis](#stability-analysis); `SIM100`). |
 | `ic V(NODE) = q;`, `ic C1 = q;`, `ic L1 = q;` | The state a transient run starts from: a node voltage, a capacitor's voltage, an inductor's current ([Transient analysis](#transient-analysis); `SIM075`). |
 | `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; temperature = 27degC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, or of several (`output = V(A), V(B);`), optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
 | `tolerance TARGET = q;` | The tolerance of a param, of a passive component (overriding its own `tolerance`) or of a model parameter `COMPONENT.PARAMETER` ([Tolerances, Monte Carlo and worst case](#tolerances-monte-carlo-and-worst-case); `SIM091`). |
@@ -3179,9 +3181,13 @@ name), subtraction needs spaces: `mag(i) / 15uA - 1`.
 | `input_noise()`, `input_noise(Q)` | The output noise density referred to the analysis's `input` (`SIM086`): divided by the input's transfer to the output (to `Q`); V/rtHz for a voltage source, A/rtHz for a current source. |
 | `noise_rms(x, from, to)` | The RMS of the density `x` over the band, `sqrt(integral of x^2 df)`: `noise_rms(noise(), 10Hz, 20kHz)` is a voltage (`SIM088`). |
 | `noise_share(x, from, to)` | The fraction of the noise power over the band of the quantity whose noise `x` reads that `x` carries: `noise_share(noise(R1), 10Hz, 20kHz)` of the output, `noise_share(noise(V(B), R1), ...)` of output `V(B)`, dimensionless; `x` reads one quantity and has its noise units (`SIM088`). |
+| `loop_gain()` | `analysis loop` only (`SIM099`): the loop gain at the probe, complex, dimensionless and swept over frequency ([Stability analysis](#stability-analysis)). |
+| `phase_margin(T)`, `gain_margin(T)`, `crossover(T)`, `phase_crossover(T)` | The margins of a loop gain `T`, a dimensionless complex value swept over frequency (`loop_gain()`, or a loop broken by hand in an ac analysis; `SIM099`): `crossover` the first frequency where `abs(T)` falls through 1, `phase_margin` 180 degrees plus the phase there, `phase_crossover` the first frequency where the phase falls through -180 degrees, `gain_margin` `-20 log10 abs(T)` there, dB. The phase is unwrapped from the lowest frequency. Without such a crossing in the sweep the value is **never**, as for `upto`. |
+| `stable()`, `damping()` | `analysis pz` only (`SIM100`): 1 when no pole is in the right half-plane (else 0), and the smallest damping ratio of the poles, dimensionless ([Stability analysis](#stability-analysis)). |
 
 In `analysis ac` probes are complex and swept over frequency; in
-`analysis op` they are real single values; in `analysis tran` they are real
+`analysis op` they are real single values; `analysis loop` and `analysis
+pz` have no `V(...)` or `I(...)` (`SIM101`); in `analysis tran` they are real
 and swept over time, with the time-domain functions of
 [Transient analysis](#transient-analysis); in `analysis noise` `V(...)` and
 `I(...)` are the AC sweep at the noise frequencies (the transfer from the
@@ -3556,6 +3562,92 @@ not. `plot` draws against the swept value, named on the axis; the JSON and
 CSV put it in `sweep` (SI base units) and the analysis records `sweep`,
 `units`, `from`, `to` and `points`.
 
+### Stability analysis
+
+```copper
+bench Stability for HowlandPump using LoadedPump {
+    step R_LOAD_VALUE in 100ohm, 1kohm, 10kohm;
+    analysis pump: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U1.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 15deg; }
+    measure crossover = crossover(loop_gain());
+    analysis poles: pz;
+    measure damping = damping();
+}
+```
+
+(`examples/simulation/howland_pump/benches/stability.copper`.) An AC sweep
+cannot tell whether a loop oscillates; these two analyses can.
+
+**`analysis loop { from; to; points_per_decade; probe = COMPONENT.PIN; }`**
+reads the loop gain at a pin. The simulator moves the pin off its net onto a
+node of its own (named `COMPONENT.PIN`) and joins the two again with a 0 V
+voltage source, the probe: the operating point does not change, and at each
+frequency two solves of the closed circuit (a unit voltage across the probe,
+then a unit current into the pin's side, the circuit's own AC sources at
+zero) give Tian's loop gain (M. Tian et al., IEEE Circuits and Devices 17(1),
+2001), `T = (Y12 + Y21) / (Y11 + Y22)` in the admittance parameters of the
+circuit opened at the probe. It counts the loading of both sides of the
+break, and it is the same whichever way the probe faces. `T` is positive at
+low frequency for negative feedback; `1 + T = 0` marks oscillation. The probe
+is a pin of a simulated board or bench component on a net: a passive's pin,
+or a pin of a modelled part's `sim` block (`SIM098`); a replaced or ignored
+component, a pin on no net and a missing probe are `SIM098`. `from`, `to` and
+`points_per_decade` are as for `analysis ac`. `loop_gain()` is the result
+(complex, dimensionless, swept); a loop section that plots nothing plots
+`db(loop_gain())` above `phase(loop_gain())`, its Bode plot. `at(x, f)` solves
+the loop at `f` as for ac.
+
+Probe an amplifier's output pin. There the break is one-way (the amplifier
+model's output does not feed its inputs), so `T` is the textbook loop gain,
+equal to Middlebrook's double injection, of every loop that passes the pin:
+at a Howland pump's amplifier output, the negative and the positive
+feedback together, with every other loop closed. At a pin where signals
+travel both ways around two loops (a passive between two loops, a guard
+resistor) `T` is still defined but is not the return ratio of one loop, and
+its margins can mislead; the poles decide (`impedance_analyzer`'s
+`GuardStability` shows a case).
+
+**`analysis pz;`** finds the poles of the circuit linearised at its operating
+point: the finite roots `s` of `det(G + s C) = 0`, where `G + j w C` is the
+small-signal matrix of the AC analysis. The unknowns with no dynamics of their
+own are deflated first by orthogonal transformations, the remaining
+eigenvalues come from the shifted QR iteration, and each pole is then refined
+by Newton's method on the circuit's own matrices, which also gives the nodes
+it dominates (those with the largest small-signal voltage in its mode). A pole
+whose refinement does not converge (a repeated pole) keeps its QR value and
+is marked unrefined. `analysis pz { input = SRC; output = V(OUT); }` (or
+`V(P, N)`) adds the zeros of the transfer function from source `SRC` (a bench
+model or replacement of kind source) to the output; they are QR values, not
+refined, and a mode the input does not excite or the output does not see
+appears as a pole and a zero at the same place. Input and output come
+together (`SIM100`).
+
+Every pole-zero section has the built-in measure `stable`, `stable() { min =
+1; }`, which fails when a pole is in the right half-plane (its real part above
+`1e-9` of its magnitude, `1e-6` unrefined); a measure of that name is
+`SIM100`. Poles at the origin, as many as `G` has null directions (a node
+reached through capacitors only, such as an electrode in air, or an ideal
+integrator), are reported and do not count. `damping()` is the smallest
+damping ratio `-Re(s) / abs(s)` of the poles: 1 for a real pole, between 0
+and 1 for a decaying pair, negative for a growing one. A pole-zero section
+has no swept values to plot (`SIM044`). The text table lists per step the
+number of poles, the verdict and the poles in the right half-plane or least
+damped with the nodes they dominate; the HTML page draws the poles and zeros
+by natural frequency against damping, the right half-plane shaded, and
+tables them; the JSON has `pole_zero`, per step `stable`, `unknowns`,
+`infinite_eigenvalues`, the `poles` (`re_hz`, `im_hz`, `frequency_hz`,
+`damping`, `right_half_plane`, `refined`, `real`, `origin`, `nodes`) and with
+a transfer function `transfer` and `zeros`.
+
+The analysis is dense, `O(n^3)` in the unknowns, and takes circuits of up to
+1500 unknowns; the analyzer's front end (about 90) takes well under a second.
+Checked against closed forms: an RC ladder's and an RLC's poles to `1e-12`,
+the phase margin and crossover of one- and two-pole amplifiers, the gain
+margin of a three-pole loop, a negative-resistance tank and an amplifier with
+positive feedback found unstable, and transfer functions of stiff circuits
+(1 fF to 10 uF, 1 mohm to 1 Gohm, coupled inductors, capacitor loops) rebuilt
+from their poles and zeros within `7e-4` of the AC analysis.
+
 ### Running benches
 
 ```console
@@ -3577,7 +3669,8 @@ solver and its version, per bench its board and, for a bench of a module, the
 module, the model fidelity of every component, supply and bench model, every
 param per step, each
 measure per step with its limits and pass or fail, the plotted vectors; for
-a noise bench `noise`, the contributors per step, for a Monte Carlo or
+a noise bench `noise`, the contributors per step, for a pole-zero bench
+`pole_zero`, the poles and zeros per step, for a Monte Carlo or
 worst-case bench `variation`, the statistics per step and measure, and for a
 transient bench `transient` per step, the solver's accepted and rejected
 steps, Newton iterations and step sizes, with the plotted vectors on
@@ -3645,6 +3738,10 @@ components that form a loop of voltage sources.
 | `SIM095` | noise quantities: `noise(Q)` of something that is not a small-signal quantity of voltage probes, an unnamed quantity with several outputs |
 | `SIM096` | parameter sets per supply in part `sim` blocks: the span, the kind, its parameters |
 | `SIM097` | several analyses in a bench: two of one name, a measure or plot before the first analysis, a bench of several analyses compiled as one |
+| `SIM098` | `analysis loop`: the probe (missing, not a component pin, unknown, ignored or replaced component, a pin of no `sim` role, a pin on no net), a property that takes one value |
+| `SIM099` | loop gains: `loop_gain()` outside `analysis loop`, a margin of a value that is not a dimensionless complex value swept over frequency |
+| `SIM100` | `analysis pz`: its input and output, `stable()` and `damping()` outside it, a measure named `stable` |
+| `SIM101` | `V(...)` and `I(...)` in `analysis loop` or `analysis pz` |
 
 ## KiCad schematic export
 

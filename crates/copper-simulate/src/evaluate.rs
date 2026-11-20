@@ -79,6 +79,10 @@ pub enum Solution {
     Tran(Box<copper_sim::TranResult>),
     /// `analysis dc`: real values at the swept values, increasing.
     Dc(Box<copper_sim::DcSweepResult>),
+    /// `analysis loop`: the loop gain at the probe over frequency.
+    Loop(copper_sim::LoopGainResult),
+    /// `analysis pz`: the poles and zeros.
+    Pz(Box<copper_sim::PoleZeroResult>),
 }
 
 impl Solution {
@@ -90,12 +94,14 @@ impl Solution {
             Solution::Noise(result) => result.ac.frequencies(),
             Solution::Tran(result) => result.times(),
             Solution::Dc(result) => result.values(),
+            Solution::Loop(result) => &result.frequencies,
+            Solution::Pz(_) => &[],
         }
     }
 
     /// Whether the axis is logarithmic frequency (interpolation in log f).
     pub fn log_axis(&self) -> bool {
-        matches!(self, Solution::Ac(_) | Solution::Noise(_))
+        matches!(self, Solution::Ac(_) | Solution::Noise(_) | Solution::Loop(_))
     }
 
     fn voltage(&self, node: &str) -> Result<Vec<Complex>, SimError> {
@@ -105,6 +111,7 @@ impl Solution {
             Solution::Noise(result) => Ok(result.ac.voltage(node)?.to_vec()),
             Solution::Tran(result) => Ok(result.voltage(node)?.into_iter().map(Complex::real).collect()),
             Solution::Dc(result) => Ok(result.voltage(node)?.iter().map(|v| Complex::real(*v)).collect()),
+            Solution::Loop(_) | Solution::Pz(_) => Err(SimError::UnknownNode(node.to_owned())),
         }
     }
 
@@ -115,6 +122,7 @@ impl Solution {
             Solution::Noise(result) => result.ac.current(element),
             Solution::Tran(result) => Ok(result.current(element)?.into_iter().map(Complex::real).collect()),
             Solution::Dc(result) => Ok(result.current(element)?.into_iter().map(Complex::real).collect()),
+            Solution::Loop(_) | Solution::Pz(_) => Err(SimError::UnknownElement(element.to_owned())),
         }
     }
 
@@ -125,11 +133,13 @@ impl Solution {
             Solution::Noise(result) => result.ac.len(),
             Solution::Tran(result) => result.len(),
             Solution::Dc(result) => result.len(),
+            Solution::Loop(result) => result.frequencies.len(),
+            Solution::Pz(_) => 1,
         }
     }
 
     fn swept(&self) -> bool {
-        !matches!(self, Solution::Op(_))
+        !matches!(self, Solution::Op(_) | Solution::Pz(_))
     }
 }
 
@@ -310,6 +320,10 @@ impl<'a> Evaluator<'a> {
             ExpressionKind::Probe(probe @ (Probe::Noise { .. } | Probe::InputNoise { .. })) => {
                 crate::noise::probe(self, probe).map(|samples| Value::swept_reals(&samples))
             }
+            ExpressionKind::Probe(Probe::LoopGain) => match &*self.solution {
+                Solution::Loop(result) => Ok(Value { samples: result.gain.clone(), swept: true, never: false }),
+                _ => Err("loop_gain() reads the result of analysis loop".to_owned()),
+            },
             ExpressionKind::Negate(operand) => Ok(self.eval(operand)?.map(|z| -z)),
             ExpressionKind::Binary { operator, left, right } => {
                 let (a, b) = (self.eval(left)?, self.eval(right)?);
@@ -482,6 +496,15 @@ impl<'a> Evaluator<'a> {
         if function == Function::If {
             return self.choose(arguments, &text());
         }
+        if matches!(function, Function::Stable | Function::Damping) {
+            let Solution::Pz(result) = &*self.solution else {
+                return Err(format!("{}: it reads the poles of analysis pz", text()));
+            };
+            return match function {
+                Function::Stable => Ok(Value::real(if result.stable() { 1.0 } else { 0.0 })),
+                _ => result.damping().map(Value::real).ok_or_else(|| format!("{}: the circuit has no poles", text())),
+            };
+        }
         // A "never" argument makes the whole call "never".
         for argument in arguments {
             if may_be_never(argument) && self.eval(argument)?.never {
@@ -529,7 +552,20 @@ impl<'a> Evaluator<'a> {
             | Function::Harmonic
             | Function::Thd
             | Function::Integrate => Err(format!("{}: evaluated by the transient functions", text())),
-            Function::Upto | Function::Downto | Function::If => Err(format!("{}: evaluated above", text())),
+            Function::Upto | Function::Downto | Function::If | Function::Stable | Function::Damping => {
+                Err(format!("{}: evaluated above", text()))
+            }
+            Function::PhaseMargin | Function::GainMargin | Function::Crossover | Function::PhaseCrossover => {
+                let margins = measure::loop_margins(self.solution.axis(), &x.samples)
+                    .map_err(|error| format!("{}: {error}", text()))?;
+                let value = match function {
+                    Function::PhaseMargin => margins.phase_margin,
+                    Function::GainMargin => margins.gain_margin,
+                    Function::Crossover => margins.crossover,
+                    _ => margins.phase_crossover,
+                };
+                Ok(value.map(Value::real).unwrap_or_else(Value::never))
+            }
             Function::NoiseRms | Function::NoiseShare => {
                 let from = self.eval(&arguments[1])?.samples[0].re;
                 let to = self.eval(&arguments[2])?.samples[0].re;

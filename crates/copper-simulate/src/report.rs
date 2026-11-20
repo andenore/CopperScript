@@ -834,6 +834,11 @@ pub fn html(run: &BenchRun, board: &str) -> String {
         }
     };
     page.push(verdict);
+    if run.error.is_none()
+        && let Some(svg) = crate::stability::figure(run)
+    {
+        page.push(format!("<figure>\n{svg}\n</figure>"));
+    }
     if let Some(svg) = figure(run) {
         page.push(format!("<figure>\n{svg}\n<div id=\"tip\"></div>\n</figure>"));
         page.push(format!("<script type=\"application/json\" id=\"sim-data\">{}</script>", tooltip_data(run)));
@@ -895,7 +900,8 @@ pub fn html(run: &BenchRun, board: &str) -> String {
         page.push("</table></div>".to_owned());
     }
     if run.error.is_none() {
-        let sections = [crate::noise::html_section(run), crate::variation::html_section(run)];
+        let sections =
+            [crate::noise::html_section(run), crate::stability::html_section(run), crate::variation::html_section(run)];
         page.extend(sections.into_iter().filter(|section| !section.is_empty()));
     }
     // One row per fidelity and model, listing the components that share it.

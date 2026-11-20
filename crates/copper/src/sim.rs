@@ -39,7 +39,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              of each measure's worst step against its limits, then writes sim-results.json (copperscript-sim/v0.1: solver, \
              model fidelity of every component, params per step, measures, plotted vectors), BENCH.csv of the plotted \
              vectors and BENCH.html with the plots (one curve per step, magnitude above phase on a shared logarithmic \
-             frequency axis, or a linear time axis for analysis tran) and the measures table. Exit status 1 when a measure is outside its limits or a bench cannot \
+             frequency axis, or a linear time axis for analysis tran; the loop gain's Bode plot for analysis loop; a map \
+             and a table of the poles for analysis pz, whose built-in measure stable fails on a pole in the right \
+             half-plane) and the measures table. Exit status 1 when a measure is outside its limits or a bench cannot \
              be solved, 2 for usage and compile errors"
         );
         crate::help::options(out, "sim");

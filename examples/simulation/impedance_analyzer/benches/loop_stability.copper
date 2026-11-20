@@ -1,0 +1,66 @@
+// LoopStability: the loop gain of every amplifier of the front end at its output
+// pin (Tian's method: a 0 V probe in series with the pin, the operating point
+// unchanged, every other loop closed), and the poles of the whole circuit, with
+// SoilSweep's moist loam (100 ohm m, relative permittivity 25) attached, as in
+// LoopPeaking.
+//
+// An amplifier's output is a one-way break (the model's output stage does not
+// feed its inputs), so there Tian's loop gain is the textbook one and its phase
+// margin means what it says. Limit: 45 degrees for every loop. Peaking of a
+// closed-loop response, which LoopPeaking measures, is a weaker test: the
+// gain-1 driver has 49 degrees (a pole pair at 135 MHz, damping 0.51) and its
+// own closed loop T / (1 + T) peaks 23 % there, but LoopPeaking's V(V_1) / V(B1_IN)
+// peaks 1.8 %: B1_IN, the amplifier's input behind its 1 kohm resistor, follows
+// the output through the input capacitance; from the source side, V(V_1) / V(B1_C),
+// it is 6 % (an ac sweep by hand; README.md, "LoopStability").
+//
+// The poles: none in the right half-plane, so the front end in soil is stable;
+// the least damped pair is near 16 Hz (damping 0.17), in the pump and its guard
+// (DRIVE, U_PMP, GUARD_HC), far below the band: C_NDC (4.7 uF) and C_BLK (100 nF)
+// are the only capacitors there slow enough for it (by hand, not isolated).
+bench LoopStability for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
+    analysis pump: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_PMP.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+    measure gain_margin = gain_margin(loop_gain());
+
+    // U_FBB's output carries its own follower loop, the pump's positive feedback (R2) and the HC guard.
+    analysis feedback_buffer: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_FBB.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+    measure gain_margin = gain_margin(loop_gain());
+
+    analysis drive_buffer: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_DRV.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis sense_buffer_hp: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_BHP.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis receiver: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_DIF.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis gain1_driver: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_B1.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+    // The closed loop T / (1 + T) of a follower: its peaking.
+    measure closed_loop_peak = max(mag(loop_gain() / (1 + loop_gain())));
+
+    analysis gain10_stage: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_G10.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis gain100_stage: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_G100.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis transimpedance: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U_TIA.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    // The built-in measure stable fails when a pole is in the right half-plane.
+    analysis poles: pz;
+    measure damping = damping();
+}

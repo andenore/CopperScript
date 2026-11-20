@@ -285,6 +285,10 @@ pub enum Analysis {
     Tran(Box<crate::transient::TranAnalysis>),
     /// `analysis dc { sweep; from; to; step | points; }`: operating points over a swept value.
     Dc(Box<DcAnalysis>),
+    /// `analysis loop { from; to; points_per_decade; probe = COMPONENT.PIN; }`: the loop gain at a pin.
+    Loop(Box<crate::stability::LoopAnalysis>),
+    /// `analysis pz;` or `analysis pz { input; output = V(...); }`: poles and zeros.
+    Pz(Box<crate::stability::PzAnalysis>),
 }
 
 impl Analysis {
@@ -295,6 +299,8 @@ impl Analysis {
             Analysis::Noise(_) => "noise",
             Analysis::Tran(_) => "tran",
             Analysis::Dc(_) => "dc",
+            Analysis::Loop(_) => "loop",
+            Analysis::Pz(_) => "pz",
         }
     }
 }
@@ -1146,6 +1152,80 @@ impl Context<'_> {
         ))
     }
 
+    /// The probe pin of `analysis loop`: a pin of a simulated board or bench
+    /// component (a role pin of its `sim` block for a modelled part) that a
+    /// net connects; returns the node of that net (`SIM098`).
+    fn loop_probe(&self, endpoint: &Endpoint, location: &Location) -> Result<Node> {
+        let refuse = |message: String| Err(error("SIM098", message, location));
+        let Some(component) = self.components.iter().find(|component| component.reference == endpoint.component) else {
+            let names: Vec<&str> = self.components.iter().map(|component| component.reference.as_str()).collect();
+            return Err(suggesting(
+                error(
+                    "SIM098",
+                    format!(
+                        "analysis loop probe {endpoint}: {} is no component of the bench",
+                        repr(&endpoint.component)
+                    ),
+                    location,
+                ),
+                &endpoint.component,
+                &names,
+            ));
+        };
+        match &component.treatment {
+            Treatment::Ignored => {
+                return refuse(format!(
+                    "analysis loop probe {endpoint}: {} is ignored, so its pins are open; probe a pin of a simulated component",
+                    endpoint.component
+                ));
+            }
+            Treatment::Replaced(_) => {
+                return refuse(format!(
+                    "analysis loop probe {endpoint}: {} is replaced by a bench model, whose terminals are nets, not pins; probe a pin of another component on that net",
+                    endpoint.component
+                ));
+            }
+            Treatment::Passive { .. } | Treatment::PartModel => {}
+        }
+        if let Treatment::PartModel = component.treatment
+            && let Some(part) = self.part(&component.part)
+        {
+            let modelled = part.sim.iter().any(|model| model.pins.values().any(|pin| pin == &endpoint.pin));
+            if !modelled {
+                let pins: Vec<&str> =
+                    part.sim.iter().flat_map(|model| model.pins.values().map(String::as_str)).collect();
+                return Err(suggesting(
+                    error(
+                        "SIM098",
+                        format!(
+                            "analysis loop probe {endpoint}: pin {} is no pin of {}'s sim model, so no loop passes it; probe one of {}",
+                            repr(&endpoint.pin),
+                            endpoint.component,
+                            pins.join(", ")
+                        ),
+                        location,
+                    ),
+                    &endpoint.pin,
+                    &pins,
+                ));
+            }
+        }
+        let node = if self.board_component(&endpoint.component).is_some() {
+            self.board_pin(endpoint, location)?
+        } else {
+            match self.nets.iter().find(|net| net.endpoints.contains(endpoint)) {
+                Some(net) => net.node.clone(),
+                None => return refuse(format!("analysis loop probe {endpoint}: the bench pin is on no bench net")),
+            }
+        };
+        match node {
+            Node::Net(_) => Ok(node),
+            Node::Pin(_) => refuse(format!(
+                "analysis loop probe {endpoint}: the pin is on no net, so no loop passes it; probe a connected pin"
+            )),
+        }
+    }
+
     /// `I(X)` or `I(X.ROLE)` of a model the bench places (a replacement or a
     /// bench model): the current into a role's terminal. `I(X)` of a
     /// two-terminal model is its first role's.
@@ -1329,6 +1409,8 @@ struct ExpressionScope<'a> {
     time_domain: bool,
     /// `analysis dc`: the units of the swept value.
     sweep: Option<Units>,
+    /// The kind of the analysis (`ac`, `loop`, `pz`, ...).
+    analysis: &'static str,
 }
 
 impl Scope for ExpressionScope<'_> {
@@ -1382,6 +1464,10 @@ impl Scope for ExpressionScope<'_> {
 
     fn sweep_units(&self) -> Option<Units> {
         self.sweep
+    }
+
+    fn analysis(&self) -> Option<&'static str> {
+        Some(self.analysis)
     }
 }
 
@@ -2063,12 +2149,24 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
                 SweepSources { params: &params, supplies: &supplies, replacements: &replacements, models: &models };
             Analysis::Dc(Box::new(dc_analysis(item, &value_scope, &sources)?))
         }
+        [item] if item.kind == "loop" => crate::stability::loop_analysis(item, &value_scope, &|endpoint, location| {
+            context.loop_probe(endpoint, location)
+        })?,
+        [item] if item.kind == "pz" => crate::stability::pz_analysis(
+            item,
+            &|target, location| context.node(target, location),
+            &replacements,
+            &models,
+        )?,
         [item] => analysis(item, &value_scope)?,
         [_, second, ..] => {
             return Err(error("SIM040", "a bench runs one analysis in this version", &second.location));
         }
     };
-    let swept = matches!(analysis, Analysis::Ac { .. } | Analysis::Noise(_) | Analysis::Tran(_) | Analysis::Dc(_));
+    let swept = matches!(
+        analysis,
+        Analysis::Ac { .. } | Analysis::Noise(_) | Analysis::Tran(_) | Analysis::Dc(_) | Analysis::Loop(_)
+    );
     let time_domain = matches!(analysis, Analysis::Tran(_));
     let sweep = match &analysis {
         Analysis::Dc(dc) => Some(Units::of(dc.dimension)),
@@ -2163,6 +2261,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             contributors: &contributors,
             time_domain,
             sweep,
+            analysis: analysis.name(),
         };
         match statement {
             BenchStatement::Step(item) => {
@@ -2267,6 +2366,8 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
                     if !expression.ty.swept {
                         let reason = if swept {
                             &format!("it does not vary with {axis}")
+                        } else if matches!(analysis, Analysis::Pz(_)) {
+                            "analysis pz gives single values (its poles are in the results and on the page)"
                         } else {
                             "analysis op gives single values"
                         };
@@ -2296,6 +2397,23 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             | BenchStatement::Variation(_)
             | BenchStatement::InitialCondition(_) => {}
         }
+    }
+    // A loop analysis that plots nothing shows its Bode plot.
+    if let (Analysis::Loop(_), true) = (&analysis, plots.is_empty()) {
+        let location = analyses.first().map_or(&document.location, |item| &item.location);
+        plots.push(crate::stability::default_loop_plot(location));
+    }
+    // The built-in measure of a pole-zero analysis: no pole in the right half-plane.
+    if let Analysis::Pz(_) = &analysis {
+        if let Some(measure) = measures.iter().find(|measure| measure.name == crate::stability::STABLE_MEASURE) {
+            return Err(error(
+                "SIM100",
+                "measure stable is the built-in measure of analysis pz (1 when no pole is in the right half-plane); name yours otherwise",
+                &measure.location,
+            ));
+        }
+        let location = analyses.first().map_or(&document.location, |item| &item.location);
+        measures.push(crate::stability::stable_measure(location));
     }
     let initial_conditions = initial_conditions(document, &analysis, &context, &value_scope)?;
     let part_of = |name: &str| library.get(name).or_else(|| view.library.get(name));
@@ -2850,11 +2968,11 @@ fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<Analysis> {
         other => Err(suggesting(
             error(
                 "SIM040",
-                format!("unknown analysis {}; expected ac, dc, noise, op or tran", repr(other)),
+                format!("unknown analysis {}; expected ac, dc, loop, noise, op, pz or tran", repr(other)),
                 &item.location,
             ),
             other,
-            &["ac", "dc", "noise", "op", "tran"],
+            &["ac", "dc", "loop", "noise", "op", "pz", "tran"],
         )),
     }
 }
@@ -3082,6 +3200,7 @@ pub fn expression_value(expression: &Expression) -> Value {
             }
             entries
         }
+        ExpressionKind::Probe(Probe::LoopGain) => vec![("probe", text("loop_gain"))],
         ExpressionKind::Probe(Probe::InputNoise { quantity }) => {
             let mut entries = vec![("probe", text("input_noise"))];
             if let Some(quantity) = quantity {
@@ -3227,6 +3346,8 @@ pub fn bench_value(bench: &Bench) -> Value {
             }
             object(entries)
         }
+        Analysis::Loop(item) => crate::stability::loop_value(item, &node_value, &sim_quantity_value),
+        Analysis::Pz(item) => crate::stability::pz_value(item, &node_value),
         Analysis::Dc(dc) => object(vec![
             ("kind", text("dc")),
             ("sweep", text(&dc.name)),

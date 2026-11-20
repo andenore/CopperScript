@@ -13,7 +13,9 @@
 //!     "analysis": { "kind": "ac", "from_hz", "to_hz", "points_per_decade" } | { "kind": "op" }
 //!                 | { "kind": "noise", "from_hz", "to_hz", "points_per_decade", "output", "input", "temperature_k" }
 //!                 | { "kind": "tran", "stop_s", "start_s", "max_step_s", "reltol", "uic" (when set) }
-//!                 | { "kind": "dc", "sweep", "units", "dimension", "from", "to", "points" },
+//!                 | { "kind": "dc", "sweep", "units", "dimension", "from", "to", "points" }
+//!                 | { "kind": "loop", "from_hz", "to_hz", "points_per_decade", "probe", "net" }
+//!                 | { "kind": "pz", "input", "output" },
 //!                 (the values at the bench's steps: a field that differs between steps is an
 //!                  array with one value per step, and "stepped" lists those fields)
 //!     "models": [ { "name", "kind": "component" | "supply" | "model", "part", "bench", "fidelity", "model", "inactive_parameters" } ],
@@ -29,6 +31,10 @@
 //!                analysis dc: "sweep", the swept value in SI base units)
 //!     "noise" (analysis noise only): [ { "step", "output", "from_hz", "to_hz", "total_rms_v",
 //!                "contributors": [ { "contributor", "owner", "rms_v", "share" } ] } ],   (one per step and output)
+//!     "pole_zero" (analysis pz only): [ { "step", "stable", "unknowns", "infinite_eigenvalues",
+//!                "poles": [ { "re_hz", "im_hz", "frequency_hz", "damping", "right_half_plane", "refined",
+//!                             "real" (a real pole), "origin" (a pole at the origin), "nodes": [...] } ],
+//!                "transfer", "zeros": [ ... ] (with input and output) } ],   (one per step)
 //!     "variation" (montecarlo or worstcase only): { "method": { "kind", "runs", "seed", "distribution" },
 //!                "variables": [...], "yield", "steps": [ { "index", "runs", "yield",
 //!                "measures": [ { "name", "nominal", "min", "max", "yield", "worst_run",
@@ -155,6 +161,19 @@ fn single_analysis_value(analysis: &AnalysisRun) -> Value {
             entries.extend([("from", number(*from)), ("to", number(*to)), ("points", Value::from(*points as i64))]);
             object(entries)
         }
+        AnalysisRun::Loop { from, to, points_per_decade, probe, net } => object(vec![
+            ("kind", Value::from("loop")),
+            ("from_hz", number(*from)),
+            ("to_hz", number(*to)),
+            ("points_per_decade", Value::from(i64::from(*points_per_decade))),
+            ("probe", Value::from(probe.as_str())),
+            ("net", Value::from(net.as_str())),
+        ]),
+        AnalysisRun::Pz { input, output } => object(vec![
+            ("kind", Value::from("pz")),
+            ("input", input.as_deref().map(Value::from).unwrap_or(Value::Null)),
+            ("output", output.as_deref().map(Value::from).unwrap_or(Value::Null)),
+        ]),
     }
 }
 
@@ -317,6 +336,10 @@ pub fn bench_value(run: &BenchRun) -> Value {
         .collect();
     if !noise.is_empty() {
         entries.push(("noise", Value::Array(noise)));
+    }
+    let pole_zero = crate::stability::json(run);
+    if !pole_zero.is_empty() {
+        entries.push(("pole_zero", Value::Array(pole_zero)));
     }
     if let Some(variation) = &run.variation {
         entries.push(("variation", crate::variation::value_of(run, variation)));
@@ -490,6 +513,23 @@ pub fn bench_analysis_text(run: &BenchRun) -> String {
             };
             format!("ac {} to {}, {points_per_decade} points per decade", range(pick(0), &hz), range(pick(1), &hz))
         }
+        AnalysisRun::Loop { points_per_decade, probe, .. } => {
+            let pick = |k: usize| -> Vec<f64> {
+                analyses
+                    .iter()
+                    .filter_map(|a| match a {
+                        AnalysisRun::Loop { from, to, .. } => Some(if k == 0 { *from } else { *to }),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            format!(
+                "loop gain at {probe} {} to {}, {points_per_decade} points per decade",
+                range(pick(0), &hz),
+                range(pick(1), &hz)
+            )
+        }
+        AnalysisRun::Pz { .. } => analysis_text(first),
         AnalysisRun::Noise { points_per_decade, output, input, kelvin, .. } => {
             let pick = |k: usize| -> Vec<f64> {
                 analyses
@@ -580,6 +620,15 @@ pub fn analysis_text(analysis: &AnalysisRun) -> String {
             quantity_text(*from, *units, 4, false),
             quantity_text(*to, *units, 4, false)
         ),
+        AnalysisRun::Loop { from, to, points_per_decade, probe, .. } => format!(
+            "loop gain at {probe} {} to {}, {points_per_decade} points per decade",
+            crate::format::hertz(*from),
+            crate::format::hertz(*to)
+        ),
+        AnalysisRun::Pz { input, output } => match (input, output) {
+            (Some(input), Some(output)) => format!("poles, and the zeros of {output} per unit of {input}"),
+            _ => "poles".to_owned(),
+        },
     }
 }
 
@@ -648,6 +697,7 @@ pub fn text_table(runs: &[BenchRun]) -> String {
             lines.push(format!("  {}", cells.join("  ").trim_end()));
         }
         lines.extend(crate::noise::text_lines(run));
+        lines.extend(crate::stability::text_lines(run));
         lines.extend(crate::variation::text_lines(run));
         let (limited, failing) = run.counts();
         lines.push(match run.status() {

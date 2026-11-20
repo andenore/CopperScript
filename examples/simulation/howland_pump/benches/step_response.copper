@@ -2,7 +2,8 @@
 // 10 ns rise, for a 100 ohm, 1 kohm and 10 kohm load. The current settles to
 // its 15 uA (less the 0.11 % of the finite open-loop gain) within 1 % in
 // under 100 ns at every load. It overshoots first, by about 22 % at
-// 100 ohm, 18 % at 1 kohm and not at all at 10 kohm: the loops are stable,
+// 100 ohm, 18 % at 1 kohm and not at all at 10 kohm: the loops are stable
+// (stability.copper: 20 to 30 degrees of phase margin, damping 0.18 to 0.26),
 // but the load current peaks above the 1 MHz that flatness.copper covers
 // (an ac sweep to 300 MHz shows it rising to 2.8 times 15 uA past 2 MHz at
 // 100 ohm), and a fast edge excites that peak. The overshoot is a study

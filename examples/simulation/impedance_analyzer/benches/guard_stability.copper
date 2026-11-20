@@ -1,0 +1,48 @@
+// GuardStability: is the HC guard loop stable with the electrodes in air (SPEC.md,
+// "Guard loop stability")? The circuit of PumpOutputImpedance: the drive at 0 V,
+// the HC strays of SoilSweep (20 pF from the node to its guard, 0.3 pF to ground,
+// 100 pF from the guard to the ground layer), nothing else on E_HC; the test
+// current source is at 0 A, so it is open.
+//
+// The poles settle it: none in the right half-plane. The least damped pair is at
+// 4.06 kHz with damping 0.27 and dominates DRIVE, U_PMP and the guard: the pump,
+// its DC servo C_NDC and the guard feeding the node back. It is the 45 Mohm
+// resonance of PumpOutputImpedance's output impedance, which peaks at 4.07 kHz
+// with a half-power width of 3.13 to 5.25 kHz, Q 1.9, damping 0.26 (an ac sweep
+// from 10 Hz; that bench starts at 1 kHz). The three poles at the origin are the
+// electrode nodes E_HP and E_LP, which in air connect through capacitors only.
+//
+// The loop gain at the guard resistor's input (R_GHC.1) is reported without a
+// limit and is not a stability margin: that break is two-way (the pump's own
+// positive feedback through R2 returns to the guard as well as the guard to the
+// pump), so Tian's loop gain there is not the return ratio of one loop; it shows
+// 2.5 degrees of "phase margin" where the poles show damping 0.27. The margins at
+// the amplifiers' outputs, one-way breaks, are limited as in LoopStability.
+bench GuardStability for AnalogFrontEnd using FrontEndPorts {
+    model DDS: source { out = DDS_OUT; ref = GND; ac = 0V; output_resistance = 200ohm; }   // drive held at 0 V
+    replace J_PROBE with source { out = E_HC; ref = GND; output = current; ac = 0A; }   // open: electrodes in air
+
+    component CG_HC: CAPACITOR { value = 20pF; }
+    component C0_HC: CAPACITOR { value = 0.3pF; }
+    component GG_HC: CAPACITOR { value = 100pF; }
+    net E_HC { CG_HC.1; C0_HC.1; }
+    net GUARD_HC { CG_HC.2; GG_HC.1; }
+    net GND { C0_HC.2; GG_HC.2; }
+
+    // The built-in measure stable fails when a pole is in the right half-plane.
+    analysis poles: pz;
+    measure damping = damping();
+
+    analysis pump: loop { from = 10Hz; to = 10GHz; points_per_decade = 40; probe = U_PMP.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis feedback_buffer: loop { from = 10Hz; to = 10GHz; points_per_decade = 40; probe = U_FBB.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis guard_resistor: loop { from = 10Hz; to = 10GHz; points_per_decade = 40; probe = R_GHC.1; }
+    measure largest_gain = max(mag(loop_gain()));
+    measure crossover = crossover(loop_gain());
+    measure apparent_phase_margin = phase_margin(loop_gain());
+}

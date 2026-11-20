@@ -6,7 +6,8 @@
 // benches/flatness.copper checks that current from 1 kHz to 1 MHz for loads
 // up to 10 kohm; benches/output_impedance.copper shows what limits larger
 // loads; benches/resistor_matching.copper and benches/noise.copper add the
-// tolerances and the noise. Run them with `copper sim board.copper`.
+// tolerances and the noise; benches/stability.copper the loops' phase margins
+// and the poles. Run them with `copper sim board.copper`.
 board HowlandPump {
     use library "tiny";
     import p "./parts";

@@ -27,6 +27,12 @@
 //! | `ignore X` | nothing: the pins are open |
 //! | board or bench supply | an ideal DC voltage source `supply NAME` from its net to ground (an AC short), unless replaced or ignored; the ground supply is the ground node; a supply driven by a component adds nothing |
 //!
+//! In `analysis loop` the probed pin is moved off its net onto a node of its
+//! own, `COMPONENT.PIN`, and the probe [`LOOP_PROBE`], a 0 V voltage source
+//! from that node to the net, closes the loop again: the DC operating point
+//! is unchanged, and the loop gain is read across the probe
+//! ([`copper_sim::loop_gain`]).
+//!
 //! Values come from the bench's params at the step being run: a passive
 //! whose value names a param, a model parameter that names one and the
 //! analysis bounds are re-valued per step. A capacitor of 0 F is absent: no
@@ -537,8 +543,50 @@ impl Builder<'_> {
     }
 }
 
+/// The element name of the probe of `analysis loop`: a 0 V voltage source
+/// from the probed pin's own node (plus) to its net (minus).
+pub const LOOP_PROBE: &str = "loop probe";
+
+/// The wiring of `analysis loop`: the probed pin moved off its net onto a
+/// node of its own, named `COMPONENT.PIN` (the name an unconnected pin's node
+/// has); returns that wiring, the pin's node and the net's node.
+fn probe_wiring(wiring: &Wiring, probe: &copper_lang::model::Endpoint) -> Result<(Wiring, String, String), String> {
+    let pin = wiring.package_pin(&probe.component, &probe.pin);
+    let key = (probe.component.clone(), pin.clone());
+    let net = wiring
+        .nodes
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| format!("analysis loop probe {probe}: the pin is on no net of the simulated circuit"))?;
+    let own = format!("{}.{pin}", probe.component);
+    if wiring.nodes.values().any(|node| *node == own) {
+        return Err(format!("analysis loop probe {probe}: a net named {} exists already", repr(&own)));
+    }
+    let mut moved = wiring.clone();
+    moved.nodes.insert(key, own.clone());
+    Ok((moved, own, net))
+}
+
 /// Lower `bench` on `design` with `params` (every effective param, at this step).
 pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Result<Lowered, String> {
+    if let copper_lang::bench::Analysis::Loop(analysis) = &bench.analysis {
+        let (moved, pin, net) = probe_wiring(wiring, &analysis.probe)?;
+        let mut lowered = lower_wired(design, bench, &moved, params)?;
+        let (plus, minus) = (lowered.circuit.node(&pin), lowered.circuit.node(&net));
+        lowered
+            .circuit
+            .voltage_source(LOOP_PROBE, plus, minus, SourceValue::dc(0.0))
+            .map_err(|error| format!("analysis loop probe {}: {error}", analysis.probe))?;
+        lowered.owners.insert(LOOP_PROBE.to_owned(), format!("the loop probe at {}", analysis.probe));
+        for node in [&pin, &net] {
+            lowered.members.entry(node.clone()).or_default().push(LOOP_PROBE.to_owned());
+        }
+        return Ok(lowered);
+    }
+    lower_wired(design, bench, wiring, params)
+}
+
+fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Result<Lowered, String> {
     let mut b = Builder {
         circuit: Circuit::with_ground(wiring.ground()),
         wiring,

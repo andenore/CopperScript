@@ -201,7 +201,7 @@ impl Parser {
                     if self.accept_symbol(":") { (Some(first), self.name("analysis kind")?) } else { (None, first) };
                 let entries = if self.accept_symbol(";") {
                     Vec::new()
-                } else if kind == "noise" {
+                } else if kind == "noise" || kind == "pz" {
                     self.noise_entries()?
                 } else {
                     self.sim_entries()?

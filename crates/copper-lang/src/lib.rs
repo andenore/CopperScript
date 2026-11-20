@@ -42,6 +42,7 @@ pub mod silkscreen;
 pub mod simulation;
 pub mod snapshot;
 pub mod spice_models;
+pub mod stability;
 mod suggest;
 pub mod syntax;
 pub mod syntax_state;

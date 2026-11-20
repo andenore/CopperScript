@@ -305,6 +305,8 @@ frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
 | `SenseCommonMode` | AC | Common-mode rejection of the sense path, rated contacts and drier soil |
 | `PumpOutputImpedance` | AC | The pump's output impedance and guard tracking, electrodes in air |
 | `LoopPeaking` | AC | Peaking of every loop to 1 GHz |
+| `LoopStability` | loop gain, poles | The phase margin of every amplifier's loop, and the poles of the front end in soil |
+| `GuardStability` | poles, loop gain | Whether the HC guard loop is stable with the electrodes in air |
 | `SenseBufferTrade` | AC | Trade study: OPA810 sense buffers |
 | `DcOperatingPoint` | operating point | DC levels with typical offsets |
 | `MeasurementNoise` | noise | Noise, SNR and contributors of the four ADC channels (one noise analysis with four outputs), and the noise of the computed impedance |
@@ -664,7 +666,7 @@ layout notes for later").
 | at 100 kHz | 974 kohm |
 | at 1 MHz | 86.8 kohm |
 | Guard tracking, maximum over 1 kHz to 1 GHz | 100.0 % (limit 106 %, the guard loop's unity-gain point 21.3 / 20) |
-| Largest output impedance | 45 Mohm, just above 1 kHz: `C_NDC` makes the low-frequency output impedance inductive, and it resonates with the node's 21 pF |
+| Largest output impedance | 45 Mohm at 4.07 kHz: `C_NDC` makes the low-frequency output impedance inductive, and it resonates with the node's 21 pF (half-power width 3.13 to 5.25 kHz in a sweep from 10 Hz: Q 1.9, the 4.06 kHz pole pair of `GuardStability`) |
 | Most negative real part | -42.5 kohm (near 600 kHz) |
 | Negative conductance against 1 / 160 kohm | -451 times (reported) |
 
@@ -677,8 +679,8 @@ which an AC sweep cannot see. The guard loop's gain stays below one
 (tracking at most 100 %), `LoopPeaking` finds no peaking, and the measure is
 reported without a limit. `Startup` runs the pump with the electrodes in air
 through the rails' start-up and finds it settling (73 ms) without oscillating,
-but with time steps of up to 1 ms; a run with fine steps or a pole-zero
-analysis would settle the question.
+but with time steps of up to 1 ms. The pole-zero analysis of `GuardStability`
+settles the question: stable (see there).
 
 ### SenseCommonMode: pass (rated: at least 63 dB at 1 MHz)
 
@@ -726,6 +728,55 @@ degraded range the common mode costs at most 0.1 % below 100 kHz (7 times
 Every loop at most 6.3 % (0.53 dB) above its in-band gain from 1 kHz to 1 GHz:
 drive buffer 1.8 %, pump current 6.2 %, sense buffer 6.3 %, guard 0 %,
 receiver 3.2 %, gain-1 driver 1.8 %, gain-10 stages 0 %, transimpedance 0 %.
+
+### LoopStability: pass (every loop at least 45 degrees; no pole in the right half-plane)
+
+The loop gain at each amplifier's output pin (`analysis loop`, Tian's method:
+a 0 V probe in series with the pin, every other loop closed), moist loam
+attached as in `LoopPeaking`:
+
+| Loop (probe) | Phase margin | Crossover | Gain margin |
+| --- | --- | --- | --- |
+| Pump (`U_PMP.OUT`) | 78.6 deg | 37.7 MHz | 50.7 dB |
+| Pump feedback buffer and HC guard (`U_FBB.OUT`) | 72.4 deg | 150 MHz | 39.2 dB |
+| Drive buffer (`U_DRV.OUT`) | 61.6 deg | 159 MHz | |
+| HP sense buffer (`U_BHP.OUT`) | 58.9 deg | 299 MHz | |
+| Receiver (`U_DIF.OUT`) | 61.1 deg | 228 MHz | |
+| Gain-1 driver (`U_B1.OUT`) | 49.1 deg | 117 MHz | |
+| Gain-10 stage, gain-100 stage | 71.6 deg | 16.3 MHz | |
+| Transimpedance (`U_TIA.OUT`) | 67.9 deg | 11.2 MHz | |
+
+The poles (`analysis pz`): 55, none in the right half-plane. The least
+damped pairs: 16.4 Hz with damping 0.17 in the pump and its guard (`DRIVE`,
+`U_PMP`, `GUARD_HC`; far below the band), 2.92 MHz with 0.51 in the gain-100
+stage, 135 MHz with 0.51 in the gain-1 driver.
+
+The gain-1 driver has the least margin, and `LoopPeaking` does not show it:
+its own closed loop, `T / (1 + T)`, peaks 23 % at 135 MHz, but its input
+`B1_IN` sits behind 1 kohm and follows the output through the amplifier's
+input capacitance, so `V(V_1) / V(B1_IN)` peaks only 1.8 %; from the source
+side, `V(V_1) / V(B1_C)`, it is 6 % (an ac sweep by hand). For the followers
+the closed loop and `LoopPeaking` agree: drive buffer 1.7 % and 1.8 %,
+receiver 3.1 % and 3.2 %. The HP sense buffer's 6.3 % in `LoopPeaking` is
+the guard's positive feedback on `SNS_HP`, outside the buffer's own loop
+(1.9 %).
+
+### GuardStability: pass (electrodes in air: no pole in the right half-plane)
+
+`PumpOutputImpedance`'s circuit with the test current at 0 A (open). 51 poles,
+none in the right half-plane; three at the origin, the electrode nodes `E_HP`
+and `E_LP`, which in air connect through capacitors only. The least damped
+pair is at 4.06 kHz with damping 0.27 and dominates `DRIVE`, `U_PMP` and
+`GUARD_HC`: the pump, its DC servo `C_NDC` and the guard feeding the node
+back. It is the 45 Mohm output-impedance resonance of `PumpOutputImpedance`
+(4.07 kHz, Q 1.9). The pump loop has 78.6 degrees of phase margin and the
+feedback buffer 74.1 degrees, as in soil.
+
+The loop gain at the guard resistor's input (`R_GHC.1`) is reported without
+a limit and is no stability margin: that break is two-way (the pump's
+positive feedback through `R2` returns to the guard as well), so Tian's loop
+gain there is not the return ratio of one loop. It peaks at 6.2 and shows 2.5
+degrees of "phase margin" at 4.04 kHz, where the poles show damping 0.27.
 
 ### SenseBufferTrade: reported (both sense buffers as an OPA810 model)
 
@@ -994,7 +1045,7 @@ harmonic here is clipping or slewing, or the settling left in the record.
 | Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoise`) |
 | Slew rate needed | 20 V/us | 3.8 V/us at 1 MHz into 1.3 kohm m (0.61 V peak at the pump output: the strays take the current there), 2.59 V peak at 1 kHz; ADA4807 225 V/us, no harmonic from slewing (`Distortion`) |
 | Start-up | 0.8 s from the slowest network | 0.66 s to 1 mV on every ADC input (`Startup`) |
-| Guard loop stability | unknown | no peaking (guard tracking at most 100 %); a negative real part of -42.5 kohm that AC analysis cannot classify; no oscillation in `Startup` with the electrodes in air (time steps up to 1 ms, not conclusive) |
+| Guard loop stability | unknown | stable: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair, 4.06 kHz with damping 0.27 in air, is the guard and pump mode behind the -42.5 kohm negative real part, which therefore does not oscillate |
 | Card within 1 % and 1 deg | required, with 47 kohm contacts on every position | 47 kohm is not soil-like: 27 to 34 % and 3.7 to 5.3 deg at 1 MHz (CalibrationCard). With soil-like contacts (270 ohm on 39 ohm, 6.8 kohm on 1 kohm) at most 0.51 % and 0.23 deg (CalibrationCard) |
 | Amplifier supply | about 10 V total | ADA4817 5 to 10 V, abs. max 10.6 V; +/-4.5 V fits. ADA4807 2.7 to 11 V |
 
@@ -1013,8 +1064,10 @@ harmonic here is clipping or slewing, or the settling left in the record.
   show what the parts do there. Overload recovery from deep saturation is
   not modelled. The rail ramps and the AD9833's level at power-up are
   estimates, and the power-down order is not simulated.
-- Whether the guard loop can oscillate: `Startup` shows no oscillation with
-  coarse time steps; no fine-step or pole-zero check exists.
+- Stability is settled for the macro models as they are (`LoopStability`,
+  `GuardStability`): every pole in the left half-plane. Real amplifiers have
+  more poles than the two of the macro model, so the gain-1 driver's 49
+  degrees and the pump's 16 Hz and 4 kHz modes are model figures.
 - The AC benches' headroom measures still check amplitudes against the linear
   range (the AC solver never clips); `Distortion` checks the pump in time at
   three frequencies.
@@ -1392,6 +1445,7 @@ footprints resolved. Two of the failures are outside this example's files:
 | Params in modules | `param NAME = q;` in a module | `copper-lang` (`module_params_compile_into_the_module_definition`) |
 | Several noise outputs, noise of a derived quantity (phase F2) | `output = V(V_MON_1), V(I_MON);`, `noise(V(V_MON_1), U_DIF)`, `noise(z1)` | `copper-simulate/tests/bench_language.rs` (`several_noise_outputs_and_the_noise_of_a_ratio`), `copper-lang/tests/bench_language.rs` (`noise_of_named_and_derived_quantities`), `copper-sim/tests/noise_closed_forms.rs` (`a_weighted_output_is_the_weighted_sum_of_node_voltages`) |
 | Optional fixture components (phase F2) | a net declared again adds pins; a 0 F capacitor is absent; `fixture B for T using A` | `copper-simulate/tests/bench_language.rs` (`optional_components_in_fixtures`) |
+| Stability (phase F3) | `analysis loop { ...; probe = U_PMP.OUT; }` with `phase_margin(loop_gain())`, `analysis pz;` with the built-in `stable` | `copper-sim` (`stability::tests`), `copper-lang/tests/stability.rs`, `copper-simulate/tests/stability_runs.rs` |
 
 Since then the plan's later phases added what this board's benches now use:
 fixtures (`using`), limits per step (`where`), `upto` and `downto`, windowed

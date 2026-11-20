@@ -12,7 +12,7 @@
 //! | [`models`] | built-in macro models expanded into primitives: `opamp` (finite gain, GBW, optional second pole, finite CMRR with an optional corner, input capacitance and resistance, output resistance), `diffamp` (the same with a second, feedback input pair), `source` (Thevenin or Norton), `load` (R parallel C) |
 //! | [`mna`] | modified nodal analysis: unknowns, stamps, element currents |
 //! | [`analysis`] | linear operating point and AC sweeps (decade, octave, linear, list) with results probed by node and element name |
-//! | [`measure`] | magnitude, phase (unwrapped), dB, min/max/mean, value at a frequency with log interpolation, first crossing |
+//! | [`measure`] | magnitude, phase (unwrapped), dB, min/max/mean, value at a frequency with log interpolation, first crossing, loop-gain margins |
 //! | [`noise`] | small-signal noise by the adjoint method: resistor thermal noise, amplifier voltage and current noise with 1/f corners, per-contributor output densities, input-referred density, band integration |
 //! | [`rng`] | a deterministic seeded generator (SplitMix64) for Monte Carlo runs |
 //! | [`complex`] | complex numbers |
@@ -22,6 +22,8 @@
 //! | [`transient`] | transient analysis: trapezoidal integration with a backward-Euler start, truncation-error step control, breakpoints, initial conditions (`ic`, `uic`) |
 //! | [`dc`] | DC sweeps: Newton operating points over a swept value with continuation, op-amp limits active |
 //! | [`sparse_lu`] | sparse LU (real and complex) for every solve: Markowitz order with threshold pivoting, refactorisation in the same order while the pattern holds |
+//! | [`stability`] | the loop gain at a probe by Tian's method; the poles and zeros of the linearised circuit, refined on the circuit's pencil, with the nodes each pole dominates |
+//! | [`eigen`] | dense real linear algebra for the poles: pivoted QR, eigenvalues by the shifted QR iteration, finite eigenvalues of a pencil with the infinite ones deflated |
 //! | [`real_lu`] | dense real LU, which decides the systems the sparse LU leaves to it |
 //! | [`timing`] | opt-in accounting of where an analysis spends its time (`copper sim --timing`) |
 //! | [`time_measure`] | measurements on time vectors: windows, time-weighted mean and RMS, peak to peak, crossings, settling, overshoot, harmonics and THD |
@@ -49,6 +51,7 @@ pub mod complex;
 pub mod dc;
 pub mod devices;
 pub mod diagnose;
+pub mod eigen;
 pub mod error;
 pub mod lu;
 pub mod measure;
@@ -60,6 +63,7 @@ pub mod real_lu;
 pub mod rng;
 pub mod semiconductors;
 pub mod sparse_lu;
+pub mod stability;
 pub mod time_measure;
 pub mod timing;
 pub mod transient;
@@ -84,5 +88,6 @@ pub use noise::{
     NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,
 };
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, MosParams};
+pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
 pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

@@ -250,10 +250,22 @@ pub enum Function {
     Integrate,
     /// `if(a < b, x, y)`: `x` where the comparison holds, else `y` (per sample of a swept condition).
     If,
+    /// `phase_margin(T)`: `180 deg` plus the phase of the loop gain `T` where `|T|` first falls through 1.
+    PhaseMargin,
+    /// `gain_margin(T)`: `-20 log10 |T|` where the phase of `T` first falls through -180 degrees.
+    GainMargin,
+    /// `crossover(T)`: the frequency where `|T|` first falls through 1.
+    Crossover,
+    /// `phase_crossover(T)`: the frequency where the phase of `T` first falls through -180 degrees.
+    PhaseCrossover,
+    /// `stable()`: 1 when no pole of `analysis pz` is in the right half-plane, else 0.
+    Stable,
+    /// `damping()`: the smallest damping ratio of the poles of `analysis pz`.
+    Damping,
 }
 
 impl Function {
-    pub const ALL: [Function; 24] = [
+    pub const ALL: [Function; 30] = [
         Function::Mag,
         Function::Phase,
         Function::Re,
@@ -278,6 +290,12 @@ impl Function {
         Function::Downto,
         Function::Integrate,
         Function::If,
+        Function::PhaseMargin,
+        Function::GainMargin,
+        Function::Crossover,
+        Function::PhaseCrossover,
+        Function::Stable,
+        Function::Damping,
     ];
 
     pub fn name(self) -> &'static str {
@@ -306,7 +324,19 @@ impl Function {
             Function::Downto => "downto",
             Function::Integrate => "integrate",
             Function::If => "if",
+            Function::PhaseMargin => "phase_margin",
+            Function::GainMargin => "gain_margin",
+            Function::Crossover => "crossover",
+            Function::PhaseCrossover => "phase_crossover",
+            Function::Stable => "stable",
+            Function::Damping => "damping",
         }
+    }
+
+    /// The margins of a loop gain (`phase_margin`, `gain_margin`, `crossover`,
+    /// `phase_crossover`): "never" when the sweep has no such crossing.
+    pub fn loop_margin(self) -> bool {
+        matches!(self, Function::PhaseMargin | Function::GainMargin | Function::Crossover | Function::PhaseCrossover)
     }
 
     pub fn parse(name: &str) -> Option<Function> {
@@ -326,6 +356,7 @@ impl Function {
             Function::At | Function::Reference | Function::Cross | Function::Settle | Function::Thd => 2,
             Function::Harmonic => 3,
             Function::NoiseRms | Function::NoiseShare | Function::If => 3,
+            Function::Stable | Function::Damping => 0,
             _ => 1,
         }
     }
@@ -365,6 +396,8 @@ pub enum Probe {
     /// `input_noise()`: the output noise referred to the analysis's `input`;
     /// `input_noise(Q)` the noise of quantity `Q` referred to it.
     InputNoise { quantity: Option<Box<Expression>> },
+    /// `loop_gain()`: the loop gain at the probe of `analysis loop`.
+    LoopGain,
 }
 
 impl Probe {
@@ -468,6 +501,10 @@ pub trait Scope {
     }
     /// `analysis dc`: the units of the swept quantity (probes are real, swept over it).
     fn sweep_units(&self) -> Option<Units> {
+        None
+    }
+    /// The kind of the bench's analysis (`ac`, `loop`, `pz`, ...), when known.
+    fn analysis(&self) -> Option<&'static str> {
         None
     }
 }
@@ -577,6 +614,7 @@ pub fn noise_quantities(expression: &Expression) -> Vec<Option<&Expression>> {
 pub fn may_be_never(expression: &Expression) -> bool {
     match &expression.kind {
         ExpressionKind::Call { function: Function::Upto | Function::Downto, .. } => true,
+        ExpressionKind::Call { function, .. } if function.loop_margin() => true,
         ExpressionKind::Call { arguments, .. } => arguments.iter().any(may_be_never),
         ExpressionKind::Negate(operand) => may_be_never(operand),
         ExpressionKind::Binary { left, right, .. } | ExpressionKind::Compare { left, right, .. } => {
@@ -633,6 +671,18 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
             Err(failure)
         }
         ExprKind::Probe { function, targets, target_locations } => {
+            if let Some(kind @ ("loop" | "pz")) = scope.analysis() {
+                let read = if kind == "loop" {
+                    "the loop gain, loop_gain(); read voltages and currents in an ac analysis of the bench"
+                } else {
+                    "its poles (the built-in measure stable, and damping()); read voltages and currents in an ac or op analysis of the bench"
+                };
+                return Err(error(
+                    "SIM101",
+                    format!("{function}(...) has no value in analysis {kind}, which gives {read}"),
+                    &location,
+                ));
+            }
             let swept = scope.swept();
             let complex = swept && !real_axis(scope);
             let ty = |dimension| ExpressionType { units: Units::of(dimension), complex, swept };
@@ -647,6 +697,20 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
                 let (component, pin) = scope.current(&targets[0], &target_locations[0])?;
                 Ok(typed(ExpressionKind::Probe(Probe::Current { component, pin }), ty(Dimension::Current)))
             }
+        }
+        ExprKind::Call { function, arguments } if function == "loop_gain" => {
+            if scope.analysis() != Some("loop") {
+                return Err(error(
+                    "SIM099",
+                    "loop_gain() reads the result of a loop analysis: analysis loop { ...; probe = U1.OUT; }",
+                    &location,
+                ));
+            }
+            if let Some(extra) = arguments.first() {
+                return Err(error("SIM064", "loop_gain takes no argument", &extra.location));
+            }
+            let ty = ExpressionType { units: Units::DIMENSIONLESS, complex: true, swept: true };
+            Ok(typed(ExpressionKind::Probe(Probe::LoopGain), ty))
         }
         ExprKind::Call { function, arguments } if function == "noise" || function == "input_noise" => {
             let probe = check_noise_probe(function, arguments, scope, &location)?;
@@ -664,7 +728,7 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
                 let mut failure = error(
                     "SIM063",
                     format!(
-                        "unknown function {}; expected one of: {}, V, I, noise, input_noise",
+                        "unknown function {}; expected one of: {}, V, I, noise, input_noise, loop_gain",
                         repr(function),
                         names.join(", ")
                     ),
@@ -699,6 +763,19 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
             }
             if resolved == Function::If {
                 return check_if(arguments, scope, &location);
+            }
+            if matches!(resolved, Function::Stable | Function::Damping) {
+                if scope.analysis() != Some("pz") {
+                    return Err(error(
+                        "SIM100",
+                        format!("{}() reads the poles of a pole-zero analysis: analysis pz;", resolved.name()),
+                        &location,
+                    ));
+                }
+                return Ok(typed(
+                    ExpressionKind::Call { function: resolved, arguments: Vec::new() },
+                    ExpressionType::scalar(Units::DIMENSIONLESS),
+                ));
             }
             let arguments: Vec<Expression> =
                 arguments.iter().map(|argument| check(argument, scope)).collect::<Result<_>>()?;
@@ -972,6 +1049,25 @@ fn call_type(
         Function::Cross | Function::Settle | Function::Overshoot | Function::Harmonic | Function::Thd => {
             return crate::transient::call_type(function, arguments, scope, location);
         }
+        Function::PhaseMargin | Function::GainMargin | Function::Crossover | Function::PhaseCrossover => {
+            if !x.swept || !x.complex || !x.units.is_dimensionless() || real_axis(scope) {
+                return Err(error(
+                    "SIM099",
+                    format!(
+                        "{}(T) takes a loop gain: a dimensionless complex value swept over frequency, such as loop_gain() of analysis loop, found {}",
+                        function.name(),
+                        describe(x)
+                    ),
+                    &arguments[0].location,
+                ));
+            }
+            ExpressionType::scalar(Units::of(match function {
+                Function::PhaseMargin => Dimension::Angle,
+                Function::GainMargin => Dimension::Gain,
+                _ => Dimension::Frequency,
+            }))
+        }
+        Function::Stable | Function::Damping => unreachable!("checked before call_type"),
         Function::At if real_axis(scope) => {
             require_swept(function, x, scope, location)?;
             let point = arguments[1].ty;

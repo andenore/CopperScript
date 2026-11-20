@@ -184,14 +184,14 @@ impl Probes {
 
 /// Node voltages (by node index) and element currents (by element index) of
 /// one solve.
-struct Point {
+pub(crate) struct Point {
     voltages: Vec<Complex>,
     currents: Vec<Complex>,
 }
 
 /// Solve one point; `factors` carries the sparse factors from point to point
 /// (a sweep's matrices share their pattern, so later points refactor).
-fn solve_point(
+pub(crate) fn solve_point(
     c: &Circuit,
     layout: &Layout,
     mode: Mode,

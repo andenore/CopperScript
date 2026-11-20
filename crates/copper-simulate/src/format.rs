@@ -165,6 +165,7 @@ pub fn expression_text(expression: &Expression, two_terminal: &dyn Fn(&str, &str
             }
             format!("noise({})", parts.join(", "))
         }
+        ExpressionKind::Probe(Probe::LoopGain) => "loop_gain()".to_owned(),
         ExpressionKind::Probe(Probe::InputNoise { quantity }) => match quantity {
             Some(quantity) => format!("input_noise({})", expression_text(quantity, two_terminal)),
             None => "input_noise()".to_owned(),

@@ -1,0 +1,38 @@
+// Stability of the Howland pump (../board.copper) for a 100 ohm, 1 kohm and
+// 10 kohm load: the loop gain at each amplifier's output (Tian's method, the
+// loop closed through a 0 V probe in series with the pin) and the poles of
+// the whole circuit.
+//
+// U1's output carries both of the pump's loops, the negative one through R4
+// and the positive one through R_SENSE, the load and U2. Their combined loop
+// gain crosses unity near 66 MHz with only 20 degrees of phase margin at
+// 100 ohm, 24 at 1 kohm and 30 at 10 kohm; the phase never reaches -180
+// degrees in this model, so there is no gain margin to report. The poles say
+// the same: a pair near 69 MHz with damping 0.18, 0.21 and 0.26, which for a
+// second-order loop is 20, 24 and 29 degrees of phase margin and a closed-loop
+// peak of 2.85 times at 100 ohm (step_response.copper's "2.8 times 15 uA").
+// A step of the input with a fast edge overshoots by exp(-pi z / sqrt(1 - z^2))
+// = 57 % at 100 ohm for z = 0.18, which a 0.1 ns edge reproduces (56.5 %); the
+// 10 ns edge of step_response.copper passes 0.39 of that ringing, 22 %, its
+// measured overshoot. At 10 kohm a real pole near 11 MHz dominates and the
+// step does not overshoot. The limit of 15 degrees keeps the present design;
+// more margin needs a slower U1 or compensation across R4.
+//
+// U2 is a follower with a 90 degree margin at its 400 MHz crossover.
+//
+// The load and the connectors are the LoadedPump fixture (loaded_pump.copper).
+bench Stability for HowlandPump using LoadedPump {
+    step R_LOAD_VALUE in 100ohm, 1kohm, 10kohm;
+
+    analysis pump: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U1.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 15deg; }
+    measure crossover = crossover(loop_gain());
+
+    analysis buffer: loop { from = 1kHz; to = 10GHz; points_per_decade = 40; probe = U2.OUT; }
+    measure phase_margin = phase_margin(loop_gain()) { min = 45deg; }
+    measure crossover = crossover(loop_gain());
+
+    // The built-in measure stable fails when a pole is in the right half-plane.
+    analysis poles: pz;
+    measure damping = damping();
+}

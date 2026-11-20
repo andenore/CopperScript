@@ -201,6 +201,9 @@ pub enum SimError {
     },
     /// Analysis options are invalid (a transient stop time that is not positive, ...).
     BadOptions(String),
+    /// The pole-zero analysis cannot be done: a circuit too large for the
+    /// dense method, a singular pencil, an eigenvalue iteration that failed.
+    PoleZero(String),
 }
 
 fn names(f: &mut fmt::Formatter<'_>, nodes: &[String], elements: &[String]) -> fmt::Result {
@@ -243,6 +246,7 @@ impl fmt::Display for SimError {
                 names(f, nodes, elements)
             }
             SimError::BadOptions(s) => write!(f, "invalid analysis options: {s}"),
+            SimError::PoleZero(s) => write!(f, "pole-zero analysis: {s}"),
         }
     }
 }

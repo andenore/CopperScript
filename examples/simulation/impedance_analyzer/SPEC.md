@@ -280,7 +280,7 @@ CopperLib after review.
 | Voltage-channel noise at the smallest signal | not estimated | | simulated 22 nV/rtHz at 1 kHz, 15 nV/rtHz above 10 kHz referred to the sense electrodes; 55 to 59 dB SNR for 0.6 mV in 1 kHz: the impedance's noise 0.12 % and 0.070 degrees RMS at 5 ohm m (`MeasurementNoise`, `noise(z1)`) |
 | Slew rate needed | 20 V/us | 3.1 V peak at 1 MHz | estimated 20 V/us; simulated: the pump output peaks at 2.59 V at 1 kHz but only 0.61 V at 1 MHz (the strays take the current there), so the largest slew needed is 3.8 V/us at 1 MHz, against 225 V/us; no harmonic from slewing (`Distortion`) |
 | Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.66 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`) |
-| Guard loop stability | Unknown | The HC guard feeds the pump's own buffer output back to its input node through the pad capacitance | no peaking (guard tracking at most 100 %); a negative real part of -42.5 kohm that AC analysis cannot classify; no oscillation in the `Startup` transient with the electrodes in air (time steps up to 1 ms, so not conclusive) |
+| Guard loop stability | Unknown | The HC guard feeds the pump's own buffer output back to its input node through the pad capacitance | stable with the macro models: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair is 4.06 kHz with damping 0.27 in air, the mode behind the -42.5 kohm negative real part |
 
 ## Benches
 
@@ -303,6 +303,8 @@ model and strays, the firmware's arithmetic, the tolerances) is in fixtures
 | `ContactImbalance` | Unequal contacts: limits 1 % and 1 degree within the rating (sense contacts 100 ohm apart, LC 200 ohm, HC 10 times); one contact 5 % to 10 times worse reported | P0 | pass |
 | `SenseCommonMode` | Common-mode rejection of the sense path; limit 63 dB with contacts up to 5.58 kohm, 11.2 to 72.5 kohm reported | P0 | pass |
 | `PumpOutputImpedance` | Output impedance of the pump against frequency; peaking as a stability warning, with the guard connected | P0 | pass |
+| `LoopStability` | Phase margin of every amplifier's loop at its output pin (limit 45 degrees) and the poles of the front end in soil (no pole in the right half-plane) | P0 | pass |
+| `GuardStability` | The poles with the electrodes in air and the HC guard connected (no pole in the right half-plane); the pump and feedback-buffer phase margins | P0 | pass |
 | `MeasurementNoise` | Noise on each ADC channel in a 1 kHz detection bandwidth at the soil corners (5, 100, 1300 ohm m); SNR, resolution, contributors (one noise analysis with the four ADC inputs as outputs), and the noise of the computed impedance | P1 | reported (no requirement) |
 | `ResistorMatching`, `ResistorWorstCase` | Monte Carlo and worst case over the tolerances and the matched network; spread of drive current, output impedance, gain before calibration and common-mode rejection; limits 1 %, 1 degree and 0.5 % after calibration | P1 | pass |
 | `Startup` | Rails ramp, coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2 | pass |

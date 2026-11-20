@@ -415,14 +415,14 @@ fn node_row(c: &Circuit, layout: &Layout, name: &str) -> Result<Option<usize>, S
 }
 
 /// How the input source enters the right-hand side.
-enum InputStamp {
+pub(crate) enum InputStamp {
     /// A voltage source with this branch row.
     Branch(Option<usize>),
     /// A current source from `p` to `q`.
     Current(NodeId, NodeId),
 }
 
-fn input_stamp(c: &Circuit, layout: &Layout, name: &str) -> Result<(InputStamp, bool), SimError> {
+pub(crate) fn input_stamp(c: &Circuit, layout: &Layout, name: &str) -> Result<(InputStamp, bool), SimError> {
     let id = match c.find_macro(name) {
         Some(m) => m
             .elements()

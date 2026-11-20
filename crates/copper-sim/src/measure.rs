@@ -292,9 +292,84 @@ pub fn first_crossing(
     Ok(None)
 }
 
+/// The stability margins of a loop gain `T` over a frequency axis
+/// ([`loop_margins`]); `None` where the sweep has no such crossing.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LoopMargins {
+    /// The first frequency at which `|T|` falls through 1, Hz.
+    pub crossover: Option<f64>,
+    /// `180 + phase(T)` there, degrees (the phase unwrapped from the first sample).
+    pub phase_margin: Option<f64>,
+    /// The first frequency at which the unwrapped phase falls through -180 degrees, Hz.
+    pub phase_crossover: Option<f64>,
+    /// `-20 log10 |T|` there, dB.
+    pub gain_margin: Option<f64>,
+}
+
+/// The margins of the loop gain `t` sampled at the increasing positive
+/// frequencies `axis`. Between two samples `log |T|` and the unwrapped phase
+/// are interpolated linearly in log frequency.
+pub fn loop_margins(axis: &[f64], t: &[Complex]) -> Result<LoopMargins, MeasureError> {
+    if axis.is_empty() || t.is_empty() {
+        return Err(MeasureError::Empty);
+    }
+    if axis.len() != t.len() {
+        return Err(MeasureError::LengthMismatch { axis: axis.len(), values: t.len() });
+    }
+    if axis.iter().any(|f| !(f.is_finite() && *f > 0.0)) || t.iter().any(|z| !z.is_finite()) {
+        return Err(MeasureError::NonFinite);
+    }
+    if let Some(i) = (1..axis.len()).find(|&i| axis[i] <= axis[i - 1]) {
+        return Err(MeasureError::NotIncreasing(i));
+    }
+    let log_mag: Vec<f64> = t.iter().map(|z| z.abs().max(1e-300).ln()).collect();
+    let phase = phase_deg_unwrapped(t);
+    let at = |i: usize, s: f64| (axis[i].ln() + s * (axis[i + 1].ln() - axis[i].ln())).exp();
+    let mut margins = LoopMargins::default();
+    for i in 0..axis.len().saturating_sub(1) {
+        if log_mag[i] >= 0.0 && log_mag[i + 1] < 0.0 {
+            let s = log_mag[i] / (log_mag[i] - log_mag[i + 1]);
+            margins.crossover = Some(at(i, s));
+            margins.phase_margin = Some(180.0 + phase[i] + s * (phase[i + 1] - phase[i]));
+            break;
+        }
+    }
+    for i in 0..axis.len().saturating_sub(1) {
+        if phase[i] > -180.0 && phase[i + 1] <= -180.0 {
+            let s = (phase[i] + 180.0) / (phase[i] - phase[i + 1]);
+            margins.phase_crossover = Some(at(i, s));
+            let ln = log_mag[i] + s * (log_mag[i + 1] - log_mag[i]);
+            margins.gain_margin = Some(-20.0 * ln / std::f64::consts::LN_10);
+            break;
+        }
+    }
+    Ok(margins)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn margins_of_an_integrator_with_delay_like_phase() {
+        // T = 1e3 / (j f / 1 Hz) * e^{-j f / 1 MHz}: |T| = 1 at 1 kHz, phase
+        // -90 - 360 f / (2 pi 1 MHz) degrees.
+        let axis: Vec<f64> = (0..=700).map(|k| 10f64.powf(k as f64 / 100.0)).collect();
+        let t: Vec<Complex> = axis
+            .iter()
+            .map(|f| Complex::real(1e3) / Complex::new(0.0, *f) * Complex::from_polar(1.0, -f / 1e6))
+            .collect();
+        let m = loop_margins(&axis, &t).unwrap();
+        assert!((m.crossover.unwrap() / 1e3 - 1.0).abs() < 1e-9);
+        assert!((m.phase_margin.unwrap() - (90.0 - (1e3 / 1e6f64).to_degrees())).abs() < 1e-6);
+        // -180 at f / 1 MHz = pi / 2.
+        let f180 = 1e6 * std::f64::consts::FRAC_PI_2;
+        assert!((m.phase_crossover.unwrap() / f180 - 1.0).abs() < 1e-4);
+        assert!((m.gain_margin.unwrap() - 20.0 * (f180 / 1e3).log10()).abs() < 1e-3);
+        // No crossing: never.
+        let low: Vec<Complex> = t.iter().map(|z| z.scale(1e-9)).collect();
+        assert_eq!(loop_margins(&axis, &low).unwrap().crossover, None);
+    }
 
     #[test]
     fn conversions() {
