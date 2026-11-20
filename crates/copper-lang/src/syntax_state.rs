@@ -429,6 +429,210 @@ pub fn declaration(declaration: &Declaration) -> StateValue {
             ],
         ),
         Declaration::MechanicalItem(item) => mechanical_item(item),
+        Declaration::Param(item) => {
+            let mut fields = vec![
+                ("location", location(&item.location)),
+                ("name", text(&item.name)),
+                ("value", scalar(&item.value)),
+            ];
+            if let Some(derived) = &item.expression {
+                fields.push(("expression", expression(derived)));
+            }
+            syntax("ParamDecl", fields)
+        }
+        Declaration::Sim(item) => syntax(
+            "SimDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("kind", text(&item.kind)),
+                ("unit", item.unit.as_deref().map(text).unwrap_or(StateValue::Null)),
+                ("entries", sim_entries(&item.entries)),
+            ],
+        ),
+        Declaration::Bench(statement) => bench_statement(statement),
+    }
+}
+
+fn sim_entries(entries: &[SimEntry]) -> StateValue {
+    StateValue::Tuple(
+        entries
+            .iter()
+            .map(|entry| {
+                let value = match &entry.value {
+                    SimValue::Scalar(item) => scalar(item),
+                    SimValue::List(items) => StateValue::Tuple(items.iter().map(scalar).collect()),
+                    SimValue::Block { kind, entries } => {
+                        syntax("SimBlock", vec![("kind", text(kind)), ("entries", sim_entries(entries))])
+                    }
+                };
+                syntax(
+                    "SimEntry",
+                    vec![("location", location(&entry.location)), ("key", text(&entry.key)), ("value", value)],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn expression(item: &Expr) -> StateValue {
+    let (name, mut fields) = match &item.kind {
+        ExprKind::Number(value) => ("NumberExpr", vec![("value", text(value))]),
+        ExprKind::Quantity { value, unit } => ("QuantityExpr", vec![("value", text(value)), ("unit", text(unit))]),
+        ExprKind::Name(name) => ("NameExpr", vec![("name", text(name))]),
+        ExprKind::Probe { function, targets, target_locations } => (
+            "ProbeExpr",
+            vec![
+                ("function", text(function)),
+                ("targets", texts(targets)),
+                ("target_locations", locations(target_locations)),
+            ],
+        ),
+        ExprKind::Call { function, arguments } => (
+            "CallExpr",
+            vec![
+                ("function", text(function)),
+                ("arguments", StateValue::Tuple(arguments.iter().map(expression).collect())),
+            ],
+        ),
+        ExprKind::Negate(operand) => ("NegateExpr", vec![("operand", expression(operand))]),
+        ExprKind::Binary { operator, left, right } => (
+            "BinaryExpr",
+            vec![("operator", text(operator.symbol())), ("left", expression(left)), ("right", expression(right))],
+        ),
+        ExprKind::Compare { operator, left, right } => (
+            "CompareExpr",
+            vec![("operator", text(operator.symbol())), ("left", expression(left)), ("right", expression(right))],
+        ),
+    };
+    fields.insert(0, ("location", location(&item.location)));
+    syntax(name, fields)
+}
+
+fn bench_statement(statement: &BenchStatement) -> StateValue {
+    match statement {
+        BenchStatement::Target(item) => {
+            let mut fields = vec![("location", location(&item.location)), ("board", text(&item.board))];
+            if !item.fixtures.is_empty() {
+                fields.push(("fixtures", texts(&item.fixtures)));
+                fields.push(("fixture_locations", locations(&item.fixture_locations)));
+            }
+            syntax("BenchTargetDecl", fields)
+        }
+        BenchStatement::InitialCondition(item) => {
+            let target = match &item.target {
+                InitialConditionTarget::Node(node) => syntax("NodeTarget", vec![("node", text(node))]),
+                InitialConditionTarget::Component(reference) => {
+                    syntax("ComponentTarget", vec![("component", text(reference))])
+                }
+            };
+            syntax(
+                "InitialConditionDecl",
+                vec![
+                    ("location", location(&item.location)),
+                    ("target", target),
+                    ("target_location", location(&item.target_location)),
+                    ("value", scalar(&item.value)),
+                ],
+            )
+        }
+        BenchStatement::Replace(item) => syntax(
+            "ReplaceDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("target", text(&item.target)),
+                ("kind", text(&item.kind)),
+                ("entries", sim_entries(&item.entries)),
+            ],
+        ),
+        BenchStatement::Model(item) => syntax(
+            "ModelDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("name", text(&item.name)),
+                ("kind", text(&item.kind)),
+                ("entries", sim_entries(&item.entries)),
+            ],
+        ),
+        BenchStatement::Ignore(item) => syntax(
+            "IgnoreDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("targets", texts(&item.targets)),
+                ("target_locations", locations(&item.target_locations)),
+            ],
+        ),
+        BenchStatement::Analysis(item) => syntax(
+            "AnalysisDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("kind", text(&item.kind)),
+                ("entries", sim_entries(&item.entries)),
+            ],
+        ),
+        BenchStatement::Step(item) => {
+            let mut fields = vec![
+                ("location", location(&item.location)),
+                ("param", text(&item.param)),
+                ("values", StateValue::Tuple(item.values.iter().map(scalar).collect())),
+            ];
+            if !item.zip.is_empty() {
+                let zip = item
+                    .zip
+                    .iter()
+                    .map(|(param, values)| {
+                        StateValue::Tuple(vec![text(param), StateValue::Tuple(values.iter().map(scalar).collect())])
+                    })
+                    .collect();
+                fields.push(("zip", StateValue::Tuple(zip)));
+            }
+            syntax("StepDecl", fields)
+        }
+        BenchStatement::Reference(item) => syntax(
+            "ReferenceDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("name", text(&item.name)),
+                ("entries", sim_entries(&item.entries)),
+            ],
+        ),
+        BenchStatement::Let(item) => syntax(
+            "LetDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("name", text(&item.name)),
+                ("expression", expression(&item.expression)),
+            ],
+        ),
+        BenchStatement::Measure(item) => {
+            let mut fields = vec![
+                ("location", location(&item.location)),
+                ("name", text(&item.name)),
+                ("expression", expression(&item.expression)),
+                ("limits", sim_entries(&item.limits)),
+            ];
+            if !item.conditions.is_empty() {
+                fields.push(("conditions", StateValue::Tuple(item.conditions.iter().map(expression).collect())));
+            }
+            syntax("MeasureDecl", fields)
+        }
+        BenchStatement::Plot(item) => syntax(
+            "PlotDecl",
+            vec![
+                ("location", location(&item.location)),
+                ("expressions", StateValue::Tuple(item.expressions.iter().map(expression).collect())),
+            ],
+        ),
+        BenchStatement::Variation(item) => {
+            let mut fields = vec![("location", location(&item.location)), ("kind", text(&item.kind))];
+            if let Some(target) = &item.target {
+                fields.push(("target", text(target)));
+            }
+            if let Some(value) = &item.value {
+                fields.push(("value", scalar(value)));
+            }
+            fields.push(("entries", sim_entries(&item.entries)));
+            syntax("VariationDecl", fields)
+        }
     }
 }
 

@@ -362,6 +362,36 @@ fn node(declaration: &Declaration) -> Node<'_> {
             base("MechanicalProfileUseDecl", "", &item.location)
         }
         Declaration::MechanicalItem(MechanicalItem::Stackup(item)) => base("StackupDecl", "", &item.location),
+        Declaration::Param(item) => {
+            Node { value: Some(scalar(&item.value)), ..base("ParamDecl", &item.name, &item.location) }
+        }
+        Declaration::Sim(item) => {
+            Node { labels: vec![("kind", item.kind.clone())], ..base("SimDecl", &item.kind, &item.location) }
+        }
+        Declaration::Bench(statement) => match statement {
+            ast::BenchStatement::Target(item) => base("BenchTargetDecl", &item.board, &item.location),
+            ast::BenchStatement::Replace(item) => base("ReplaceDecl", &item.target, &item.location),
+            ast::BenchStatement::Model(item) => {
+                Node { labels: vec![("kind", item.kind.clone())], ..base("ModelDecl", &item.name, &item.location) }
+            }
+            ast::BenchStatement::Ignore(item) => base("IgnoreDecl", "", &item.location),
+            ast::BenchStatement::Analysis(item) => base("AnalysisDecl", &item.kind, &item.location),
+            ast::BenchStatement::Step(item) => base("StepDecl", &item.param, &item.location),
+            ast::BenchStatement::Reference(item) => base("ReferenceDecl", &item.name, &item.location),
+            ast::BenchStatement::Let(item) => base("LetDecl", &item.name, &item.location),
+            ast::BenchStatement::Measure(item) => base("MeasureDecl", &item.name, &item.location),
+            ast::BenchStatement::InitialCondition(item) => {
+                let name = match &item.target {
+                    ast::InitialConditionTarget::Node(node) => format!("V({node})"),
+                    ast::InitialConditionTarget::Component(reference) => reference.clone(),
+                };
+                base("InitialConditionDecl", &name, &item.location)
+            }
+            ast::BenchStatement::Plot(item) => base("PlotDecl", "", &item.location),
+            ast::BenchStatement::Variation(item) => {
+                base("VariationDecl", item.target.as_deref().unwrap_or(&item.kind), &item.location)
+            }
+        },
     }
 }
 

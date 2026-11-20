@@ -266,7 +266,40 @@ pub fn part_value(part: &PartDefinition) -> Value {
     if let Some(emi) = &part.emi {
         entries.push(("emi", part_emi_value(emi)));
     }
+    if !part.sim.is_empty() {
+        entries.push(("sim", Value::Array(part.sim.iter().map(part_sim_value).collect())));
+    }
     object(entries)
+}
+
+/// A part `sim` block: the unit, pin roles, unmodelled pins and the model.
+fn part_sim_value(model: &crate::simulation::PartSimModel) -> Value {
+    let mut entries = vec![
+        ("unit", optional(&model.unit)),
+        ("pins", string_map(&model.pins)),
+        ("unmodelled", texts(&model.unmodelled)),
+    ];
+    entries.extend(crate::bench::spec_fields(&model.spec));
+    object(entries)
+}
+
+/// The board's `param` values and the component attributes that use them.
+fn params_value(params: &IndexMap<String, crate::simulation::Param>) -> Value {
+    Value::Object(
+        params
+            .iter()
+            .map(|(name, param)| {
+                let uses = param
+                    .uses
+                    .iter()
+                    .map(|item| {
+                        object(vec![("component", text(&item.component)), ("attribute", text(&item.attribute))])
+                    })
+                    .collect();
+                (name.clone(), object(vec![("value", quantity_value(&param.value)), ("uses", Value::Array(uses))]))
+            })
+            .collect(),
+    )
 }
 
 pub fn device_value(device: &DeviceDefinition) -> Value {
@@ -695,6 +728,9 @@ fn module_value(definition: &ModuleDefinition) -> Value {
         &definition.peripheral_selections,
         &[],
     ));
+    if !definition.params.is_empty() {
+        entries.push(("params", params_value(&definition.params)));
+    }
     object(entries)
 }
 
@@ -744,6 +780,9 @@ pub fn board_value(board: &Board) -> Object {
     entries.push(("module_definitions", Value::Array(modules.into_iter().map(module_value).collect())));
     if !board.sources.file.is_empty() {
         entries.push(("source_locations", source_locations_value(&board.sources)));
+    }
+    if !board.params.is_empty() {
+        entries.push(("params", params_value(&board.params)));
     }
     let mut dependencies: Vec<&Dependency> = board.dependencies.iter().collect();
     dependencies.sort_by(|a, b| a.import_path.cmp(&b.import_path));

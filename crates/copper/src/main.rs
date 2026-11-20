@@ -48,6 +48,7 @@ mod replay_unified;
 mod route_board;
 mod route_global;
 mod si_check;
+mod sim;
 mod source_build;
 mod state;
 mod summarize;

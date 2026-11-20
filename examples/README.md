@@ -24,6 +24,11 @@ packages under `packages/` are separate from these board and language examples.
 | Resolved local footprint | `resolved_footprint_board/board.copper` |
 | Valid compiler fixture | `valid_board/board.copper` |
 | Analog front end (simulation removed) | [Source and recorded evidence](simulation/analog_frontend/README.md) |
+| Soil impedance analyzer: battery board with the analog front end as a module, benches for the module | [Specification](simulation/impedance_analyzer/SPEC.md), [board, benches and results](simulation/impedance_analyzer/README.md) |
+| Low-noise preamp: noise, Monte Carlo gain and worst-case offset benches | `simulation/preamp/board.copper` |
+| Precision rectifier: a transient bench with a diode, op-amp clipping and slew, THD | `simulation/precision_rectifier/board.copper` |
+| SPICE amplifier: an op-amp from a self-written SPICE model file (`sim spice`), op, AC, tran and noise benches | `simulation/spice_amplifier/board.copper` |
+| Vendor models: TI's OPA810 PSpice model by URL and SHA-256 beside the built-in macro model (needs `copper models fetch`) | `simulation/vendor_models/board.copper` |
 
 The CM4 carrier, managed-footprint, and simulation examples already use
 multi-file directories and retain their existing folder names.

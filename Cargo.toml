@@ -24,6 +24,9 @@ default-members = [
     "crates/copper-place",
     "crates/copper-report",
     "crates/copper-route",
+    "crates/copper-sim",
+    "crates/copper-simulate",
+    "crates/copper-spice",
     "crates/copper-state",
     "crates/copper-units",
 ]
@@ -65,6 +68,9 @@ copper-place = { path = "crates/copper-place" }
 copper-physical = { path = "crates/copper-physical" }
 copper-report = { path = "crates/copper-report" }
 copper-route = { path = "crates/copper-route" }
+copper-sim = { path = "crates/copper-sim" }
+copper-simulate = { path = "crates/copper-simulate" }
+copper-spice = { path = "crates/copper-spice" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }
 

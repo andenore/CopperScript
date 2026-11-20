@@ -1,0 +1,116 @@
+//! Runs CopperScript benches (`copper sim`): phase P0 of the
+//! [integrated simulation plan](../../../docs/integrated-simulation-plan.md).
+//!
+//! The language crate checks a board's benches into plain data
+//! ([`copper_lang::bench::Bench`]); this crate lowers board plus bench to a
+//! [`copper_sim::Circuit`] ([`lower`]), runs the bench's analysis once per
+//! combination of its `step` values ([`run`]), evaluates the typed `let`,
+//! `measure` and `plot` expressions ([`evaluate`]) and writes the results:
+//! a `copperscript-sim/v0.1` JSON document ([`results`]), a CSV of the
+//! plotted vectors and one self-contained HTML page per bench with inline
+//! SVG plots ([`report`]).
+//!
+//! Every component of the circuit is modelled, replaced or ignored (the
+//! language checks that); every result names the fidelity each one ran
+//! with. A bench that cannot be lowered or solved is a result with an
+//! error in source terms (net names and the component pins on them), never a
+//! panic and never a silent partial result.
+
+#![forbid(unsafe_code)]
+
+pub mod evaluate;
+pub mod format;
+pub mod lower;
+pub mod noise;
+pub mod report;
+pub mod results;
+pub mod run;
+pub mod spice;
+pub mod transient;
+pub mod variation;
+
+use std::path::{Path, PathBuf};
+
+use copper_lang::CopperScriptError;
+use copper_lang::bench::load_benches;
+use copper_lang::compiler::Design;
+
+pub use run::{BenchRun, Status, run_bench};
+
+/// Why benches could not be run at all.
+#[derive(Debug)]
+pub enum SimulateError {
+    /// A bench source does not compile.
+    Compile(CopperScriptError),
+    /// The board has no benches, or none of the requested name.
+    NoBench(String),
+}
+
+impl std::fmt::Display for SimulateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SimulateError::Compile(failure) => failure.fmt(formatter),
+            SimulateError::NoBench(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for SimulateError {}
+
+/// Run the benches of the board in `board_file` (already compiled to
+/// `design`): all of them, or the one named `only`.
+pub fn simulate(board_file: &Path, design: &Design, only: Option<&str>) -> Result<Vec<BenchRun>, SimulateError> {
+    let benches = load_benches(board_file, design).map_err(SimulateError::Compile)?;
+    if benches.is_empty() {
+        let directory = board_file.parent().unwrap_or(Path::new(".")).join(copper_lang::bench::BENCH_DIRECTORY);
+        return Err(SimulateError::NoBench(format!(
+            "board {} has no benches: put bench NAME for {} {{ ... }} files in {}",
+            design.electrical.name,
+            design.electrical.name,
+            copper_lang::paths::display(&directory)
+        )));
+    }
+    let selected: Vec<_> = match only {
+        None => benches.iter().collect(),
+        Some(name) => benches.iter().filter(|bench| bench.name == name).collect(),
+    };
+    if selected.is_empty() {
+        let names: Vec<&str> = benches.iter().map(|bench| bench.name.as_str()).collect();
+        return Err(SimulateError::NoBench(format!(
+            "board {} has no bench {}; its benches: {}",
+            design.electrical.name,
+            copper_json::python_str_repr(only.unwrap_or_default()),
+            names.join(", ")
+        )));
+    }
+    Ok(selected.into_iter().map(|bench| run_bench(design, bench)).collect())
+}
+
+/// True when any measure fails or any bench could not be solved.
+pub fn failed(runs: &[BenchRun]) -> bool {
+    runs.iter().any(|run| run.status() != Status::Pass)
+}
+
+/// The files of [`write_outputs`].
+pub const RESULTS_FILE: &str = "sim-results.json";
+
+/// Write the results JSON, one CSV and one HTML page per bench into `directory`; returns the paths written.
+pub fn write_outputs(runs: &[BenchRun], board: &str, directory: &Path) -> std::io::Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(directory)?;
+    let mut written = Vec::new();
+    let json = directory.join(RESULTS_FILE);
+    copper_json::text::write_text(&json, &results::results_json(runs, board))?;
+    written.push(json);
+    for run in runs {
+        let stem = results::file_stem(&run.name);
+        if !run.plots.is_empty() && run.error.is_none() {
+            let csv = directory.join(format!("{stem}.csv"));
+            copper_json::text::write_text(&csv, &results::plots_csv(run))?;
+            written.push(csv);
+        }
+        let html = directory.join(format!("{stem}.html"));
+        copper_json::text::write_text(&html, &report::html(run, board))?;
+        written.push(html);
+    }
+    Ok(written)
+}

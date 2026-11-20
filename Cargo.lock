@@ -55,6 +55,7 @@ dependencies = [
  "copper-place",
  "copper-report",
  "copper-route",
+ "copper-simulate",
  "copper-state",
  "copper-units",
  "indexmap",
@@ -297,6 +298,29 @@ dependencies = [
  "num-rational",
  "num-traits",
  "sha2",
+]
+
+[[package]]
+name = "copper-sim"
+version = "0.1.0"
+
+[[package]]
+name = "copper-simulate"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-lang",
+ "copper-sim",
+ "copper-spice",
+ "copper-units",
+ "indexmap",
+]
+
+[[package]]
+name = "copper-spice"
+version = "0.1.0"
+dependencies = [
+ "copper-sim",
 ]
 
 [[package]]

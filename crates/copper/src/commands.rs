@@ -6,8 +6,8 @@ use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
     compile_macro, completions, drc, edit_mechanical, editor_overlay, emi_check, explain, export_kicad,
     export_kicad_pcb, export_manufacturing, fill, help, init, issues, library, lock, lsp, models, plan_layout, plot,
-    power_check, query, render, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize,
-    synthesize_antenna, view,
+    power_check, query, render, replay_critical, replay_unified, route_board, route_global, si_check, sim, state,
+    summarize, synthesize_antenna, view,
 };
 
 /// Exit status of behaviour a command does not implement.
@@ -25,6 +25,7 @@ pub const COMMANDS: &[&str] = &[
     "compile",
     "query",
     "power-check",
+    "sim",
     "lock",
     "library",
     "audit-footprints",
@@ -117,6 +118,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "summarize" => summarize::run(rest, out, err),
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
+        "sim" => sim::run(rest, out, err),
         "emi-check" => emi_check::run(rest, out, err),
         "route-board" => route_board::run(rest, out, err),
         "build" => crate::build::run(rest, out, err),

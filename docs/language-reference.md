@@ -924,6 +924,11 @@ Omitted properties remain free; explicit allowed-orientation rules still apply.
 Conflicting imported and board-owned poses are errors. `/` is an instance path
 separator for constraint targets; electrical nets continue to use module ports.
 
+A module may declare `param`s, which its components use like a board's
+([Params](#params)). A simulation bench can target a module on its own, with
+the bench supplying its ports
+([Benches for a module](#benches-for-a-module)).
+
 Module ports do not provide a second connectivity mechanism. `port.VIN` and
 `PWR.VIN` are ordinary net endpoints that identify opposite sides of the same
 boundary during elaboration.
@@ -2718,6 +2723,799 @@ events have separate fixed costs. The unified router prices its own lattice thro
 Accepted ordinary copper is straightened by default; `--unified-set route_smoothing=false`
 keeps it as searched. Smoothing never moves vias, reserved or immutable copper.
 
+## Simulation
+
+Status: phases P0, P1 (noise, tolerances, Monte Carlo and worst case),
+P2 (transient analysis, diodes, switches, source waveforms, initial
+conditions, dc sweeps) and P3 (SPICE subcircuits read natively,
+[`sim spice`](#spice-subcircuits)) of
+the [integrated simulation plan](integrated-simulation-plan.md). The constructs
+below parse, are checked as far as that is possible without simulating, and
+compile to plain data (`copper_lang::simulation`, `copper_lang::bench`);
+`copper sim BOARD.copper` runs the board's benches (see
+[Running benches](#running-benches)). A board that uses none of them compiles
+to the same JSON as before; `params` and part `sim` keys appear only when
+declared.
+
+### Params
+
+```copper
+board HowlandPump {
+    param R_SET = 10kohm;
+    component R_SENSE: RESISTOR { value = R_SET; }
+}
+```
+
+`param NAME = quantity;` declares a typed named value in a board, a module or
+a bench (parts cannot declare params). A module's params belong to its
+definition: every instance of the module has the same values, the module's
+JSON lists them like a board's, and a bench for the module may override them
+([Benches for a module](#benches-for-a-module)). In a bench a param may
+instead be derived from earlier params: `param R_CONTACT = R_TRANSFER * 2 *
+3.14159 * PITCH / (4 * PAD_RADIUS);`. A derived param's expression uses
+numbers, quantities, earlier params (the target's included) and `+ - * /` only,
+and its units must be those of a quantity (`SIM001`; `%` for a dimensionless
+one). A simulator re-evaluates it at every step, so it follows the params it is
+computed from; it cannot itself be stepped (`SIM041`). A param stands in for a
+component quantity of its dimension: `value`, `switching_frequency`,
+`load_current` and `capacitance_at_bias`. The compiled component carries the
+param's value; the board JSON lists each param with its value and the
+component attributes that use it. A component `value = NAME;` naming no param
+stays text, as before. A param must be a quantity with a unit (`SIM001`), its
+name is unique (`SIM002`), and it must fit the attribute it is used for
+(`SIM003`).
+
+### Part `sim` blocks
+
+```copper
+part OPAMP_ADA4817_LIKE {
+    pin INP { ... } pin INN { ... } pin OUT { ... } pin VP { ... } pin VN { ... }
+    pin NC { number = "7"; connection = do_not_connect; }
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        unmodelled = NC;
+        gbw = 400MHz;
+        open_loop_gain = 65dB;
+        input_capacitance_common = 1.3pF;
+    }
+}
+```
+
+`sim KIND [UNIT] { ... }` binds a part to a built-in model. Role assignments
+name the part's pins; every role of the kind is required. Every pin of a part
+with `sim` blocks is either a role of some block or listed in
+`unmodelled = PIN, PIN;`, so omissions are explicit. A multi-unit part names
+the unit each block models (`sim opamp A { ... }`, `sim opamp B { ... }`);
+blocks may share a pin only in the same role (shared supply pins). `sim = value;`
+remains an ordinary part property.
+
+| Kind | Roles | Typed parameters (all optional) |
+| --- | --- | --- |
+| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`) |
+| `diffamp` | `inp`, `inn`, `ref`, `fb`, `out`, `vp`, `vn` | as `opamp` |
+| `source` | `out`, `ref` | `output = voltage` (default) or `current`; `dc`, `ac` (V or A, following `output`), `ac_phase` (deg), `output_resistance` (ohm), `output_capacitance` (F), `waveform = sine { ... };`, `pulse`, `pwl` or `step` ([Transient analysis](#transient-analysis)) |
+| `diode`, `switch` | `anode`, `cathode`; `a`, `b`, `ctrl`, `ctrl_ref` | see [Transient analysis](#transient-analysis) |
+| `load` | `inp`, `ref` | `resistance` (ohm), `capacitance` (F); at least one |
+
+`diffamp` is an active-feedback differential receiver (AD8130 class): the
+amplifier sees `(V(inp) - V(inn)) + (V(ref) - V(fb))`, so `fb` tied to `out`
+and `ref` to the output reference is gain 1, and a divider from `out` to `ref`
+with its tap on `fb` sets `1 + RF/RG`. The input parameters apply to the
+`inp`/`inn` pair only. `cmrr` adds the input-referred error `V_cm / CMRR` with
+`V_cm` the mean of `inp` and `inn` against ground; `cmrr_corner` makes the CMRR
+fall 20 dB per decade above that frequency (and needs `cmrr`). `second_pole`
+adds a second open-loop pole.
+
+Blocks may share a pin only in the same role, except `load` blocks: a load is a
+passive two-terminal element, so a pin may be the `inp` of one load and the
+`ref` of another. A resistor network is four `load` resistors plus `load`
+capacitances from their ends to the exposed pad
+(`examples/simulation/impedance_analyzer/parts/analog_lt5400.copper`).
+
+`sim spice { ... }` binds a part to a SPICE subcircuit instead of a built-in
+model ([SPICE subcircuits](#spice-subcircuits)). The `diode` and `switch`
+kinds, the waveforms and the op-amp's transient limits are described under
+[Transient analysis](#transient-analysis).
+
+### SPICE subcircuits
+
+```copper
+part OPAMP_SPICE {
+    pin INN { ... } pin INP { ... } pin VN { ... } pin OUT { ... } pin VP { ... }
+    sim spice {
+        file = "../models/behavioural_opamp.lib";   // the user's own file, relative to this source file
+        subckt = "BEHAVIOURAL_OPAMP";
+        dialect = pspice;                           // spice3 (default), pspice or ltspice
+        terminals = INP, INN, VP, VN, OUT;          // part pins on the subcircuit's nodes, in its order
+    }
+}
+
+part OPA810_VENDOR {
+    ...
+    sim spice {
+        source = "https://www.ti.com/lit/zip/SBOMB73";   // a vendor file, never committed
+        sha256 = "bee7ec13330e01d291d3e05c3b703647af276f3b174a51d40680d36905c4a0a0";
+        member = "opa810_a.lib";                          // the model inside a ZIP archive
+        subckt = "OPA810";
+        dialect = pspice;
+        terminals = INP, INN, OUT, VP, VN;
+    }
+}
+```
+
+(`examples/simulation/spice_amplifier/`, `examples/simulation/vendor_models/`.)
+A `sim spice` block runs a subcircuit of a SPICE model file in place of a
+built-in model; the simulator reads the file itself (`copper-spice`), no
+external tool is involved. Its properties:
+
+| Property | Meaning and checks (`SIM076`) |
+| --- | --- |
+| `file = "..."` | the user's own model file, resolved against the directory of the file that declares the part; it may include other local files (`.INCLUDE`, `.LIB file`) |
+| `source = "https://..."; sha256 = "...";` | a vendor file by URL, pinned by its SHA-256 (64 hexadecimal digits); `copper models fetch BOARD` downloads it into `.copper-cache/spice/` beside the nearest `copper.mod` (else beside the part's file), refusing bytes of another hash. `copper sim` never downloads: an uncached model is `SIM077` naming the command. A fetched file is one file (includes are refused) |
+| `member = "..."` | with `source`: the URL is a ZIP archive (as Texas Instruments ships its models), the hash is the archive's, and the model is this member (matched by its path or file name, ignoring case), extracted into the cache on first use |
+| `subckt = "..."` | the subcircuit (case-insensitive) |
+| `terminals = PIN, ...;` | part pins on the subcircuit's nodes in its `.SUBCKT` order; their count must be the subcircuit's (`SIM078` when run); a pin may be on several nodes |
+| `dialect = ...;` | `spice3` (the default, ngspice), `pspice` or `ltspice`: `$` comments (SPICE3 only), `^` (a power, an exclusive or in LTspice) and a diode's default `IBV` (PSpice 1e-10 A, otherwise 1e-3 A) differ |
+| `unmodelled = PIN, ...;` | pins on no node, as for built-in blocks |
+
+Exactly one of `file` and `source` (with `sha256`) is given. A multi-unit
+part has one block per unit (`sim spice A { ... }`), and units may share
+supply pins at any position. The block's roles are positional (`1` to `n`
+in the part JSON's `pins`); `I(U1.PIN)` is the current into that pin, the
+sum of the currents of the subcircuit's elements attached to its node. The
+results name the component's fidelity `vendor` and its model as `spice
+SUBCKT (file, dialect, sha256 ...)`; the SHA-256 of a local file is the
+content it ran with.
+
+**What is read.** The reader accepts SPICE3, PSpice and LTspice netlists:
+`*` comment lines, `;` comments, `+` continuations, case-insensitive names,
+engineering suffixes (`T G MEG K M MIL U N P F`, trailing unit letters
+ignored), `{...}` and `'...'` expressions, node `0` as ground, a DOS
+end-of-file mark. Cards and elements:
+
+| Construct | Notes |
+| --- | --- |
+| `.SUBCKT NAME nodes [PARAMS:] p=v ...` / `.ENDS` | nested definitions are local; instance values override the defaults |
+| `.PARAM`, `.FUNC f(a, b) {expr}`, `.MODEL` (with `AKO:`), `.INCLUDE`, `.INC`, `.LIB file`, `.LIB name` / `.ENDL` | parameters are evaluated per instance (global, the caller's, the defaults, then local ones in order); functions are inlined |
+| `R C L K` | values may be expressions of parameters; resistor models `R`, `TC1`, `TC2`, `T_ABS` (the resistance and the noise temperature at it: `T_ABS = -273.15` is noiseless), LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
+| `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC`, the waveform's value at 0 |
+| `E G F H` | linear, `POLY(n)` (SPICE2 coefficient order), `VALUE = {expr}`, `TABLE {x} = (x, y) ...`, `LAPLACE {x} = {H(s)}` (and LTspice `E a b c d LAPLACE = H(s)`): rational `H(s)` only, realised exactly as a state-space network |
+| `B V= / I=` | an expression of node voltages, of currents of elements of the same subcircuit and of `TIME` |
+| `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; `EG`, `XTI` and temperature coefficients are accepted and have no effect at 27 degC |
+| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node |
+| `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area |
+| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`; `L W AD AS PD PS M` on the element |
+| `S W` | `SW`/`CSW` (hysteresis), PSpice `VSWITCH`/`ISWITCH` (the smooth switch) |
+| `X` | with `PARAMS:` or bare `name=value` |
+
+Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin acos
+atan atan2 sinh cosh tanh min max limit pwr pwrs pow u stp uramp floor ceil
+round int hypot if table`, the operators `+ - * / ** ^ == != < <= > >= && ||
+& | ! ?:`, `PI`, `TEMP` (27). Device equations and their noise are those of
+SPICE3 at 27 degC (`copper_sim::semiconductors`). Newton iteration uses the
+exact derivatives of every expression and device equation (forward-mode
+automatic differentiation), junction and FET voltage limiting, and for a
+circuit with such elements pseudo-transient continuation besides gmin and
+source stepping; in a transient run, a node that jumps (a behavioural source
+switching) is accepted as a discontinuity once the step reaches a
+billionth of the run, and integration restarts there.
+
+**What is rejected.** Every construct outside the list is an error naming the
+file, the line, the element (with its instance path, `U1.X2.G5`) and the
+construct (`SIM078`); nothing is approximated. Unsupported elements and
+models inside a subcircuit are reported when that subcircuit is used, so a
+library of many parts stays usable for the ones it can simulate. Among
+them: encrypted models; `T O U A Z` elements; `FREQ` and `CHEBYSHEV`
+sources; non-rational `LAPLACE` (delays); `DDT`, `SDT`, `DELAY` and random
+functions; `SFFM`, `AM` and damped `SIN`; element `IC=`; switches that start
+`ON`; MOSFET levels other than 1 (BSIM by name) and level-1 models with
+`TOX`, whose intrinsic gate capacitance is not modelled; models measured at
+a `TNOM` other than 27 degC; diode `ISR`, `IKF`; BJT `IRB`, `PTF`,
+quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; unknown model parameters;
+`.OPTIONS`, `.GLOBAL`, `.IC`, `.NODESET`, `.TEMP`, `.LIB file section`.
+Analysis cards of a test deck at the top level (`.TRAN`, `.AC`, ...) have
+no effect.
+
+### Benches
+
+A bench is its own document. A source file holds one document, so a board's
+benches live in `.copper` files in a `benches/` directory beside the board
+file (`examples/simulation/howland_pump/benches/flatness.copper`). Every bench
+there names its target: the board, or a module of the board's design
+([Benches for a module](#benches-for-a-module)). A bench for a board that no
+`.copper` file beside `benches/` declares, and that is no module of the
+board, is an error (`SIM030`); a bench for a sibling board belongs to that
+board. A bench file is not a compiler entry source.
+
+```copper
+bench CurrentFlatness for HowlandPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0.15V; }
+    ignore J_OUT, J_PWR;
+    param R_LOAD_VALUE = 1kohm;
+    component R_LOAD: RESISTOR { value = R_LOAD_VALUE; }
+    net J_OUT.1 { R_LOAD.1; }   // joins the board net at that pin (LOAD)
+    net GND { R_LOAD.2; }       // joins the board net GND
+    analysis ac { from = 1kHz; to = 1MHz; points_per_decade = 20; }
+    step R_LOAD_VALUE in 100ohm, 1kohm, 10kohm;
+    let i_load = I(R_LOAD);
+    measure flatness = max(abs(mag(i_load) / 15uA - 1)) { max = 1%; }
+    plot mag(i_load), phase(i_load);
+}
+```
+
+| Statement | Meaning and checks |
+| --- | --- |
+| `use library "..."` | Parts for bench components, besides the board's. Package imports are not supported in benches yet (`SIM031`). |
+| `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
+| `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). |
+| `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it; a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. |
+| `replace X with KIND { ... }` | Swaps a board component or supply for a built-in model; roles name nodes: a board net, a bench net or `COMPONENT.PIN` (`SIM038`, `SIM039`). |
+| `supply NAME { voltage = q; net = NET; }` | A bench supply: an ideal DC voltage source from a net of the target to ground, an AC short; a 0 V one makes its net the ground. It takes `voltage` and `net` only (no `source`, no `external`); its name is new, its net is a net of the target (a module's port names its net) and no other supply drives it (`SIM048`). It cannot be replaced or ignored (`SIM038`). |
+| `model NAME: KIND { ... }` | A built-in model the bench adds, on nodes as for `replace`: a stimulus such as `model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }` on a module port, or a `load`. Its name is new (`SIM049`); `I(NAME)` and `I(NAME.ROLE)` read the current into its terminals ([Expressions](#expressions)). |
+| `ignore X, Y;` | Removes components or supplies; their pins are open (`SIM038`). |
+| `analysis ac { from; to; points_per_decade; }`, `analysis op;` | Exactly one analysis per bench in this version (`SIM040`). `0 < from < to`; `points_per_decade` is 1 to 10000. |
+| `analysis tran { stop; start; max_step; reltol; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
+| `analysis dc { sweep = NAME; from; to; step; }` (or `points = N;`) | Operating points over a swept param, source or supply ([DC sweep](#dc-sweep); `SIM074`). |
+| `ic V(NODE) = q;`, `ic C1 = q;`, `ic L1 = q;` | The state a transient run starts from: a node voltage, a capacitor's voltage, an inductor's current ([Transient analysis](#transient-analysis); `SIM075`). |
+| `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; temperature = 27degC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
+| `tolerance TARGET = q;` | The tolerance of a param, of a passive component (overriding its own `tolerance`) or of a model parameter `COMPONENT.PARAMETER` ([Tolerances, Monte Carlo and worst case](#tolerances-monte-carlo-and-worst-case); `SIM091`). |
+| `montecarlo { runs = N; seed = S; distribution = uniform; }`, `worstcase;` | Runs the bench over its tolerances: sampled boards, or the sensitivity corners (`SIM090`, `SIM092`, `SIM093`). |
+| `step PARAM in a, b, c;` | Repeats the run over values of the param's dimension; several steps nest, the first outermost (`SIM041`). |
+| `step A, B in (a1, b1), (a2, b2);` | A zipped step: the params move together, one tuple per run, each tuple with one value per param (`SIM041`). It nests with other steps like a plain one. |
+| `reference NAME { PARAM = q; ... }` | A reference run: at every step the bench is also solved with these params overridden (derived params that are not overridden follow them), for `reference(x, NAME)`. It models a calibration standard: `z / reference(z / z_true, CARD)` is a result calibrated on the standard (`SIM047`). |
+| `let NAME = expr;` | A named expression, visible to later statements (`SIM042`). |
+| `measure NAME = expr { min = q; max = q; where C and C; }` | One real value per step; the limits block is optional. Limits have the measure's dimension; a plain number or `%` is dimensionless (`SIM043`). A limit may name a param, and so differ per step. `where` scopes the limits to the steps whose params satisfy every comparison ([Limits per step](#limits-per-step); `SIM072`). |
+| `plot expr, expr;` | Real values swept over the analysis axis (`SIM044`). |
+
+A bench may start from shared setup: `bench NAME for TARGET using FIXTURE, FIXTURE { ... }`
+([Fixtures](#fixtures)).
+
+#### Limits per step
+
+```copper
+step R_SOIL in 10ohm, 100ohm, 1kohm;
+measure z_error = max(abs(mag(z) / Z_DUT - 1)) { max = 1%; where R_SOIL <= 100ohm; }
+```
+
+A `where` in a measure's limits block holds comparisons (`<`, `<=`, `>`,
+`>=`, `==`, `!=`) of params, numbers and quantities joined with `and`; both
+sides of each are arithmetic of the same units (`+ - * /`, no probes or
+functions; `SIM072`). The limits apply at the steps where every comparison
+holds, evaluated at each step's own params (derived params re-derived,
+equality within 1e-9 relative); at the other steps the measure is reported
+without limits (`pass` null). The worst step is the covered step with the
+least margin, Monte Carlo and worst-case runs judge covered steps only (the
+`where` reads the step's nominal params, never a run's varied ones), and a
+`where` that holds at no step is an error of the run. A measure has one
+`where` and needs `min` or `max` with it. The text table shows the limits as
+`max 1 % where R_SOIL <= 100ohm (2 of 3 steps)`, the results JSON adds
+`where`, `covered_steps` and a per-step `covered`, and the HTML page draws
+the limit only for the steps it covers. A limit that names a param (`max =
+PUMP_SWING;`) is the other way to make limits differ between steps; with
+either, the page draws one limit line or window per distinct limit,
+labelled with the steps it applies to.
+
+#### Fixtures
+
+```copper
+// benches/loaded_pump.copper
+fixture LoadedPump for HowlandPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0.15V; }
+    ignore J_OUT, J_PWR;
+    param R_LOAD_VALUE = 1kohm;
+    component R_LOAD: RESISTOR { value = R_LOAD_VALUE; }
+    net J_OUT.1 { R_LOAD.1; }
+    net GND { R_LOAD.2; }
+}
+
+// benches/noise.copper
+bench MeasurementNoise for HowlandPump using LoadedPump {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0.15V; output_resistance = 50ohm; }
+    analysis noise { ... }
+}
+```
+
+(`examples/simulation/howland_pump/benches/`.) A fixture is a document of
+its own in `benches/`, `fixture NAME for TARGET { ... }`, holding bench setup
+that several benches share: `use library`, `param`, `component`, `net`,
+`supply`, `model`, `replace`, `ignore`, `let`, `reference`, `ic` and
+`tolerance`. It is not a bench and is not run; `analysis`, `step`,
+`measure`, `plot`, `montecarlo` and `worstcase` belong in the bench
+(`SIM073`). `bench NAME for TARGET using A, B { ... }` compiles as if the
+declarations of `A`, then `B`, stood before the bench's own: every check is
+the bench's, and errors name the fixture's file. A bench declaration of the
+same param, `supply`, `model`, `replace` target or bench `component` as a
+fixture's takes the fixture declaration's place (so params the fixture
+derives from it follow the bench's value); anything else declared twice is
+the usual duplicate error. A fixture names the bench's target (the same
+board or module, `SIM073`), uses no other fixture, and must be in the same
+`benches/` directory; an unknown fixture is `SIM073`. The bench JSON lists
+the fixtures it used (`fixtures`).
+
+Every board component must be modelled, replaced or ignored (`SIM034`): there
+are no silent ideal parts. Passives (parts whose category is
+`passive.resistor`, `passive.capacitor` or `passive.inductor`) are ideal
+elements of their value; parts with `sim` blocks use them. Board supplies are
+ideal DC voltage sources from their net to ground unless replaced or ignored;
+a supply with a `source` component is driven by that component. The net of
+the board's 0 V supply is the simulation ground; a bench needs exactly one
+such net, and the ground supply cannot be replaced or ignored (`SIM046`).
+
+#### Benches for a module
+
+`bench NAME for MODULE` simulates one module definition of the board's design
+on its own: its components and nets under their local names (`U_DRV`, not
+`AFE/U_DRV`), with nested module instances expanded below it, and its ports
+as the nets they are on; a port whose name is not its net's names that net.
+Nothing outside the module is in the circuit, so the bench needs no `ignore`
+for the rest of the board. `MODULE` is the definition's own name or its
+qualified name (`analog.AnalogFrontEnd`), and must name one module of the
+design (`SIM030`); the bench file sits in `benches/` beside the board that
+instantiates the module, and `copper sim BOARD.copper` runs it with the
+board's benches.
+
+A module declares no rails, so the bench supplies its ports: `supply` for
+each rail (one of them at 0 V, whose net is the ground, `SIM046`) and `model`
+for each signal source that drives a port. The module's params are the
+bench's params, which the bench may override and step like a board's.
+
+```copper
+bench SoilSweep for AnalogFrontEnd {
+    supply POS { voltage = 4.5V; net = VP; }
+    supply NEG { voltage = -4.48V; net = VN; }
+    supply MID { voltage = 1.65V; net = V_MID; }
+    supply GROUND { voltage = 0V; net = GND; }
+    model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }
+    ...
+}
+```
+
+A bench for a module exercises the circuit every instance of it places on
+the board; what the instance's surroundings contribute (the regulators that
+make the rails, the DDS, the loads on its outputs) is in the bench's own
+port conditions, and the results name them (bench supplies and models are
+listed with `bench` true).
+
+### Expressions
+
+Bench expressions are typed. Precedence, lowest first: `+` and `-`; `*` and
+`/`; unary `-`; then literals, names, calls and parentheses. Operators
+associate to the left. Because `-` is part of identifiers (`x-1` is one
+name), subtraction needs spaces: `mag(i) / 15uA - 1`.
+
+| Form | Type |
+| --- | --- |
+| `2`, `15uA`, `1%`, `4nV/rtHz` | A dimensionless number or a quantity; `%` is dimensionless. |
+| `NAME` | A param (its nominal value) or an earlier `let` (`SIM062`). |
+| `V(node)`, `V(a, b)` | Voltage of a node against ground, or between two nodes. A node is a board net, a bench net or `COMPONENT.PIN` (`SIM039`). |
+| `I(X)`, `I(X.PIN)` | Current into a pin; `I(X)` of a two-terminal component is the current into its first pin (`SIM045`): positive when current flows from the net into the pin, so a resistor carrying current from its first pin to its second reads positive at its first pin and negative at its second. The supply pins of the built-in op-amp model carry no current. |
+| `I(X)`, `I(X.ROLE)` of a replaced component or bench model | The current into a terminal of the model the bench placed: `ROLE` is a role of its kind (`I(J_IN.out)`), and `I(X)` of a two-terminal kind (`source`, `load`, `diode`) is its first role's. The part's own pins are not the model's terminals: `I(J_IN.1)` of a replaced connector is `SIM045`, which names the roles to write instead. The supply pins of an amplifier and a switch's control pins carry no current. |
+| `a < b`, `<=`, `>`, `>=`, `==`, `!=` | A comparison of two real values of the same units; allowed only as the argument of `upto` and `downto` and in a limit's `where` (`SIM072`). |
+| `upto(a < b)`, `downto(a < b)` | The axis value up to which the comparison (`<`, `<=`, `>`, `>=`) holds from the start of the axis, or down to which it holds from its end: the bandwidth `upto(db(H) > -3dB)`, the highest frequency at which a noise density stays below a limit (`upto(noise() < 10nV/rtHz)`), the input voltage where an amplifier leaves its linear range (`upto(V(OUT) < 4.4V)` in a dc sweep). Between the last sample where it holds and the first where it fails the margin (`b - a`, or `a - b` for `>`) is taken as linear in log frequency on a frequency axis and linear on a time or dc axis, and the crossing of zero is returned: at an RC corner sampled at 20 points per decade within 2e-4. The end of the axis when it holds everywhere (a lower bound); a run-time error when it fails at the first sample (`SIM072`). |
+| `integrate(x)`, `integrate(x, from, to)` | The integral of a real swept value over the axis, trapezoidal in the axis variable (time, frequency or the swept value), a window's ends interpolated as the windows are; its units are `x`'s times the axis's (`integrate(I(R1))` is a charge). |
+| `mag`, `abs`, `re`, `im` | Real, of the argument's dimension. |
+| `phase` | Real, deg; a swept phase is unwrapped along the axis, starting in (-180, 180]. `db` is real, dB: `20 log10(abs(x))` with `x` in its base unit. |
+| `min`, `max`, `mean` | Reduce a real swept value over the analysis axis (`SIM066`, `SIM067`); `mean` is the mean of the samples, on the logarithmic ac axis the mean over log frequency. `max(x, from, to)` and the other windows reduce over a sub-band (or a time window, or part of a dc sweep): the samples inside it plus its two ends, interpolated as `at` interpolates (linear in log frequency on the ac and noise axes); `max(mag(H), 1kHz, 10kHz)` is the largest gain in that band. |
+| `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis. |
+| `at(x, f)` | `x` at one frequency of the ac axis (`SIM068`), interpolated between the two nearest samples: linear in log frequency, complex values in log magnitude and phase. Between samples this differs from the exact response by the curvature over one step (about 1e-3 dB at an RC corner at 50 points per decade). |
+
+| `noise()`, `noise(X)` | `analysis noise` only (`SIM085`): the output noise density, real and swept, V/rtHz; `noise(X)` the part of it that component or bench model `X` contributes (all of its generators, every unit of a multi-unit part; `SIM087`). |
+| `input_noise()` | The output noise density referred to the analysis's `input` (`SIM086`): divided by the input's transfer to the output; V/rtHz for a voltage source, A/rtHz for a current source. |
+| `noise_rms(x, from, to)` | The RMS of the density `x` over the band, `sqrt(integral of x^2 df)`: `noise_rms(noise(), 10Hz, 20kHz)` is a voltage (`SIM088`). |
+| `noise_share(x, from, to)` | The fraction of the output noise power over the band that the density `x` carries: `noise_share(noise(R1), 10Hz, 20kHz)`, dimensionless; `x` is a V/rtHz density (`SIM088`). |
+
+In `analysis ac` probes are complex and swept over frequency; in
+`analysis op` they are real single values; in `analysis tran` they are real
+and swept over time, with the time-domain functions of
+[Transient analysis](#transient-analysis); in `analysis noise` `V(...)` and
+`I(...)` are the AC sweep at the noise frequencies (the transfer from the
+bench's `ac` sources), as in `analysis ac`. Products and quotients combine
+dimensions (`V(a) / I(R1)` is a resistance, `R * C` a time); sums of
+mismatched dimensions are errors (`SIM065`). Unknown functions, wrong
+argument counts and unknown units are `SIM063`, `SIM064` and `SIM061`.
+
+### Noise analysis
+
+```copper
+bench MeasurementNoise for LowNoisePreamp {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1mV; output_resistance = 1kohm; }
+    ignore J_OUT, J_PWR;
+    analysis noise {
+        from = 1Hz; to = 1MHz; points_per_decade = 20;
+        output = V(VOUT);
+        input = J_IN;
+        temperature = 27degC;
+    }
+    measure en_in_1khz = at(input_noise(), 1kHz) { max = 7nV/rtHz; }
+    measure vn_audio = noise_rms(noise(), 10Hz, 20kHz) { max = 0.012mV; }
+    measure amplifier_share = noise_share(noise(U1), 10Hz, 20kHz) { max = 25%; }
+    plot noise(), input_noise(), noise(J_IN), noise(R_G), noise(U1);
+}
+```
+
+(`examples/simulation/preamp/benches/noise.copper`.) `from`, `to` and
+`points_per_decade` are as for `analysis ac`; `output` is a voltage probe,
+`V(NODE)` or `V(P, N)`, of nodes as `V(...)` takes them (`SIM094`). `input`
+names a source: a bench `model` of kind `source`, or a component or supply
+replaced with one (`SIM094`); without it `input_noise()` is an error.
+`temperature` is the resistors' temperature in `degC` or `K` (27 degC when
+not given; it cannot be a param or stepped).
+
+The noise generators are uncorrelated:
+
+| Element | Noise |
+| --- | --- |
+| a passive resistor, a `load` resistance, a `source` output resistance | thermal, `4 k T / R` as a current across it |
+| an op-amp or differential amplifier with `voltage_noise` | `e_n` in series with its `inp`, power density `e_n^2 (1 + voltage_noise_corner / f)` |
+| an op-amp or differential amplifier with `current_noise` | one current from each of `inp` and `inn` to ground, each `i_n^2 (1 + current_noise_corner / f)` |
+| a diode | shot noise across the junction, `2 q I` with `I` the magnitude of its operating-point current; its `series_resistance` is a resistor with thermal noise |
+| a switch | thermal noise of its resistance in its operating-point state, `4 k T / R_on` or `4 k T / R_off` |
+
+A circuit with diodes or switches is solved at its Newton operating point
+first and analysed with their small-signal admittance there, as `analysis ac`
+does; the shot noise uses the junction current there (without the 1 pS
+`G_MIN` part), labelled `D1 shot noise` in the contributor table, and
+`noise(D1)` holds it together with the series resistance's thermal noise.
+The resistors inside an amplifier model (its gain and pole elements, output
+resistance and input resistances) are noiseless, as are capacitors,
+inductors, sources and supplies. The amplifier's voltage noise drives its
+gain stage behind the input capacitances, so the `e_n` times input
+capacitance current is not modelled, nor any noise of a differential
+amplifier's feedback pair. The solver computes every generator's transfer
+to the output with one transposed solve per frequency (the adjoint method).
+
+`noise_rms` and `noise_share` integrate between samples as power laws (a
+straight line in log-log): exact for white noise, 1/f noise and a single
+pole's `1/f^2` skirt; where white and 1/f noise meet, the error is below
+1e-4 at 10 points per decade and 2e-5 at 50. The band must lie inside the
+analysis range. The HTML page adds a table of every contributor's RMS over
+the analysis band and its share of the output noise power, ranked; the
+results JSON has it per step (`noise`, see [Running benches](#running-benches)).
+
+### Tolerances, Monte Carlo and worst case
+
+A passive component declares its value tolerance, and a matched set (a
+resistor network) the group it is matched in and the group's ratio tolerance:
+
+```copper
+component R_B: RESISTOR { value = 100kohm; tolerance = 1%; }
+component R_G: RESISTOR { value = 1kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
+component R_F: RESISTOR { value = 10kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
+```
+
+`tolerance` and `match_tolerance` are percentages above 0 and below 100;
+`match` needs `match_tolerance` and `tolerance`, and `match_tolerance` is at
+most `tolerance` (`SIM089`). They are stored on the compiled component and
+change nothing until a bench runs over them. Members of one group need equal
+tolerances and two or more simulated members (`SIM092`); a component in a
+group cannot get a bench tolerance (`SIM091`).
+
+A bench adds tolerances and names one method (`SIM090`):
+
+```copper
+tolerance R_SET = 0.5%;                      // a param (not a derived one)
+tolerance C1 = 10%;                          // a passive: overrides its own tolerance
+tolerance U1.gbw = 30%;                      // a model parameter of a component, replacement or bench model
+tolerance U1.input_offset_voltage = 60uV;    // absolute: in the parameter's own unit
+montecarlo { runs = 200; seed = 1; distribution = gaussian; }   // or: worstcase;
+```
+
+A percentage is relative to the nominal value; any other value is absolute,
+of the target's dimension (dB and degree parameters take absolute values
+only). A model parameter must be declared by the model, except
+`input_offset_voltage`, `input_bias_current` and `input_offset_current`,
+whose undeclared value is zero and which take an absolute tolerance
+(`SIM091`). On a multi-unit part every unit varies on its own. `runs` is 1
+to 100000 and required; `seed` defaults to 1, `distribution` to `uniform`.
+A `tolerance` statement without a method is an error, and so is a method with
+nothing to vary (`SIM093`).
+
+Every toleranced quantity is one variable `x` in `[-1, 1]` (`x = 1` at its
+upper limit); a matched group is one common variable plus one per member:
+member `i` is `nominal (1 + (tolerance - m) x_common + m x_i)` with
+`m = match_tolerance / 2`, so every member stays within `tolerance` and the
+ratio of any two within `match_tolerance`. A run sets every quantity to
+`nominal (1 + relative deviations) + absolute deviations`; params first,
+derived params re-derived from them, then component values and model
+parameters (whose nominal values follow the run's params).
+
+**Monte Carlo** draws run `k` from its own stream of the seed (SplitMix64):
+uniform, or normal with the tolerance at three standard deviations, redrawn
+outside it. The same seed gives the same runs, and run `k` does not depend on
+`runs`. Run `k` is one board at every `step` (and in every `reference` run),
+so it passes when every limited measure passes at every step; the yield is
+the fraction of runs that pass. Per step and measure the results give the
+nominal value, minimum, maximum, mean, standard deviation, the fraction of
+runs within the limits and every run's value.
+
+**Worst case** is a sensitivity-based corner search: every variable is run
+at `+1` and at `-1` with the others nominal; the sign of the change of each
+measure gives its direction; each measure is then run at its high corner
+(every variable at the end that raises it) and its low corner. This assumes
+each measure moves monotonically with each variable and that interactions
+do not reverse a direction: a measure such as `max(abs(error))`, or one
+with an extreme inside a variable's range, can be worse than the corners
+found. The results give per measure the nominal value, both corners with
+their variables, the minimum and maximum of every run evaluated, and each
+variable's sensitivity (the change from its low to its high end).
+
+With either method a measure's limits apply to its worst run: the value
+shown and checked at each step is the value of the run (nominal included)
+with the least margin, so `copper sim` exits 1 when any run leaves a limit.
+Plots show the nominal run. The text table adds a line per measure with the
+statistics at its worst step, and the HTML page a statistics table, a
+histogram per measure (Monte Carlo) or the sensitivity table (worst case).
+
+```copper
+bench GainMonteCarlo for LowNoisePreamp {
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 1V; }
+    ignore J_OUT, J_PWR;
+    param R_ADC = 10kohm;
+    model ADC: load { inp = VOUT; ref = GND; resistance = R_ADC; capacitance = 20pF; }
+    analysis ac { from = 100Hz; to = 1MHz; points_per_decade = 20; }
+    step R_ADC in 10kohm, 1Mohm;
+    tolerance U1.gbw = 30%;
+    montecarlo { runs = 200; seed = 7; distribution = gaussian; }
+    let h = V(OUT) / V(INP);
+    measure gain_1khz = mag(at(h, 1kHz)) { min = 10.994; max = 11.006; }
+}
+```
+
+### Transient analysis
+
+```copper
+bench HalfWave for PrecisionRectifier {
+    replace J_IN with source {
+        out = J_IN.1; ref = GND;
+        waveform = sine { amplitude = 1V; frequency = 1kHz; };
+    }
+    ignore J_PWR;
+    analysis tran { stop = 3ms; start = 0.9ms; max_step = 1us; }
+    measure peak = max(V(OUT)) { min = 0.995V; max = 1.005V; }
+    measure average = mean(V(OUT), 1ms, 3ms) { min = 0.313V; max = 0.3185V; }
+    measure output_delay = cross(V(OUT), 10mV) - cross(V(VIN), 10mV) { max = 2us; }
+    measure distortion = thd(V(OUT), 1kHz);
+    plot V(VIN), V(OUT), V(AMP);
+}
+```
+
+(`examples/simulation/precision_rectifier/`.) `analysis tran { stop; start;
+max_step; reltol; }` runs the circuit in time from 0 to `stop` (required,
+positive), recording from `start` (default 0; `0 <= start < stop`). It
+starts from the operating point at `t = 0` with every source at its
+waveform's value just before 0. `max_step` bounds the time step (default
+`(stop - start) / 50`); `reltol` (a ratio, `0.01%` or a plain number;
+default `0.01%`) is the truncation error each step may make, relative to the
+largest value the node voltage or inductor current has had. Times may name
+params (`stop = T_STOP;`) and step with them. Errors are `SIM069`.
+
+**Initial conditions.** `ic V(NODE) = q;` sets a node's voltage against
+ground at `t = 0`, `ic C1 = q;` a capacitor's voltage (its first pin against
+its second) and `ic L1 = q;` an inductor's current (into its first pin);
+`C1` and `L1` are capacitors and inductors simulated as passives, values may
+name params, and each target is set once (`SIM075`). Without `uic` the
+operating point at `t = 0` is solved with every one of them held (a node by
+an ideal source to ground, a capacitor by an ideal source across it, an
+inductor by an ideal current source in place of its DC short) and the run
+starts from it with them released. `analysis tran { ...; uic = true; }`
+skips the operating point: every capacitor starts at its `ic` voltage or
+0 V, every inductor at its `ic` current or 0 A, and the rest of the circuit
+(other node voltages, diode junctions, op-amp outputs) is solved at `t = 0`
+from those states and the sources; `ic V(NODE)` cannot be used with `uic`
+(set the capacitor on the node instead). An LC tank needs `uic`: held at
+1 V, its capacitor would face the inductor's DC short.
+
+```copper
+ic C1 = 1V;                                       // C1 discharges from 1 V
+analysis tran { stop = 300us; }
+measure at_tau = at(V(VOUT), 100us);              // 1 / e of 1 V for R C = 100 us
+```
+
+The solver (`copper_sim::transient`) integrates trapezoidally, with backward
+Euler for the first two steps after the start and after every breakpoint,
+and controls the step by the estimated truncation error; time points land
+on every corner of every source waveform, on `start` and on `stop`. Each
+time point is solved by Newton iteration. A run that cannot continue (a
+Newton iteration that does not converge even with steps shortened to
+`1e-12` of the run) is an error naming the nets or components that changed
+most. Trapezoidal integration lowers the frequency of a lightly damped
+oscillation by about `(w h)^2 / 12` (0.15 % at the default `reltol` in the
+closed-form RLC check); a smaller `reltol` or `max_step` reduces it.
+
+**Waveforms.** A `source` (in `replace` or `model`) takes
+`waveform = KIND { ... };`, in the source's unit (V, or A for
+`output = current`). The waveform drives transient runs only; `dc` and `ac`
+remain the source's operating-point and AC values. A source without a
+waveform holds its `dc` value; bench and board supplies are constant.
+
+| Waveform | Properties |
+| --- | --- |
+| `sine` | `amplitude`, `frequency` (required), `offset`, `phase` (deg), `delay` (s): `offset + amplitude sin(2 pi f (t - delay) + phase)` from `delay` on |
+| `pulse` | `initial`, `pulsed`, `width` (required), `delay`, `rise`, `fall` (default 0, a zero edge is a jump), `period` (none: one pulse; at least `rise + width + fall`), `cycles` (a whole number; needs `period`) |
+| `pwl` | `points = t1, v1, t2, v2, ...;` with times that do not decrease; two points at one time are a jump; the first value before the first point, the last after the last |
+| `step` | `final` (required), `initial`, `at`, `rise` (default 0) |
+
+Waveform errors are `SIM020`.
+
+**Nonlinear models.** Two more `sim` kinds, usable in part blocks and in
+`replace`/`model` (both are nonlinear in every analysis: the operating
+point solves them by Newton iteration, AC analysis uses their small-signal
+admittance at the operating point):
+
+| Kind | Roles | Typed parameters (all optional) |
+| --- | --- | --- |
+| `diode` | `anode`, `cathode` | `saturation_current` (A, default 1e-14 A), `emission_coefficient` (a plain number, default 1), `series_resistance` (ohm), `junction_capacitance` (F, at zero bias), `junction_potential` (V, default 1 V), `grading_coefficient` (a plain number below 1, default 0.5), `transit_time` (s), `breakdown_voltage` (V), `breakdown_current` (A at the breakdown voltage, default 1 mA) |
+| `switch` | `a`, `b`, `ctrl`, `ctrl_ref` | `on_resistance` (ohm, default 1 ohm), `off_resistance` (default 1 Gohm), `threshold` (V, default 0), `hysteresis` (V, default 0) |
+
+The diode is the SPICE junction at 27 degC: `I = I_S (exp(v / n V_T) - 1)`
+plus, with a breakdown voltage, a reverse current that reaches
+`breakdown_current` at `-breakdown_voltage` and grows exponentially beyond
+it, the series resistance in front, the depletion capacitance
+`C_J0 / (1 - v / V_J)^M` (linear above `V_J / 2`) and the diffusion
+capacitance `transit_time dI/dv`. The switch is `on_resistance` once
+`V(ctrl) - V(ctrl_ref)` rises above `threshold + hysteresis` and
+`off_resistance` once it falls below `threshold - hysteresis`; it keeps its
+state in between and starts off. In a transient run its state changes
+between time points, located to a millionth of the run. `I(D1)` and
+`I(D1.A)` read the diode current; the switch's control pins carry no current.
+
+**Op-amp limits.** In a transient run (and its initial operating point)
+the `opamp` and `diffamp` models clip their output at the supply pins less
+the headroom (`output_swing_from_positive_rail` and
+`output_swing_from_negative_rail`, each defaulting to
+`output_swing_from_rail`, which defaults to 0: rail to rail), slew at
+`slew_rate`, and deliver at most `output_current_limit` (which needs an
+`output_resistance` above 0). Clipping is a stiff
+clamp on the model's internal pole node (within a few millivolts for a
+volt of overdrive); the slew and current limits are smooth, so a linear
+demand equal to the limit gets 84 % of it. A dc sweep
+([DC sweep](#dc-sweep)) clips and limits the output current the same way
+(slewing has no effect at DC). The operating point, AC and
+noise analyses use the linear model and list these parameters as inactive.
+The supply pins still carry no current.
+
+**Measurements.** Probes are real and swept over time.
+
+| Function | Value |
+| --- | --- |
+| `min(x)`, `max(x)` | over the recorded samples |
+| `mean(x)`, `rms(x)` | over time, the record taken as linear between samples, so unevenly spaced points weigh by the time they cover |
+| `pp(x)` | `max(x) - min(x)` |
+| `f(x, from, to)` | `min`, `max`, `mean`, `rms` or `pp` over a window of the axis (two times; `SIM070`), interpolated at its ends |
+| `at(x, t)` | `x` at time `t`, linear between samples (`SIM068`) |
+| `cross(x, level)` | the first time `x` crosses `level` either way, interpolated (an error at run time if it never does); a 10 % to 90 % rise time is `cross(x, 0.9V) - cross(x, 0.1V)` with the levels written out |
+| `settle(x, band)` | the time after which `x` stays within `band` (of `x`'s unit) of its last recorded value |
+| `overshoot(x)` | how far `x` passes its last value, as a fraction of its step from its first value (dimensionless; zero without overshoot) |
+| `harmonic(x, f0, n)` | the peak amplitude of harmonic `n` (1 the fundamental) of `f0`, over the last whole periods of `f0` in the record (resampled at 512 points per period) |
+| `thd(x, f0)`, `thd(x, f0, n)` | total harmonic distortion: `sqrt(A_2^2 + ... + A_9^2) / A_1` over the same periods, or to harmonic `n` (a whole number from 2 to 255) |
+
+`settle`, `overshoot`, `harmonic` and `thd` need `analysis tran`
+(`SIM070`); their arguments are checked like the windows (`SIM071`). Outside
+`analysis tran`, `rms` and `pp` reduce over the samples of the frequency
+axis as `mean` does, the windows take frequencies, and `cross(x, level)` is
+the first frequency at which `x` crosses `level` (`cross(db(H), -3dB)`).
+A measure must reduce a swept value (`SIM043`); `plot` draws it against
+time.
+
+### DC sweep
+
+```copper
+bench Transfer for Analog {
+    replace J2 with source { out = J2.1; ref = GND; dc = 0V; }
+    analysis dc { sweep = J2; from = -4V; to = 4V; step = 0.1V; }
+    measure gain = at(V(OUT), 1V) / 1V;
+    measure high = max(V(OUT)) { min = 4.48V; max = 4.52V; }   // clipped at 5 V less 0.5 V headroom
+    measure linear_to = upto(V(OUT) < 4.4V);
+    plot V(OUT);
+}
+```
+
+`analysis dc { sweep = NAME; from = q; to = q; step = q; }` (or
+`points = N;`, 2 to 100000, evenly spaced with both ends) solves the
+operating point at every value of `NAME` from `from` to `to`: a param (not a
+derived or stepped one; derived params follow it), the `dc` of a source (a
+bench `model` of kind source, or a component or supply replaced with one),
+or the voltage of a supply simulated as its ideal DC source. `from`, `to` and
+`step` are of the swept quantity's dimension and may name params; `step` is
+positive, and the last point is `to` itself when the steps do not land on
+it (`SIM074`). Each point is a Newton operating point started from the
+previous point's solution (continuation), falling back to the full
+operating point (gmin and source stepping) where that fails; a sweep from a
+higher to a lower value is solved in that order, so hysteresis shows, and
+reported on the increasing axis. The op-amp's limits are active, as in a
+transient run: the output clips at the rails less the headroom and is held
+to its output current limit (a transfer curve clips as the part does); the
+slew rate has no effect at DC. `analysis op` and AC keep the linear model,
+so their results are unchanged. Capacitors are open, inductors short.
+
+Probes are real and swept over the swept value, like time in a transient
+run: `min`, `max`, `mean`, `rms`, `pp` and the windows, `at(x, v)` (a value
+of the swept quantity), `cross`, `upto`, `downto` and `integrate` work on
+it, linear between points; `settle`, `overshoot`, `harmonic` and `thd` do
+not. `plot` draws against the swept value, named on the axis; the JSON and
+CSV put it in `sweep` (SI base units) and the analysis records `sweep`,
+`units`, `from`, `to` and `points`.
+
+### Running benches
+
+```console
+copper sim examples/simulation/rc_filter.copper --out build/sim
+copper sim examples/simulation/howland_pump/board.copper --bench CurrentFlatness
+```
+
+`copper sim BOARD.copper` runs every bench of the board and of its modules (`--bench NAME` one of
+them): the bench's analysis once per combination of its `step` values, with
+every param at that step's value (in component values, model parameters,
+analysis bounds, limits and expressions; derived params re-evaluated), plus
+one run per `reference` at each step. It prints, per bench, each measure's
+worst step against its limits (headed `BENCH NAME (BOARD)`, or `BENCH NAME
+(module MODULE of BOARD)` for a bench of a module), and writes into `--out`
+(default `build/sim`): `sim-results.json` (schema `copperscript-sim/v0.1`: the
+solver and its version, per bench its board and, for a bench of a module, the
+module, the model fidelity of every component, supply and bench model, every
+param per step, each
+measure per step with its limits and pass or fail, the plotted vectors; for
+a noise bench `noise`, the contributors per step, for a Monte Carlo or
+worst-case bench `variation`, the statistics per step and measure, and for a
+transient bench `transient` per step, the solver's accepted and rejected
+steps, Newton iterations and step sizes, with the plotted vectors on
+`time_s` instead of `frequency_hz` (a dc sweep: `sweep`); a measure with a
+`where` adds `where`, `covered_steps` and a per-step `covered`),
+`BENCH.csv` (the plotted vectors, SI base units) and `BENCH.html` (the plots,
+one curve per step, magnitude-like panels above phase-like ones on a shared
+logarithmic frequency axis, limit lines or windows where a measure's limit
+applies to a plotted quantity, one per distinct limit over the steps it
+covers, then the measures table and the models; a
+transient bench's panels share a linear time axis, each curve drawn from the
+first, lowest, highest and last sample of each pixel column, while the CSV
+and JSON keep every time point, and a dc sweep's a linear axis of the swept
+value; noise densities are drawn on a logarithmic value axis, log-log;
+dimensionless values are shown in percent, and a limit that names a param
+shows its nominal value, `max 4.4 V (PUMP_SWING)`). The
+exit status is 1 when a measure is outside its limits or a bench cannot be
+solved, 2 for usage and compile errors, 0 otherwise.
+
+The simulated circuit: every net of the target (the board, or the module on
+its own) is a node of its name and the ground net is the reference. Passives are ideal elements of their value between their
+two pins, decoupling capacitors included. A part's `sim` blocks become the
+built-in models (a multi-unit part's units are `REF.UNIT`); on a device-backed
+part, a unit terminal named on a net (`U1.A.INP`) is the package pin its pad is
+bonded to, and a terminal bonded to no pin or to several is an error naming
+it. `replace` swaps in a model on the named nodes; `ignore` leaves the pins
+open. A board supply is an ideal DC voltage source from its net to ground,
+which is a short at AC, unless replaced, ignored or driven by a component.
+The op-amp and differential-amplifier models need `gbw` and `open_loop_gain`; `input_resistance_common`
+adds a resistor from each input to ground and `input_offset_current` splits
+into the two inputs (operating point only). Slew rate, output swing,
+output current limit and source waveforms act in tran runs only (swing and
+current limit also in dc sweeps) and are listed as not used by the other runs;
+noise densities and their corners are used by noise runs only and listed as
+not used by the others. A circuit the solver cannot solve is reported in source terms: the
+nets with no (DC) path to ground with the component pins on them, or the
+components that form a loop of voltage sources.
+
+### Simulation diagnostics
+
+| Codes | Area |
+| --- | --- |
+| `SIM001`-`SIM004` | params |
+| `SIM010`-`SIM021` | `sim` blocks and `replace` models: kind (`SIM011`: `sim spice` in a bench `replace` or `model`), properties, roles, pins, units, values, waveforms |
+| `SIM030`-`SIM049` | benches: target, components, nets, replace and ignore, analysis, step, names, measure, plot, probes, ground, references, bench supplies (`SIM048`), bench models (`SIM049`) |
+| `SIM050`, `SIM051` | expression syntax |
+| `SIM060`-`SIM068` | expression types |
+| `SIM069`-`SIM071` | transient: `analysis tran` properties (`SIM069`), windows and the time-domain functions outside `analysis tran` (`SIM070`), their arguments (`SIM071`) |
+| `SIM072` | comparisons: where they are allowed, their units, `upto`/`downto`, a limit's `where` |
+| `SIM073` | fixtures: unknown or repeated fixtures, a fixture for another target, bench statements in a fixture, `using` in a fixture |
+| `SIM074` | `analysis dc`: the swept name, `from`, `to`, `step`, `points` |
+| `SIM075` | `ic`: the target, its analysis, `uic` |
+| `SIM076` | `sim spice` properties: the model file (`file`, or `source` with `sha256`, `member`), `subckt`, `terminals`, `dialect` |
+| `SIM077` | `sim spice` model files when a bench runs: a local file that cannot be read, a vendor file not in the cache or not matching its hash |
+| `SIM078` | `sim spice` netlists when a bench runs: syntax, unsupported constructs, undefined names, encrypted files, a terminal count that differs from the subcircuit's (file, line, element and construct named) |
+| `SIM085`-`SIM088` | noise expressions: `noise()` and the band functions outside `analysis noise` (`SIM085`), `input_noise()` without an input (`SIM086`), unknown contributors (`SIM087`), band arguments (`SIM088`) |
+| `SIM089` | component `tolerance`, `match`, `match_tolerance` |
+| `SIM090`-`SIM093` | `montecarlo` and `worstcase` (`SIM090`), `tolerance` statements (`SIM091`), matched groups (`SIM092`), nothing to vary (`SIM093`) |
+| `SIM094` | `analysis noise` output, input and temperature |
+
 ## KiCad schematic export
 
 Generate a KiCad 8 schematic after ERC succeeds:
@@ -2740,23 +3538,35 @@ engineering values use a space and the shared fixed-point quantity formatter.
 
 | Dimension | Units |
 |---|---|
-| Voltage | `V`, `mV` |
-| Resistance | `ohm`, `kohm`, `Mohm` |
+| Voltage | `V`, `mV`, `uV`, `nV` |
+| Resistance | `mohm`, `ohm`, `kohm`, `Mohm` |
 | Capacitance | `F`, `uF`, `nF`, `pF` |
 | Inductance | `H`, `mH`, `uH`, `nH` |
 | Length | `m`, `mm`, `um` |
-| Current | `A`, `mA`, `uA` |
+| Current | `fA`, `pA`, `nA`, `uA`, `mA`, `A` |
 | Frequency | `Hz`, `kHz`, `MHz`, `GHz` |
 | Time | `s`, `ms`, `us`, `ns` |
+| Slew rate | `V/s`, `V/us`, `kV/us`, `V/ns` |
+| Ratio | `%` |
+| Gain | `dB` |
+| Angle | `deg` |
+| Voltage noise density | `V/rtHz`, `uV/rtHz`, `nV/rtHz` |
+| Current noise density | `A/rtHz`, `nA/rtHz`, `pA/rtHz`, `fA/rtHz` |
 
-Values are normalized to SI base units in the IR while retaining their source
+Component values take the first seven dimensions; the others serve the
+attributes that name them (EMI facts, `sim` blocks, bench expressions). A
+compound unit is written with its slash directly after the number's unit
+(`4nV/rtHz`); `mohm` is milliohm and `Mohm` megohm.
+
+Values are normalized to SI base units (dB and deg are their own base units) in the IR while retaining their source
 display unit.
 
 ## Grammar sketch
 
 ```ebnf
-document       = design_document | macro_document ;
+document       = design_document | macro_document | bench_document ;
 design_document = ("board" | "module" | "part" | "device" | "board_profile"), name, "{", item*, "}" ;
+bench_document = "bench", name, "for", name, "{", bench_item*, "}" ;
 macro_document = "macro", name, "{", macro_definition_item*, "}" ;
 (* Macro definition items, nested values and geometry blocks are specified
    in macro-definitions.md; electrical items are not permitted there. *)
@@ -2765,7 +3575,27 @@ item           = library | package_import | port | pin | pad | power_domain
                | unit | signal_group | mode_group | device_property
                | configuration | module_instance | component | net | supply
                | power_state | interface | constraint | mechanical | silkscreen
-               | physical_macro | no_connect | build ;
+               | physical_macro | no_connect | build | param | sim ;
+param          = "param", name, "=", scalar, ";" ;   (* boards and benches *)
+sim            = "sim", name, [name], sim_block ;     (* parts; kind, then unit *)
+sim_block      = "{", (name, "=", sim_value, ";")*, "}" ;
+sim_value      = scalar, (",", scalar)* | name, sim_block ;
+bench_item     = library | package_import | component | bench_net | param
+               | replace | ignore | analysis | step | let | measure | plot ;
+bench_net      = "net", name, [".", qualified_name], "{", endpoint*, "}" ;
+replace        = "replace", target_reference, "with", name, sim_block ;
+ignore         = "ignore", target_reference, (",", target_reference)*, ";" ;
+analysis       = "analysis", name, (";" | sim_block) ;
+step           = "step", name, "in", scalar, (",", scalar)*, ";" ;
+let            = "let", name, "=", expression, ";" ;
+measure        = "measure", name, "=", expression, (";" | sim_block) ;
+plot           = "plot", expression, (",", expression)*, ";" ;
+expression     = term, (("+" | "-"), term)* ;
+term           = factor, (("*" | "/"), factor)* ;
+factor         = ("-" | "+"), factor | primary ;
+primary        = number, unit? | name | "(", expression, ")"
+               | ("V" | "I"), "(", qualified_name, [",", qualified_name], ")"
+               | name, "(", [expression, (",", expression)*], ")" ;
 build          = "build", "{", (build_setting | build_group)*, "}" ;   (* board only, at most one *)
 build_group    = ("placement" | "routing" | "planes" | "router"), "{", build_setting*, "}" ;
 build_setting  = name, "=", scalar, ";" ;

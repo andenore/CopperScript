@@ -672,6 +672,8 @@ pub struct PartDefinition {
     pub dc_power_path: Vec<String>,
     /// Declared EMI facts; `None` when none is declared.
     pub emi: Option<PartEmi>,
+    /// The part's `sim` blocks; empty when it declares none.
+    pub sim: Vec<crate::simulation::PartSimModel>,
 }
 
 impl PartDefinition {
@@ -690,6 +692,7 @@ impl PartDefinition {
             internal_pad_groups: Vec::new(),
             dc_power_path: Vec::new(),
             emi: None,
+            sim: Vec::new(),
         }
     }
 
@@ -889,6 +892,9 @@ pub struct ModuleDefinition {
     pub peripheral_selections: Vec<PeripheralSelection>,
     pub physical_macros: Vec<MacroBinding>,
     pub no_connects: Vec<NoConnect>,
+    /// The module's `param` values, in source order; empty when it declares none.
+    /// They are the module's own named values; a bench for the module may override them.
+    pub params: IndexMap<String, crate::simulation::Param>,
 }
 
 /// The authoritative hierarchical electrical design.
@@ -911,6 +917,8 @@ pub struct Board {
     pub no_connects: Vec<NoConnect>,
     /// Where the board's own components, nets and supplies are declared.
     pub sources: SourceLocations,
+    /// The board's `param` values, in source order; empty when it declares none.
+    pub params: IndexMap<String, crate::simulation::Param>,
 }
 
 /// The line and column (both 1-based) of each top-level declaration of a

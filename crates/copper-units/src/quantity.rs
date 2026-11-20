@@ -29,10 +29,18 @@ pub enum Dimension {
     DataRate,
     /// A dimensionless fraction, written as a percentage (`0.5%`); base value is the fraction itself.
     Ratio,
+    /// A logarithmic gain or level in decibels (`65dB`), base unit dB.
+    Gain,
+    /// A phase angle in degrees (`45deg`), base unit deg.
+    Angle,
+    /// Voltage noise spectral density (`4nV/rtHz`), base unit V/rtHz.
+    VoltageNoiseDensity,
+    /// Current noise spectral density (`2.5fA/rtHz`), base unit A/rtHz.
+    CurrentNoiseDensity,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 15] = [
+    pub const ALL: [Dimension; 19] = [
         Dimension::Voltage,
         Dimension::Resistance,
         Dimension::Capacitance,
@@ -48,6 +56,10 @@ impl Dimension {
         Dimension::SlewRate,
         Dimension::DataRate,
         Dimension::Ratio,
+        Dimension::Gain,
+        Dimension::Angle,
+        Dimension::VoltageNoiseDensity,
+        Dimension::CurrentNoiseDensity,
     ];
 
     /// The Python class name.
@@ -68,6 +80,10 @@ impl Dimension {
             Dimension::SlewRate => "SlewRate",
             Dimension::DataRate => "DataRate",
             Dimension::Ratio => "Ratio",
+            Dimension::Gain => "Gain",
+            Dimension::Angle => "Angle",
+            Dimension::VoltageNoiseDensity => "VoltageNoiseDensity",
+            Dimension::CurrentNoiseDensity => "CurrentNoiseDensity",
         }
     }
 
@@ -77,16 +93,20 @@ impl Dimension {
 
     /// `(unit, scale)` pairs in Python's declaration order.
     pub fn units(self) -> &'static [(&'static str, &'static str)] {
-        const OHMS: &[(&str, &str)] = &[("ohm", "1"), ("kohm", "1000"), ("Mohm", "1000000")];
+        // Units after the Python-era ones (`mohm`, `uV`, `nV`, `nA`, `pA`, `fA`) are appended so the
+        // earlier declaration order is unchanged.
+        const OHMS: &[(&str, &str)] = &[("ohm", "1"), ("kohm", "1000"), ("Mohm", "1000000"), ("mohm", "0.001")];
         match self {
-            Dimension::Voltage => &[("V", "1"), ("mV", "0.001")],
+            Dimension::Voltage => &[("V", "1"), ("mV", "0.001"), ("uV", "0.000001"), ("nV", "1e-9")],
             Dimension::Resistance | Dimension::Impedance => OHMS,
             Dimension::Capacitance => {
                 &[("F", "1"), ("uF", "0.000001"), ("nF", "0.000000001"), ("pF", "0.000000000001")]
             }
             Dimension::Inductance => &[("H", "1"), ("mH", "0.001"), ("uH", "0.000001"), ("nH", "0.000000001")],
             Dimension::Length => &[("m", "1"), ("mm", "0.001"), ("um", "0.000001")],
-            Dimension::Current => &[("A", "1"), ("mA", "0.001"), ("uA", "0.000001")],
+            Dimension::Current => {
+                &[("A", "1"), ("mA", "0.001"), ("uA", "0.000001"), ("nA", "1e-9"), ("pA", "1e-12"), ("fA", "1e-15")]
+            }
             Dimension::Frequency => &[("Hz", "1"), ("kHz", "1000"), ("MHz", "1000000"), ("GHz", "1000000000")],
             Dimension::Time => &[("s", "1"), ("ms", "1e-3"), ("us", "1e-6"), ("ns", "1e-9")],
             Dimension::Power => &[("W", "1"), ("mW", "1e-3")],
@@ -95,6 +115,12 @@ impl Dimension {
             Dimension::SlewRate => &[("V/s", "1"), ("V/us", "1e6"), ("kV/us", "1e9"), ("V/ns", "1e9")],
             Dimension::DataRate => &[("bps", "1"), ("kbps", "1e3"), ("Mbps", "1e6"), ("Gbps", "1e9")],
             Dimension::Ratio => &[("%", "0.01")],
+            Dimension::Gain => &[("dB", "1")],
+            Dimension::Angle => &[("deg", "1")],
+            Dimension::VoltageNoiseDensity => &[("V/rtHz", "1"), ("uV/rtHz", "1e-6"), ("nV/rtHz", "1e-9")],
+            Dimension::CurrentNoiseDensity => {
+                &[("A/rtHz", "1"), ("nA/rtHz", "1e-9"), ("pA/rtHz", "1e-12"), ("fA/rtHz", "1e-15")]
+            }
         }
     }
 
@@ -211,11 +237,38 @@ mod tests {
     }
 
     #[test]
+    fn simulation_units() {
+        let parse = |text: &str| Decimal::parse(text).unwrap();
+        let cases = [
+            (Dimension::Gain, "65", "dB", "65 dB", "65"),
+            (Dimension::Angle, "-45", "deg", "-45 deg", "-45"),
+            (Dimension::Resistance, "50", "mohm", "50 mohm", "0.050"),
+            (Dimension::Current, "2", "pA", "2 pA", "2E-12"),
+            (Dimension::Current, "15", "fA", "15 fA", "1.5E-14"),
+            (Dimension::Current, "3", "nA", "3 nA", "3E-9"),
+            (Dimension::Voltage, "12", "uV", "12 uV", "0.000012"),
+            (Dimension::Voltage, "4.5", "nV", "4.5 nV", "4.5E-9"),
+            (Dimension::VoltageNoiseDensity, "4", "nV/rtHz", "4 nV/rtHz", "4E-9"),
+            (Dimension::CurrentNoiseDensity, "2.5", "fA/rtHz", "2.5 fA/rtHz", "2.5E-15"),
+            (Dimension::CurrentNoiseDensity, "1", "pA/rtHz", "1 pA/rtHz", "1E-12"),
+        ];
+        for (dimension, value, unit, shown, base) in cases {
+            let quantity = Quantity::of(dimension, &parse(value), unit).unwrap();
+            assert_eq!(quantity.to_string(), shown);
+            assert_eq!(quantity.base_value().to_sci_string(), base, "{shown}");
+            assert_eq!(Dimension::from_name(dimension.name()), Some(dimension));
+        }
+        // The Python-era units keep their order; the new ones follow.
+        let ohms: Vec<&str> = Dimension::Resistance.units().iter().map(|(name, _)| *name).collect();
+        assert_eq!(ohms, ["ohm", "kohm", "Mohm", "mohm"]);
+    }
+
+    #[test]
     fn formats_like_pcbir() {
         let capacitance = Quantity::of(Dimension::Capacitance, &Decimal::parse("100").unwrap(), "nF").unwrap();
         assert_eq!(capacitance.to_string(), "100 nF");
         assert_eq!(capacitance.base_value().to_sci_string(), "1.00E-7");
         let error = Quantity::of(Dimension::Voltage, &Decimal::from_i64(1), "kV").unwrap_err();
-        assert_eq!(error.to_string(), "unsupported Voltage unit 'kV'; use V, mV");
+        assert_eq!(error.to_string(), "unsupported Voltage unit 'kV'; use V, mV, uV, nV");
     }
 }

@@ -106,6 +106,24 @@ pub const COMMANDS: &[Command] = &[
         actions: &[],
     },
     Command {
+        name: "sim",
+        group: Group::Source,
+        summary: "run the board's simulation benches and check their measures against limits",
+        options: &[
+            Opt { flag: "--bench BENCH", help: "run only the bench of this name (default: every bench in benches/)" },
+            Opt {
+                flag: "--out OUT",
+                help: "directory for sim-results.json, BENCH.csv and BENCH.html (default: build/sim)",
+            },
+            Opt {
+                flag: "--locked",
+                help: "require every dependency to be pinned in copper.lock and verify it without rewriting the lock",
+            },
+            Opt { flag: "--offline", help: "resolve dependencies from the local cache only; never fetch" },
+        ],
+        actions: &[],
+    },
+    Command {
         name: "lock",
         group: Group::Source,
         summary: "resolve package content and update copper.lock",

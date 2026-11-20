@@ -1409,8 +1409,10 @@ pub fn compile_part(
 ) -> Result<PartDefinition> {
     let mut properties: IndexMap<String, Scalar> = IndexMap::new();
     let mut pins: IndexMap<String, PackagePinDefinition> = IndexMap::new();
+    let mut sim_blocks: Vec<&SimDecl> = Vec::new();
     for declaration in &document.declarations {
         match declaration {
+            Declaration::Sim(block) => sim_blocks.push(block),
             Declaration::PartProperty(property) => {
                 if properties.contains_key(&property.name) {
                     return Err(error(
@@ -1730,6 +1732,7 @@ pub fn compile_part(
     part.source = source_reference(&properties, location)?;
     part.internal_pad_groups = groups;
     part.emi = part_emi(&properties, location)?;
+    part.sim = crate::simulation::part_models(&sim_blocks, &part.pins, qualified_name)?;
     match properties.get("model") {
         None => {}
         Some(Scalar::Str(path)) if copper_physical::model3d::FootprintModel::storable(path) => {
@@ -1877,7 +1880,19 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
     let attributes = &declaration.attributes;
     reject_unknown(
         attributes.keys(),
-        &["value", "footprint", "modes", "role", "decouples", SWITCHING_FREQUENCY, LOAD_CURRENT, CAPACITANCE_AT_BIAS],
+        &[
+            "value",
+            "footprint",
+            "modes",
+            "role",
+            "decouples",
+            SWITCHING_FREQUENCY,
+            LOAD_CURRENT,
+            CAPACITANCE_AT_BIAS,
+            crate::tolerance::TOLERANCE,
+            crate::tolerance::MATCH,
+            crate::tolerance::MATCH_TOLERANCE,
+        ],
         location,
     )?;
     let value = match attributes.get("value") {
@@ -1947,6 +1962,7 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
         }
         properties.insert(CAPACITANCE_AT_BIAS.to_owned(), capacitance.to_string());
     }
+    properties.extend(crate::tolerance::component_properties(attributes, location)?);
     Ok(ComponentInstance {
         reference: declaration.reference.clone(),
         part: part.to_owned(),

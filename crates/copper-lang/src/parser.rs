@@ -17,9 +17,11 @@ use crate::lexer::{Token, TokenKind, tokenize};
 use crate::suggest::close_match;
 use crate::syntax::*;
 
+mod simulation;
+
 type Result<T> = std::result::Result<T, CopperScriptError>;
 
-const BOARD_KEYWORDS: [&str; 16] = [
+const BOARD_KEYWORDS: [&str; 17] = [
     "component",
     "port",
     "module",
@@ -36,6 +38,7 @@ const BOARD_KEYWORDS: [&str; 16] = [
     "silkscreen",
     "physical_macro",
     "build",
+    "param",
 ];
 
 const SILKSCREEN_KINDS: [&str; 8] = ["branding", "text", "logo", "line", "rectangle", "circle", "arc", "polygon"];
@@ -178,10 +181,13 @@ impl Parser {
             ));
         };
         let name = self.name(&format!("{} name", root.text))?;
+        let mut declarations = Vec::new();
+        if matches!(kind, DocumentKind::Bench | DocumentKind::Fixture) {
+            declarations.push(self.bench_target(kind)?);
+        }
         self.expect_symbol("{")?;
         let mut libraries = Vec::new();
         let mut imports = Vec::new();
-        let mut declarations = Vec::new();
         while !self.at_symbol("}") {
             if self.current().kind == TokenKind::Eof {
                 return Err(self.error("PAR001", "expected '}' before end of file"));
@@ -241,6 +247,11 @@ impl Parser {
                     return Err(self.error_at("PAR012", "mechanical blocks are board-only", self.previous(1)));
                 }
                 declarations.push(Declaration::Mechanical(self.mechanical()?));
+            } else if matches!(kind, DocumentKind::Bench | DocumentKind::Fixture) {
+                declarations.push(self.bench_declaration(&keyword, keyword_location)?);
+            } else if kind == DocumentKind::Part && keyword == "sim" && !self.at_symbol("=") {
+                // `sim = value;` stays an ordinary part property.
+                declarations.push(Declaration::Sim(self.sim_block(keyword_location)?));
             } else if kind == DocumentKind::Part && keyword == "pin" {
                 declarations.push(Declaration::Pin(self.named_block("pin name")?));
             } else if kind == DocumentKind::Part {
@@ -259,6 +270,16 @@ impl Parser {
                     "constraint" => Declaration::Constraint(self.constraint()?),
                     "configure" => Declaration::Configuration(self.configuration()?),
                     "power_state" => Declaration::PowerState(self.power_state()?),
+                    "param" => {
+                        if kind != DocumentKind::Board && kind != DocumentKind::Module {
+                            return Err(self.error_at(
+                                "SIM004",
+                                "params are declared in boards, modules and benches",
+                                self.previous(1),
+                            ));
+                        }
+                        Declaration::Param(self.param(keyword_location)?)
+                    }
                     _ => {
                         let suggestion = close_match(&keyword, &BOARD_KEYWORDS);
                         let mut error = self.error_at(
@@ -894,9 +915,10 @@ impl Parser {
         }
     }
 
-    /// The unit identifier after a number. A slew-rate unit is written with an
-    /// adjacent slash (`3V/ns`): `V/ns`, `V/us` and `kV/us` are the only
-    /// compound units, joined here so that no other `/` is affected.
+    /// The unit identifier after a number. A compound unit is written with an
+    /// adjacent slash (`3V/ns`, `4nV/rtHz`): only a joined unit that some
+    /// dimension declares (slew rates and noise densities) is joined here, so
+    /// that no other `/` is affected.
     fn quantity_unit(&mut self) -> String {
         let unit = self.advance().text;
         let slash = self.current();
@@ -909,7 +931,7 @@ impl Parser {
             && next.location.offset == slash.end_offset
         {
             let joined = format!("{unit}/{}", next.text);
-            if Dimension::SlewRate.units().iter().any(|(name, _)| *name == joined) {
+            if Dimension::ALL.iter().any(|dimension| dimension.units().iter().any(|(name, _)| *name == joined)) {
                 self.advance();
                 self.advance();
                 return joined;

@@ -4,7 +4,7 @@
 //! Recovery is editor-only: it never produces a buildable board or silently
 //! repairs source. Original token offsets survive synthetic root delimiters.
 
-use copper_lang::syntax::{Document, DocumentKind};
+use copper_lang::syntax::{BenchStatement, Declaration, Document, DocumentKind};
 use copper_lang::{CopperScriptError, Token, TokenKind, parse_tokens, tokenize_recovering};
 
 /// A recovered parse: the document when its header parses, every token and
@@ -70,7 +70,15 @@ pub fn parse_recovering(text: &str, filename: &str) -> Parsed {
         location: eof.location.clone(),
         end_offset: eof.end_offset,
     };
-    let header = &tokens[..tokens.len().min(3)];
+    // `bench NAME for BOARD [using A, B] {` and `fixture NAME for BOARD {` run to
+    // their first `{`; every other document has a three-token header.
+    let bench_like = tokens.first().is_some_and(|token| token.text == "bench" || token.text == "fixture");
+    let header_length = match tokens.iter().position(|token| symbol(token, "{")) {
+        Some(open) if bench_like => open + 1,
+        _ if bench_like => 5,
+        _ => 3,
+    };
+    let header = &tokens[..tokens.len().min(header_length)];
     let wrapped = |body: &[Token]| {
         let mut all = header.to_vec();
         all.extend_from_slice(body);
@@ -85,9 +93,12 @@ pub fn parse_recovering(text: &str, filename: &str) -> Parsed {
             return Parsed { document: None, tokens, errors };
         }
     };
-    let (mut declarations, mut imports, mut libraries) = (Vec::new(), Vec::new(), Vec::new());
+    // A bench's header carries its `for BOARD` target, which every wrapped chunk repeats.
+    let is_target = |declaration: &Declaration| matches!(declaration, Declaration::Bench(BenchStatement::Target(_)));
+    let mut declarations: Vec<Declaration> = empty.declarations.iter().filter(|d| is_target(d)).cloned().collect();
+    let (mut imports, mut libraries) = (Vec::new(), Vec::new());
     let last = tokens.len() - 1;
-    let mut i = 3;
+    let mut i = header_length;
     let mut closed = false;
     while i < last {
         if symbol(&tokens[i], "}") {
@@ -148,7 +159,7 @@ pub fn parse_recovering(text: &str, filename: &str) -> Parsed {
         }
         match wrapped(&tokens[start..i]) {
             Ok(chunk) => {
-                declarations.extend(chunk.declarations);
+                declarations.extend(chunk.declarations.into_iter().filter(|declaration| !is_target(declaration)));
                 imports.extend(chunk.imports);
                 libraries.extend(chunk.libraries);
             }
@@ -163,4 +174,34 @@ pub fn parse_recovering(text: &str, filename: &str) -> Parsed {
     let document =
         Document { location: empty.location, kind: empty.kind, name: empty.name, libraries, imports, declarations };
     Parsed { document: Some(document), tokens, errors }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_and_using_headers_recover() {
+        let text = "bench B for Board using Common, Other {\n    analysis op;\n    let x = 1 +;\n    measure m = V(OUT) { max = 1V; where R < 1kohm; }\n    ic C1 = 1V;\n}\n";
+        let parsed = parse_recovering(text, "b.copper");
+        let document = parsed.document.expect("the bench header parses");
+        assert_eq!(document.declarations.len(), 4, "{:?}", parsed.errors);
+        assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+        let text = "fixture F for Board {\n    param R_X = 1kohm;\n    ignore J1;\n}\n";
+        let parsed = parse_recovering(text, "f.copper");
+        let document = parsed.document.expect("the fixture header parses");
+        assert_eq!(document.kind, DocumentKind::Fixture);
+        assert_eq!((document.declarations.len(), parsed.errors.len()), (3, 0), "{:?}", parsed.errors);
+    }
+
+    #[test]
+    fn bench_headers_recover_like_other_documents() {
+        let text = "bench B for Board {\n    analysis op;\n    let x = 1 +;\n    measure m = V(OUT);\n}\n";
+        let parsed = parse_recovering(text, "b.copper");
+        let document = parsed.document.expect("the bench header parses");
+        assert_eq!(document.kind, DocumentKind::Bench);
+        // The target, the analysis and the measure; the broken let is one error.
+        assert_eq!(document.declarations.len(), 3);
+        assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+    }
 }

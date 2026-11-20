@@ -28,6 +28,7 @@ copper-panel.workspace = true
 copper-place.workspace = true
 copper-report.workspace = true
 copper-route.workspace = true
+copper-simulate.workspace = true
 copper-units.workspace = true
 copper-state.workspace = true
 indexmap.workspace = true

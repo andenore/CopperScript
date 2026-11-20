@@ -40,6 +40,40 @@ copper explain UNMARKED_PIN
 copper explain --list
 ```
 
+`sim` runs a board's simulation benches (`benches/*.copper` beside the board):
+each bench's analysis once per step, its measures against their limits as a
+table, and `sim-results.json`, `BENCH.csv` and `BENCH.html` (plots and the
+measures) in `--out`. A failing measure or an unsolvable bench exits 1. A
+noise bench adds its contributors, and a `montecarlo` or `worstcase` bench
+its statistics per measure, to the table, the JSON and the page; a limit
+then applies to the worst run. A transient bench (`analysis tran`) writes
+its traces on `time_s` in the JSON and CSV, the solver's step counts per
+step in the JSON, and plots against a linear time axis; a dc sweep
+(`analysis dc`) writes its traces on `sweep` and plots against the swept
+value. A limit scoped with `where` shows the steps it covers in the table
+(`max 1 % where R_SOIL <= 100ohm (2 of 3 steps)`), the JSON and the page.
+Files in `benches/` that start `fixture NAME for TARGET` are shared setup
+for the benches that name them (`using NAME`), not benches. A part with a
+`sim spice` block runs a SPICE subcircuit read natively from its model
+file; a vendor model named by URL and SHA-256 must be fetched first with
+`copper models fetch BOARD` (into `.copper-cache/spice/`): `copper sim`
+never downloads and stops with `SIM077` naming that command. See
+[running benches](language-reference.md#running-benches),
+[SPICE subcircuits](language-reference.md#spice-subcircuits),
+[transient analysis](language-reference.md#transient-analysis),
+[dc sweep](language-reference.md#dc-sweep) and
+[fixtures](language-reference.md#fixtures).
+
+```console
+copper sim examples/simulation/rc_filter.copper --out build/sim
+copper sim examples/simulation/howland_pump/board.copper --bench CurrentFlatness
+copper sim examples/simulation/preamp/board.copper --bench GainMonteCarlo
+copper sim examples/simulation/precision_rectifier/board.copper --out build/sim
+copper sim examples/simulation/spice_amplifier/board.copper
+copper models fetch examples/simulation/vendor_models/board.copper   # TI's OPA810 model, local only
+copper sim examples/simulation/vendor_models/board.copper
+```
+
 `query` answers compact questions about the compiled flat design without
 re-reading source. Names use hierarchical `INSTANCE/REF` paths; unknown names
 fail with exit 2 and a close-match suggestion. `--json` emits deterministic,

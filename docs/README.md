@@ -28,6 +28,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
 | Run the physical editor in the browser (WebAssembly) | [Editor WebAssembly plan](editor-wasm-plan.md) |
 | Author mechanical geometry or profiles | [Mechanical language](mechanical-language.md), [profiles](mechanical-profiles.md) |
+| Plan or implement integrated circuit simulation (`copper sim`, benches, models) | [Integrated simulation plan](integrated-simulation-plan.md); first consumer: [impedance analyzer spec](../examples/simulation/impedance_analyzer/SPEC.md) |
 | Assess engineering or release evidence | [Engineering qualification](engineering-qualification.md) |
 | Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [native plotting](native-plotting.md), [native zone filling](native-filling.md), [native DRC](native-drc.md), [assembly pinning](assembly-pinning.md) |
 | Share KiCad outputs | [Project export](kicad-project-export.md) |

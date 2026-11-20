@@ -1,0 +1,19 @@
+[package]
+name = "copper-simulate"
+description = "Runs CopperScript benches: lowers a board plus a bench to the copper-sim circuit, steps params, evaluates typed bench expressions and writes the results JSON, CSV and HTML report of `copper sim`"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-json.workspace = true
+copper-lang.workspace = true
+copper-sim.workspace = true
+copper-spice.workspace = true
+copper-units.workspace = true
+indexmap.workspace = true
+
+[lints]
+workspace = true

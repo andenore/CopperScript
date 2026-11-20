@@ -2,7 +2,7 @@
  "errors": [
   {
    "kind": "Voltage",
-   "message": "unsupported Voltage unit 'kV'; use V, mV",
+   "message": "unsupported Voltage unit 'kV'; use V, mV, uV, nV",
    "unit": "kV"
   },
   {

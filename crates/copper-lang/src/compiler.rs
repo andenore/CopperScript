@@ -610,6 +610,11 @@ fn lower_unit(
     let mut instances = Vec::new();
     let mut configurations = Vec::new();
     let mut net_declarations: Vec<&NetDecl> = Vec::new();
+    // Params belong to boards and modules (the parser rejects them elsewhere) and may be
+    // declared below their uses.
+    let mut params = crate::simulation::board_params(document)?;
+    let param_values: IndexMap<String, copper_units::Quantity> =
+        params.iter().map(|(name, param)| (name.clone(), param.value.clone())).collect();
     for declaration in &document.declarations {
         match declaration {
             Declaration::Component(component) => {
@@ -619,6 +624,18 @@ fn lower_unit(
                         "'port' is reserved and cannot be a component reference",
                         &component.location,
                     ));
+                }
+                let (attributes, bound) = crate::simulation::bind_params(component, &param_values)?;
+                let substituted;
+                let component = if bound.is_empty() {
+                    component
+                } else {
+                    substituted = ComponentDecl { attributes, ..component.clone() };
+                    &substituted
+                };
+                for (attribute, name) in bound {
+                    let uses = &mut params.get_mut(&name).expect("bound to a declared param").uses;
+                    uses.push(crate::simulation::ParamUse { component: component.reference.clone(), attribute });
                 }
                 let instance = lower::component(component, &resolve_part(&component.part))?;
                 lower::check_component_frequency(&instance, library.get(&instance.part), &component.location)?;
@@ -686,6 +703,7 @@ fn lower_unit(
         board.peripheral_selections.push(selection);
     }
     board.physical_macros = compile_macro_bindings(document, macro_assets)?;
+    board.params = params;
     board.library = library;
     board.devices = devices;
     Ok(Unit { board, ports, instances })
@@ -1104,6 +1122,7 @@ fn compile_module(
         peripheral_selections: body.peripheral_selections,
         physical_macros: body.physical_macros,
         no_connects: body.no_connects,
+        params: body.params,
     })
 }
 

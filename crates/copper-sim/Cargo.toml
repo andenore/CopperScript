@@ -1,0 +1,13 @@
+[package]
+name = "copper-sim"
+description = "Pure-numerics circuit simulator core: element list, macro models, modified nodal analysis, operating point, AC sweeps and measurements"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

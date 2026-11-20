@@ -21,6 +21,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript-assembly-lock/v0.4` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
 | `copperscript-assembly-offers/v0.1` | `copper-assembly` | `copper-assembly/src/offers/mod.rs` |
 | `copperscript-assembly-report/v0.1` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
+| `copperscript-bench/v0.1` | `copper-lang` | `copper-lang/src/bench.rs` |
 | `copperscript-bench/v1` | `copper-route` | `copper-route/src/ladder.rs` |
 | `copperscript-build/v1` | `copper` | `copper/src/build.rs` |
 | `copperscript-cam-comparison/v0.1` | `copper-cam` | `copper-cam/src/compare/mod.rs` |
@@ -52,6 +53,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript-routing-quality/v0.1` | `copper-route` | `copper-route/src/routing_metrics.rs` |
 | `copperscript-emi-check/v0.1` | `copper-drc` | `copper-drc/src/emi.rs` |
 | `copperscript-si-check/v0.1` | `copper-drc` | `copper-drc/src/signal_integrity.rs` |
+| `copperscript-sim/v0.1` | `copper-simulate` | `copper-simulate/src/results.rs`, `copper-simulate/src/noise.rs` (`noise`), `copper-simulate/src/variation.rs` (`variation`); a component simulated by a `sim spice` block has fidelity `vendor` and model `spice SUBCKT (file, dialect, sha256 ...)` (`copper-simulate/src/spice.rs`); a transient bench's `analysis` kind `tran` (optional `uic`), step `transient` and plot axis `time_s`, a dc sweep's `analysis` kind `dc` (`sweep`, `units`, `dimension`, `from`, `to`, `points`) and plot axis `sweep`, a scoped limit's optional `where`, `covered_steps` and per-step `covered`: `copper-simulate/src/results.rs` |
 | `copperscript-signoff/v0.1` | `copper-route` | `copper-route/src/drc_report.rs` |
 | `copperscript-source-macro/v0.1` | `copper-place` | `copper-place/src/requirements.rs` |
 | `copperscript-via-process/v0.1` | `copper-pcb` | `copper-pcb/src/kicad_pcb.rs`, `copper-pcb/src/project.rs` |

@@ -37,6 +37,30 @@ pub fn elaborate(board: &Board) -> Result<FlatElectricalView, String> {
     Ok(result)
 }
 
+/// The flat view of one module definition of `board` on its own, as a bench
+/// for the module simulates it: its components and nets under their local
+/// names (nested module instances expanded below it), its ports as the nets
+/// they are on. `module` is the definition's qualified name
+/// (`analog.AnalogFrontEnd`). The `port.NAME` endpoints are dropped; a port
+/// whose name is not the name of its net is an alias of that net.
+pub fn elaborate_module(board: &Board, module: &str) -> Result<FlatElectricalView, String> {
+    let template = template_for(module, &board.module_definitions, &mut IndexMap::new(), &[])?;
+    let mut view = template.body;
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    for net in &mut view.nets {
+        for endpoint in net.endpoints.iter().filter(|endpoint| endpoint.component == "port") {
+            aliases.push((endpoint.pin.clone(), net.name.clone()));
+        }
+        net.endpoints.retain(|endpoint| endpoint.component != "port");
+    }
+    for (port, net) in aliases {
+        if !view.nets.iter().any(|item| item.name == port) {
+            view.net_aliases.entry(port).or_insert(net);
+        }
+    }
+    Ok(view)
+}
+
 fn template_for(
     name: &str,
     definitions: &IndexMap<String, ModuleDefinition>,
