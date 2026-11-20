@@ -128,7 +128,7 @@ fn netlist_and_file_errors_name_their_source() {
         "{:?}",
         missing.error
     );
-    let bad = run("bad.lib", Some(".SUBCKT AMP A B C\nE1 C 0 A B 1E5\nT1 A 0 B 0 Z0=50\n.ENDS\n"));
+    let bad = run("bad.lib", Some(".SUBCKT AMP A B C\nE1 C 0 A B 1E5\nT1 A 0 B 0 Z0=50 TD=1N R=0.1\n.ENDS\n"));
     let message = bad.error.unwrap_or_default();
     assert!(
         message.contains("SIM078")

@@ -24,23 +24,25 @@
 //! | --- | --- |
 //! | `.SUBCKT name nodes [PARAMS:] a=1 ...` / `.ENDS` | nested definitions are local to their parent; instance values override the defaults, evaluated in the caller |
 //! | `.PARAM`, `.FUNC f(x, y) {expr}` | evaluated per instance: global params, then the calling instance's, then the defaults, then local `.PARAM`s in order; functions are inlined |
-//! | `.MODEL name TYPE (...)`, `AKO:` | `D`, `NPN`/`PNP` (Gummel–Poon), `NJF`/`PJF`, `NMOS`/`PMOS` level 1, `SW`, `CSW`, `VSWITCH`, `ISWITCH`, `RES`, `CAP`, `IND`; parameters are checked by name |
-//! | `.INCLUDE`, `.INC`, `.LIB file` | local files only, relative to the including file; a fetched model is one file |
-//! | `.LIB name` / `.ENDL` sections | their cards belong to the file |
+//! | `.MODEL name TYPE (...)`, `AKO:` | `D`, `NPN`/`PNP` (Gummel–Poon), `NJF`/`PJF`, `NMOS`/`PMOS` levels 1 and 3 (with `TOX`, Meyer's gate charge), `SW`, `CSW`, `VSWITCH`, `ISWITCH`, `RES`, `CAP`, `IND`; parameters are checked by name |
+//! | `.INCLUDE`, `.INC`, `.LIB file`, `.LIB file SECTION` | local files only, relative to the including file; a fetched model is one file |
+//! | `.LIB name` / `.ENDL` sections | their cards belong to the file (all of them, unless an including `.LIB file SECTION` picks one) |
+//! | `.OPTIONS` | solver and output controls are ignored and listed in [`Library::notes`]; others are rejected |
 //! | `R C L K` | values may be expressions of parameters; a resistor model's `R`, `TC1`, `TC2`, `T_ABS` (noise temperature, and the resistance at it), LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
 //! | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC` the waveform's value at 0 |
 //! | `E G` linear, `F H` | |
 //! | `E G POLY(n)`, `F H POLY(n)` | SPICE2 coefficient order |
 //! | `E G VALUE = {expr}`, `B V= / I=` | behavioural; any expression of node voltages, currents of elements of the same subcircuit and `TIME` |
 //! | `E G TABLE {expr} = (x, y) ...` | piecewise linear, constant beyond the ends |
-//! | `E G LAPLACE {expr} = {H(s)}`, LTspice `E a b c d LAPLACE = H(s)` | rational `H(s)` only, realised as a state-space network |
+//! | `E G LAPLACE {expr} = {H(s)}`, LTspice `E a b c d LAPLACE = H(s)` | a rational `H(s)` times at most one `exp(-s T)`, realised as a state-space network and an ideal delay |
+//! | `T a1 b1 a2 b2 Z0= TD=` (or `F=`, `NL=`) | the lossless line, by Branin's method with ideal delays |
 //! | `D Q J M` | see [`copper_sim::semiconductors`] and the parameter lists in `flatten.rs` |
-//! | `S W` | `SW`/`CSW`: hysteresis switch; `VSWITCH`/`ISWITCH`: PSpice's smooth switch |
+//! | `S W` | `SW`/`CSW`: hysteresis switch (`ON` sets its starting state); `VSWITCH`/`ISWITCH`: PSpice's smooth switch |
 //! | `X` | with `PARAMS:` or bare `name=value` |
 //!
 //! Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin
 //! acos atan atan2 sinh cosh tanh min max limit pwr pwrs pow u stp uramp
-//! floor ceil round int hypot if table`, the operators of [`expr`] and
+//! floor ceil round int hypot if table ddt delay`, the operators of [`expr`] and
 //! `PI`, `TEMP` (27). Derivatives for Newton iteration are exact (forward
 //! automatic differentiation in [`copper_sim::behavioral`]).
 //!
@@ -48,14 +50,14 @@
 //!
 //! Every unsupported construct is an error naming the file, the line, the
 //! element and the construct ([`SpiceError`]); nothing is approximated. In
-//! particular: encrypted models; `T O U A Z` elements; `FREQ` and
-//! `CHEBYSHEV` sources; non-rational `LAPLACE` (delays); `DDT`, `SDT`,
-//! `DELAY` and random functions; `SFFM`, `AM` and damped `SIN`; element
-//! `IC=`; switches that start `ON`; MOSFET levels other than 1 (BSIM by
-//! name) and level-1 models with `TOX` (intrinsic gate capacitance); models
-//! measured at a `TNOM` other than 27 degC; diode `ISR`, `IKF`; BJT `IRB`,
-//! `PTF`, quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; `.OPTIONS`,
-//! `.GLOBAL`, `.IC`, `.NODESET`, `.TEMP`; `.LIB file section`. Unsupported
+//! particular: encrypted models; lossy `T` lines, `O U A Z` elements; `FREQ`
+//! and `CHEBYSHEV` sources; `LAPLACE` beyond a rational function and one
+//! delay; `SDT`, `IDT`, `ABSDELAY` and random functions; `SFFM`, `AM` and
+//! damped `SIN`; element `IC=`; MOSFET levels other than 1 and 3 (BSIM by
+//! name), LTspice's `VDMOS`, `KF` with `TOX`; models measured at a `TNOM`
+//! other than 27 degC; diode `ISR`, `IKF` outside the PSpice dialect; BJT
+//! `PTF`, quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; `.OPTIONS` that
+//! may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`, `.TEMP`. Unsupported
 //! elements and models inside a subcircuit are reported when that
 //! subcircuit is instantiated, so a library stays usable for its other parts.
 
@@ -230,6 +232,11 @@ impl Library {
         &self.netlist.files
     }
 
+    /// Cards read and ignored because they cannot change the circuit (`.OPTIONS`), one line each.
+    pub fn notes(&self) -> &[String] {
+        &self.netlist.notes
+    }
+
     /// The top-level subcircuit names.
     pub fn subckts(&self) -> Vec<&str> {
         self.netlist.scopes[0].subckts.keys().map(String::as_str).collect()
@@ -267,7 +274,7 @@ impl Library {
         let sub = &self.netlist.subckts[index];
         let first = circuit.elements().len();
         let params: Vec<(String, f64)> = params.iter().map(|(k, v)| (k.to_ascii_uppercase(), *v)).collect();
-        let mut f = flatten::Flattener { lib: &self.netlist, c: circuit };
+        let mut f = flatten::Flattener { lib: &self.netlist, c: circuit, aux: 0 };
         let globals = f.global_params()?;
         f.subckt(sub, name, nodes, &params, &globals, 0)?;
         let mut ports: Vec<(String, Vec<(String, f64)>)> = sub.ports.iter().map(|p| (p.clone(), Vec::new())).collect();

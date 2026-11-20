@@ -9,7 +9,9 @@ use copper_sim::{
 };
 
 use crate::expr::SExpr;
-use crate::netlist::{Card, Element, Model, Netlist, Out, PolyInputs, Subckt, SwitchControl, TranSpec, Value};
+use crate::netlist::{
+    Card, Element, LineDelay, Model, Netlist, Out, PolyInputs, Subckt, SwitchControl, TranSpec, Value,
+};
 use crate::{ErrorKind, Loc, SpiceError};
 
 /// Celsius to kelvin.
@@ -34,6 +36,8 @@ struct Frame {
 pub(crate) struct Flattener<'a> {
     pub lib: &'a Netlist,
     pub c: &'a mut Circuit,
+    /// Auxiliary networks made so far (for `DDT`), for unique names.
+    pub aux: usize,
 }
 
 type Res<T> = Result<T, SpiceError>;
@@ -344,12 +348,89 @@ impl<'a> Flattener<'a> {
                     let body = f.body.clone();
                     return r(self.lower(l, &body, &inner, depth + 1));
                 }
+                if name == "DDT" {
+                    return self.time_derivative(l, args, locals, depth);
+                }
+                if name == "DELAY" {
+                    return self.delayed(l, args, locals, depth);
+                }
                 let lowered: Vec<Expr> =
                     args.iter().map(|a| self.lower(l, a, locals, depth + 1)).collect::<Result<_, _>>()?;
                 builtin(name, lowered)?
             }
         };
         Ok(fold(out))
+    }
+
+    /// `DDT(x)`: `x` drives a voltage across 1 F in series with a 0 V sense
+    /// source, whose current is then `dx/dt` exactly (0 at the operating
+    /// point, `j w x` in AC); the expression reads that current.
+    fn time_derivative(
+        &mut self,
+        l: &mut Lower,
+        args: &[SExpr],
+        locals: &BTreeMap<String, Expr>,
+        depth: usize,
+    ) -> Result<Expr, String> {
+        if args.len() != 1 {
+            return Err(format!("DDT takes 1 argument, given {}", args.len()));
+        }
+        if l.controls.is_none() {
+            return Err("DDT() in a constant value".into());
+        }
+        let inner = self.lower(l, &args[0], locals, depth + 1)?;
+        let controls = l.controls.clone().unwrap_or_default();
+        self.aux += 1;
+        let base = format!("{}.ddt{}", l.frame.path, self.aux);
+        let drive = self.c.node(&format!("{}#ddt{}", l.frame.path, self.aux));
+        let sense = self.c.node(&format!("{}#ddt{}s", l.frame.path, self.aux));
+        let simf = |x: copper_sim::SimError| x.to_string();
+        self.c
+            .law(&format!("{base}.e"), drive, NodeId::GROUND, Law::expression(Output::Voltage, controls, inner))
+            .map_err(simf)?;
+        self.c.capacitor(&format!("{base}.c"), drive, sense, 1.0).map_err(simf)?;
+        let id = self
+            .c
+            .voltage_source(&format!("{base}.sense"), sense, NodeId::GROUND, SourceValue::dc(0.0))
+            .map_err(simf)?;
+        let controls = l.controls.as_mut().expect("checked above");
+        Ok(Expr::Var(position_or_push(controls, Control::Current(id))))
+    }
+
+    /// `DELAY(x, T)`: `x` drives an internal node, an ideal delay carries it
+    /// `T` seconds later to another, and the expression reads that node.
+    fn delayed(
+        &mut self,
+        l: &mut Lower,
+        args: &[SExpr],
+        locals: &BTreeMap<String, Expr>,
+        depth: usize,
+    ) -> Result<Expr, String> {
+        if args.len() != 2 {
+            return Err(format!("DELAY(x, T) takes 2 arguments, given {}", args.len()));
+        }
+        if l.controls.is_none() {
+            return Err("DELAY() in a constant value".into());
+        }
+        let delay = self.lower(l, &args[1], locals, depth + 1)?;
+        let Some(delay) = delay.constant() else {
+            return Err("DELAY(x, T): the delay T must be a constant".into());
+        };
+        if !(delay > 0.0 && delay.is_finite()) {
+            return Err(format!("DELAY(x, T): the delay must be positive, got {delay} s"));
+        }
+        let inner = self.lower(l, &args[0], locals, depth + 1)?;
+        let controls = l.controls.clone().unwrap_or_default();
+        self.aux += 1;
+        let base = format!("{}.delay{}", l.frame.path, self.aux);
+        let w = self.c.node(&format!("{}#delay{}w", l.frame.path, self.aux));
+        let z = self.c.node(&format!("{}#delay{}", l.frame.path, self.aux));
+        let simf = |x: copper_sim::SimError| x.to_string();
+        let gnd = NodeId::GROUND;
+        self.c.law(&format!("{base}.w"), w, gnd, Law::expression(Output::Voltage, controls, inner)).map_err(simf)?;
+        self.c.delay(&base, z, gnd, vec![(w, gnd, 1.0)], delay).map_err(simf)?;
+        let controls = l.controls.as_mut().expect("checked above");
+        Ok(Expr::Var(position_or_push(controls, Control::Voltage(z, gnd))))
     }
 
     fn element(&mut self, e: &Element, frame: &mut Frame, depth: usize) -> Res<()> {
@@ -641,6 +722,12 @@ impl<'a> Flattener<'a> {
                 self.c.jfet(&name, pins, &params).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
             }
             Card::Mosfet { d, g, s, b, model, params } => {
+                if self.find_model(frame.scope, model).is_some_and(|m| m.kind == "VDMOS") {
+                    return Err(fail(
+                        ErrorKind::Unsupported,
+                        format!("model {model} is an LTspice VDMOS power MOSFET, which is not supported"),
+                    ));
+                }
                 let m = self.model(frame, model, &["NMOS", "PMOS"], &e.loc, &name)?;
                 let mut instance = BTreeMap::new();
                 for (k, v) in params {
@@ -655,8 +742,29 @@ impl<'a> Flattener<'a> {
                 };
                 self.c.mosfet(&name, pins, &p).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
             }
-            Card::Switch { a, b, control, model } => {
-                self.switch(frame, &name, a, b, control, model, &e.loc)?;
+            Card::Switch { a, b, control, model, on } => {
+                self.switch(frame, &name, a, b, control, model, *on, &e.loc)?;
+            }
+            Card::Line { ports, z0, delay } => {
+                let z0 = constant!(z0);
+                let td = match delay {
+                    LineDelay::Time(td) => constant!(td),
+                    LineDelay::Frequency(f, nl) => {
+                        let nl = match nl {
+                            Some(nl) => constant!(nl),
+                            None => 0.25,
+                        };
+                        nl / constant!(f)
+                    }
+                };
+                if !(z0 > 0.0 && z0.is_finite() && td > 0.0 && td.is_finite()) {
+                    return Err(fail(
+                        ErrorKind::Circuit,
+                        format!("a transmission line needs Z0 > 0 and a delay > 0, got Z0 = {z0} ohm, TD = {td} s"),
+                    ));
+                }
+                let [a1, b1, a2, b2] = ports.each_ref().map(|p| frame.node(self.c, p));
+                self.line(&name, [a1, b1, a2, b2], z0, td).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
             }
             Card::Instance { nodes, subckt, params } => {
                 let Some(sub) = self.find_subckt(frame.scope, subckt) else {
@@ -671,6 +779,23 @@ impl<'a> Flattener<'a> {
                 self.subckt(sub, &name, &ports, &given, &inherited, depth + 1)?;
             }
         }
+        Ok(())
+    }
+
+    /// A lossless line by Branin's method: at each port `k`, `Z0` (noiseless)
+    /// in series with a source of the other port's `v + Z0 i` one delay
+    /// earlier, so a wave leaving one port arrives at the other after `TD`.
+    fn line(&mut self, name: &str, ports: [NodeId; 4], z0: f64, td: f64) -> Result<(), copper_sim::SimError> {
+        let [a1, b1, a2, b2] = ports;
+        let n1 = self.c.node(&format!("{name}#1"));
+        let n2 = self.c.node(&format!("{name}#2"));
+        let r1 = self.c.resistor(&format!("{name}.r1"), a1, n1, z0)?;
+        let r2 = self.c.resistor(&format!("{name}.r2"), a2, n2, z0)?;
+        self.c.set_noise_temperature(r1, 0.0)?;
+        self.c.set_noise_temperature(r2, 0.0)?;
+        // v_k + Z0 i_k = (V(a_k) - V(b_k)) + (V(a_k) - V(n_k)), i_k into a_k.
+        self.c.delay(&format!("{name}.e1"), n1, b1, vec![(a2, b2, 1.0), (a2, n2, 1.0)], td)?;
+        self.c.delay(&format!("{name}.e2"), n2, b2, vec![(a1, b1, 1.0), (a1, n1, 1.0)], td)?;
         Ok(())
     }
 
@@ -864,7 +989,23 @@ impl<'a> Flattener<'a> {
         )?;
         Self::check_level(m, &p, element, "diode")?;
         Self::check_tnom(m, &p, element)?;
-        Self::reject_nonzero(m, &p, &["ISR", "IKF", "IK", "IBVL", "CJSW", "JSW"], element)?;
+        Self::reject_nonzero(m, &p, &["IBVL", "CJSW", "JSW"], element)?;
+        let pspice = self.lib.dialect == crate::Dialect::Pspice;
+        if !pspice {
+            for n in ["ISR", "IKF", "IK"] {
+                if p.get(n).is_some_and(|v| *v != 0.0) {
+                    return Err(at(
+                        &m.loc,
+                        ErrorKind::Unsupported,
+                        element,
+                        format!(
+                            "model {} (D): parameter {n} is supported in the pspice dialect only (PSpice's recombination and high-injection equations; other simulators differ)",
+                            m.name
+                        ),
+                    ));
+                }
+            }
+        }
         if p.get("NBV").is_some_and(|v| *v != 1.0) {
             return Err(at(
                 &m.loc,
@@ -876,8 +1017,10 @@ impl<'a> Flattener<'a> {
         let area = area * p.get("AREA").copied().unwrap_or(1.0);
         let d = DiodeParams::default();
         let get = |names: &[&str]| names.iter().find_map(|n| p.get(*n)).copied();
-        let pspice = self.lib.dialect == crate::Dialect::Pspice;
         Ok(DiodeParams {
+            recombination_current: get(&["ISR"]).unwrap_or(0.0) * area,
+            recombination_emission: get(&["NR"]).unwrap_or(2.0),
+            knee_current: get(&["IKF", "IK"]).filter(|x| *x > 0.0).map(|x| x * area),
             saturation_current: get(&["IS"]).unwrap_or(d.saturation_current) * area,
             emission_coefficient: get(&["N"]).unwrap_or(1.0),
             series_resistance: get(&["RS"]).unwrap_or(0.0) / area,
@@ -983,7 +1126,7 @@ impl<'a> Flattener<'a> {
         let p = self.model_params(frame, m, KNOWN, INERT, element)?;
         Self::check_level(m, &p, element, "bipolar")?;
         Self::check_tnom(m, &p, element)?;
-        Self::reject_nonzero(m, &p, &["IRB", "PTF", "ISS", "QCO", "RCO", "QUASIMOD", "C2", "C4"], element)?;
+        Self::reject_nonzero(m, &p, &["PTF", "ISS", "QCO", "RCO", "QUASIMOD", "C2", "C4"], element)?;
         if p.get("NK").is_some_and(|v| *v != 0.5) {
             return Err(at(
                 &m.loc,
@@ -1020,6 +1163,7 @@ impl<'a> Flattener<'a> {
             nc: get(&["NC"]).unwrap_or(d.nc),
             rb: get(&["RB"]).unwrap_or(0.0) / area,
             rbm: get(&["RBM"]).map(|x| x / area),
+            irb: positive(get(&["IRB"])).map(|x| x * area),
             re: get(&["RE"]).unwrap_or(0.0) / area,
             rc: get(&["RC"]).unwrap_or(0.0) / area,
             cje: get(&["CJE"]).unwrap_or(0.0) * area,
@@ -1113,6 +1257,26 @@ impl<'a> Flattener<'a> {
         instance: &BTreeMap<String, f64>,
         element: &str,
     ) -> Res<MosParams> {
+        // The level first: an advanced model's parameters are not worth naming one by one.
+        if let Some(v) = m.param(&["LEVEL"]) {
+            let level = self
+                .constant(frame, &v.clone())
+                .map_err(|e| at(&m.loc, ErrorKind::Undefined, element, format!("model {}: LEVEL: {e}", m.name)))?;
+            if level != 1.0 && level != 3.0 {
+                let detail = if level >= 4.0 {
+                    format!(
+                        "MOSFET model {} is LEVEL={level} (BSIM or another advanced model), which is not supported; only LEVEL=1 and LEVEL=3 are",
+                        m.name
+                    )
+                } else {
+                    format!(
+                        "MOSFET model {} is LEVEL={level}, which is not supported; only LEVEL=1 and LEVEL=3 are",
+                        m.name
+                    )
+                };
+                return Err(at(&m.loc, ErrorKind::Unsupported, element, detail));
+            }
+        }
         let p = self.model_params(
             frame,
             m,
@@ -1154,46 +1318,126 @@ impl<'a> Flattener<'a> {
                 "WD",
                 "L",
                 "W",
+                "XJ",
+                "ETA",
+                "THETA",
+                "KAPPA",
+                "DELTA",
+                "VMAX",
+                "NFS",
             ],
             &["XTI", "EG", "T_ABS", "T_REL_GLOBAL", "T_REL_LOCAL", "BEX", "TCV"],
             element,
         )?;
-        Self::check_level(m, &p, element, "MOSFET")?;
+        let level = p.get("LEVEL").copied().unwrap_or(1.0);
+        if level != 1.0 && level != 3.0 {
+            let detail = if level >= 4.0 {
+                format!(
+                    "MOSFET model {} is LEVEL={level} (BSIM or another advanced model), which is not supported; only LEVEL=1 and LEVEL=3 are",
+                    m.name
+                )
+            } else {
+                format!(
+                    "MOSFET model {} is LEVEL={level}, which is not supported; only LEVEL=1 and LEVEL=3 are",
+                    m.name
+                )
+            };
+            return Err(at(&m.loc, ErrorKind::Unsupported, element, detail));
+        }
+        let level3 = level == 3.0;
         Self::check_tnom(m, &p, element)?;
-        if p.contains_key("TOX") {
+        Self::reject_nonzero(m, &p, &["RSH"], element)?;
+        if !level3 {
+            Self::reject_nonzero(m, &p, &["WD"], element)?;
+        }
+        let get = |n: &str| p.get(n).copied();
+        // SPICE3's process parameters (mos1temp, mos3temp) at the nominal temperature.
+        let tox = get("TOX").filter(|t| *t > 0.0).or(if level3 { Some(1e-7) } else { None });
+        let cox_area = tox.map(|t| copper_sim::semiconductors::EPS_OXIDE / t);
+        if get("KF").is_some_and(|kf| kf != 0.0) && cox_area.is_some() {
             return Err(at(
                 &m.loc,
                 ErrorKind::Unsupported,
                 element,
                 format!(
-                    "model {}: TOX is given, but the level-1 intrinsic (Meyer) gate capacitances it implies are not modelled; give KP and the overlap capacitances CGSO, CGDO, CGBO instead",
+                    "model {}: flicker noise (KF) of a model with an oxide thickness (TOX) is not supported: the simulators normalise it by the oxide capacitance differently",
                     m.name
                 ),
             ));
         }
-        Self::reject_nonzero(m, &p, &["NSUB", "NSS", "RSH", "WD"], element)?;
-        if p.contains_key("TPG") || p.contains_key("U0") || p.contains_key("UO") {
-            return Err(at(
-                &m.loc,
-                ErrorKind::Unsupported,
-                element,
-                format!("model {}: process parameters (U0, TPG) are not supported; give KP, VTO and GAMMA", m.name),
-            ));
+        let u0 = get("U0").or(get("UO")).unwrap_or(600.0);
+        let kp = match (get("KP"), cox_area) {
+            (Some(kp), _) => kp,
+            (None, Some(c)) => u0 * c * 1e-4,
+            (None, None) => 2e-5,
+        };
+        let mut phi = get("PHI");
+        let mut gamma = get("GAMMA");
+        let mut vto = get("VTO").or(get("VT0"));
+        let polarity = if m.kind == "PMOS" { -1.0 } else { 1.0 };
+        let nsub = get("NSUB").filter(|n| *n != 0.0 && cox_area.is_some());
+        if let (Some(nsub), Some(cox)) = (nsub, cox_area) {
+            if nsub <= 1.45e10 {
+                return Err(at(
+                    &m.loc,
+                    ErrorKind::Circuit,
+                    element,
+                    format!("model {}: NSUB = {nsub} /cm³ is below the intrinsic carrier density 1.45e10 /cm³", m.name),
+                ));
+            }
+            let vt = copper_sim::devices::THERMAL_VOLTAGE;
+            let charge = copper_sim::noise::ELEMENTARY_CHARGE;
+            let phi_v = *phi.get_or_insert_with(|| (2.0 * vt * (nsub / 1.45e10).ln()).max(0.1));
+            let gamma_v = *gamma.get_or_insert_with(|| {
+                (2.0 * copper_sim::semiconductors::EPS_SILICON * charge * nsub * 1e6).sqrt() / cox
+            });
+            if vto.is_none() {
+                let kelvin = NOMINAL_CELSIUS + ZERO_CELSIUS;
+                let egfet = 1.16 - 7.02e-4 * kelvin * kelvin / (kelvin + 1108.0);
+                let tpg = get("TPG").unwrap_or(1.0);
+                let wkfng = if tpg != 0.0 { 3.25 + 0.5 * egfet - polarity * tpg * 0.5 * egfet } else { 3.2 };
+                let wkfngs = wkfng - (3.25 + 0.5 * egfet + polarity * 0.5 * phi_v);
+                let vfb = wkfngs - get("NSS").unwrap_or(0.0) * 1e4 * charge / cox;
+                vto = Some(vfb + polarity * (gamma_v * phi_v.sqrt() + phi_v));
+            }
         }
         let inst = |n: &str| instance.get(n).copied();
-        let get = |n: &str| p.get(n).copied();
         let w = inst("W").or(get("W")).unwrap_or(100e-6);
         let l = inst("L").or(get("L")).unwrap_or(100e-6);
         let mult = inst("M").unwrap_or(1.0);
-        let leff = l - 2.0 * get("LD").unwrap_or(0.0);
-        if !(leff > 0.0 && w > 0.0 && mult > 0.0) {
+        let ld = get("LD").unwrap_or(0.0);
+        let leff = l - 2.0 * ld;
+        let weff = if level3 { w - 2.0 * get("WD").unwrap_or(0.0) } else { w };
+        if !(leff > 0.0 && weff > 0.0 && mult > 0.0) {
             return Err(at(
                 &m.loc,
                 ErrorKind::Circuit,
                 element,
-                format!("W = {w} m, L = {l} m and LD give no positive effective channel"),
+                format!("W = {w} m, L = {l} m, LD and WD give no positive effective channel"),
             ));
         }
+        let mos_level = if level3 {
+            let cox = cox_area.expect("level 3 has a default TOX");
+            copper_sim::MosLevel::Three(copper_sim::Level3Params {
+                length: leff,
+                width: weff,
+                oxide_capacitance_per_area: cox,
+                lateral_diffusion: ld,
+                junction_depth: get("XJ").unwrap_or(0.0),
+                alpha: nsub.map_or(0.0, |n| {
+                    2.0 * copper_sim::semiconductors::EPS_SILICON / (copper_sim::noise::ELEMENTARY_CHARGE * n * 1e6)
+                }),
+                eta: get("ETA").unwrap_or(0.0),
+                theta: get("THETA").unwrap_or(0.0),
+                kappa: get("KAPPA").unwrap_or(0.2),
+                delta: get("DELTA").unwrap_or(0.0),
+                vmax: get("VMAX").unwrap_or(0.0),
+                nfs: get("NFS").unwrap_or(0.0),
+                u0,
+            })
+        } else {
+            copper_sim::MosLevel::One
+        };
         let (ad, as_, pd, ps) = (
             inst("AD").unwrap_or(0.0),
             inst("AS").unwrap_or(0.0),
@@ -1211,12 +1455,13 @@ impl<'a> Flattener<'a> {
         };
         let d = MosParams::default();
         Ok(MosParams {
-            polarity: if m.kind == "PMOS" { -1.0 } else { 1.0 },
-            vto: get("VTO").or(get("VT0")).unwrap_or(0.0),
-            beta: get("KP").unwrap_or(2e-5) * w / leff * mult,
-            lambda: get("LAMBDA").unwrap_or(0.0),
-            gamma: get("GAMMA").unwrap_or(0.0),
-            phi: get("PHI").unwrap_or(d.phi),
+            polarity,
+            vto: vto.unwrap_or(0.0),
+            beta: kp * weff / leff * mult,
+            // Level 3 has no LAMBDA (KAPPA models the channel-length modulation).
+            lambda: if level3 { 0.0 } else { get("LAMBDA").unwrap_or(0.0) },
+            gamma: gamma.unwrap_or(0.0),
+            phi: phi.unwrap_or(d.phi),
             rd: get("RD").unwrap_or(0.0) / mult,
             rs: get("RS").unwrap_or(0.0) / mult,
             is_drain: is_drain * mult,
@@ -1229,12 +1474,14 @@ impl<'a> Flattener<'a> {
             mj: get("MJ").unwrap_or(d.mj),
             mjsw: get("MJSW").unwrap_or(d.mjsw),
             fc: get("FC").unwrap_or(d.fc),
-            cgs_overlap: get("CGSO").unwrap_or(0.0) * w * mult,
-            cgd_overlap: get("CGDO").unwrap_or(0.0) * w * mult,
+            cgs_overlap: get("CGSO").unwrap_or(0.0) * weff * mult,
+            cgd_overlap: get("CGDO").unwrap_or(0.0) * weff * mult,
             cgb_overlap: get("CGBO").unwrap_or(0.0) * leff * mult,
             kf: get("KF").unwrap_or(0.0),
             af: get("AF").unwrap_or(1.0),
             flicker_divisor: 1.0,
+            oxide_capacitance: cox_area.map_or(0.0, |c| c * weff * leff * mult),
+            level: mos_level,
         })
     }
 
@@ -1247,6 +1494,7 @@ impl<'a> Flattener<'a> {
         b: &str,
         control: &SwitchControl,
         model: &str,
+        on: bool,
         loc: &Loc,
     ) -> Res<()> {
         let m = self.model(frame, model, &["SW", "CSW", "VSWITCH", "ISWITCH"], loc, name)?;
@@ -1299,6 +1547,7 @@ impl<'a> Flattener<'a> {
                     off_resistance: p.get("ROFF").copied().unwrap_or(1e12),
                     threshold: p.get(vt[0]).copied().unwrap_or(0.0),
                     hysteresis,
+                    initially_on: on,
                 };
                 self.c.switch(name, na, nb, cp, cn, &params).map_err(fail)?;
             }
@@ -1447,8 +1696,14 @@ impl<'a> Flattener<'a> {
         loc: &Loc,
     ) -> Res<()> {
         let fail = |k: ErrorKind, m: String| at(loc, k, name, m);
-        let (num, den) =
+        let (num, den, delay) =
             self.rational(frame, transfer).map_err(|m| fail(ErrorKind::Unsupported, format!("LAPLACE: {m}")))?;
+        if delay < 0.0 {
+            return Err(fail(
+                ErrorKind::Unsupported,
+                format!("LAPLACE: exp(+s T) is a negative delay ({delay} s), which no causal circuit has"),
+            ));
+        }
         let (num, den) = (trim(num), trim(den));
         if den.iter().all(|c| *c == 0.0) {
             return Err(fail(ErrorKind::Circuit, "LAPLACE: the denominator is zero".into()));
@@ -1461,7 +1716,7 @@ impl<'a> Flattener<'a> {
         if n == 0 {
             let gain = num[0] / den[0];
             let expr = Expr::binary(BinaryOp::Mul, Expr::Const(gain), u);
-            return self.law(frame, name, a, b, out, controls, expr, loc);
+            return self.delayed_law(frame, name, a, b, out, controls, expr, delay, loc);
         }
         // Frequency scale w0 so that the scaled monic denominator has unit constant term (or near).
         let lead = den[n];
@@ -1509,12 +1764,52 @@ impl<'a> Flattener<'a> {
             let idx = position_or_push(&mut out_controls, Control::Voltage(x, gnd));
             expr = Expr::binary(BinaryOp::Add, expr, Expr::binary(BinaryOp::Mul, Expr::Const(c[k]), Expr::Var(idx)));
         }
-        self.law(frame, name, a, b, out, out_controls, fold(expr), loc)
+        self.delayed_law(frame, name, a, b, out, out_controls, fold(expr), delay, loc)
     }
 
-    /// `H(s)` as numerator and denominator coefficients (ascending powers of s).
-    fn rational(&mut self, frame: &mut Frame, e: &SExpr) -> Result<(Vec<f64>, Vec<f64>), String> {
-        type R = (Vec<f64>, Vec<f64>);
+    /// [`Self::law`], its output taken `delay` seconds late: the law drives an
+    /// internal node `name#w` and an ideal delay carries it to the terminals
+    /// (through a 1 S VCCS for a current output).
+    #[allow(clippy::too_many_arguments)]
+    fn delayed_law(
+        &mut self,
+        frame: &mut Frame,
+        name: &str,
+        a: &str,
+        b: &str,
+        out: Out,
+        controls: Vec<Control>,
+        expr: Expr,
+        delay: f64,
+        loc: &Loc,
+    ) -> Res<()> {
+        if delay == 0.0 {
+            return self.law(frame, name, a, b, out, controls, expr, loc);
+        }
+        let simf = |x: copper_sim::SimError| at(loc, ErrorKind::Circuit, name, x.to_string());
+        let gnd = NodeId::GROUND;
+        let w = self.c.node(&format!("{name}#w"));
+        self.c.law(&format!("{name}.w"), w, gnd, Law::expression(Output::Voltage, controls, expr)).map_err(simf)?;
+        let (na, nb) = (frame.node(self.c, a), frame.node(self.c, b));
+        match out {
+            Out::Voltage => {
+                self.c.delay(name, na, nb, vec![(w, gnd, 1.0)], delay).map_err(simf)?;
+            }
+            Out::Current => {
+                let z = self.c.node(&format!("{name}#z"));
+                self.c.delay(&format!("{name}.delay"), z, gnd, vec![(w, gnd, 1.0)], delay).map_err(simf)?;
+                self.c.vccs(name, na, nb, z, gnd, 1.0).map_err(simf)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `H(s)` as numerator and denominator coefficients (ascending powers of
+    /// s) and a delay: `H(s) = N(s) / D(s) exp(-s T)`. `exp(a + b s)` of a
+    /// first-degree argument is a gain `exp(a)` and a delay `-b`; terms added
+    /// together must have the same delay.
+    fn rational(&mut self, frame: &mut Frame, e: &SExpr) -> Result<(Vec<f64>, Vec<f64>, f64), String> {
+        type R = (Vec<f64>, Vec<f64>, f64);
         fn mul(a: &[f64], b: &[f64]) -> Vec<f64> {
             let mut out = vec![0.0; a.len() + b.len() - 1];
             for (i, x) in a.iter().enumerate() {
@@ -1534,8 +1829,7 @@ impl<'a> Flattener<'a> {
             }
             out
         }
-        let constant = |v: f64| -> R { (vec![v], vec![1.0]) };
-        let _ = self.lib;
+        let constant = |v: f64| -> R { (vec![v], vec![1.0], 0.0) };
         let mentions_s = |e: &SExpr| -> bool {
             fn walk(e: &SExpr) -> bool {
                 match e {
@@ -1552,14 +1846,15 @@ impl<'a> Flattener<'a> {
         if !mentions_s(e) {
             return Ok(constant(self.constant(frame, e)?));
         }
+        let same = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(y.abs());
         Ok(match e {
-            SExpr::Name(n) if n == "S" => (vec![0.0, 1.0], vec![1.0]),
+            SExpr::Name(n) if n == "S" => (vec![0.0, 1.0], vec![1.0], 0.0),
             SExpr::Unary('-', x) => {
-                let (n, d) = self.rational(frame, x)?;
-                (n.iter().map(|c| -c).collect(), d)
+                let (n, d, t) = self.rational(frame, x)?;
+                (n.iter().map(|c| -c).collect(), d, t)
             }
             SExpr::Binary(op, a, b) => {
-                let (an, ad) = self.rational(frame, a)?;
+                let (an, ad, at) = self.rational(frame, a)?;
                 match *op {
                     "**" => {
                         let k = self.constant(frame, b).map_err(|_| "s raised to a non-constant power".to_string())?;
@@ -1571,23 +1866,48 @@ impl<'a> Flattener<'a> {
                             n = mul(&n, &an);
                             d = mul(&d, &ad);
                         }
-                        if k < 0.0 { (d, n) } else { (n, d) }
+                        if k < 0.0 { (d, n, -k * at) } else { (n, d, k * at) }
                     }
                     _ => {
-                        let (bn, bd) = self.rational(frame, b)?;
+                        let (bn, bd, bt) = self.rational(frame, b)?;
                         match *op {
-                            "+" => (add(&mul(&an, &bd), &mul(&bn, &ad), 1.0), mul(&ad, &bd)),
-                            "-" => (add(&mul(&an, &bd), &mul(&bn, &ad), -1.0), mul(&ad, &bd)),
-                            "*" => (mul(&an, &bn), mul(&ad, &bd)),
-                            "/" => (mul(&an, &bd), mul(&ad, &bn)),
+                            "+" | "-" => {
+                                let zero = |c: &[f64]| c.iter().all(|x| *x == 0.0);
+                                // A zero term has no delay of its own.
+                                let t = if zero(&an) {
+                                    bt
+                                } else if zero(&bn) || same(at, bt) {
+                                    at
+                                } else {
+                                    return Err(format!(
+                                        "a sum of terms delayed by {at} s and {bt} s is not a rational function times one delay"
+                                    ));
+                                };
+                                let sign = if *op == "+" { 1.0 } else { -1.0 };
+                                (add(&mul(&an, &bd), &mul(&bn, &ad), sign), mul(&ad, &bd), t)
+                            }
+                            "*" => (mul(&an, &bn), mul(&ad, &bd), at + bt),
+                            "/" => (mul(&an, &bd), mul(&ad, &bn), at - bt),
                             other => return Err(format!("the operator {other} on s is not rational")),
                         }
                     }
                 }
             }
+            SExpr::Call(f, args) if f == "EXP" && args.len() == 1 => {
+                let (n, d, t) = self.rational(frame, &args[0])?;
+                let (n, d) = (trim(n), trim(d));
+                if t != 0.0 || d.len() != 1 || n.len() > 2 {
+                    return Err(
+                        "exp(...) of s is a delay only as exp(-s T) (an argument of the first degree in s)".into()
+                    );
+                }
+                let gain = (n[0] / d[0]).exp();
+                let delay = -n.get(1).copied().unwrap_or(0.0) / d[0];
+                (vec![gain], vec![1.0], delay)
+            }
             SExpr::Call(f, _) => {
                 return Err(format!(
-                    "{f}(...) of s is not a rational function (delays such as exp(-s*T) are not supported)"
+                    "{f}(...) of s is not a rational function (of functions of s, only exp(-s T), a delay, is supported)"
                 ));
             }
             _ => return Err("this use of s is not a rational function".into()),
@@ -1763,10 +2083,10 @@ fn builtin(name: &str, args: Vec<Expr>) -> Result<Expr, String> {
             }
             return Ok(Expr::Table(Box::new(x), points));
         }
-        "DDT" | "SDT" | "IDT" | "IDTMOD" => {
-            return Err(format!("{name}() (time derivative or integral in an expression) is not supported"));
+        "SDT" | "IDT" | "IDTMOD" => {
+            return Err(format!("{name}() (a time integral in an expression) is not supported"));
         }
-        "DELAY" | "ABSDELAY" => return Err(format!("{name}() (delays) is not supported")),
+        "ABSDELAY" => return Err(format!("{name}() (a variable delay) is not supported; DELAY(x, T) is")),
         "RAND" | "RANDOM" | "GAUSS" | "AGAUSS" | "UNIF" | "AUNIF" | "LIMIT_RAND" | "MC" | "WHITE" | "FLAT" => {
             return Err(format!("{name}() (random values) is not supported"));
         }

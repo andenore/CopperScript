@@ -48,15 +48,16 @@ Earlier research, written against the removed Python implementation, is in
 | Analyses | Operating point, AC, noise, transient, DC sweep, loop gain, poles and zeros; `step` (cartesian and zipped), `reference` runs, `ic` and `uic` | `crates/copper-sim`, `crates/copper-simulate` |
 | Statistics | `tolerance`, matched groups, `montecarlo`, `worstcase` | `copper-lang/src/tolerance.rs`, `copper-simulate/src/variation.rs` |
 | Built-in models | `sim opamp`, `diffamp`, `source`, `load`, `diode`, `switch`, `regulator`, `reference`; supply current and PSRR; op-amp clipping, slew and current limit in transient and DC sweep | `copper-sim/src/models.rs`, `devices.rs` |
-| Vendor models | `sim spice`: SPICE3, PSpice and LTspice netlists; behavioural sources; Gummel-Poon BJT, JFET, MOSFET level 1 | `crates/copper-spice`, `copper-sim/src/semiconductors.rs`, `behavioral.rs` |
+| Vendor models | `sim spice`: SPICE3, PSpice and LTspice netlists; behavioural sources; Gummel-Poon BJT, JFET, MOSFET levels 1 and 3 with Meyer gate charge; ideal delays and lossless transmission lines | `crates/copper-spice`, `copper-sim/src/semiconductors.rs`, `behavioral.rs` |
 | Bench language | `bench`, `fixture`/`using`, `supply`, `model`, `replace`, `ignore`, measures with limits and `where`, `upto`/`downto` (with a "never" result), `if()`, windowed reductions, waveforms; several analyses per bench, several noise outputs and `noise()` of a derived quantity, parameter sets per supply, matched groups on model parameters, fixtures using fixtures | `copper-lang/src/bench.rs`, `expression.rs` |
 | Output | Text table, `sim-results.json` (`copperscript-sim/v0.1`), CSV and an HTML page with plots per bench | `copper-simulate/src/results.rs`, `report.rs` |
 | Examples | `rc_filter`, `howland_pump`, `preamp`, `precision_rectifier`, `spice_amplifier`, `vendor_models`, `impedance_analyzer` (14 benches) | `examples/simulation/` |
 
 Checked by closed-form tests (RC, RLC, Howland output impedance, kT/C noise,
 device equations, self-written op-amp subcircuits against their design) and
-by loading real Texas Instruments models (OPA810, OPA1612, OPA2134, TL072,
-LM358). The OPA810 bias point matches the one PSpice ships with the model
+by loading real Texas Instruments models (eleven amplifiers give a gain
+bandwidth within the spread expected of a macro model; the table is in
+`docs/language-reference.md`). The OPA810 bias point matches the one PSpice ships with the model
 within 24 uV on all 90 nodes.
 
 Known weak spots of what is built:
@@ -65,8 +66,13 @@ Known weak spots of what is built:
   error on the analyzer's start-up bench: a change of rounding in the solver
   moves its measures by that much. Harmonics below about 1e-5 % are inside
   that error and are not meaningful.
-- The OPA1612 vendor model gives 63 MHz unity gain against 40 MHz on the
-  product page; whether the model or the reader is wrong is not established.
+- The TL431 vendor model loads but does not regulate at its operating point
+  (100 V at 10 mA; a current ramp in transient settles at 2.0 V against
+  2.495 V). The cause is not established.
+- Nothing has been compared against a PSpice or LTspice run of the same
+  netlist beyond the OPA810 bias point. Vendor-model transients are slow in
+  the debug build (an OPA2277 slew test did not finish in 40 minutes), so the
+  slew checks are opt-in and were not rerun.
 - No Analog Devices model has been loaded: analog.com refuses automated
   downloads.
 - Everything runs at 27 degC.
@@ -391,6 +397,33 @@ Scope, in order of how often vendor files need it:
 Acceptance: each device against its equations evaluated independently in the
 test; a self-written subcircuit per new construct; the compatibility table of
 real models rerun and extended to at least ten parts.
+
+Built on 20 November 2026. Diagnostic SIM105.
+
+- MOSFET: Meyer gate charge as three charge branches (charge conserving; in
+  the linear region the source-drain split adds a transcapacitance of at most
+  C_ox/6 that Meyer's model does not have) and level 3 after SPICE3's
+  `mos3load`. The drain-source Newton limit now acts on |v_ds|, so a MOSFET
+  converges below -0.5 V.
+- Netlist: `params = values { ... };` on `sim spice`, `.OPTIONS` (solver and
+  output controls read and named, others rejected), `.LIB file SECTION`,
+  switches that start `ON`, `DDT`, an ideal delay element (LAPLACE
+  `exp(-sT)`, `DELAY(x, T)`), PSpice `VALUE {expr}` without `=`.
+- Diode `ISR`, `NR`, `IKF` (pspice dialect only) and BJT `IRB`.
+- Lossless transmission lines (Branin). `analysis pz` refuses a circuit with
+  a delay.
+- OPA1612 resolved: the reader matches a hand calculation from the model's
+  element values within 2.5 %. The data sheet's 40 MHz is the follower
+  bandwidth and its gain bandwidth is 80 MHz at a gain of 100; the model gives
+  50.4 MHz and 91.7 MHz. The earlier 63 MHz was read off a 20 points per
+  decade sweep without interpolation.
+- Compatibility table: 13 Texas Instruments parts, 12 load, 11 give a gain
+  bandwidth (0.95 to 1.38 of the data-sheet figure, LM358 the furthest).
+
+Open: `VDMOS`, `SDT`, `FREQ` tables, BJT quasi-saturation and `PTF`, lossy
+lines, saturating and hysteretic inductors, BSIM (the TI CSD MOSFET models
+are BSIM3 and do not load), the level-3 `KAPPA` difference between SPICE3 and
+PSpice, and the TL431 result above.
 
 ### F8. Temperature
 

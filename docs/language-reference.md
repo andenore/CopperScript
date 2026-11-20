@@ -3036,6 +3036,7 @@ external tool is involved. Its properties:
 | `terminals = PIN, ...;` | part pins on the subcircuit's nodes in its `.SUBCKT` order; their count must be the subcircuit's (`SIM078` when run); a pin may be on several nodes |
 | `dialect = ...;` | `spice3` (the default, ngspice), `pspice` or `ltspice`: `$` comments (SPICE3 only), `^` (a power, an exclusive or in LTspice) and a diode's default `IBV` (PSpice 1e-10 A, otherwise 1e-3 A) differ |
 | `unmodelled = PIN, ...;` | pins on no node, as for built-in blocks |
+| `params = values { NAME = value; ... };` | values for the subcircuit's `PARAMS:` defaults (names ignore case): plain numbers, or quantities in a simulation unit taken at their SI value (`10kohm` is 10000); decibels, text and repeated names are `SIM105`, a name the subcircuit does not declare is `SIM078` when run. The model list shows them (`spice AMP (..., GAIN = 7)`) |
 
 Exactly one of `file` and `source` (with `sha256`) is given. A multi-unit
 part has one block per unit (`sim spice A { ... }`), and units may share
@@ -3056,15 +3057,19 @@ end-of-file mark. Cards and elements:
 | --- | --- |
 | `.SUBCKT NAME nodes [PARAMS:] p=v ...` / `.ENDS` | nested definitions are local; instance values override the defaults |
 | `.PARAM`, `.FUNC f(a, b) {expr}`, `.MODEL` (with `AKO:`), `.INCLUDE`, `.INC`, `.LIB file`, `.LIB name` / `.ENDL` | parameters are evaluated per instance (global, the caller's, the defaults, then local ones in order); functions are inlined |
+| `.LIB file SECTION` | only the cards between `.LIB SECTION` and its `.ENDL` in that (local) file; a missing section is an error naming it |
+| `.OPTIONS` | solver and output controls (`RELTOL`, `ITL4`, `NOPAGE`, ...; `GMIN=1e-12`, `TNOM=27`) are read and ignored, and the model list names them (`.OPTIONS RELTOL ITL4 ignored`); any other option (`SCALE`, `DEFL`, another `GMIN`, ...) is rejected, as it could change the circuit |
 | `R C L K` | values may be expressions of parameters; resistor models `R`, `TC1`, `TC2`, `T_ABS` (the resistance and the noise temperature at it: `T_ABS = -273.15` is noiseless), LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
 | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC`, the waveform's value at 0 |
-| `E G F H` | linear, `POLY(n)` (SPICE2 coefficient order), `VALUE = {expr}`, `TABLE {x} = (x, y) ...`, `LAPLACE {x} = {H(s)}` (and LTspice `E a b c d LAPLACE = H(s)`): rational `H(s)` only, realised exactly as a state-space network |
+| `E G F H` | linear, `POLY(n)` (SPICE2 coefficient order), `VALUE = {expr}`, `TABLE {x} = (x, y) ...`, `LAPLACE {x} = {H(s)}` (and LTspice `E a b c d LAPLACE = H(s)`): a rational `H(s)` times at most one delay `exp(-s T)` (`exp(a - s T)` is the gain `exp(a)` and the delay `T`; terms added together must share their delay), realised exactly as a state-space network and an ideal delay |
 | `B V= / I=` | an expression of node voltages, of currents of elements of the same subcircuit and of `TIME` |
-| `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; `EG`, `XTI` and temperature coefficients are accepted and have no effect at 27 degC |
-| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node |
+| `DDT(x)`, `DELAY(x, T)` | in any behavioural expression: the exact time derivative (0 at the operating point, `j w x` in AC; `x` drives 1 F in series with a 0 V sense source whose current the expression reads) and `x` delayed by a constant `T > 0` (an ideal delay) |
+| `T a1 b1 a2 b2 Z0= TD=` (or `F=` with `NL=`, default 0.25) | the lossless transmission line (Branin's method: at each port `Z0`, noiseless, behind the other port's `v + Z0 i` one delay earlier) |
+| `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; in the `pspice` dialect also PSpice's `ISR NR` (recombination current `ISR (exp(v / NR V_T) - 1) ((1 - v/VJ)^2 + 0.005)^(M/2)`) and `IKF` (high injection: the normal current times `sqrt(IKF / (IKF + I_nrm))`); `EG`, `XTI` and temperature coefficients are accepted and have no effect at 27 degC |
+| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM IRB RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node; with `IRB` the base resistance is SPICE's current-crowding form |
 | `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area |
-| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`; `L W AD AS PD PS M` on the element |
-| `S W` | `SW`/`CSW` (hysteresis), PSpice `VSWITCH`/`ISWITCH` (the smooth switch) |
+| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`, and level 3 with `XJ ETA THETA KAPPA DELTA VMAX NFS WD` as well (SPICE3's `mos3load`; level 3 has no `LAMBDA`); `TOX` gives the intrinsic gate charge (below), `U0` the default `KP`, `NSUB` (with `TPG`, `NSS`) the defaults of `PHI`, `GAMMA` and `VTO` as SPICE3 derives them and, at level 3, the depletion width; a level-3 model without `TOX` takes SPICE's 100 nm; `L W AD AS PD PS M` on the element |
+| `S W` | `SW`/`CSW` (hysteresis), PSpice `VSWITCH`/`ISWITCH` (the smooth switch); `ON` / `OFF` after the model set the state the operating point starts from, which decides a hysteresis switch whose control sits inside its band (a smooth switch has no state, so the flag has no effect) |
 | `X` | with `PARAMS:` or bare `name=value` |
 
 Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin acos
@@ -3079,21 +3084,84 @@ source stepping; in a transient run, a node that jumps (a behavioural source
 switching) is accepted as a discontinuity once the step reaches a
 billionth of the run, and integration restarts there.
 
+**MOSFET gate charge.** With `TOX`, a MOSFET carries the intrinsic gate
+charge of SPICE's Meyer model as charges on three branches (gate to source,
+drain and bulk), so a transient run conserves charge exactly. With `x =
+v_gs - V_on` (drain and source exchanged for `v_ds < 0`) and `C_ox = 3.9
+eps_0 / TOX * W L_eff M`: below turn-on, the gate-bulk charge is the
+integral of Meyer's `C_gb` and of his depletion-edge `C_gs`; above it, the
+channel charge is `2/3 C_ox (a^2 + a b + b^2) / (a + b)` with `a = V_dsat`
+and `b = max(V_dsat - v_ds, 0)`, split as `a^2 (a + 2b)` to the source and
+`b^2 (b + 2a)` to the drain (over `(a + b)^2`). The gate's capacitances are
+then exactly Meyer's in every region (level 1, bulk on the source), and in
+saturation and below turn-on every capacitance is; in the linear region a
+source-drain transcapacitance of at most `C_ox / 6` appears that Meyer's
+model (which does not conserve charge) lacks, and the depletion-edge part of
+`C_gs` sits between gate and bulk. At level 3, `a` is `V_dsat` less its value
+at turn-on, so the charge is continuous where Meyer's capacitances jump.
+`KF` together with `TOX` is rejected: the simulators normalise flicker noise
+by the oxide capacitance differently.
+
+**Ideal delays.** A transmission line, a `LAPLACE` delay and `DELAY()` are
+ideal delays: a VCVS at the operating point, `exp(-j w T)` in AC and noise;
+in a transient run the step is at most the shortest delay, the delayed
+value is interpolated linearly between accepted points (the operating point
+before `t = 0`), and every source corner is repeated one delay (and its
+multiples, up to 1000) later as a breakpoint. `analysis pz` refuses a
+circuit with a delay (it has infinitely many poles).
+
 **What is rejected.** Every construct outside the list is an error naming the
 file, the line, the element (with its instance path, `U1.X2.G5`) and the
 construct (`SIM078`); nothing is approximated. Unsupported elements and
 models inside a subcircuit are reported when that subcircuit is used, so a
 library of many parts stays usable for the ones it can simulate. Among
-them: encrypted models; `T O U A Z` elements; `FREQ` and `CHEBYSHEV`
-sources; non-rational `LAPLACE` (delays); `DDT`, `SDT`, `DELAY` and random
-functions; `SFFM`, `AM` and damped `SIN`; element `IC=`; switches that start
-`ON`; MOSFET levels other than 1 (BSIM by name) and level-1 models with
-`TOX`, whose intrinsic gate capacitance is not modelled; models measured at
-a `TNOM` other than 27 degC; diode `ISR`, `IKF`; BJT `IRB`, `PTF`,
-quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; unknown model parameters;
-`.OPTIONS`, `.GLOBAL`, `.IC`, `.NODESET`, `.TEMP`, `.LIB file section`.
-Analysis cards of a test deck at the top level (`.TRAN`, `.AC`, ...) have
-no effect.
+them: encrypted models; lossy transmission lines (`T` with `R L G C LEN`,
+and `O`), `U A Z` elements; `FREQ` and `CHEBYSHEV` sources; `LAPLACE` of a
+non-rational `H(s)` other than one delay (`sqrt(s)`, a sum of differently
+delayed terms, `exp(+s T)`); `SDT`, `IDT`, `ABSDELAY` and random functions;
+`SFFM`, `AM` and damped `SIN`; element `IC=`; MOSFET levels other than 1
+and 3 (BSIM by name), LTspice's `VDMOS` (the three-terminal `M` card and the
+model type), `RSH`, and `KF` with `TOX`; models measured at a `TNOM` other
+than 27 degC; diode `ISR`, `IKF` outside the `pspice` dialect; BJT `PTF`,
+quasi-saturation (`QUASIMOD`, `RCO`, `QCO`); JFET `ALPHA`, `VK`, `ISR`, `B`;
+saturating and hysteretic inductors and cores; unknown model parameters;
+`.OPTIONS` that may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`,
+`.TEMP`. Analysis cards of a test deck at the top level (`.TRAN`, `.AC`,
+...) have no effect.
+
+**Real models checked.** Texas Instruments' own model archives, fetched by
+URL and SHA-256 with `copper models fetch` (never committed), run by the
+`#[ignore]`d harness `crates/copper-spice/tests/vendor_models.rs`
+(20 November 2026). An op amp runs on its data sheet supplies in open loop
+(an inductor from the output to the inverting input, a capacitor from that
+input to ground); the gain-bandwidth product is 100 times the frequency
+where `|A_OL|` falls through 100, as data sheets state it at `G = 100`;
+the follower is the small-signal `-3 dB` bandwidth at unity gain.
+
+| Part (archive) | Loads | Operating point | Simulated | Data sheet / product page |
+| --- | --- | --- | --- | --- |
+| OPA810 (SBOMB73) | yes | converges | GBW 66.2 MHz; follower 124 MHz | GBW 70 MHz |
+| OPA1612 (SBOM396) | yes | converges | GBW 91.7 MHz; open-loop crossover 59.9 MHz; follower 50.4 MHz | GBW 80 MHz (`G = 100`); bandwidth 40 MHz (`G = +1`) |
+| OPA2134 (SBOM042) | yes | converges | GBW 8.09 MHz | 8 MHz |
+| TL072 (SLOJ067) | yes | converges | GBW 3.45 MHz | 3 MHz |
+| LM358 (SNOM268, LMx58/LM2904) | yes | converges | GBW 0.963 MHz | 0.7 MHz |
+| OPA2277 (SBOM063) | yes | converges | GBW 1.05 MHz | 1 MHz |
+| OPA350 (SBOM071) | yes | converges | GBW 39.4 MHz | 38 MHz |
+| OPA1641 (SBOM627) | yes | converges | GBW 11.0 MHz | 11 MHz |
+| OPA828 (SBOMAJ0) | yes | converges | GBW 45.2 MHz | 45 MHz |
+| OPA1656 (SBOMAW6) | yes | converges | GBW 53.1 MHz | 53 MHz |
+| TLV9002 (SBOMAL2) | yes | converges | GBW 1.13 MHz | 1 MHz |
+| TL431 (SLVM071) | yes (needs `VALUE {expr}` without `=`) | converges, but to 100.45 V at 10 mA, not regulating; a current ramp in a transient run settles at 2.000 V | - | 2.495 V; not resolved |
+| CSD18563Q5A (SLPM082) | no: BSIM3 (`LEVEL=7`) channel; also `TNOM=25` | - | - | V_GS(th) 2 V |
+
+The OPA1612's 40 MHz is the data sheet's closed-loop bandwidth at unity
+gain, not its open-loop crossover; its gain-bandwidth product is specified
+at 80 MHz (`G = 100`). The model's open-loop response was worked out by
+hand from its element values (its gain stages and lead networks, and the
+local loop around its output stage) and agrees with the reader's within
+0.1 % to 1 MHz and 2 % at 60 MHz, so the reader runs the model as written:
+the model itself has 15 % more gain-bandwidth and 26 % more follower
+bandwidth than the data sheet states.
 
 ### Benches
 
@@ -3883,7 +3951,7 @@ components that form a loop of voltage sources.
 | `SIM073` | fixtures: unknown or repeated fixtures, a fixture for another target, bench statements in a fixture, a fixture that uses itself through others |
 | `SIM074` | `analysis dc`: the swept name, `from`, `to`, `step`, `points` |
 | `SIM075` | `ic`: the target, its analysis, `uic` |
-| `SIM076` | `sim spice` properties: the model file (`file`, or `source` with `sha256`, `member`), `subckt`, `terminals`, `dialect` |
+| `SIM076` | `sim spice` properties: the model file (`file`, or `source` with `sha256`, `member`), `subckt`, `terminals`, `dialect` (`params`: `SIM105`) |
 | `SIM077` | `sim spice` model files when a bench runs: a local file that cannot be read, a vendor file not in the cache or not matching its hash |
 | `SIM078` | `sim spice` netlists when a bench runs: syntax, unsupported constructs, undefined names, encrypted files, a terminal count that differs from the subcircuit's (file, line, element and construct named) |
 | `SIM085`-`SIM088` | noise expressions: `noise()` and the band functions outside `analysis noise` (`SIM085`), `input_noise()` without an input (`SIM086`), unknown contributors (`SIM087`), band arguments (`SIM088`) |
@@ -3900,6 +3968,7 @@ components that form a loop of voltage sources.
 | `SIM102` | supply current and rejection: `psrr_corner` without a `psrr` (in the block or with a parameter set per supply); when a bench runs, a rail of an amplifier with a `quiescent_current` that has no DC path to ground, a rail a `psrr` is referred to that no supply, DC source or rail model sets |
 | `SIM103` | `regulator` and `reference` blocks: no `output_voltage` or a zero one, `output_impedance_corner` or `output_current_limit` without an `output_resistance` above 0, `psrr_corner` without a `psrr`, `en` without `enable_threshold` or the reverse, an `efficiency` outside 0 to 100 % |
 | `SIM104` | when a bench runs, a `regulator` or `reference` with a `psrr` whose input no supply, DC source or rail model sets |
+| `SIM105` | `sim spice params`: not a `values { ... }` block, a value that is not a number or a quantity in a simulation unit, decibels, a name given twice |
 
 ## KiCad schematic export
 

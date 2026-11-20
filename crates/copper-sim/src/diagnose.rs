@@ -120,6 +120,7 @@ fn joined(c: &Circuit, dc: bool) -> UnionFind {
             | ElementKind::VoltageSource { .. }
             | ElementKind::Vcvs { .. }
             | ElementKind::Ccvs { .. }
+            | ElementKind::Delay { .. }
             | ElementKind::Diode { .. }
             | ElementKind::Switch { .. } => true,
             ElementKind::Capacitor { .. } => !dc,
@@ -168,7 +169,10 @@ fn voltage_loops(c: &Circuit, dc: bool) -> Vec<SingularCause> {
     let mut causes = Vec::new();
     for (i, e) in c.elements().iter().enumerate() {
         let voltage_defined = match e.kind() {
-            ElementKind::VoltageSource { .. } | ElementKind::Vcvs { .. } | ElementKind::Ccvs { .. } => true,
+            ElementKind::VoltageSource { .. }
+            | ElementKind::Vcvs { .. }
+            | ElementKind::Ccvs { .. }
+            | ElementKind::Delay { .. } => true,
             ElementKind::Law { law, .. } => law.output == crate::behavioral::Output::Voltage,
             ElementKind::Inductor { .. } => dc,
             _ => false,

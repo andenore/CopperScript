@@ -1,5 +1,6 @@
 //! Semiconductor devices as sets of law branches: the Gummel–Poon bipolar
-//! transistor, the junction FET and the level-1 MOSFET.
+//! transistor, the junction FET and the level-1 and level-3 MOSFET with
+//! its intrinsic (Meyer) gate charge.
 //!
 //! Each device expands ([`Circuit::bjt`], [`Circuit::jfet`],
 //! [`Circuit::mosfet`]) into a macro instance with internal nodes for its
@@ -32,8 +33,9 @@
 //!
 //! The diffusion charge is `TF I_BE` without the `1 / q_b` factor for
 //! `v_be <= 0`, as in SPICE3. With `RBM` below `RB`, the base resistance is
-//! the law branch `b -> b'` of resistance `RBM + (RB - RBM) / q_b` (`IRB` is
-//! not supported), else a plain resistor `RB`. Noise: shot noise of the
+//! the law branch `b -> b'` of resistance `RBM + (RB - RBM) / q_b`, or with
+//! `IRB` SPICE's current-crowding form [`BjtParams::base_resistance`], else
+//! a plain resistor `RB`. Noise: shot noise of the
 //! transport current and of both base branches, flicker noise `KF I^AF / f`
 //! of the base-emitter branch, thermal noise of the resistances.
 //!
@@ -69,10 +71,43 @@
 //! Body diodes `b -> d'`, `b -> s'` with `IS` (or `JS` times `AD`, `AS`)
 //! and depletion charges (`CBD`, `CBS`, or `CJ` per area and `CJSW` per
 //! perimeter, `PB`, `MJ`, `MJSW`, `FC`); overlap capacitances `CGSO W`,
-//! `CGDO W`, `CGBO L` as plain capacitors. The intrinsic (Meyer) gate
-//! capacitances that SPICE derives from `TOX` are not modelled, so a model
-//! with `TOX` is rejected by the reader rather than run without them.
+//! `CGDO W`, `CGBO L` as plain capacitors.
 //! Noise: channel thermal `4 k T (2/3) g_m`, flicker `KF I_D^AF / f`.
+//!
+//! # MOSFET level 3
+//!
+//! [`MosLevel::Three`]: SPICE3's `mos3load` at the nominal temperature
+//! ([`MosParams::level3`]): the threshold with the short-channel (`XJ`,
+//! `NSUB`), narrow-width (`DELTA`) and static-feedback (`ETA`) terms, the
+//! turn-on voltage `V_on = V_th + n V_T` with `NFS` (weak inversion below
+//! it, `exp((v_gs - V_on) / n V_T)`), mobility modulation `THETA`, velocity
+//! saturation `VMAX`, channel-length modulation `KAPPA` (with `NSUB`) and the
+//! punch-through limit. Its derivatives are exact (automatic
+//! differentiation), where SPICE3 writes some of them by hand.
+//!
+//! # MOSFET gate charge
+//!
+//! With an oxide capacitance `C_ox` ([`MosParams::oxide_capacitance`],
+//! from `TOX`), three charge branches `g -> s'`, `g -> d'`, `g -> b`
+//! ([`MosParams::gate_charges`]) carry Meyer's gate charge as state
+//! functions, so a transient run conserves charge. In forward mode (drain
+//! and source exchanged for `v_ds < 0`), with `x = v_gs - V_on`:
+//!
+//! ```text
+//! x <= -PHI:          q_gb = C_ox (x + PHI/3)
+//! -PHI < x <= -PHI/2: q_gb = C_ox (-PHI/6 - x^2 / (2 PHI))
+//! -PHI/2 < x <= 0:    q_gb = C_ox (x^2 / (6 PHI) + 2x/3)       (Meyer's C_gb and depletion-edge C_gs)
+//! x > 0:              a = V_dsat - V_dsat(V_on), b = max(a - v_ds, 0)
+//!                     q_gs = 2/3 C_ox ((x - a) + a^2 (a + 2b) / (a + b)^2)
+//!                     q_gd = 2/3 C_ox b^2 (b + 2a) / (a + b)^2
+//! ```
+//!
+//! `q_gs + q_gd` is the integral of Meyer's `C_gs + C_gd` (exactly at level
+//! 1, where `V_dsat = x`), so the gate sees Meyer's capacitances in every
+//! region; in saturation and below turn-on every capacitance is Meyer's, and
+//! in the linear region the split adds a source-drain transcapacitance of
+//! at most `C_ox / 6`. The threshold's dependence on `v_bs` enters the
+//! charges through `V_on`, which Meyer's capacitances leave out.
 
 use crate::behavioral::{Control, Dual, Function, Law, LawNoise, Limit, Output};
 use crate::circuit::{Circuit, ElementKind, NodeId};
@@ -146,6 +181,11 @@ pub struct BjtParams {
     pub rb: f64,
     /// `RBM`, ohm (`None`: `RB`).
     pub rbm: Option<f64>,
+    /// `IRB`, A: the base current at which the base resistance has fallen
+    /// halfway to `RBM` (`None`: the resistance follows `1 / q_b` instead).
+    /// SPICE's rounded constants `144 / pi^2 = 14.59025` and `24 / pi^2 =
+    /// 2.4317` are used, as SPICE writes them.
+    pub irb: Option<f64>,
     /// `RE`, ohm.
     pub re: f64,
     /// `RC`, ohm.
@@ -208,6 +248,7 @@ impl Default for BjtParams {
             nc: 2.0,
             rb: 0.0,
             rbm: None,
+            irb: None,
             re: 0.0,
             rc: 0.0,
             cje: 0.0,
@@ -295,7 +336,30 @@ impl BjtParams {
         if self.polarity.abs() != 1.0 {
             return bad("polarity must be +1 or -1".to_string());
         }
+        if let Some(irb) = self.irb
+            && !(irb.is_finite() && irb > 0.0)
+        {
+            return bad(format!("IRB must be positive, got {irb}"));
+        }
         Ok(())
+    }
+
+    /// The bias-dependent base resistance (`RB > RBM`): with `IRB`, SPICE's
+    /// `RBM + 3 (RB - RBM) (tan z - z) / (z tan^2 z)`, `z = (sqrt(1 + 144
+    /// i_b / (pi^2 IRB)) - 1) / (24 / pi^2 sqrt(i_b / IRB))` of the base
+    /// current `i_b` (at least `1e-9 IRB`); else `RBM + (RB - RBM) / q_b`.
+    pub fn base_resistance(&self, state: &BjtState) -> Dual {
+        let n = state.qb.d.len();
+        let rbm = self.rbm.unwrap_or(self.rb);
+        let Some(irb) = self.irb else {
+            return Dual::constant(self.rb - rbm, n).div(&state.qb).offset(rbm);
+        };
+        let arg = state.base_emitter.add(&state.base_collector).scale(1.0 / irb);
+        let arg = if arg.v > 1e-9 { arg } else { Dual::constant(1e-9, n) };
+        let z = arg.scale(14.59025).offset(1.0).sqrt().offset(-1.0).div(&arg.sqrt().scale(2.4317));
+        let t = z.v.tan();
+        let tan = z.chain(t, 1.0 + t * t);
+        tan.sub(&z).div(&z.mul(&tan).mul(&tan)).scale(3.0 * (self.rb - rbm)).offset(rbm)
     }
 
     fn inverse(x: Option<f64>) -> f64 {
@@ -476,7 +540,53 @@ impl JfetParams {
     }
 }
 
-/// Level-1 MOSFET parameters (SPICE names; geometry applied).
+/// The drain-current equations of a MOSFET.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MosLevel {
+    /// Level 1 (Shichman–Hodges).
+    One,
+    /// Level 3 (SPICE3's semi-empirical short-channel model).
+    Three(Level3Params),
+}
+
+/// The parameters of a level-3 MOSFET beyond the level-1 set (SPICE names,
+/// geometry applied, SI units).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Level3Params {
+    /// Effective channel length `L - 2 LD`, m.
+    pub length: f64,
+    /// Effective channel width `W - 2 WD`, m.
+    pub width: f64,
+    /// Oxide capacitance per area `3.9 eps_0 / TOX`, F/m².
+    pub oxide_capacitance_per_area: f64,
+    /// `LD`, m (for the junction-depth short-channel term).
+    pub lateral_diffusion: f64,
+    /// `XJ`, m (0: no short-channel threshold correction).
+    pub junction_depth: f64,
+    /// `2 eps_si / (q NSUB)`, m²/V (0 without `NSUB`: no channel-length modulation, no short-channel term).
+    pub alpha: f64,
+    /// `ETA`, the static feedback (drain-induced barrier lowering) coefficient.
+    pub eta: f64,
+    /// `THETA`, 1/V, the mobility modulation.
+    pub theta: f64,
+    /// `KAPPA`, the saturation field factor.
+    pub kappa: f64,
+    /// `DELTA`, the width effect on threshold.
+    pub delta: f64,
+    /// `VMAX`, m/s (0: no velocity saturation).
+    pub vmax: f64,
+    /// `NFS`, 1/cm², the fast surface state density (0: no weak inversion current).
+    pub nfs: f64,
+    /// `U0`, cm²/V/s, the surface mobility.
+    pub u0: f64,
+}
+
+/// The permittivity of silicon as SPICE takes it, `11.7 eps_0`, F/m.
+pub const EPS_SILICON: f64 = 11.7 * 8.854214871e-12;
+/// The permittivity of silicon dioxide as SPICE takes it, `3.9 eps_0`, F/m.
+pub const EPS_OXIDE: f64 = 3.9 * 8.854214871e-12;
+
+/// MOSFET parameters, level 1 or 3 (SPICE names; geometry applied).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MosParams {
     /// +1 for N-channel, -1 for P-channel.
@@ -527,6 +637,11 @@ pub struct MosParams {
     pub af: f64,
     /// The flicker-noise divisor `C_ox L_eff²` (1 without `TOX`).
     pub flicker_divisor: f64,
+    /// The gate oxide capacitance `3.9 eps_0 / TOX * W L_eff M`, F, of the
+    /// intrinsic (Meyer) gate charges; 0 for none.
+    pub oxide_capacitance: f64,
+    /// Level 1 or 3.
+    pub level: MosLevel,
 }
 
 impl Default for MosParams {
@@ -557,6 +672,8 @@ impl Default for MosParams {
             kf: 0.0,
             af: 1.0,
             flicker_divisor: 1.0,
+            oxide_capacitance: 0.0,
+            level: MosLevel::One,
         }
     }
 }
@@ -588,10 +705,40 @@ impl MosParams {
         if !(0.0..1.0).contains(&self.mj) || !(0.0..1.0).contains(&self.mjsw) || !(0.0..1.0).contains(&self.fc) {
             return bad("MJ, MJSW and FC must be at least 0 and below 1".to_string());
         }
+        if !(self.oxide_capacitance.is_finite() && self.oxide_capacitance >= 0.0) {
+            return bad(format!("the oxide capacitance must be zero or positive, got {}", self.oxide_capacitance));
+        }
+        if let MosLevel::Three(l3) = &self.level {
+            for (what, x) in [
+                ("L_eff", l3.length),
+                ("W_eff", l3.width),
+                ("the oxide capacitance per area (TOX)", l3.oxide_capacitance_per_area),
+                ("U0", l3.u0),
+            ] {
+                if !(x.is_finite() && x > 0.0) {
+                    return bad(format!("level 3: {what} must be positive, got {x}"));
+                }
+            }
+            for (what, x) in [
+                ("XJ", l3.junction_depth),
+                ("NSUB (alpha)", l3.alpha),
+                ("KAPPA", l3.kappa),
+                ("VMAX", l3.vmax),
+                ("NFS", l3.nfs),
+                ("LD", l3.lateral_diffusion),
+            ] {
+                if !(x.is_finite() && x >= 0.0) {
+                    return bad(format!("level 3: {what} must be zero or positive, got {x}"));
+                }
+            }
+            if !(l3.eta.is_finite() && l3.theta.is_finite() && l3.delta.is_finite()) {
+                return bad("level 3: ETA, THETA and DELTA must be finite".to_string());
+            }
+        }
         Ok(())
     }
 
-    /// The threshold voltage at `v_bs` (N-type polarity).
+    /// The threshold voltage at `v_bs` (N-type polarity), level 1.
     pub fn threshold(&self, vbs: &Dual) -> Dual {
         let sphi = self.phi.sqrt();
         let sarg = if vbs.v <= 0.0 {
@@ -615,6 +762,9 @@ impl MosParams {
     }
 
     fn forward_current(&self, vgs: &Dual, vds: &Dual, vbs: &Dual) -> Dual {
+        if let MosLevel::Three(l3) = &self.level {
+            return self.level3(l3, vgs, vds, vbs).current;
+        }
         let n = vgs.d.len();
         let vgst = vgs.sub(&self.threshold(vbs));
         if vgst.v <= 0.0 {
@@ -627,6 +777,188 @@ impl MosParams {
             betap.mul(vds).mul(&vgst.sub(&vds.scale(0.5)))
         }
     }
+
+    /// The level-3 equations in forward mode (`v_ds >= 0`, N-type): SPICE3's
+    /// `mos3load` at the nominal temperature, with exact derivatives.
+    pub fn level3(&self, l3: &Level3Params, vgs: &Dual, vds: &Dual, vbs: &Dual) -> Level3State {
+        const COEFF0: f64 = 0.0631353;
+        const COEFF1: f64 = 0.8013292;
+        const COEFF2: f64 = -0.01110777;
+        let n = vgs.d.len();
+        let zero = Dual::constant(0.0, n);
+        let one = Dual::constant(1.0, n);
+        let vt = THERMAL_VOLTAGE;
+        let phi = self.phi;
+        let (leff, weff) = (l3.length, l3.width);
+        // The square root of the surface potential, continued for a forward-biased bulk.
+        let (sqphbs, phibs) = if vbs.v <= 0.0 {
+            let phibs = vbs.neg().offset(phi);
+            (phibs.sqrt(), phibs)
+        } else {
+            let sq = Dual::constant(phi.sqrt(), n).div(&vbs.scale(1.0 / (2.0 * phi)).offset(1.0));
+            (sq.clone(), sq.mul(&sq))
+        };
+        // The short-channel factor of the bulk charge.
+        let xd = l3.alpha.sqrt();
+        let fshort = if l3.junction_depth != 0.0 && xd != 0.0 {
+            let xj = l3.junction_depth;
+            let wponxj = sqphbs.scale(xd / xj);
+            let wconxj = wponxj.mul(&wponxj).scale(COEFF2).add(&wponxj.scale(COEFF1)).offset(COEFF0);
+            let djonxj = l3.lateral_diffusion / xj;
+            let arga = wconxj.offset(djonxj);
+            let argc = wponxj.div(&wponxj.offset(1.0));
+            let argb = one.sub(&argc.mul(&argc)).sqrt();
+            arga.mul(&argb).offset(-djonxj).scale(-xj / leff).offset(1.0)
+        } else {
+            one.clone()
+        };
+        let narrow = l3.delta * 0.5 * std::f64::consts::PI * EPS_SILICON / l3.oxide_capacitance_per_area;
+        let gammas = fshort.scale(self.gamma);
+        let fbody = gammas.div(&sqphbs.scale(4.0)).offset(narrow / weff);
+        let onfbdy = one.div(&fbody.offset(1.0));
+        let qbonco = gammas.mul(&sqphbs).add(&phibs.scale(narrow / weff));
+        let eta = l3.eta * 8.15e-22 / (l3.oxide_capacitance_per_area * leff * leff * leff);
+        let vbi = self.polarity * self.vto - self.gamma * phi.sqrt();
+        let vth = vds.scale(-eta).offset(vbi).add(&qbonco);
+        let (von, xn) = if l3.nfs != 0.0 {
+            let csonco = crate::noise::ELEMENTARY_CHARGE * l3.nfs * 1e4 / l3.oxide_capacitance_per_area;
+            let xn = qbonco.div(&phibs.scale(2.0)).offset(1.0 + csonco);
+            (vth.add(&xn.scale(vt)), Some(xn))
+        } else {
+            (vth.clone(), None)
+        };
+        let u0 = l3.u0 * 1e-4;
+        // The saturation voltage at gate voltage `vgsx`.
+        let saturation = |vgsx: &Dual| -> Dual {
+            let arga = vgsx.sub(&vth).mul(&onfbdy);
+            if l3.vmax <= 0.0 {
+                return arga;
+            }
+            let fgate = one.div(&vgsx.sub(&vth).scale(l3.theta).offset(1.0));
+            let vdsc = one.div(&fgate).scale(leff * l3.vmax / u0);
+            let argb = arga.mul(&arga).add(&vdsc.mul(&vdsc)).sqrt();
+            arga.add(&vdsc).sub(&argb)
+        };
+        let vdsat_on = saturation(&von);
+        if xn.is_none() && vgs.v <= von.v {
+            let vdsat = vdsat_on.clone();
+            return Level3State { current: zero, von, vdsat, vdsat_on };
+        }
+        let vgsx = vgs.max(&von);
+        let onfg = vgsx.sub(&vth).scale(l3.theta).offset(1.0);
+        let fgate = one.div(&onfg);
+        let vdsat = saturation(&vgsx);
+        let vdsx = vds.min(&vdsat);
+        if vdsx.v == 0.0 {
+            return Level3State { current: zero, von, vdsat, vdsat_on };
+        }
+        let cdo = vgsx.sub(&vth).sub(&fbody.offset(1.0).mul(&vdsx).scale(0.5));
+        let mut cdrain = cdo.mul(&vdsx).mul(&fgate).scale(self.beta);
+        let vdsc = one.div(&fgate).scale(leff * l3.vmax / u0);
+        let fdrain = if l3.vmax > 0.0 { one.div(&vdsx.div(&vdsc).offset(1.0)) } else { one.clone() };
+        if l3.vmax > 0.0 {
+            cdrain = cdrain.mul(&fdrain);
+        }
+        // Channel-length modulation beyond saturation.
+        if vds.v > vdsat.v && l3.alpha != 0.0 {
+            let excess = vds.sub(&vdsat);
+            let mut delxl = if l3.vmax <= 0.0 {
+                excess.scale(l3.kappa * l3.alpha).sqrt()
+            } else {
+                let gdsat = cdrain.mul(&one.sub(&fdrain)).div(&vdsc);
+                let gdsat = if gdsat.v > 1e-12 { gdsat } else { Dual::constant(1e-12, n) };
+                let emax = cdrain.div(&gdsat).scale(1.0 / leff);
+                let arga = emax.scale(0.5 * l3.alpha);
+                let argb = arga.mul(&arga).add(&excess.scale(l3.kappa * l3.alpha)).sqrt();
+                argb.sub(&arga)
+            };
+            // Punch-through.
+            if delxl.v > 0.5 * leff {
+                delxl = Dual::constant(leff * leff / 4.0, n).div(&delxl).neg().offset(leff);
+            }
+            cdrain = cdrain.div(&delxl.scale(-1.0 / leff).offset(1.0));
+        }
+        // Weak inversion below V_on.
+        if let Some(xn) = &xn
+            && vgs.v < von.v
+        {
+            cdrain = cdrain.mul(&vgs.sub(&von).div(&xn.scale(vt)).exp());
+        }
+        Level3State { current: cdrain, von, vdsat, vdsat_on }
+    }
+
+    /// The turn-on voltage, the saturation voltage and that at turn-on, forward mode.
+    fn corners(&self, vgs: &Dual, vds: &Dual, vbs: &Dual) -> (Dual, Dual, Dual) {
+        match &self.level {
+            MosLevel::One => {
+                let von = self.threshold(vbs);
+                let vdsat = vgs.sub(&von).max(&Dual::constant(0.0, vgs.d.len()));
+                (von, vdsat, Dual::constant(0.0, vgs.d.len()))
+            }
+            MosLevel::Three(l3) => {
+                let s = self.level3(l3, vgs, vds, vbs);
+                (s.von, s.vdsat, s.vdsat_on)
+            }
+        }
+    }
+
+    /// The intrinsic gate charges `[q_gs, q_gd, q_gb]` (on the branches
+    /// `g -> s'`, `g -> d'`, `g -> b`) at `(v_gs, v_ds, v_bs)`, N-type; see
+    /// the module docs.
+    pub fn gate_charges(&self, vgs: &Dual, vds: &Dual, vbs: &Dual) -> [Dual; 3] {
+        let n = vgs.d.len();
+        if self.oxide_capacitance <= 0.0 {
+            return [Dual::constant(0.0, n), Dual::constant(0.0, n), Dual::constant(0.0, n)];
+        }
+        if vds.v >= 0.0 {
+            self.forward_gate_charges(vgs, vds, vbs)
+        } else {
+            let vgd = vgs.sub(vds);
+            let vbd = vbs.sub(vds);
+            let [qd, qs, qb] = self.forward_gate_charges(&vgd, &vds.neg(), &vbd);
+            [qs, qd, qb]
+        }
+    }
+
+    fn forward_gate_charges(&self, vgs: &Dual, vds: &Dual, vbs: &Dual) -> [Dual; 3] {
+        let n = vgs.d.len();
+        let zero = Dual::constant(0.0, n);
+        let cox = self.oxide_capacitance;
+        let phi = self.phi;
+        let (von, vdsat, vdsat_on) = self.corners(vgs, vds, vbs);
+        let x = vgs.sub(&von);
+        if x.v <= 0.0 {
+            // Accumulation and depletion: Meyer's C_gb, with the depletion-edge part of C_gs.
+            let g = if x.v <= -phi {
+                x.offset(phi / 3.0)
+            } else if x.v <= -phi / 2.0 {
+                x.mul(&x).scale(-1.0 / (2.0 * phi)).offset(-phi / 6.0)
+            } else {
+                x.mul(&x).scale(1.0 / (6.0 * phi)).add(&x.scale(2.0 / 3.0))
+            };
+            return [zero.clone(), zero, g.scale(cox)];
+        }
+        let a = vdsat.sub(&vdsat_on);
+        let b = if a.v > vds.v { a.sub(vds) } else { zero.clone() };
+        let s2 = a.add(&b).mul(&a.add(&b));
+        let k = 2.0 / 3.0 * cox;
+        let qs = x.sub(&a).add(&a.mul(&a).mul(&a.add(&b.scale(2.0))).div(&s2)).scale(k);
+        let qd = b.mul(&b).mul(&b.add(&a.scale(2.0))).div(&s2).scale(k);
+        [qs, qd, zero]
+    }
+}
+
+/// The level-3 drain current and the voltages the gate charges need.
+#[derive(Debug, Clone)]
+pub struct Level3State {
+    /// Drain current, drain to source.
+    pub current: Dual,
+    /// The turn-on voltage `V_on` (the threshold, plus `n V_T` with `NFS`).
+    pub von: Dual,
+    /// The saturation voltage.
+    pub vdsat: Dual,
+    /// The saturation voltage at `v_gs = V_on`.
+    pub vdsat_on: Dual,
 }
 
 /// One law branch of a device.
@@ -690,6 +1022,12 @@ pub enum FetPart {
     Drain,
     /// Drain to source channel.
     Channel,
+    /// MOSFET intrinsic gate charge, gate to source; controls `[v_gs, v_ds, v_bs]`.
+    GateSource,
+    /// MOSFET intrinsic gate charge, gate to drain.
+    GateDrain,
+    /// MOSFET intrinsic gate charge, gate to bulk.
+    GateBulk,
 }
 
 /// The polarity-normalised variables of `u`: `sign * u_k`, each with derivative `sign`.
@@ -709,9 +1047,7 @@ impl DeviceBranch {
                 match part {
                     BjtPart::BaseResistance => {
                         let state = params.state(&v[1], &v[2]);
-                        let rbm = params.rbm.unwrap_or(params.rb);
-                        let r = Dual::constant(params.rb - rbm, n).div(&state.qb).offset(rbm);
-                        v[0].div(&r).scale(s)
+                        v[0].div(&params.base_resistance(&state)).scale(s)
                     }
                     _ => {
                         let state = params.state(&v[0], &v[1]);
@@ -732,6 +1068,7 @@ impl DeviceBranch {
                     FetPart::Source => junction(&v[0], params.is, nvt),
                     FetPart::Drain => junction(&v[1], params.is, nvt),
                     FetPart::Channel => params.drain_current(&v[0], &v[1]),
+                    FetPart::GateSource | FetPart::GateDrain | FetPart::GateBulk => Dual::constant(0.0, n),
                 };
                 i.scale(s)
             }
@@ -742,6 +1079,7 @@ impl DeviceBranch {
                     FetPart::Source => junction(&v[0], params.is_source, THERMAL_VOLTAGE),
                     FetPart::Drain => junction(&v[0], params.is_drain, THERMAL_VOLTAGE),
                     FetPart::Channel => params.drain_current(&v[0], &v[1], &v[2]),
+                    FetPart::GateSource | FetPart::GateDrain | FetPart::GateBulk => Dual::constant(0.0, n),
                 };
                 i.scale(s)
             }
@@ -771,17 +1109,24 @@ impl DeviceBranch {
                 let q = match part {
                     FetPart::Source => depletion_charge(&v[0], params.cgs, params.pb, params.m, params.fc),
                     FetPart::Drain => depletion_charge(&v[1], params.cgd, params.pb, params.m, params.fc),
-                    FetPart::Channel => return None,
+                    _ => return None,
                 };
                 q.scale(s)
             }
             DeviceBranch::Mos { params, part } => {
                 let s = params.polarity;
                 let v = normalised(u, s);
+                let gate = |k: usize| {
+                    let q = params.gate_charges(&v[0], &v[1], &v[2]);
+                    Some(q[k].scale(s))
+                };
                 let (bottom, side) = match part {
                     FetPart::Source => (params.cbs, params.cbs_sidewall),
                     FetPart::Drain => (params.cbd, params.cbd_sidewall),
                     FetPart::Channel => return None,
+                    FetPart::GateSource => return gate(0),
+                    FetPart::GateDrain => return gate(1),
+                    FetPart::GateBulk => return gate(2),
                 };
                 depletion_charge(&v[0], bottom, params.pb, params.mj, params.fc)
                     .add(&depletion_charge(&v[0], side, params.pb, params.mjsw, params.fc))
@@ -812,12 +1157,13 @@ impl DeviceBranch {
             DeviceBranch::Jfet { params, part } => match part {
                 FetPart::Source => params.cgs > 0.0,
                 FetPart::Drain => params.cgd > 0.0,
-                FetPart::Channel => false,
+                _ => false,
             },
             DeviceBranch::Mos { params, part } => match part {
                 FetPart::Source => params.cbs > 0.0 || params.cbs_sidewall > 0.0,
                 FetPart::Drain => params.cbd > 0.0 || params.cbd_sidewall > 0.0,
                 FetPart::Channel => false,
+                FetPart::GateSource | FetPart::GateDrain | FetPart::GateBulk => params.oxide_capacitance > 0.0,
             },
             DeviceBranch::Depletion { cj0, .. } => *cj0 > 0.0,
         }
@@ -1028,9 +1374,10 @@ impl Circuit {
         Ok(x.finish(MacroModel::Jfet(p), terminals, None))
     }
 
-    /// Add a level-1 MOSFET (see the module docs): `M.rd`, `M.rs` (when
-    /// nonzero), `M.ds`, `M.bd`, `M.bs`, overlap capacitors `M.cgso`,
-    /// `M.cgdo`, `M.cgbo` (when nonzero); internal nodes `M#d`, `M#s`.
+    /// Add a MOSFET (see the module docs): `M.rd`, `M.rs` (when nonzero),
+    /// `M.ds`, `M.bd`, `M.bs`, overlap capacitors `M.cgso`, `M.cgdo`,
+    /// `M.cgbo` (when nonzero), the gate charges `M.gs`, `M.gd`, `M.gb`
+    /// (with an oxide capacitance); internal nodes `M#d`, `M#s`.
     pub fn mosfet(&mut self, name: &str, pins: FetPins, params: &MosParams) -> Result<usize, SimError> {
         params.validate(name)?;
         self.check_nodes(name, &[pins.d, pins.g, pins.s, pins.b])?;
@@ -1048,6 +1395,10 @@ impl Circuit {
                 parts.push(part);
             }
         }
+        let intrinsic = params.oxide_capacitance > 0.0;
+        if intrinsic {
+            parts.extend(["gs", "gd", "gb"]);
+        }
         let mut x = Expansion::begin(self, name, &parts, &nodes)?;
         let d = fet_resistor(&mut x, params.rd, "rd", "d", pins.d)?;
         let s = fet_resistor(&mut x, params.rs, "rs", "s", pins.s)?;
@@ -1058,12 +1409,20 @@ impl Circuit {
         if params.kf > 0.0 {
             channel_noise.push(LawNoise::Flicker { kf: params.kf, af: params.af, divisor: params.flicker_divisor });
         }
-        let channel = device_law(
-            vec![Control::Voltage(pins.g, s), Control::Voltage(d, s), Control::Voltage(pins.b, s)],
-            vec![Limit::Fet { vto: sign * params.vto, sign }, Limit::Vds { sign }, Limit::None],
-            mos(FetPart::Channel),
-            channel_noise,
-        );
+        let channel_controls = vec![Control::Voltage(pins.g, s), Control::Voltage(d, s), Control::Voltage(pins.b, s)];
+        let channel_limits = vec![Limit::Fet { vto: sign * params.vto, sign }, Limit::Vds { sign }, Limit::None];
+        let channel =
+            device_law(channel_controls.clone(), channel_limits.clone(), mos(FetPart::Channel), channel_noise);
+        if intrinsic {
+            for (part, z, branch) in
+                [("gs", s, FetPart::GateSource), ("gd", d, FetPart::GateDrain), ("gb", pins.b, FetPart::GateBulk)]
+            {
+                let law = device_law(channel_controls.clone(), channel_limits.clone(), mos(branch), Vec::new());
+                let n = x.part(part);
+                let id = x.c.add(&n, ElementKind::Law { a: pins.g, b: z, law });
+                x.keep(id)?;
+            }
+        }
         let diode = |is: f64, node: NodeId, part: FetPart| {
             device_law(
                 vec![Control::Voltage(pins.b, node)],

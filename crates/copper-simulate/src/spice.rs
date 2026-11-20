@@ -55,7 +55,7 @@ pub fn instantiate(c: &mut Circuit, instance: &str, model: &SpiceModel, ports: &
             ports.len()
         ));
     }
-    lib.instantiate(c, instance, &model.subckt, ports, &[]).map_err(|e| format!("SIM078: {e}"))
+    lib.instantiate(c, instance, &model.subckt, ports, &model.params).map_err(|e| format!("SIM078: {e}"))
 }
 
 /// `spice OPA810 (opa810_a.lib, sha256 1a2b3c4d...)` for the model list.
@@ -64,8 +64,12 @@ pub fn describe(model: &SpiceModel) -> String {
         SpiceSource::File(file) => file.clone(),
         SpiceSource::Url { url, .. } => url.clone(),
     };
+    let params: String = model.params.iter().map(|(name, value)| format!(", {name} = {value}")).collect();
     match library(model) {
-        Ok((_, _, hash)) => format!("spice {} ({file}, {} dialect, sha256 {hash})", model.subckt, model.dialect),
-        Err(_) => format!("spice {} ({file}, {} dialect)", model.subckt, model.dialect),
+        Ok((lib, _, hash)) => {
+            let notes: String = lib.notes().iter().map(|note| format!("; {note}")).collect();
+            format!("spice {} ({file}, {} dialect, sha256 {hash}{params}{notes})", model.subckt, model.dialect)
+        }
+        Err(_) => format!("spice {} ({file}, {} dialect{params})", model.subckt, model.dialect),
     }
 }

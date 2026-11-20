@@ -90,7 +90,7 @@ pub use noise::{
     NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,
 };
 pub use regulator::{RegulatorParams, RegulatorPins};
-pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, MosParams};
+pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, Level3Params, MosLevel, MosParams};
 pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
 pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

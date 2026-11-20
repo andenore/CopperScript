@@ -422,7 +422,8 @@ fn switch_with_hysteresis_turns_on_at_its_threshold() {
     let vc = c.voltage_source("VC", ctl, G, SourceValue::dc(0.0)).unwrap();
     c.set_waveform(vc, Waveform::Pwl(vec![(0.0, 0.0), (1e-3, 2.0)])).unwrap();
     c.voltage_source("VS", s, G, SourceValue::dc(1.0)).unwrap();
-    let p = SwitchParams { on_resistance: 1.0, off_resistance: 1e9, threshold: 1.0, hysteresis: 0.1 };
+    let p =
+        SwitchParams { on_resistance: 1.0, off_resistance: 1e9, threshold: 1.0, hysteresis: 0.1, initially_on: false };
     c.switch("S1", s, o, ctl, G, &p).unwrap();
     c.resistor("RL", o, G, 999.0).unwrap();
     let stop = 1.2e-3;

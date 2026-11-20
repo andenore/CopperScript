@@ -496,6 +496,12 @@ fn roots(g: &Mat, c: &Mat, values: Vec<Complex>, node_names: Option<(&Circuit, &
 /// The poles of `circuit` linearised at its operating point, and the zeros of
 /// `transfer` when given (see the module docs).
 pub fn pole_zero(circuit: &Circuit, transfer: Option<&Transfer>) -> Result<PoleZeroResult, SimError> {
+    if let Some(e) = circuit.elements().iter().find(|e| matches!(e.kind(), crate::circuit::ElementKind::Delay { .. })) {
+        return Err(SimError::PoleZero(format!(
+            "{} is an ideal delay (a transmission line, a LAPLACE exp(-s T) or a DELAY()), which has infinitely many poles; use analysis loop or ac",
+            e.name()
+        )));
+    }
     let linearized;
     let circuit = if circuit.is_nonlinear() {
         linearized = crate::newton::linearized(circuit)?;

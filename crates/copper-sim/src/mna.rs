@@ -192,7 +192,8 @@ pub fn current_form(c: &Circuit, layout: &Layout, mode: Mode, index: usize) -> O
         ElementKind::Inductor { .. }
         | ElementKind::VoltageSource { .. }
         | ElementKind::Vcvs { .. }
-        | ElementKind::Ccvs { .. } => branch(),
+        | ElementKind::Ccvs { .. }
+        | ElementKind::Delay { .. } => branch(),
         ElementKind::CurrentSource { value, .. } => {
             CurrentForm { terms: Vec::new(), constant: source_value(mode, value) }
         }
@@ -305,6 +306,22 @@ pub fn assemble(c: &Circuit, layout: &Layout, mode: Mode) -> System {
                 }
                 if let Some(r) = layout.row(*cn) {
                     s.add(k, r, Complex::real(*gain));
+                }
+            }
+            ElementKind::Delay { controls, delay, .. } => {
+                // exp(-j w T); 1 at DC.
+                let phase = match mode {
+                    Mode::Dc => 0.0,
+                    Mode::Ac { omega } => -omega * delay,
+                };
+                let shift = Complex::new(phase.cos(), phase.sin());
+                for (p, q, g) in controls {
+                    if let Some(r) = layout.row(*p) {
+                        s.add(k, r, -shift.scale(*g));
+                    }
+                    if let Some(r) = layout.row(*q) {
+                        s.add(k, r, shift.scale(*g));
+                    }
                 }
             }
             ElementKind::Ccvs { control, ohms, .. } => {

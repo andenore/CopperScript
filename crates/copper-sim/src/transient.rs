@@ -214,6 +214,20 @@ impl TranResult {
     }
 }
 
+/// A delay's control value at `t` from its accepted samples (linear between
+/// them; the first sample, the operating point, before it).
+fn delayed_value(samples: &[(f64, f64)], t: f64) -> f64 {
+    let after = samples.partition_point(|(s, _)| *s <= t);
+    if after == 0 {
+        return samples.first().map_or(0.0, |(_, v)| *v);
+    }
+    if after == samples.len() {
+        return samples[after - 1].1;
+    }
+    let ((t0, v0), (t1, v1)) = (samples[after - 1], samples[after]);
+    if t1 > t0 { v0 + (v1 - v0) * (t - t0) / (t1 - t0) } else { v1 }
+}
+
 /// Divided differences of order `points.len() - 1` (at most 4) of unknown `k`.
 fn divided_difference(points: &[(f64, &[f64])], k: usize) -> f64 {
     debug_assert!(points.len() <= 5, "at most a fourth divided difference");
@@ -403,11 +417,40 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
     let m = &model;
     let elements = c.elements().len();
     let mut solver = Solver::default();
-    let hmax = options.max_step.unwrap_or((stop - start) / 50.0).min(stop);
+    // Ideal delays: the step is at most the shortest delay, so a delayed
+    // value always lies in the accepted history; a corner of a source
+    // reappears a delay (and its multiples, for reflections) later.
+    let delays: Vec<(usize, f64)> = c
+        .elements()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e.kind() {
+            ElementKind::Delay { delay, .. } => Some((i, *delay)),
+            _ => None,
+        })
+        .collect();
+    let shortest = delays.iter().map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
+    let hmax = options.max_step.unwrap_or((stop - start) / 50.0).min(stop).min(shortest);
     let hmin = stop * 1e-12;
     let event_tol = stop * 1e-6;
 
     let mut breakpoints: Vec<f64> = c.waveforms.values().flat_map(|w| w.breakpoints(stop)).collect();
+    if !delays.is_empty() {
+        let mut lengths: Vec<f64> = delays.iter().map(|(_, d)| *d).collect();
+        lengths.sort_by(f64::total_cmp);
+        lengths.dedup();
+        let mut base = breakpoints.clone();
+        base.push(0.0);
+        for b in base {
+            for &d in &lengths {
+                let mut k = 1.0;
+                while b + k * d < stop && k <= 1000.0 {
+                    breakpoints.push(b + k * d);
+                    k += 1.0;
+                }
+            }
+        }
+    }
     if start > 0.0 {
         breakpoints.push(start);
     }
@@ -470,7 +513,21 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             charge[l] = law.charge(&u).map_or(0.0, |q| q.v);
         }
     }
-    let mut state = State { x: dc.x, dynamic, charge, junction: dc.junction, switch_on: dc.switch_on };
+    // Each delay's control value at the accepted points, from t = 0.
+    let control_value = |i: usize, x: &[f64]| -> f64 {
+        let ElementKind::Delay { controls, .. } = c.elements()[i].kind() else { return 0.0 };
+        controls.iter().map(|(p, q, g)| g * (m.v(x, *p) - m.v(x, *q))).sum()
+    };
+    let mut delay_history: Vec<Vec<(f64, f64)>> =
+        delays.iter().map(|&(i, _)| vec![(0.0, control_value(i, &dc.x))]).collect();
+    let mut state = State {
+        x: dc.x,
+        dynamic,
+        charge,
+        junction: dc.junction,
+        switch_on: dc.switch_on,
+        delayed: vec![0.0; elements],
+    };
     let record = |state: &State| Recorded {
         x: state.x.clone(),
         dynamic: dynamic_elements.iter().map(|&e| state.dynamic[e]).collect(),
@@ -512,6 +569,9 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             return Err(SimError::StepTooSmall { time: t, step: h, nodes, elements });
         }
         let t_new = if landing { next } else { t + h };
+        for (&(i, delay), samples) in delays.iter().zip(&delay_history) {
+            state.delayed[i] = delayed_value(samples, t_new - delay);
+        }
         let method = if history.len() >= 3 { Method::Trapezoidal } else { Method::BackwardEuler };
         let ctx = Context {
             time: Some(t_new),
@@ -598,6 +658,7 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             charge: state.charge.clone(),
             junction: solved.junction,
             switch_on,
+            delayed: vec![0.0; elements],
         };
         for &e in &dynamic_elements {
             let trap = if method == Method::Trapezoidal { state.dynamic[e] } else { 0.0 };
@@ -621,6 +682,14 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
             }
         }
         t = t_new;
+        for (&(i, delay), samples) in delays.iter().zip(delay_history.iter_mut()) {
+            samples.push((t, control_value(i, &x)));
+            // Keep what a later step can still ask for: from one point before t - delay.
+            let keep = samples.partition_point(|(s, _)| *s < t - delay).saturating_sub(1);
+            if keep > 64 && keep * 2 > samples.len() {
+                samples.drain(..keep);
+            }
+        }
         stats.accepted_steps += 1;
         stats.smallest_step = stats.smallest_step.min(h);
         stats.largest_step = stats.largest_step.max(h);

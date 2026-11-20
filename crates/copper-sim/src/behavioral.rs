@@ -570,7 +570,11 @@ impl Limit {
             Limit::None => new,
             Limit::Junction { vt, vcrit, sign } => sign * pnjlim(sign * new, sign * old, vt, vcrit),
             Limit::Fet { vto, sign } => sign * fetlim(sign * new, sign * old, vto),
-            Limit::Vds { sign } => sign * limvds(sign * new, sign * old),
+            Limit::Vds { sign } => {
+                // As SPICE3: the limit acts on |v_ds| in the mode the new value is in.
+                let (n, o) = (sign * new, sign * old);
+                sign * if n >= 0.0 { limvds(n, o) } else { -limvds(-n, -o) }
+            }
             Limit::Window { lo, hi } => window_limit(new, old, lo, hi),
         }
     }

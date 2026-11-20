@@ -232,6 +232,22 @@ pub enum ElementKind {
         /// Resistances, threshold and hysteresis.
         params: crate::devices::SwitchParams,
     },
+    /// An ideal delay: `V(plus) - V(minus) = sum_k g_k (V(p_k) - V(n_k))`
+    /// taken `delay` seconds earlier (a transmission line's travelling wave,
+    /// a LAPLACE `exp(-s T)`, a `DELAY()`). At the operating point the delay
+    /// is a VCVS; in AC each gain carries `exp(-j w T)`; in a transient run
+    /// the step is at most `delay` and the delayed value is interpolated
+    /// linearly between accepted points (before `t = 0`: the operating point).
+    Delay {
+        /// Positive output terminal.
+        plus: NodeId,
+        /// Negative output terminal.
+        minus: NodeId,
+        /// `(p, n, g)`: the control is the sum of `g (V(p) - V(n))`.
+        controls: Vec<(NodeId, NodeId, f64)>,
+        /// The delay, s (positive).
+        delay: f64,
+    },
     /// A nonlinear element with a general law between `a` and `b`: a
     /// behavioural source or a branch of a semiconductor device, see
     /// [`crate::behavioral`]. A voltage law has a branch current.
@@ -255,7 +271,8 @@ impl ElementKind {
             | ElementKind::Inductor { a, b, .. } => Some((a, b)),
             ElementKind::VoltageSource { plus, minus, .. }
             | ElementKind::Vcvs { plus, minus, .. }
-            | ElementKind::Ccvs { plus, minus, .. } => Some((plus, minus)),
+            | ElementKind::Ccvs { plus, minus, .. }
+            | ElementKind::Delay { plus, minus, .. } => Some((plus, minus)),
             ElementKind::CurrentSource { from, to, .. }
             | ElementKind::Vccs { from, to, .. }
             | ElementKind::Cccs { from, to, .. } => Some((from, to)),
@@ -292,6 +309,11 @@ impl ElementKind {
                 }
             }
         }
+        if let ElementKind::Delay { controls, .. } = self {
+            for (p, n, _) in controls {
+                nodes.extend([*p, *n]);
+            }
+        }
         nodes
     }
 
@@ -303,7 +325,8 @@ impl ElementKind {
             ElementKind::Inductor { .. }
             | ElementKind::VoltageSource { .. }
             | ElementKind::Vcvs { .. }
-            | ElementKind::Ccvs { .. } => true,
+            | ElementKind::Ccvs { .. }
+            | ElementKind::Delay { .. } => true,
             ElementKind::Law { law, .. } => law.output == crate::behavioral::Output::Voltage,
             _ => false,
         }
@@ -534,6 +557,12 @@ impl Circuit {
             ElementKind::Vcvs { gain, .. } | ElementKind::Cccs { gain, .. } => finite("gain", *gain)?,
             ElementKind::Vccs { gm, .. } => finite("transconductance", *gm)?,
             ElementKind::Ccvs { ohms, .. } => finite("transresistance", *ohms)?,
+            ElementKind::Delay { controls, delay, .. } => {
+                positive("delay", *delay)?;
+                for (_, _, g) in controls {
+                    finite("gain", *g)?;
+                }
+            }
             ElementKind::Diode { params, .. } => params.validate(name)?,
             ElementKind::Switch { params, .. } => params.validate(name)?,
             ElementKind::Law { law, .. } => {
@@ -624,6 +653,19 @@ impl Circuit {
         gain: f64,
     ) -> Result<ElementId, SimError> {
         self.add(name, ElementKind::Vcvs { plus, minus, cp, cn, gain })
+    }
+
+    /// An ideal delay (see [`ElementKind::Delay`]): `V(plus) - V(minus) =
+    /// sum_k g_k (V(p_k) - V(n_k))` at `t - delay`.
+    pub fn delay(
+        &mut self,
+        name: &str,
+        plus: NodeId,
+        minus: NodeId,
+        controls: Vec<(NodeId, NodeId, f64)>,
+        delay: f64,
+    ) -> Result<ElementId, SimError> {
+        self.add(name, ElementKind::Delay { plus, minus, controls, delay })
     }
 
     /// VCCS: current `gm (V(cp) - V(cn))` from `from` through the source to `to`.

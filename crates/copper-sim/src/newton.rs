@@ -397,6 +397,9 @@ pub(crate) struct State {
     pub junction: Vec<f64>,
     /// Per element: whether a switch is on.
     pub switch_on: Vec<bool>,
+    /// Per element: a delay's output for the step being solved, from the
+    /// history of its control (set by the transient run before each step).
+    pub delayed: Vec<f64>,
 }
 
 /// One solve's conditions.
@@ -534,7 +537,8 @@ fn forms(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], junction: &[f64], mas
                 ElementKind::Inductor { .. }
                 | ElementKind::VoltageSource { .. }
                 | ElementKind::Vcvs { .. }
-                | ElementKind::Ccvs { .. },
+                | ElementKind::Ccvs { .. }
+                | ElementKind::Delay { .. },
                 _,
             ) => Some(branch()),
             (ElementKind::CurrentSource { value, .. }, _) => {
@@ -706,6 +710,21 @@ fn stamp(
                     add(k, r, *gain);
                 }
             }
+            ElementKind::Delay { controls, .. } => match (ctx.method, ctx.prev) {
+                // At the operating point (and the initial point) the delay is a VCVS.
+                (Method::Dc, _) | (_, None) => {
+                    for (p, q, g) in controls {
+                        if let Some(r) = m.row(*p) {
+                            add(k, r, -*g);
+                        }
+                        if let Some(r) = m.row(*q) {
+                            add(k, r, *g);
+                        }
+                    }
+                }
+                // In a transient step, the value from the history (see `transient`).
+                (_, Some(prev)) => rhs[k] = prev.delayed.get(i).copied().unwrap_or(0.0),
+            },
             ElementKind::Ccvs { control, ohms, .. } => {
                 if let Some(form) = &forms[control.index()] {
                     for &(col, coef) in &form.terms {
@@ -788,7 +807,8 @@ pub(crate) fn element_current(
             ElementKind::Inductor { .. }
             | ElementKind::VoltageSource { .. }
             | ElementKind::Vcvs { .. }
-            | ElementKind::Ccvs { .. },
+            | ElementKind::Ccvs { .. }
+            | ElementKind::Delay { .. },
             _,
         ) => branch(),
         (ElementKind::CurrentSource { value, .. }, _) => {
@@ -1102,6 +1122,11 @@ pub(crate) fn dc_point(
     let n = m.layout.size();
     let elements = c.elements().len();
     let mut switch_on = vec![false; elements];
+    for &s in &m.switches {
+        if let ElementKind::Switch { params, .. } = c.elements()[s].kind() {
+            switch_on[s] = params.initially_on;
+        }
+    }
     let zeros = vec![0.0; n];
     let no_junction = vec![0.0; m.slots];
     let singular = |e: LuError| match e {

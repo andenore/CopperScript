@@ -159,14 +159,31 @@ pub enum Card {
         b: String,
         control: SwitchControl,
         model: String,
+        /// The `ON` flag: the operating point starts with the switch on.
+        on: bool,
     },
     Instance {
         nodes: Vec<String>,
         subckt: String,
         params: Vec<(String, Value)>,
     },
+    /// A lossless transmission line `T a1 b1 a2 b2 Z0= TD=` (or `F=` with `NL=`).
+    Line {
+        ports: [String; 4],
+        z0: Value,
+        delay: LineDelay,
+    },
     /// A card the simulator cannot run, with the reason.
     Unsupported(String),
+}
+
+/// How a transmission line's delay is given.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineDelay {
+    /// `TD=`, s.
+    Time(Value),
+    /// `F=` with `NL=` (the length in wavelengths at `F`, default 0.25): `TD = NL / F`.
+    Frequency(Value, Option<Value>),
 }
 
 /// What controls a switch.
@@ -242,6 +259,8 @@ pub struct Netlist {
     pub top: Vec<Element>,
     /// The files read, in order.
     pub files: Vec<PathBuf>,
+    /// Cards read and ignored because they cannot change the circuit (`.OPTIONS`), one line each.
+    pub notes: Vec<String>,
 }
 
 fn err(loc: &Loc, kind: ErrorKind, message: impl Into<String>) -> SpiceError {
@@ -255,9 +274,34 @@ fn value_of(token: &Token, dialect: Dialect, loc: &Loc) -> Result<Value, SpiceEr
             None if w.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') => Ok(SExpr::Name(w.clone())),
             None => Err(err(loc, ErrorKind::Syntax, format!("{w:?} is not a number"))),
         },
-        Token::Expr(e) => expr::parse(e, dialect).map_err(|m| err(loc, ErrorKind::Syntax, format!("in {{{e}}}: {m}"))),
+        Token::Expr(e) => {
+            // Redundant inner braces, as in PSpice's VALUE { {I(V1)*15.6} }.
+            let mut inner = e.trim();
+            while inner.starts_with('{') && inner.ends_with('}') && balanced(&inner[1..inner.len() - 1]) {
+                inner = inner[1..inner.len() - 1].trim();
+            }
+            expr::parse(inner, dialect).map_err(|m| err(loc, ErrorKind::Syntax, format!("in {{{e}}}: {m}")))
+        }
         other => Err(err(loc, ErrorKind::Syntax, format!("expected a value, found {}", other.text()))),
     }
+}
+
+/// Whether the braces of `text` pair up (no `}` closes before its `{`).
+fn balanced(text: &str) -> bool {
+    let mut depth = 0i32;
+    for c in text.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// `NAME = value` pairs from `tokens` (commas and parentheses ignored).
@@ -290,6 +334,9 @@ struct Reader {
     files: Vec<PathBuf>,
     /// Open subcircuit definitions, innermost last.
     open: Vec<usize>,
+    notes: Vec<String>,
+    /// The files and library sections read (a file may be read once per section).
+    read: Vec<(PathBuf, Option<String>)>,
 }
 
 /// Read `path` and the files it includes (`.INCLUDE`, `.INC`, `.LIB file`).
@@ -303,8 +350,10 @@ pub fn read_file(path: &Path, dialect: Dialect, allow_includes: bool) -> Result<
         top: Vec::new(),
         files: Vec::new(),
         open: Vec::new(),
+        notes: Vec::new(),
+        read: Vec::new(),
     };
-    reader.file(path, allow_includes, &Loc::new(&path.display().to_string(), 0))?;
+    reader.file(path, allow_includes, None, &Loc::new(&path.display().to_string(), 0))?;
     reader.finish()
 }
 
@@ -317,8 +366,10 @@ pub fn read_str(text: &str, file: &str, dialect: Dialect) -> Result<Netlist, Spi
         top: Vec::new(),
         files: Vec::new(),
         open: Vec::new(),
+        notes: Vec::new(),
+        read: Vec::new(),
     };
-    reader.text(text, file, None)?;
+    reader.text(text, file, None, None)?;
     reader.finish()
 }
 
@@ -334,14 +385,17 @@ impl Reader {
             subckts: self.subckts,
             top: self.top,
             files: self.files,
+            notes: self.notes,
         })
     }
 
-    fn file(&mut self, path: &Path, allow_includes: bool, from: &Loc) -> Result<(), SpiceError> {
-        if self.files.iter().any(|f| f == path) {
+    fn file(&mut self, path: &Path, allow_includes: bool, section: Option<&str>, from: &Loc) -> Result<(), SpiceError> {
+        let key = (path.to_path_buf(), section.map(str::to_string));
+        if self.read.contains(&key) {
             return Ok(());
         }
-        if self.files.len() > 64 {
+        self.read.push(key);
+        if self.read.len() > 64 {
             return Err(err(from, ErrorKind::Syntax, "more than 64 included files"));
         }
         let bytes = std::fs::read(path)
@@ -357,15 +411,58 @@ impl Reader {
         if text.contains('\0') {
             return Err(err(&Loc::new(&shown, 0), ErrorKind::Syntax, "not a text netlist (binary data)"));
         }
-        self.files.push(path.to_path_buf());
+        if !self.files.iter().any(|f| f == path) {
+            self.files.push(path.to_path_buf());
+        }
         let base = path.parent().map(Path::to_path_buf);
-        self.text(&text, &shown, if allow_includes { base } else { None }.as_deref())
+        self.text(&text, &shown, if allow_includes { base } else { None }.as_deref(), section).map_err(|e| {
+            if e.line == 0 && section.is_some() {
+                SpiceError { line: from.line, file: from.file.to_string(), ..e }
+            } else {
+                e
+            }
+        })
     }
 
-    fn text(&mut self, text: &str, file: &str, base: Option<&Path>) -> Result<(), SpiceError> {
+    /// Read the cards of `text`; with `section`, only those between
+    /// `.LIB SECTION` and its `.ENDL`.
+    fn text(&mut self, text: &str, file: &str, base: Option<&Path>, section: Option<&str>) -> Result<(), SpiceError> {
         let lines = lexer::logical_lines(text, file, self.dialect)?;
+        let Some(section) = section else {
+            for line in &lines {
+                self.line(line, base)?;
+            }
+            return Ok(());
+        };
+        let mut inside = false;
+        let mut found = false;
         for line in &lines {
-            self.line(line, base)?;
+            let toks = lexer::tokens(line)?;
+            let first = toks.first().and_then(Token::word);
+            let opens = first == Some(".LIB")
+                && toks.len() == 2
+                && toks[1].word().is_some_and(|w| !w.contains('.') && !w.contains('/'));
+            if opens {
+                if toks[1].word() == Some(section) {
+                    inside = true;
+                    found = true;
+                }
+                continue;
+            }
+            if first == Some(".ENDL") {
+                inside = false;
+                continue;
+            }
+            if inside {
+                self.line(line, base)?;
+            }
+        }
+        if !found {
+            return Err(err(
+                &Loc::new(file, 0),
+                ErrorKind::Undefined,
+                format!("the library section {section} (.LIB {section} ... .ENDL) is not in {file}"),
+            ));
         }
         Ok(())
     }
@@ -493,7 +590,19 @@ impl Reader {
                         start += 1;
                     }
                 }
-                params.extend(assignments(&rest[start.min(rest.len())..], d, loc)?);
+                let mut cards: Vec<Token> = rest[start.min(rest.len())..].to_vec();
+                if kind == "VDMOS" {
+                    // LTspice's channel-type flags of a VDMOS model, kept as parameters.
+                    for flag in ["PCHAN", "NCHAN"] {
+                        if let Some(i) = cards.iter().position(|t| t.word() == Some(flag))
+                            && cards.get(i + 1) != Some(&Token::Equals)
+                        {
+                            cards.remove(i);
+                            params.push((flag.to_string(), SExpr::Num(1.0)));
+                        }
+                    }
+                }
+                params.extend(assignments(&cards, d, loc)?);
                 let scope = self.scope();
                 if self.scopes[scope].models.contains_key(name) {
                     return Err(err(loc, ErrorKind::Syntax, format!(".MODEL {name} is defined twice")));
@@ -503,7 +612,17 @@ impl Reader {
             }
             ".PARAM" | ".PARAMS" => {
                 let scope = self.scope();
-                for (name, value) in assignments(rest, d, loc)? {
+                // PSpice also reads .PARAM NAME VALUE without the equals sign.
+                let mut written: Vec<Token> = Vec::with_capacity(rest.len() + 1);
+                let plain = rest.iter().filter(|t| !matches!(t, Token::Comma)).count() == 2
+                    && matches!(rest.first(), Some(Token::Word(_)))
+                    && !rest.contains(&Token::Equals);
+                if plain {
+                    written.push(rest[0].clone());
+                    written.push(Token::Equals);
+                    written.extend(rest[1..].iter().filter(|t| !matches!(t, Token::Comma)).cloned());
+                }
+                for (name, value) in assignments(if plain { &written } else { rest }, d, loc)? {
                     self.scopes[scope].params.push((name, value, loc.clone()));
                 }
             }
@@ -555,13 +674,18 @@ impl Reader {
                     _ => return Err(err(loc, ErrorKind::Syntax, format!("{card} needs a file name"))),
                 };
                 let Some(target) = target else { return Ok(()) };
-                if card == ".LIB" && rest.len() > 1 {
-                    return Err(err(
-                        loc,
-                        ErrorKind::Unsupported,
-                        ".LIB FILE SECTION (library sections) is not supported; include the file",
-                    ));
-                }
+                // `.LIB FILE SECTION`: only that section of the file.
+                let section = match rest.get(1) {
+                    None => None,
+                    Some(Token::Word(w)) if card == ".LIB" && rest.len() == 2 => Some(w.clone()),
+                    Some(other) => {
+                        return Err(err(
+                            loc,
+                            ErrorKind::Syntax,
+                            format!("{card}: unexpected {} after the file", other.text()),
+                        ));
+                    }
+                };
                 let Some(base) = base else {
                     return Err(err(
                         loc,
@@ -572,7 +696,18 @@ impl Reader {
                     ));
                 };
                 let path = base.join(&target);
-                self.file(&path, true, loc)?;
+                self.file(&path, true, section.as_deref(), loc)?;
+            }
+            ".OPTIONS" | ".OPTION" | ".OPT" => {
+                let names = options(rest, d, loc)?;
+                if !names.is_empty() {
+                    self.notes.push(format!(
+                        "{}:{}: .OPTIONS {} ignored (simulator controls that do not change the circuit)",
+                        loc.file,
+                        loc.line,
+                        names.join(" ")
+                    ));
+                }
             }
             ".ENDL" | ".END" | ".PROBE" | ".BACKANNO" | ".PRINT" | ".PLOT" | ".SAVE" | ".WIDTH" | ".TITLE" => {}
             ".TRAN" | ".AC" | ".OP" | ".DC" | ".NOISE" | ".FOUR" | ".MEAS" | ".MEASURE" | ".STEP" | ".TF" | ".SENS" => {
@@ -608,6 +743,103 @@ impl Reader {
         };
         Ok(Element { name: name.to_string(), loc: loc.clone(), card })
     }
+}
+
+/// `.OPTIONS` that only steer the solver or the output of another simulator.
+const HARMLESS_OPTIONS: &[&str] = &[
+    "ABSTOL",
+    "RELTOL",
+    "VNTOL",
+    "CHGTOL",
+    "TRTOL",
+    "PIVTOL",
+    "PIVREL",
+    "ITL1",
+    "ITL2",
+    "ITL3",
+    "ITL4",
+    "ITL5",
+    "ITL6",
+    "GMINSTEPS",
+    "SRCSTEPS",
+    "STEPGMIN",
+    "METHOD",
+    "MAXORD",
+    "NUMDGT",
+    "MEASDGT",
+    "MEASCPLXFMT",
+    "NOPAGE",
+    "NOECHO",
+    "NOMOD",
+    "NODE",
+    "LIST",
+    "OPTS",
+    "ACCT",
+    "WIDTH",
+    "LIMPTS",
+    "LIMTIM",
+    "CPTIME",
+    "EXPAND",
+    "NOREUSE",
+    "NOOUTMSG",
+    "NOBIAS",
+    "NOICON",
+    "NOSTEPDEP",
+    "ADVCONV",
+    "PREORDER",
+    "PLOTWINSIZE",
+    "NOOPITER",
+    "KEEPOPINFO",
+    "INTERP",
+    "BINARY",
+    "ASCII",
+    "NOINIT",
+    "NOACCT",
+    "NOWARN",
+    "WARN",
+    "POST",
+    "PROBE",
+];
+
+/// The names of an `.OPTIONS` card's options, all of which must be harmless;
+/// anything that could change the circuit (another `GMIN`, `TNOM`, `SCALE`,
+/// default MOSFET geometry) is unsupported.
+fn options(rest: &[Token], d: Dialect, loc: &Loc) -> Result<Vec<String>, SpiceError> {
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let Some(name) = rest[i].word() else {
+            i += 1;
+            continue;
+        };
+        let value = if rest.get(i + 1) == Some(&Token::Equals) {
+            let v =
+                rest.get(i + 2).ok_or_else(|| err(loc, ErrorKind::Syntax, format!(".OPTIONS {name}= has no value")))?;
+            i += 3;
+            Some(value_of(v, d, loc)?)
+        } else {
+            i += 1;
+            None
+        };
+        let number = match &value {
+            Some(SExpr::Num(x)) => Some(*x),
+            _ => None,
+        };
+        let harmless = HARMLESS_OPTIONS.contains(&name)
+            || (name == "GMIN" && number == Some(1e-12))
+            || (name == "TNOM" && number == Some(27.0));
+        if !harmless {
+            return Err(err(
+                loc,
+                ErrorKind::Unsupported,
+                format!(
+                    ".OPTIONS {name} is not supported: it may change the circuit (only solver and output controls, GMIN=1e-12 and TNOM=27 are ignored)"
+                ),
+            ));
+        }
+        names.push(name.to_string());
+    }
+    Ok(names)
 }
 
 fn words(toks: &[Token]) -> Vec<String> {
@@ -826,9 +1058,13 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
             let (a, b) = (node(1)?, node(2)?);
             let third = toks.get(3).ok_or_else(|| err(loc, ErrorKind::Syntax, format!("{name} is incomplete")))?;
             match third.word() {
-                Some("VALUE") | Some("VOL") | Some("CUR") if toks.get(4) == Some(&Token::Equals) => {
-                    let v = toks.get(5).ok_or_else(|| err(loc, ErrorKind::Syntax, "VALUE= needs {expression}"))?;
-                    if toks.len() > 6 {
+                // PSpice also writes VALUE {expr} without the equals sign.
+                Some("VALUE") | Some("VOL") | Some("CUR")
+                    if toks.get(4) == Some(&Token::Equals) || matches!(toks.get(4), Some(Token::Expr(_))) =>
+                {
+                    let at = if toks.get(4) == Some(&Token::Equals) { 5 } else { 4 };
+                    let v = toks.get(at).ok_or_else(|| err(loc, ErrorKind::Syntax, "VALUE= needs {expression}"))?;
+                    if toks.len() > at + 1 {
                         return Err(unsupported(loc, format!("{name}: options after VALUE are not supported")));
                     }
                     Ok(Card::Behavioral { out, a, b, value: value_of(v, d, loc)? })
@@ -1015,6 +1251,16 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
             Ok(Card::Jfet { d: dn, g, s, model, area })
         }
         'M' => {
+            // LTspice's VDMOS has three terminals: M d g s model [params].
+            let three_terminal = !matches!(toks.get(5), Some(Token::Word(_)))
+                || toks.get(6) == Some(&Token::Equals)
+                || toks.get(5).and_then(Token::word) == Some("OFF");
+            if three_terminal {
+                return Err(unsupported(
+                    loc,
+                    format!("{name}: a three-terminal MOSFET (LTspice's VDMOS power model) is not supported"),
+                ));
+            }
             let (dn, g, s, b) = (node(1)?, node(2)?, node(3)?, node(4)?);
             let model = word_at(toks, 5, "a MOSFET model", loc)?;
             let mut rest: Vec<Token> = toks[6.min(toks.len())..].to_vec();
@@ -1030,15 +1276,15 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
         'S' => {
             let (a, b, cp, cn) = (node(1)?, node(2)?, node(3)?, node(4)?);
             let model = word_at(toks, 5, "a switch model", loc)?;
-            switch_flags(name, &toks[6.min(toks.len())..], loc)?;
-            Ok(Card::Switch { a, b, control: SwitchControl::Voltage(cp, cn), model })
+            let on = switch_flags(name, &toks[6.min(toks.len())..], loc)?;
+            Ok(Card::Switch { a, b, control: SwitchControl::Voltage(cp, cn), model, on })
         }
         'W' => {
             let (a, b) = (node(1)?, node(2)?);
             let source = word_at(toks, 3, "a controlling voltage source", loc)?;
             let model = word_at(toks, 4, "a switch model", loc)?;
-            switch_flags(name, &toks[5.min(toks.len())..], loc)?;
-            Ok(Card::Switch { a, b, control: SwitchControl::Current(source), model })
+            let on = switch_flags(name, &toks[5.min(toks.len())..], loc)?;
+            Ok(Card::Switch { a, b, control: SwitchControl::Current(source), model, on })
         }
         'X' => {
             let mut nodes = Vec::new();
@@ -1065,7 +1311,49 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
             let params = assignments(&toks[params_from.min(toks.len())..], d, loc)?;
             Ok(Card::Instance { nodes, subckt, params })
         }
-        'T' => Err(unsupported(loc, format!("{name}: transmission lines (T) are not supported"))),
+        'T' => {
+            let ports = [node(1)?, node(2)?, node(3)?, node(4)?];
+            let params = assignments(&toks[5.min(toks.len())..], d, loc)?;
+            let mut z0 = None;
+            let (mut td, mut f, mut nl) = (None, None, None);
+            for (key, value) in params {
+                match key.as_str() {
+                    "Z0" | "ZO" => z0 = Some(value),
+                    "TD" => td = Some(value),
+                    "F" => f = Some(value),
+                    "NL" => nl = Some(value),
+                    "R" | "L" | "G" | "C" | "LEN" | "RG" | "LOSSY" => {
+                        return Err(unsupported(
+                            loc,
+                            format!(
+                                "{name}: lossy transmission lines ({key}=) are not supported; only the lossless line (Z0, TD or F and NL) is"
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(unsupported(
+                            loc,
+                            format!("{name}: the transmission line option {other}= is not supported"),
+                        ));
+                    }
+                }
+            }
+            let Some(z0) = z0 else {
+                return Err(err(loc, ErrorKind::Syntax, format!("{name}: a transmission line needs Z0=")));
+            };
+            let delay = match (td, f) {
+                (Some(td), None) => LineDelay::Time(td),
+                (None, Some(f)) => LineDelay::Frequency(f, nl),
+                _ => {
+                    return Err(err(
+                        loc,
+                        ErrorKind::Syntax,
+                        format!("{name}: a transmission line needs its delay as TD=, or as F= (with NL=)"),
+                    ));
+                }
+            };
+            Ok(Card::Line { ports, z0, delay })
+        }
         'O' => Err(unsupported(loc, format!("{name}: lossy transmission lines (O) are not supported"))),
         'U' => Err(unsupported(loc, format!("{name}: digital primitives and distributed lines (U) are not supported"))),
         'A' => Err(unsupported(loc, format!("{name}: XSPICE code models (A) are not supported"))),
@@ -1075,22 +1363,17 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
     }
 }
 
-fn switch_flags(name: &str, rest: &[Token], loc: &Loc) -> Result<(), SpiceError> {
+/// The `ON` / `OFF` flags after a switch's model: whether it starts on.
+fn switch_flags(name: &str, rest: &[Token], loc: &Loc) -> Result<bool, SpiceError> {
+    let mut on = false;
     for t in rest {
         match t.word() {
-            Some("OFF") => {}
-            Some("ON") => {
-                return Err(unsupported(
-                    loc,
-                    format!(
-                        "{name}: an initial ON state is not supported; the operating point starts every switch off"
-                    ),
-                ));
-            }
+            Some("OFF") => on = false,
+            Some("ON") => on = true,
             _ => return Err(unsupported(loc, format!("{name}: unexpected {} after the model", t.text()))),
         }
     }
-    Ok(())
+    Ok(on)
 }
 
 fn device_area(name: &str, toks: &[Token], from: usize, d: Dialect, loc: &Loc) -> Result<Option<Value>, SpiceError> {
@@ -1178,7 +1461,7 @@ B1 12 0 I=V(2)*2
 .MODEL QN NPN IS=1E-16 BF=200
 .MODEL R_QUIET RES (T_ABS=-273.15)
 .MODEL SMOD VSWITCH(RON=1 ROFF=1MEG VON=1 VOFF=0)
-T1 1 0 2 0 Z0=50
+T1 1 0 2 0 Z0=50 TD=1N LEN=1
 .ENDS AMP
 .SUBCKT BUF A B
 E1 B 0 A 0 1
@@ -1216,7 +1499,10 @@ E1 B 0 A 0 1
         assert!(e.to_string().contains("bad.cir:3"), "{e}");
         let e = read_str(".SUBCKT X a\nR2 a 0 1\n", "open.cir", Dialect::Spice3).unwrap_err();
         assert!(e.message.contains(".ENDS"));
-        let e = read_str(".OPTIONS GMIN=1e-12\n", "o.cir", Dialect::Spice3).unwrap_err();
+        let e = read_str(".OPTIONS SCALE=1e-6\n", "o.cir", Dialect::Spice3).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Unsupported);
+        let n = read_str(".OPTIONS GMIN=1e-12 ITL4=100 NOPAGE\n", "o.cir", Dialect::Spice3).unwrap();
+        assert_eq!(n.notes.len(), 1);
+        assert!(n.notes[0].contains("GMIN ITL4 NOPAGE"), "{:?}", n.notes);
     }
 }

@@ -100,6 +100,7 @@ pub fn switch_params(spec: &SimSpec, params: &Params) -> SwitchParams {
         off_resistance: get("off_resistance").unwrap_or(d.off_resistance),
         threshold: get("threshold").unwrap_or(d.threshold),
         hysteresis: get("hysteresis").unwrap_or(d.hysteresis),
+        initially_on: false,
     }
 }
 

@@ -99,6 +99,12 @@ pub struct DiodeParams {
     pub flicker_coefficient: f64,
     /// Flicker-noise exponent `AF`.
     pub flicker_exponent: f64,
+    /// PSpice's recombination saturation current `ISR`, A (zero for none).
+    pub recombination_current: f64,
+    /// PSpice's recombination emission coefficient `NR` (default 2).
+    pub recombination_emission: f64,
+    /// PSpice's high-injection knee current `IKF`, A (`None` for none).
+    pub knee_current: Option<f64>,
 }
 
 impl Default for DiodeParams {
@@ -118,6 +124,9 @@ impl Default for DiodeParams {
             forward_bias_coefficient: 0.5,
             flicker_coefficient: 0.0,
             flicker_exponent: 1.0,
+            recombination_current: 0.0,
+            recombination_emission: 2.0,
+            knee_current: None,
         }
     }
 }
@@ -153,6 +162,11 @@ impl DiodeParams {
             ));
         }
         non_negative("flicker_coefficient", self.flicker_coefficient)?;
+        non_negative("recombination_current (ISR)", self.recombination_current)?;
+        positive("recombination_emission (NR)", self.recombination_emission)?;
+        if let Some(ikf) = self.knee_current {
+            positive("knee_current (IKF)", ikf)?;
+        }
         if !self.flicker_exponent.is_finite() {
             return bad(format!("flicker_exponent must be finite, got {}", self.flicker_exponent));
         }
@@ -165,11 +179,35 @@ impl DiodeParams {
     }
 
     /// Junction current and its derivative `(I, dI/dv)` at `v` (G_MIN included).
+    ///
+    /// With PSpice's extensions the forward current is
+    /// `I_nrm K_inj + I_rec K_gen`: `I_nrm = IS (exp(v / N V_T) - 1)`,
+    /// `K_inj = sqrt(IKF / (IKF + I_nrm))` (1 without `IKF`),
+    /// `I_rec = ISR (exp(v / NR V_T) - 1)` and
+    /// `K_gen = ((1 - v / VJ)^2 + 0.005)^(M / 2)`.
     pub fn current(&self, v: f64) -> (f64, f64) {
         let nvt = self.nvt();
         let (e, de) = limited_exp(v / nvt);
         let mut i = self.saturation_current * (e - 1.0);
         let mut g = self.saturation_current * de / nvt;
+        if let Some(ikf) = self.knee_current {
+            let k = (ikf / (ikf + i)).sqrt();
+            let dk = -0.5 * k / (ikf + i) * g;
+            (i, g) = (i * k, g * k + i * dk);
+        }
+        if self.recombination_current > 0.0 {
+            let nrvt = self.recombination_emission * THERMAL_VOLTAGE;
+            let (er, der) = limited_exp(v / nrvt);
+            let irec = self.recombination_current * (er - 1.0);
+            let grec = self.recombination_current * der / nrvt;
+            let (vj, m) = (self.junction_potential, self.grading_coefficient);
+            let s = 1.0 - v / vj;
+            let u = s * s + 0.005;
+            let kgen = u.powf(m / 2.0);
+            let dkgen = m / 2.0 * u.powf(m / 2.0 - 1.0) * 2.0 * s * (-1.0 / vj);
+            i += irec * kgen;
+            g += grec * kgen + irec * dkgen;
+        }
         if let Some(bv) = self.breakdown_voltage {
             let (eb, deb) = limited_exp(-(v + bv) / nvt);
             let (e0, _) = limited_exp(-bv / nvt);
@@ -264,12 +302,15 @@ pub struct SwitchParams {
     pub threshold: f64,
     /// Half-width of the hysteresis band, V (zero for a plain threshold).
     pub hysteresis: f64,
+    /// The state the operating point starts from (SPICE's `ON` flag): it
+    /// decides the state while the control is inside the hysteresis band.
+    pub initially_on: bool,
 }
 
 impl Default for SwitchParams {
-    /// `on_resistance = 1 ohm`, `off_resistance = 1 Gohm`, threshold and hysteresis zero.
+    /// `on_resistance = 1 ohm`, `off_resistance = 1 Gohm`, threshold and hysteresis zero, starting off.
     fn default() -> Self {
-        Self { on_resistance: 1.0, off_resistance: 1e9, threshold: 0.0, hysteresis: 0.0 }
+        Self { on_resistance: 1.0, off_resistance: 1e9, threshold: 0.0, hysteresis: 0.0, initially_on: false }
     }
 }
 

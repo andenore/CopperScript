@@ -251,7 +251,7 @@ impl SimKind {
 }
 
 /// The properties of a `sim spice` block.
-pub const SPICE_KEYS: [&str; 7] = ["source", "sha256", "member", "file", "subckt", "terminals", "dialect"];
+pub const SPICE_KEYS: [&str; 8] = ["source", "sha256", "member", "file", "subckt", "terminals", "dialect", "params"];
 
 /// The SPICE dialects a `sim spice` block may name.
 pub const SPICE_DIALECTS: [&str; 3] = ["spice3", "pspice", "ltspice"];
@@ -279,6 +279,9 @@ pub struct SpiceModel {
     pub dialect: String,
     /// The directory of the declaring source file, for a relative `file`.
     pub directory: String,
+    /// `params = values { NAME = value; ... };`: values (SI) for the
+    /// subcircuit's `PARAMS:` defaults, names in upper case, in source order.
+    pub params: Vec<(String, f64)>,
 }
 
 /// A source's output quantity.
@@ -677,6 +680,79 @@ fn spice_text<'a>(entry: &'a SimEntry, what: &str) -> Result<&'a str> {
     }
 }
 
+/// `params = values { NAME = value; ... };` of a `sim spice` block (`SIM105`):
+/// plain numbers, or quantities in a simulation unit (taken at their SI base
+/// value, `10kohm` is 10000); decibels are refused, since a SPICE parameter
+/// is a plain number.
+fn spice_params(entry: &SimEntry) -> Result<Vec<(String, f64)>> {
+    let SimValue::Block { kind, entries } = &entry.value else {
+        return Err(error(
+            "SIM105",
+            "sim spice params takes the subcircuit's parameters as a block: params = values { GAIN = 10; RF = 10kohm; };",
+            &entry.location,
+        ));
+    };
+    if kind != "values" {
+        return Err(error(
+            "SIM105",
+            format!("sim spice params is written params = values {{ NAME = value; ... }}, found {}", repr(kind)),
+            &entry.location,
+        ));
+    }
+    let mut out: Vec<(String, f64)> = Vec::new();
+    for item in entries {
+        let name = item.key.to_ascii_uppercase();
+        if out.iter().any(|(known, _)| *known == name) {
+            return Err(error(
+                "SIM105",
+                format!("sim spice params names {} twice (SPICE names ignore case)", repr(&item.key)),
+                &item.location,
+            ));
+        }
+        let number = match &item.value {
+            SimValue::Scalar(Scalar::Int(value)) => value.to_string().parse::<f64>().ok(),
+            SimValue::Scalar(Scalar::Float(value)) => Some(*value),
+            SimValue::Scalar(Scalar::Quantity { value, unit }) => {
+                if crate::expression::sim_dimension(unit) == Some(Dimension::Gain) {
+                    return Err(error(
+                        "SIM105",
+                        format!(
+                            "sim spice params {}: a SPICE parameter is a plain number, not decibels ({value} {unit})",
+                            item.key
+                        ),
+                        &item.location,
+                    ));
+                }
+                match crate::expression::sim_quantity(value, unit) {
+                    Some(quantity) => quantity.base_value().to_sci_string().parse::<f64>().ok(),
+                    None => {
+                        return Err(error(
+                            "SIM105",
+                            format!(
+                                "sim spice params {}: unknown unit {}; expected a number or one of: {}",
+                                item.key,
+                                repr(unit),
+                                crate::expression::sim_units().join(", ")
+                            ),
+                            &item.location,
+                        ));
+                    }
+                }
+            }
+            _ => None,
+        };
+        let Some(number) = number.filter(|x| x.is_finite()) else {
+            return Err(error(
+                "SIM105",
+                format!("sim spice params {} must be a number or a quantity", item.key),
+                &item.location,
+            ));
+        };
+        out.push((name, number));
+    }
+    Ok(out)
+}
+
 /// Lower a part's `sim spice { ... }` block: the roles are `1` to `n`, the
 /// terminals in the subcircuit's node order (a pin may be several terminals).
 fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<LoweredBlock> {
@@ -688,6 +764,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
     let mut dialect = None;
     let mut terminals: Vec<(String, Location)> = Vec::new();
     let mut unmodelled = Vec::new();
+    let mut params: Vec<(String, f64)> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
         let key = entry.key.as_str();
@@ -742,6 +819,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
                 }
                 dialect = Some(text.to_owned());
             }
+            "params" => params = spice_params(entry)?,
             "terminals" | "unmodelled" => {
                 let values = match &entry.value {
                     SimValue::Scalar(value) => std::slice::from_ref(value),
@@ -818,7 +896,8 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let spice = SpiceModel { source, subckt, dialect: dialect.unwrap_or_else(|| "spice3".to_owned()), directory };
+    let spice =
+        SpiceModel { source, subckt, dialect: dialect.unwrap_or_else(|| "spice3".to_owned()), directory, params };
     Ok(LoweredBlock {
         roles,
         unmodelled,
