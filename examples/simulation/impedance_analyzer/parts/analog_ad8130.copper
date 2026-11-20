@@ -39,6 +39,26 @@
 // typical (Table 2, +/-5 V; taken at +/-4.5 V, where it was not read), the output current
 // from the rail that sources it. No PSRR: not read.
 // Footprint: KiCad Package_SO:SOIC-8_3.9x4.9mm_P1.27mm.
+// Vendor model, registered by hand (plan F6). analog.com refuses scripted
+// downloads, so this part has no sim spice block yet and every bench runs the
+// macro model above. To run the vendor model:
+//   1. Download the AD8130 SPICE macro model yourself from its product page,
+//      https://www.analog.com/en/products/ad8130.html, "Tools & Simulations"
+//      (the .cir netlist; if it comes as a ZIP, keep the archive and name the
+//      netlist inside it with member = "...").
+//   2. copper models add examples/simulation/impedance_analyzer/board.copper FILE
+//      refuses a file no part declares yet, and prints its SHA-256 and the
+//      .SUBCKT lines it holds.
+//   3. Add below the sim block above:
+//        sim spice { sha256 = "THAT HASH"; download = "AD8130 SPICE macro model, analog.com product page";
+//                    subckt = "NAME"; dialect = pspice; terminals = INP, INN, REF, FB, VP, VN, OUT (as its header orders them); unmodelled = ...; }
+//      with the terminals in the .SUBCKT's node order (its header names them;
+//      the macro block's roles are inp INP, inn INN, ref REF, fb FB, out OUT, vp VP, vn VN; PD is unmodelled), every pin a terminal or unmodelled.
+//   4. Run copper models add again: it copies the file into
+//      .copper-cache/spice/<sha256>/; then copper sim --models vendor (or
+//      copper sim --check-model AD8130ARZ BOARD) runs it. A board without the file
+//      still builds and runs the macro model; with --models vendor it stops
+//      with SIM108, naming what to download.
 part AD8130ARZ {
     category = "amplifier.differential_receiver";
     manufacturer = "Analog Devices";

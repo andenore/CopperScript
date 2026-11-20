@@ -1,0 +1,33 @@
+// One part with both models of the OPA810: the built-in macro model at the
+// product page's figures (as OPA810_MACRO) and TI's PSpice model (as
+// OPA810_VENDOR), so one component can run either. `copper sim` runs the
+// macro model; `copper sim --models vendor` the vendor model (its archive
+// fetched first with `copper models fetch`). `copper sim --check-model OPA810
+// examples/simulation/vendor_models/board.copper --supply 24V` runs the standard
+// bench set on both and prints them side by side. The board's benches keep
+// the two separate parts, so that one run shows both.
+part OPA810 {
+    category = "amplifier.opamp";
+    manufacturer = "Texas Instruments (OPA810)";
+    pin OUT { number = "1"; domains = "analog"; directions = "output"; }
+    pin VN  { number = "2"; domains = "power"; directions = "input"; }
+    pin INP { number = "3"; domains = "analog"; directions = "input"; }
+    pin INN { number = "4"; domains = "analog"; directions = "input"; }
+    pin VP  { number = "5"; domains = "power"; directions = "input"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        gbw = 70MHz;              // product page
+        open_loop_gain = 112dB;   // assumption
+        slew_rate = 200V/us;      // product page
+        voltage_noise = 9.5nV/rtHz;  // product page, at 1 kHz
+    }
+    sim spice {
+        source = "https://www.ti.com/lit/zip/SBOMB73";
+        sha256 = "bee7ec13330e01d291d3e05c3b703647af276f3b174a51d40680d36905c4a0a0";
+        member = "opa810_a.lib";
+        subckt = "OPA810";
+        dialect = pspice;
+        terminals = INP, INN, OUT, VP, VN;
+    }
+}

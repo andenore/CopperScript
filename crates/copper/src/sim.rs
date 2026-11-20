@@ -1,32 +1,54 @@
-//! `copper sim BOARD [--bench NAME] [--out DIR] [--jobs N] [--timing] [--locked] [--offline]`: run
-//! the board's benches (`benches/*.copper` beside it): the analysis of each,
-//! once per step, its measures against their limits, and the results JSON,
-//! the CSV of plotted vectors and one HTML page per bench in `--out`.
+//! `copper sim BOARD [--bench NAME] [--out DIR] [--jobs N] [--models MODE] [--timing] [--locked] [--offline]`:
+//! run the board's benches (`benches/*.copper` beside it): the analysis of
+//! each, once per step, its measures against their limits, and the results
+//! JSON, the CSV of plotted vectors and one HTML page per bench in `--out`.
 //! Exit status 1 when a measure fails or a bench cannot be solved.
+//!
+//! `copper sim --check-model PART BOARD [--supply V] [--tie PIN=ROLE] [--no-tran] [--tran-budget S]`
+//! runs the standard bench set of [`copper_simulate::check_model`] on a part
+//! of the board's library instead, macro model beside vendor model.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
-use copper_simulate::{SimulateError, failed, simulate, write_outputs};
+use copper_simulate::check_model::{CheckOptions, check_part, find_part};
+use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with, write_outputs};
 
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
-const USAGE: &str =
-    "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--timing] [--locked] [--offline] board";
+const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--models {default,macro,vendor}] [--check-model PART] [--supply VOLTS] [--tie PIN=ROLE] [--no-tran] [--tran-budget SECONDS] [--timing] [--locked] [--offline] board";
 
 /// Where the files go without `--out`.
 const DEFAULT_OUT: &str = "build/sim";
+
+/// `30V`, `30 V` or `30`: volts.
+fn volts(text: &str) -> Option<f64> {
+    let number = text.trim().trim_end_matches(['V', 'v']).trim();
+    number.parse::<f64>().ok().filter(|x| x.is_finite() && *x > 0.0)
+}
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let usage_error = |err: &mut dyn Write, message: &str| {
         let _ = writeln!(err, "{USAGE}\ncopper sim: error: {message}");
         2
     };
-    let specs =
-        [value("--bench"), value("--out"), value("--jobs"), flag("--timing"), flag("--locked"), flag("--offline")];
+    let specs = [
+        value("--bench"),
+        value("--out"),
+        value("--jobs"),
+        value("--models"),
+        value("--check-model"),
+        value("--supply"),
+        value("--tie"),
+        flag("--no-tran"),
+        value("--tran-budget"),
+        flag("--timing"),
+        flag("--locked"),
+        flag("--offline"),
+    ];
     let parsed = match option_parser::parse(arguments, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
@@ -48,7 +70,17 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              averaged DC-DC converter, without switching ripple) drive rails in every analysis. A part's sim spice \
              block runs a SPICE subcircuit read natively (params = values {{ ... }} sets its PARAMS:; the model list \
              names ignored .OPTIONS); an unsupported construct fails the bench with its file and line (SIM078). \
-             Exit status 1 when a measure is outside its limits or a bench cannot be solved, 2 for \
+             A part may declare a built-in block and a sim spice block for one unit, its macro and vendor models: \
+             a run uses the macro model unless --models vendor is given (--models macro refuses a part with only a \
+             sim spice model, SIM107). A vendor file registered by hand (sim spice sha256 with a download note) \
+             that is not in the cache is SIM108, naming what to download and copper models add. \
+             --check-model PART runs a standard bench set on a part of the board's library instead of the benches \
+             (amplifiers: supply current, open-loop gain, gain-bandwidth, phase margin, follower bandwidth, voltage \
+             noise and slew rate; regulators and references: quiescent current, output voltage, output resistance, \
+             line rejection, dropout, efficiency, output noise and start-up), the macro model beside the vendor model \
+             with their difference, and passes when the models load, the operating points converge and the macro \
+             figures meet the values the block declares within the printed tolerances. \
+             Exit status 1 when a measure is outside its limits, a bench cannot be solved or a model check fails, 2 for \
              usage and compile errors"
         );
         crate::help::options(out, "sim");
@@ -59,6 +91,59 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [] => return usage_error(err, "the following arguments are required: board"),
         [_, extra @ ..] => return usage_error(err, &format!("unrecognized arguments: {}", extra.join(" "))),
     };
+    let choice = match parsed.value("--models") {
+        None => ModelChoice::Default,
+        Some(name) => match ModelChoice::parse(name) {
+            Some(choice) => choice,
+            None => {
+                return usage_error(
+                    err,
+                    &format!(
+                        "argument --models: invalid choice: '{name}' (choose from {})",
+                        ModelChoice::NAMES.join(", ")
+                    ),
+                );
+            }
+        },
+    };
+    let check = parsed.value("--check-model").map(str::to_owned);
+    let supply = match parsed.value("--supply") {
+        None => None,
+        Some(text) => match volts(text) {
+            Some(supply) => Some(supply),
+            None => {
+                return usage_error(err, &format!("argument --supply: expected a positive voltage, found '{text}'"));
+            }
+        },
+    };
+    let mut ties = Vec::new();
+    for text in parsed.values("--tie") {
+        for item in text.split(',').filter(|item| !item.trim().is_empty()) {
+            let Some((pin, role)) = item.split_once('=') else {
+                return usage_error(err, &format!("argument --tie: expected PIN=ROLE, found '{item}'"));
+            };
+            ties.push((pin.trim().to_owned(), role.trim().to_owned()));
+        }
+    }
+    let budget = match parsed.value("--tran-budget") {
+        None => None,
+        Some(text) => match text.parse::<f64>().ok().filter(|x| x.is_finite() && *x > 0.0) {
+            Some(seconds) => Some(seconds),
+            None => {
+                return usage_error(
+                    err,
+                    &format!("argument --tran-budget: expected a positive number of seconds, found '{text}'"),
+                );
+            }
+        },
+    };
+    let check_only = supply.is_some() || !ties.is_empty() || parsed.flag("--no-tran") || budget.is_some();
+    if check.is_none() && check_only {
+        return usage_error(err, "--supply, --tie, --no-tran and --tran-budget belong to --check-model");
+    }
+    if check.is_some() && (parsed.value("--bench").is_some() || parsed.value("--models").is_some()) {
+        return usage_error(err, "--check-model runs the part's own bench set; it takes no --bench or --models");
+    }
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let timing = parsed.flag("--timing") || std::env::var("COPPER_SIM_TIMING").is_ok_and(|v| !v.is_empty() && v != "0");
     copper_simulate::timing::enable(timing);
@@ -75,7 +160,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
-    let runs = match simulate(&board_path, &design, parsed.value("--bench")) {
+    if let Some(name) = check {
+        let options =
+            CheckOptions { supply, ties, skip_transient: parsed.flag("--no-tran"), transient_seconds: budget };
+        return check_model(&design, &name, &options, out, err);
+    }
+    let runs = match simulate_with(&board_path, &design, parsed.value("--bench"), choice) {
         Ok(runs) => runs,
         Err(SimulateError::Compile(failure)) => {
             let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
@@ -103,6 +193,29 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     }
     u8::from(failed(&runs))
+}
+
+/// `--check-model PART`: the part's bench set; exit 1 when a unit fails, 2 when it cannot be checked.
+fn check_model(
+    design: &copper_lang::compiler::Design,
+    name: &str,
+    options: &CheckOptions,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let library = match copper_lang::elaborate::elaborate(&design.electrical) {
+        Ok(flat) => flat.library,
+        Err(_) => design.electrical.library.clone(),
+    };
+    let checks = match find_part(&library, name).and_then(|part| check_part(part, options)) {
+        Ok(checks) => checks,
+        Err(failure) => {
+            let _ = text::print(err, &format!("SIM ERROR: {failure}"));
+            return 2;
+        }
+    };
+    let _ = out.write_all(copper_simulate::check_model::text(&checks).as_bytes());
+    u8::from(checks.iter().any(|check| !check.passed()))
 }
 
 fn display(path: &Path) -> String {

@@ -401,13 +401,14 @@ impl Reader {
         let bytes = std::fs::read(path)
             .map_err(|e| err(from, ErrorKind::Io, format!("cannot read {}: {e}", path.display())))?;
         let shown = path.display().to_string();
-        let text = String::from_utf8(bytes).map_err(|_| {
-            err(
-                &Loc::new(&shown, 0),
-                ErrorKind::Syntax,
-                "not a text netlist (not UTF-8; an encrypted or binary model?)",
-            )
-        })?;
+        // Vendor files written on Windows carry single-byte characters (a
+        // Windows-1252 en dash in a comment, TI's TLV75718P model): text that is
+        // not UTF-8 is read byte for byte as Latin-1. Netlist syntax is ASCII,
+        // so only comments and names can hold such a character.
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(failure) => failure.into_bytes().iter().map(|&byte| char::from(byte)).collect(),
+        };
         if text.contains('\0') {
             return Err(err(&Loc::new(&shown, 0), ErrorKind::Syntax, "not a text netlist (binary data)"));
         }

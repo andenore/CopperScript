@@ -3030,15 +3030,17 @@ external tool is involved. Its properties:
 | Property | Meaning and checks (`SIM076`) |
 | --- | --- |
 | `file = "..."` | the user's own model file, resolved against the directory of the file that declares the part; it may include other local files (`.INCLUDE`, `.LIB file`) |
-| `source = "https://..."; sha256 = "...";` | a vendor file by URL, pinned by its SHA-256 (64 hexadecimal digits); `copper models fetch BOARD` downloads it into `.copper-cache/spice/` beside the nearest `copper.mod` (else beside the part's file), refusing bytes of another hash. `copper sim` never downloads: an uncached model is `SIM077` naming the command. A fetched file is one file (includes are refused) |
-| `member = "..."` | with `source`: the URL is a ZIP archive (as Texas Instruments ships its models), the hash is the archive's, and the model is this member (matched by its path or file name, ignoring case), extracted into the cache on first use |
+| `source = "https://..."; sha256 = "...";` | a vendor file by URL, pinned by its SHA-256 (64 hexadecimal digits); `copper models fetch BOARD` downloads it into `.copper-cache/spice/` of the board's project (beside the nearest `copper.mod` above the board file, also for a part from a library package; else beside the board), refusing bytes of another hash. `copper sim` never downloads: an uncached model is `SIM077` naming the command. A fetched file is one file (includes are refused) |
+| `sha256 = "..."; download = "...";` | a vendor file registered by hand: one that cannot be fetched by a script (a site that refuses scripted downloads, a licence to accept). `download` is the note of where to get it. The user downloads it and runs `copper models add BOARD FILE`, which checks the file's SHA-256 against the parts' and copies it into the same cache, `.copper-cache/spice/<sha256>/<file name>`; from there it runs like a fetched file. Not in the cache, it is `SIM108`, naming the note and the command ([Vendor files registered by hand](#vendor-files-registered-by-hand)) |
+| `member = "..."` | with `source` or `download`: the file is a ZIP archive (as Texas Instruments ships its models), the hash is the archive's, and the model is this member (matched by its path or file name, ignoring case), extracted into the cache on first use |
 | `subckt = "..."` | the subcircuit (case-insensitive) |
 | `terminals = PIN, ...;` | part pins on the subcircuit's nodes in its `.SUBCKT` order; their count must be the subcircuit's (`SIM078` when run); a pin may be on several nodes |
 | `dialect = ...;` | `spice3` (the default, ngspice), `pspice` or `ltspice`: `$` comments (SPICE3 only), `^` (a power, an exclusive or in LTspice) and a diode's default `IBV` (PSpice 1e-10 A, otherwise 1e-3 A) differ |
 | `unmodelled = PIN, ...;` | pins on no node, as for built-in blocks |
 | `params = values { NAME = value; ... };` | values for the subcircuit's `PARAMS:` defaults (names ignore case): plain numbers, or quantities in a simulation unit taken at their SI value (`10kohm` is 10000); decibels, text and repeated names are `SIM105`, a name the subcircuit does not declare is `SIM078` when run. The model list shows them (`spice AMP (..., GAIN = 7)`) |
 
-Exactly one of `file` and `source` (with `sha256`) is given. A multi-unit
+Exactly one of `file`, `source` (with `sha256`) and `download` (with
+`sha256`) is given. A multi-unit
 part has one block per unit (`sim spice A { ... }`), and units may share
 supply pins at any position. The block's roles are positional (`1` to `n`
 in the part JSON's `pins`); `I(U1.PIN)` is the current into that pin, the
@@ -3050,8 +3052,10 @@ content it ran with.
 **What is read.** The reader accepts SPICE3, PSpice and LTspice netlists:
 `*` comment lines, `;` comments, `+` continuations, case-insensitive names,
 engineering suffixes (`T G MEG K M MIL U N P F`, trailing unit letters
-ignored), `{...}` and `'...'` expressions, node `0` as ground, a DOS
-end-of-file mark. Cards and elements:
+ignored), `{...}` and `'...'` expressions (braces nested inside one group
+like parentheses, `{IF(V(A) > {VTH}, 1, 0)}`), node `0` as ground, a DOS
+end-of-file mark; a file that is not UTF-8 is read byte for byte as Latin-1
+(a Windows-1252 dash in a comment). Cards and elements:
 
 | Construct | Notes |
 | --- | --- |
@@ -3162,6 +3166,120 @@ local loop around its output stage) and agrees with the reader's within
 0.1 % to 1 MHz and 2 % at 60 MHz, so the reader runs the model as written:
 the model itself has 15 % more gain-bandwidth and 26 % more follower
 bandwidth than the data sheet states.
+
+### Macro and vendor models of one part
+
+```copper
+part OPA810 {
+    ...
+    sim opamp { inp = INP; inn = INN; out = OUT; vp = VP; vn = VN; gbw = 70MHz; open_loop_gain = 112dB; }
+    sim spice {
+        source = "https://www.ti.com/lit/zip/SBOMB73";
+        sha256 = "bee7ec13330e01d291d3e05c3b703647af276f3b174a51d40680d36905c4a0a0";
+        member = "opa810_a.lib"; subckt = "OPA810"; dialect = pspice;
+        terminals = INP, INN, OUT, VP, VN;
+    }
+}
+```
+
+(`examples/simulation/vendor_models/parts/opa810.copper`.) A unit (or a
+single-unit part) may have one built-in block and one `sim spice` block:
+they are its macro and vendor models, and a run uses one of them. Without
+units both blocks are written without one; on a multi-unit part `sim opamp A`
+and `sim spice A` are unit A's, and a unit may have only one of the two. A
+unit has at most one block of each sort (`SIM017`). The pin rules hold for
+the blocks of each choice on its own: every pin is a role (a terminal) or
+unmodelled in the macro blocks, and in the vendor blocks with the macro
+blocks of units that have no vendor model; a failure only the vendor choice
+has is `SIM106`. Spice blocks share pins with the other units at any
+position.
+
+`copper sim --models` chooses ([Running benches](#running-benches)):
+
+| `--models` | Runs |
+| --- | --- |
+| `default` (the default) | the built-in macro model of every unit that has one; a unit with only a `sim spice` block runs it |
+| `vendor` | the `sim spice` model of every unit that has one (its file must be in the cache: `SIM077` or `SIM108` otherwise); other units their built-in model |
+| `macro` | built-in models only; a part with a unit that has only a `sim spice` block is `SIM107` |
+
+The default is the macro model because it needs no downloaded file and runs
+in milliseconds, so a board's benches give the same result on every machine
+and CopperLib parts can carry vendor references without making every board
+that uses them depend on a download; the vendor model is a deliberate choice
+per run. The results name the model each component ran with, as always.
+
+### Vendor files registered by hand
+
+```copper
+sim spice {
+    sha256 = "...";                                       // of the file you download
+    download = "ADA4817-1 SPICE macro model, analog.com product page, Tools & Simulations";
+    subckt = "ADA4817"; dialect = pspice; terminals = INP, INN, VP, VN, OUT;
+    unmodelled = FB, PD, NC, EP;
+}
+```
+
+A vendor file that a script cannot fetch is pinned by its hash and carries a
+note saying where to get it. The user downloads it and registers it:
+
+```console
+copper models add BOARD.copper ~/Downloads/ada4817.cir
+```
+
+`copper models add BOARD FILE...` reads each file, finds the part of the
+board whose `sim spice` block declares its SHA-256, and copies it into the
+board project's `.copper-cache/spice/<sha256>/` under its own file name (a
+`source` URL model under its URL's file name, as `fetch` would). A file whose
+hash no part declares is refused, and the message gives its SHA-256 and the
+`.SUBCKT` cards it holds, so the block can be written from it. `copper models
+list` shows a registered model with its note, `fetch` does not try to
+download it. A run that needs it while it is not in the cache stops with
+`SIM108`, naming the note and the command. The cache is local and
+gitignored; the board builds the same everywhere the same bytes are
+registered. The analyzer example's Analog Devices parts
+(`examples/simulation/impedance_analyzer/parts/analog_ada4817.copper`,
+`analog_ada4807.copper`, `analog_ad8130.copper`) describe the steps for their
+models.
+
+### Checking a part's models
+
+```console
+copper sim --check-model OPA2277UA board.copper --supply 30V
+copper sim --check-model OPA547T board.copper --supply 60V --tie ILIM=vn
+```
+
+`--check-model PART` runs a standard bench set on a part of the board's
+library (its qualified name, its name after the namespace, or its declared
+name) instead of the board's benches, on the macro model and, where the unit
+has one, the vendor model, and prints one table per unit (a unit with the
+same models as an earlier one is not run again):
+
+| Kind | Circuit | Figures (declared value they are judged against) |
+| --- | --- | --- |
+| `opamp`, `diffamp` | supplies `+S/2` and `-S/2` (`--supply S`, default 10 V), 10 kohm load; a follower, and the open loop through 1 GH from the output to the inverting input (`fb` for a diffamp, whose `inn` and `ref` are grounded) with 1 GF from there to ground | supply current at the follower's operating point (`quiescent_current`, 5 %), output offset, open-loop gain at 1 mHz (`open_loop_gain`, 1 dB), gain-bandwidth as 100 times the frequency where the open-loop gain falls through 40 dB (`gbw`, 5 %), unity-gain frequency and phase margin, the follower's -3 dB bandwidth and peaking, the input-referred voltage noise at `max(1 kHz, 100 voltage_noise_corner)` (`voltage_noise sqrt(1 + corner / f)`, 5 %) and at 10 Hz, and the 20 to 80 % slew rate of a follower step of eight times `slew_rate / (2 pi gbw)`, at least 0.5 V and at most `0.4 S`, so that it slews over that span (`slew_rate`, 10 %) |
+| `regulator`, `reference` | input `|output_voltage| + dropout + 1 V` (`--supply` sets its magnitude), `en` tied to `in` | input current at no load (`quiescent_current`, 5 %), output at 1 mA (`output_voltage` less the drop across `output_resistance`, 1 %), output resistance at 1 Hz and the impedance at `output_impedance_corner` (`sqrt(2)` times it), line rejection at 1 Hz and at `psrr_corner` (3 dB less), dropout at 1 mA, efficiency at 100 mA or half the current limit (`efficiency` with the `quiescent_current` drawn on top, as the model draws it, 2 points), output noise at `max(1 kHz, 100 corner)`, and the time after which the output stays above 90 % of its set point once the input ramps up from 0 V over 5 % of the run (`0.9 soft_start` or `startup_time`, 10 %) |
+
+A figure the block does not declare is printed, not judged; for a rail model
+it is left out when the macro model is ideal in it (no quiescent current, no
+noise) and only the vendor model has a value. **A unit passes** when every
+model it has loads (the file is read and the subcircuit expanded), every
+operating point converges and every judged figure lies within its
+tolerance. The vendor model's figures are not judged against the block: they
+are printed beside the macro model's with their difference, and marked
+`DIFFERS` beyond 25 % (3 dB, 30 degrees). A vendor file that is not in the
+cache is reported as not run and leaves the verdict to the macro model; a
+vendor file that does not load or converge fails the unit, and a vendor
+model's transient run that fails (the solver's step collapsing in its
+netlist) is reported in a note and its figure left out. A vendor
+subcircuit's pins that the macro block leaves unmodelled are open unless
+`--tie PIN=ROLE` ties them to a role's node (`vp`, `vn`, `out`, `in`, `gnd`,
+...; repeatable or comma-separated). Transient runs are bounded by
+`--tran-budget SECONDS` (default 120 s each; a run that takes longer is
+reported as not finished and its figure is not judged), and `--no-tran`
+leaves them out. The exit status is 1 when a unit fails, 2 when the part
+cannot be checked (`SIM109`: no such part, no sim block, only a `sim spice`
+block, a kind other than these four, a `--tie` of a pin the part does not
+have).
 
 ### Benches
 
@@ -3879,7 +3997,11 @@ copper sim examples/simulation/howland_pump/board.copper --bench CurrentFlatness
 ```
 
 `copper sim BOARD.copper` runs every bench of the board and of its modules (`--bench NAME` one of
-them): the bench's analysis once per combination of its `step` values, with
+them), with each part's macro or vendor model as `--models` chooses
+([Macro and vendor models of one part](#macro-and-vendor-models-of-one-part);
+`--check-model PART` runs a part's standard bench set instead,
+[Checking a part's models](#checking-a-parts-models)): the bench's analysis
+once per combination of its `step` values, with
 every param at that step's value (in component values, model parameters,
 analysis bounds, limits and expressions; derived params re-evaluated), plus
 one run per `reference` at each step. It prints, per bench, each measure's
@@ -3951,7 +4073,7 @@ components that form a loop of voltage sources.
 | `SIM073` | fixtures: unknown or repeated fixtures, a fixture for another target, bench statements in a fixture, a fixture that uses itself through others |
 | `SIM074` | `analysis dc`: the swept name, `from`, `to`, `step`, `points` |
 | `SIM075` | `ic`: the target, its analysis, `uic` |
-| `SIM076` | `sim spice` properties: the model file (`file`, or `source` with `sha256`, `member`), `subckt`, `terminals`, `dialect` (`params`: `SIM105`) |
+| `SIM076` | `sim spice` properties: the model file (`file`, `source` with `sha256`, or `download` with `sha256`; `member`), `subckt`, `terminals`, `dialect` (`params`: `SIM105`) |
 | `SIM077` | `sim spice` model files when a bench runs: a local file that cannot be read, a vendor file not in the cache or not matching its hash |
 | `SIM078` | `sim spice` netlists when a bench runs: syntax, unsupported constructs, undefined names, encrypted files, a terminal count that differs from the subcircuit's (file, line, element and construct named) |
 | `SIM085`-`SIM088` | noise expressions: `noise()` and the band functions outside `analysis noise` (`SIM085`), `input_noise()` without an input (`SIM086`), unknown contributors (`SIM087`), band arguments (`SIM088`) |
@@ -3969,6 +4091,10 @@ components that form a loop of voltage sources.
 | `SIM103` | `regulator` and `reference` blocks: no `output_voltage` or a zero one, `output_impedance_corner` or `output_current_limit` without an `output_resistance` above 0, `psrr_corner` without a `psrr`, `en` without `enable_threshold` or the reverse, an `efficiency` outside 0 to 100 % |
 | `SIM104` | when a bench runs, a `regulator` or `reference` with a `psrr` whose input no supply, DC source or rail model sets |
 | `SIM105` | `sim spice params`: not a `values { ... }` block, a value that is not a number or a quantity in a simulation unit, decibels, a name given twice |
+| `SIM106` | a part with macro and vendor models: a pin rule (`SIM014` to `SIM016`) that only the blocks `--models vendor` runs break |
+| `SIM107` | when a bench runs with `--models macro`: a part whose unit has only a `sim spice` block |
+| `SIM108` | when a bench runs: a vendor file registered by hand (`sha256` with `download`) that is not in the cache, naming its download note and `copper models add` |
+| `SIM109` | `copper sim --check-model`: no such part (or several), no sim block, a unit with only a `sim spice` block, a kind without a bench set, a `--tie` of a pin the part does not have |
 
 ## KiCad schematic export
 

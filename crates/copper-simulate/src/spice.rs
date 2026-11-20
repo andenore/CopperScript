@@ -25,7 +25,9 @@ fn libraries() -> &'static Libraries {
 
 /// The model's library, read once per file, dialect and content hash.
 pub fn library(model: &SpiceModel) -> Result<(Arc<Library>, PathBuf, String), String> {
-    let (path, hash) = copper_lang::spice_models::resolve(model).map_err(|message| format!("SIM077: {message}"))?;
+    // A file registered by hand carries its own code (`SIM108`), every other missing file is `SIM077`.
+    let (path, hash) = copper_lang::spice_models::resolve(model)
+        .map_err(|message| if message.starts_with("SIM108") { message } else { format!("SIM077: {message}") })?;
     let dialect = Dialect::parse(&model.dialect).unwrap_or(Dialect::Spice3);
     let key = (path.clone(), model.dialect.clone(), hash.clone());
     let mut cache = libraries().lock().map_err(|_| "the SPICE library cache is poisoned".to_string())?;
@@ -63,6 +65,10 @@ pub fn describe(model: &SpiceModel) -> String {
     let file = match &model.source {
         SpiceSource::File(file) => file.clone(),
         SpiceSource::Url { url, .. } => url.clone(),
+        SpiceSource::Registered { member, .. } => match member {
+            Some(member) => format!("registered by hand, {member}"),
+            None => "registered by hand".to_owned(),
+        },
     };
     let params: String = model.params.iter().map(|(name, value)| format!(", {name} = {value}")).collect();
     match library(model) {

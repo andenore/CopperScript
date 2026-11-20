@@ -76,7 +76,7 @@ use copper_lang::bench::{Bench, PassiveKind, Replacement, SUPPLY_NET, SimCompone
 use copper_lang::compiler::Design;
 use copper_lang::expression::Node;
 use copper_lang::model::{FlatElectricalView, PartDefinition};
-use copper_lang::simulation::{PartSimModel, SimKind, SimQuantity, SimSpec, SourceOutput, SupplySet};
+use copper_lang::simulation::{ModelChoice, PartSimModel, SimKind, SimQuantity, SimSpec, SourceOutput, SupplySet};
 use copper_sim::{
     Circuit, DiffampPins, LoadParams, NodeId, OpampParams, OpampPins, RegulatorParams, RegulatorPins, SourceParams,
     SourceValue,
@@ -280,6 +280,76 @@ fn check_name(name: &str) -> Result<(), String> {
 /// A model role and the signed currents (element or macro names) into its terminal.
 type RoleCurrents = (String, Vec<(String, f64)>);
 
+/// The solver parameters of an `opamp` or `diffamp` spec, `get` reading each
+/// parameter's value at this step. The supply rejection's span is the
+/// caller's (`psrr_span` is left at 0).
+pub fn opamp_params(spec: &SimSpec, get: &dyn Fn(&str) -> Option<f64>, owner: &str) -> Result<OpampParams, String> {
+    let (Some(gbw), Some(gain_db)) = (get("gbw"), get("open_loop_gain")) else {
+        return Err(format!(
+            "{owner}: the simulator's {} model needs gbw and open_loop_gain; declare both in the sim {} block",
+            spec.kind.name(),
+            spec.kind.name()
+        ));
+    };
+    let mut params = OpampParams::new(10f64.powf(gain_db / 20.0), gbw);
+    params.second_pole = get("second_pole");
+    params.cmrr = get("cmrr").map(|db| 10f64.powf(db / 20.0));
+    params.cmrr_corner = get("cmrr_corner");
+    if params.cmrr_corner.is_some() && params.cmrr.is_none() {
+        return Err(format!("{owner}: cmrr_corner needs a cmrr in the sim {} block", spec.kind.name()));
+    }
+    params.input_capacitance_common = get("input_capacitance_common").unwrap_or(0.0);
+    params.input_capacitance_differential = get("input_capacitance_differential").unwrap_or(0.0);
+    params.input_resistance = get("input_resistance_differential");
+    params.output_resistance = get("output_resistance").unwrap_or(0.0);
+    params.input_bias_current = get("input_bias_current").unwrap_or(0.0);
+    params.input_offset_voltage = get("input_offset_voltage").unwrap_or(0.0);
+    params.slew_rate = get("slew_rate");
+    params.voltage_noise = get("voltage_noise");
+    params.current_noise = get("current_noise");
+    params.voltage_noise_corner = get("voltage_noise_corner");
+    params.current_noise_corner = get("current_noise_corner");
+    params.output_swing_from_rail = get("output_swing_from_rail");
+    params.output_swing_from_positive_rail = get("output_swing_from_positive_rail");
+    params.output_swing_from_negative_rail = get("output_swing_from_negative_rail");
+    params.output_current_limit = get("output_current_limit");
+    params.quiescent_current = get("quiescent_current");
+    params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
+    params.psrr_corner = get("psrr_corner");
+    if params.psrr_corner.is_some() && params.psrr.is_none() {
+        return Err(format!("SIM102: {owner}: psrr_corner needs a psrr in the sim {} block", spec.kind.name()));
+    }
+    Ok(params)
+}
+
+/// The solver parameters of a `regulator` or `reference` spec, `get` reading
+/// each parameter's value at this step. The line rejection's nominal input is
+/// the caller's (`psrr_input` is left at 0).
+pub fn regulator_params(
+    spec: &SimSpec,
+    get: &dyn Fn(&str) -> Option<f64>,
+    owner: &str,
+) -> Result<RegulatorParams, String> {
+    let Some(set_point) = get("output_voltage") else {
+        return Err(format!("SIM103: {owner}: the {} model needs an output_voltage", spec.kind.name()));
+    };
+    let start_key = if spec.kind == SimKind::Reference { "startup_time" } else { "soft_start" };
+    let mut params = RegulatorParams::new(set_point);
+    params.dropout = get("dropout");
+    params.output_resistance = get("output_resistance").unwrap_or(0.0);
+    params.output_impedance_corner = get("output_impedance_corner");
+    params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
+    params.psrr_corner = get("psrr_corner");
+    params.output_current_limit = get("output_current_limit");
+    params.soft_start = get(start_key);
+    params.enable_threshold = get("enable_threshold");
+    params.quiescent_current = get("quiescent_current").unwrap_or(0.0);
+    params.efficiency = get("efficiency");
+    params.voltage_noise = get("voltage_noise");
+    params.voltage_noise_corner = get("voltage_noise_corner");
+    Ok(params)
+}
+
 struct Builder<'a> {
     circuit: Circuit,
     design: &'a Design,
@@ -383,46 +453,8 @@ impl Builder<'_> {
         let mut inactive = Vec::new();
         let roles = match spec.kind {
             SimKind::Opamp | SimKind::Diffamp => {
-                let (Some(gbw), Some(gain_db)) = (self.parameter(spec, "gbw"), self.parameter(spec, "open_loop_gain"))
-                else {
-                    return Err(format!(
-                        "{owner}: the simulator's {} model needs gbw and open_loop_gain; declare both in the sim {} block",
-                        spec.kind.name(),
-                        spec.kind.name()
-                    ));
-                };
-                let mut params = OpampParams::new(10f64.powf(gain_db / 20.0), gbw);
                 let get = |key: &str| self.parameter(spec, key);
-                params.second_pole = get("second_pole");
-                params.cmrr = get("cmrr").map(|db| 10f64.powf(db / 20.0));
-                params.cmrr_corner = get("cmrr_corner");
-                if params.cmrr_corner.is_some() && params.cmrr.is_none() {
-                    return Err(format!("{owner}: cmrr_corner needs a cmrr in the sim {} block", spec.kind.name()));
-                }
-                params.input_capacitance_common = get("input_capacitance_common").unwrap_or(0.0);
-                params.input_capacitance_differential = get("input_capacitance_differential").unwrap_or(0.0);
-                params.input_resistance = get("input_resistance_differential");
-                params.output_resistance = get("output_resistance").unwrap_or(0.0);
-                params.input_bias_current = get("input_bias_current").unwrap_or(0.0);
-                params.input_offset_voltage = get("input_offset_voltage").unwrap_or(0.0);
-                params.slew_rate = get("slew_rate");
-                params.voltage_noise = get("voltage_noise");
-                params.current_noise = get("current_noise");
-                params.voltage_noise_corner = get("voltage_noise_corner");
-                params.current_noise_corner = get("current_noise_corner");
-                params.output_swing_from_rail = get("output_swing_from_rail");
-                params.output_swing_from_positive_rail = get("output_swing_from_positive_rail");
-                params.output_swing_from_negative_rail = get("output_swing_from_negative_rail");
-                params.output_current_limit = get("output_current_limit");
-                params.quiescent_current = get("quiescent_current");
-                params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
-                params.psrr_corner = get("psrr_corner");
-                if params.psrr_corner.is_some() && params.psrr.is_none() {
-                    return Err(format!(
-                        "SIM102: {owner}: psrr_corner needs a psrr in the sim {} block",
-                        spec.kind.name()
-                    ));
-                }
+                let mut params = opamp_params(spec, &get, owner)?;
                 if params.psrr.is_some() {
                     params.psrr_span = self.nominal_span(owner, nodes)?;
                 }
@@ -539,23 +571,8 @@ impl Builder<'_> {
             SimKind::Regulator | SimKind::Reference => {
                 let reference = spec.kind == SimKind::Reference;
                 let get = |key: &str| self.parameter(spec, key);
-                let Some(set_point) = get("output_voltage") else {
-                    return Err(format!("SIM103: {owner}: the {} model needs an output_voltage", spec.kind.name()));
-                };
                 let start_key = if reference { "startup_time" } else { "soft_start" };
-                let mut params = RegulatorParams::new(set_point);
-                params.dropout = get("dropout");
-                params.output_resistance = get("output_resistance").unwrap_or(0.0);
-                params.output_impedance_corner = get("output_impedance_corner");
-                params.psrr = get("psrr").map(|db| 10f64.powf(db / 20.0));
-                params.psrr_corner = get("psrr_corner");
-                params.output_current_limit = get("output_current_limit");
-                params.soft_start = get(start_key);
-                params.enable_threshold = get("enable_threshold");
-                params.quiescent_current = get("quiescent_current").unwrap_or(0.0);
-                params.efficiency = get("efficiency");
-                params.voltage_noise = get("voltage_noise");
-                params.voltage_noise_corner = get("voltage_noise_corner");
+                let mut params = regulator_params(spec, &get, owner)?;
                 if params.psrr.is_some() {
                     params.psrr_input = self.nominal_input(owner, nodes)?;
                 }
@@ -787,9 +804,23 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
                 used.model = kind.name().to_owned();
             }
             Treatment::PartModel => {
+                if bench.model_choice == ModelChoice::Macro {
+                    let missing = copper_lang::simulation::units_without_macro(&part.sim);
+                    if !missing.is_empty() {
+                        let units: Vec<String> = missing
+                            .iter()
+                            .map(|unit| unit.map_or_else(String::new, |u| format!(" unit {u}")))
+                            .collect();
+                        return Err(format!(
+                            "SIM107: {reference}: copper sim --models macro runs built-in models only, but part {}{} has only a sim spice model; give it a built-in block (sim opamp, sim regulator, ...) beside the sim spice block, replace {reference} in the bench, or run without --models macro",
+                            repr(&part.name),
+                            units.join(",")
+                        ));
+                    }
+                }
                 let blocks = bench.models(design, component);
                 let mut sets: Vec<String> = Vec::new();
-                for block in blocks {
+                for &block in &blocks {
                     let instance = match (&block.unit, blocks.len()) {
                         (Some(unit), n) if n > 1 => format!("{reference}.{unit}"),
                         _ => reference.clone(),
@@ -820,7 +851,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
                 used.fidelity = "macro";
                 // One name per kind: a resistor network of twelve load blocks is `load`.
                 let mut kinds: Vec<String> = Vec::new();
-                for block in blocks {
+                for block in &blocks {
                     let name = match &block.spec.spice {
                         Some(model) => {
                             used.fidelity = "vendor";

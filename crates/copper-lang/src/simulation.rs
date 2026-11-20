@@ -251,7 +251,8 @@ impl SimKind {
 }
 
 /// The properties of a `sim spice` block.
-pub const SPICE_KEYS: [&str; 8] = ["source", "sha256", "member", "file", "subckt", "terminals", "dialect", "params"];
+pub const SPICE_KEYS: [&str; 9] =
+    ["source", "sha256", "member", "file", "download", "subckt", "terminals", "dialect", "params"];
 
 /// The SPICE dialects a `sim spice` block may name.
 pub const SPICE_DIALECTS: [&str; 3] = ["spice3", "pspice", "ltspice"];
@@ -267,6 +268,101 @@ pub enum SpiceSource {
     /// hash; with `member = "..."` the URL is a ZIP archive (the hash is the
     /// archive's) and the model is that file inside it.
     Url { url: String, sha256: String, member: Option<String> },
+    /// `sha256 = "..."; download = "...";`: a vendor file the user downloads by
+    /// hand (a site that refuses automated downloads, a licence to accept) and
+    /// registers with `copper models add BOARD FILE`, which copies it into the
+    /// same cache as a fetched file, checked against the hash. `download` is
+    /// the human-readable note of where to get it; with `member` the file is a
+    /// ZIP archive and the model is that member.
+    Registered { sha256: String, download: String, member: Option<String> },
+}
+
+impl SpiceSource {
+    /// The pinned hash of a vendor file (`None` for a local file).
+    pub fn sha256(&self) -> Option<&str> {
+        match self {
+            SpiceSource::Url { sha256, .. } | SpiceSource::Registered { sha256, .. } => Some(sha256),
+            SpiceSource::File(_) => None,
+        }
+    }
+
+    /// The archive member of a vendor file.
+    pub fn member(&self) -> Option<&str> {
+        match self {
+            SpiceSource::Url { member, .. } | SpiceSource::Registered { member, .. } => member.as_deref(),
+            SpiceSource::File(_) => None,
+        }
+    }
+}
+
+/// Which model a part runs with when it declares both a built-in block and a
+/// `sim spice` block for one unit (`copper sim --models`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelChoice {
+    /// The built-in macro model where a unit has one, else its `sim spice` block.
+    #[default]
+    Default,
+    /// Built-in macro models only: a unit with only a `sim spice` block is an
+    /// error of the run (`SIM107`).
+    Macro,
+    /// The `sim spice` (vendor) model where a unit has one, else its built-in block.
+    Vendor,
+}
+
+impl ModelChoice {
+    pub const NAMES: [&'static str; 3] = ["default", "macro", "vendor"];
+
+    pub fn parse(name: &str) -> Option<ModelChoice> {
+        match name {
+            "default" => Some(ModelChoice::Default),
+            "macro" => Some(ModelChoice::Macro),
+            "vendor" => Some(ModelChoice::Vendor),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ModelChoice::Default => "default",
+            ModelChoice::Macro => "macro",
+            ModelChoice::Vendor => "vendor",
+        }
+    }
+}
+
+/// The blocks of `models` (one part's) that run under `choice`: per unit, the
+/// built-in block or the `sim spice` block when the unit has both, the one
+/// block otherwise. Source order is kept.
+pub fn select_models(models: &[PartSimModel], choice: ModelChoice) -> Vec<&PartSimModel> {
+    let spice_wanted = choice == ModelChoice::Vendor;
+    models
+        .iter()
+        .filter(|model| {
+            let is_spice = model.spec.kind == SimKind::Spice;
+            let has_other =
+                models.iter().any(|other| other.unit == model.unit && (other.spec.kind == SimKind::Spice) != is_spice);
+            !has_other || is_spice == spice_wanted
+        })
+        .collect()
+}
+
+/// The units (`None` for a single-unit part) of `models` that have a
+/// `sim spice` block and no built-in block: what `--models macro` cannot run.
+pub fn units_without_macro(models: &[PartSimModel]) -> Vec<Option<&str>> {
+    models
+        .iter()
+        .filter(|model| model.spec.kind == SimKind::Spice)
+        .filter(|model| !models.iter().any(|other| other.unit == model.unit && other.spec.kind != SimKind::Spice))
+        .map(|model| model.unit.as_deref())
+        .collect()
+}
+
+/// True when some unit of `models` has both a built-in and a `sim spice` block.
+pub fn has_alternatives(models: &[PartSimModel]) -> bool {
+    models.iter().any(|model| {
+        model.spec.kind == SimKind::Spice
+            && models.iter().any(|other| other.unit == model.unit && other.spec.kind != SimKind::Spice)
+    })
 }
 
 /// A part's `sim spice { ... }` model reference.
@@ -282,6 +378,33 @@ pub struct SpiceModel {
     /// `params = values { NAME = value; ... };`: values (SI) for the
     /// subcircuit's `PARAMS:` defaults, names in upper case, in source order.
     pub params: Vec<(String, f64)>,
+    /// The directory of the board being built, whose project's
+    /// `.copper-cache/spice/` holds vendor files ([`bind_spice_project`]);
+    /// `None` until a board binds it, and then the declaring directory's
+    /// project is used. A part from a library package therefore finds its
+    /// vendor file in the cache of the project that uses it, not in the
+    /// package's checkout.
+    pub project: Option<String>,
+}
+
+/// Bind the vendor `sim spice` models of every part of `board` (its library
+/// and its module definitions') to the project of the board in `directory`.
+pub fn bind_spice_project(board: &mut crate::model::Board, directory: &str) {
+    bind_library(&mut board.library, directory);
+    for module in board.module_definitions.values_mut() {
+        bind_library(&mut module.library, directory);
+    }
+}
+
+/// [`bind_spice_project`] for one library.
+pub fn bind_library(library: &mut IndexMap<String, crate::model::PartDefinition>, directory: &str) {
+    for part in library.values_mut() {
+        for block in &mut part.sim {
+            if let Some(spice) = &mut block.spec.spice {
+                spice.project = Some(directory.to_owned());
+            }
+        }
+    }
 }
 
 /// A source's output quantity.
@@ -760,6 +883,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
     let mut sha256 = None;
     let mut member = None;
     let mut file = None;
+    let mut download = None;
     let mut subckt = None;
     let mut dialect = None;
     let mut terminals: Vec<(String, Location)> = Vec::new();
@@ -796,6 +920,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
             }
             "member" => member = Some(spice_text(entry, "member")?.to_owned()),
             "file" => file = Some(spice_text(entry, "file")?.to_owned()),
+            "download" => download = Some(spice_text(entry, "download")?.to_owned()),
             "subckt" => subckt = Some(spice_text(entry, "subckt")?.to_owned()),
             "dialect" => {
                 let text = match &entry.value {
@@ -858,24 +983,49 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
             }
         }
     }
-    if member.is_some() && source.is_none() {
-        return Err(error("SIM076", "sim spice member names a file inside a ZIP archive given by source", location));
+    if member.is_some() && source.is_none() && download.is_none() {
+        return Err(error(
+            "SIM076",
+            "sim spice member names a file inside a ZIP archive given by source (or by download)",
+            location,
+        ));
     }
-    let source = match (source, sha256, file) {
-        (Some(url), Some(sha256), None) => SpiceSource::Url { url, sha256, member },
-        (None, None, Some(file)) => SpiceSource::File(file),
-        (Some(_), None, None) => {
+    let source = match (source, sha256, file, download) {
+        (Some(url), Some(sha256), None, None) => SpiceSource::Url { url, sha256, member },
+        (None, Some(sha256), None, Some(download)) => SpiceSource::Registered { sha256, download, member },
+        (None, None, Some(file), None) => SpiceSource::File(file),
+        (Some(_), None, None, None) => {
             return Err(error(
                 "SIM076",
                 "sim spice source needs its sha256 = \"...\"; the hash pins the vendor file",
                 location,
             ));
         }
-        (None, Some(_), None) => return Err(error("SIM076", "sim spice sha256 needs a source URL", location)),
-        (None, None, None) => {
+        (None, None, None, Some(_)) => {
             return Err(error(
                 "SIM076",
-                "sim spice needs a model file: file = \"...\"; or source = \"https://...\"; with sha256",
+                "sim spice download needs the sha256 = \"...\"; of the file to download; the hash pins it",
+                location,
+            ));
+        }
+        (None, Some(_), None, None) => {
+            return Err(error(
+                "SIM076",
+                "sim spice sha256 needs a source URL, or a download = \"...\"; note for a file registered by hand",
+                location,
+            ));
+        }
+        (None, None, None, None) => {
+            return Err(error(
+                "SIM076",
+                "sim spice needs a model file: file = \"...\"; source = \"https://...\"; with sha256, or download = \"...\"; with sha256",
+                location,
+            ));
+        }
+        (Some(_), _, _, Some(_)) => {
+            return Err(error(
+                "SIM076",
+                "sim spice takes either source (fetched by copper models fetch) or download (registered by hand with copper models add), not both",
                 location,
             ));
         }
@@ -896,8 +1046,14 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let spice =
-        SpiceModel { source, subckt, dialect: dialect.unwrap_or_else(|| "spice3".to_owned()), directory, params };
+    let spice = SpiceModel {
+        source,
+        subckt,
+        dialect: dialect.unwrap_or_else(|| "spice3".to_owned()),
+        directory,
+        params,
+        project: None,
+    };
     Ok(LoweredBlock {
         roles,
         unmodelled,
@@ -1251,20 +1407,33 @@ fn lower_pwl(entry: &SimEntry, entries: &[SimEntry], dimension: Dimension, scope
     Ok(Waveform::Pwl { points })
 }
 
+/// One lowered part block with the source locations its pin checks name.
+struct LoweredPartBlock {
+    model: PartSimModel,
+    roles: IndexMap<String, (String, Location)>,
+    unmodelled: Vec<(String, Location)>,
+}
+
 /// Lower a part's `sim` blocks against its pins.
+///
+/// A unit (or a single-unit part) may have one built-in block and one `sim
+/// spice` block: the spice block is then the unit's vendor model, the
+/// alternative `copper sim --models vendor` runs. The pin rules (`SIM014` to
+/// `SIM016`) hold for the blocks of each choice on its own; a failure that
+/// only the vendor choice has is `SIM106`.
 pub(crate) fn part_models(
     blocks: &[&SimDecl],
     pins: &IndexMap<String, PackagePinDefinition>,
     part: &str,
 ) -> Result<Vec<PartSimModel>> {
-    let mut models: Vec<PartSimModel> = Vec::new();
-    // Pin -> (role, block index) of every role assignment so far.
-    let mut assigned: IndexMap<String, (String, usize)> = IndexMap::new();
-    let mut unmodelled_all: Vec<String> = Vec::new();
-    let pin_names: Vec<&str> = pins.keys().map(String::as_str).collect();
-    for (index, block) in blocks.iter().enumerate() {
+    let mut lowered: Vec<LoweredPartBlock> = Vec::new();
+    // Blocks without a unit are allowed in number only as one built-in block and its spice alternative.
+    let unitless_pair = blocks.len() == 2
+        && blocks.iter().all(|block| block.unit.is_none())
+        && blocks.iter().filter(|block| block.kind == "spice").count() == 1;
+    for block in blocks {
         let kind = part_sim_kind(&block.kind, &block.location)?;
-        if blocks.len() > 1 && block.unit.is_none() {
+        if blocks.len() > 1 && block.unit.is_none() && !unitless_pair {
             return Err(error(
                 "SIM017",
                 format!(
@@ -1276,8 +1445,11 @@ pub(crate) fn part_models(
                 &block.location,
             ));
         }
+        let spice = kind == SimKind::Spice;
         if let Some(unit) = &block.unit
-            && models.iter().any(|model| model.unit.as_ref() == Some(unit))
+            && lowered.iter().any(|other| {
+                other.model.unit.as_ref() == Some(unit) && (other.model.spec.kind == SimKind::Spice) == spice
+            })
         {
             return Err(error(
                 "SIM017",
@@ -1287,14 +1459,73 @@ pub(crate) fn part_models(
         }
         let sets = supply_sets(kind, &block.entries)?;
         let plain: Vec<SimEntry> = block.entries.iter().filter(|entry| entry.key != "supply").cloned().collect();
-        let lowered = if kind == SimKind::Spice {
+        let block_lowered = if spice {
             lower_spice_block(&plain, &block.location)?
         } else {
             lower_block(kind, &plain, &ValueScope::Part, true, &block.location)?
         };
-        check_supply_rejection(kind, &lowered.spec.parameters, &sets, &block.location)?;
+        check_supply_rejection(kind, &block_lowered.spec.parameters, &sets, &block.location)?;
+        lowered.push(LoweredPartBlock {
+            model: PartSimModel {
+                location: block.location.clone(),
+                unit: block.unit.clone(),
+                pins: block_lowered.roles.iter().map(|(role, (pin, _))| (role.clone(), pin.clone())).collect(),
+                unmodelled: Vec::new(),
+                spec: block_lowered.spec,
+                supply_sets: sets,
+            },
+            roles: block_lowered.roles,
+            unmodelled: block_lowered.unmodelled,
+        });
+    }
+    let models: Vec<PartSimModel> = lowered.iter().map(|block| block.model.clone()).collect();
+    let selected = |choice: ModelChoice| -> Vec<usize> {
+        let chosen = select_models(&models, choice);
+        (0..models.len()).filter(|&index| chosen.iter().any(|model| std::ptr::eq(*model, &models[index]))).collect()
+    };
+    let default = selected(ModelChoice::Default);
+    let unmodelled = check_part_pins(&lowered, &default, pins, part)?;
+    let vendor = selected(ModelChoice::Vendor);
+    if vendor != default {
+        check_part_pins(&lowered, &vendor, pins, part).map_err(|mut failure| {
+            failure.message = format!("with its sim spice model (copper sim --models vendor): {}", failure.message);
+            failure.code = "SIM106".to_owned();
+            failure
+        })?;
+    }
+    let mut models = models;
+    for (index, list) in unmodelled {
+        models[index].unmodelled = list;
+    }
+    // The vendor choice's unmodelled lists, for the spice blocks the default choice does not run.
+    for &index in &vendor {
+        if !default.contains(&index) {
+            models[index].unmodelled = lowered[index].unmodelled.iter().map(|(pin, _)| pin.clone()).collect();
+        }
+    }
+    Ok(models)
+}
+
+/// The pin rules of the part blocks `chosen` (indices into `blocks`): roles
+/// name pins (`SIM014`), a pin has one role per block and shares a role only
+/// as the same role (`SIM015`), every pin is a role or unmodelled (`SIM016`).
+/// Returns each chosen block's unmodelled pins.
+fn check_part_pins(
+    blocks: &[LoweredPartBlock],
+    chosen: &[usize],
+    pins: &IndexMap<String, PackagePinDefinition>,
+    part: &str,
+) -> Result<Vec<(usize, Vec<String>)>> {
+    // Pin -> (role, position in `chosen`) of every role assignment so far.
+    let mut assigned: IndexMap<String, (String, usize)> = IndexMap::new();
+    let mut unmodelled_all: Vec<String> = Vec::new();
+    let mut lists = Vec::new();
+    let pin_names: Vec<&str> = pins.keys().map(String::as_str).collect();
+    for (position, &index) in chosen.iter().enumerate() {
+        let block = &blocks[index];
+        let kind = block.model.spec.kind;
         let mut block_pins: Vec<&str> = Vec::new();
-        for (role, (pin, location)) in &lowered.roles {
+        for (role, (pin, location)) in &block.roles {
             if !pins.contains_key(pin) {
                 return Err(suggesting(
                     error(
@@ -1316,17 +1547,21 @@ pub(crate) fn part_models(
                 return Err(error("SIM015", format!("pin {} has two roles in one sim block", repr(pin)), location));
             }
             block_pins.push(pin);
+            let other_kind = |other: usize| blocks[chosen[other]].model.spec.kind;
             // Load blocks are passive two-terminal elements, so a pin may be the
             // `inp` of one and the `ref` of another (a resistor network with
             // its parasitic capacitances); other kinds share pins only in the
             // same role (shared supply pins).
-            let both_loads = |other: usize| kind == SimKind::Load && models[other].spec.kind == SimKind::Load;
-            // Spice units share supply pins at whatever position their subcircuits have them.
-            let both_spice =
-                |other: usize| kind == SimKind::Spice && (other == index || models[other].spec.kind == SimKind::Spice);
+            let both_loads = |other: usize| kind == SimKind::Load && other_kind(other) == SimKind::Load;
+            // Spice units share supply pins at whatever position their subcircuits have them,
+            // with each other and with built-in units (a vendor model for one unit of two).
+            let both_spice = |other: usize| {
+                (kind == SimKind::Spice && (other == position || other_kind(other) == SimKind::Spice))
+                    || (other != position && (kind == SimKind::Spice || other_kind(other) == SimKind::Spice))
+            };
             if let Some((other_role, other)) = assigned.get(pin)
                 && !both_spice(*other)
-                && ((other_role != role && !both_loads(*other)) || *other == index)
+                && ((other_role != role && !both_loads(*other)) || *other == position)
             {
                 return Err(error(
                     "SIM015",
@@ -1334,10 +1569,10 @@ pub(crate) fn part_models(
                     location,
                 ));
             }
-            assigned.insert(pin.clone(), (role.clone(), index));
+            assigned.insert(pin.clone(), (role.clone(), position));
         }
         let mut unmodelled = Vec::new();
-        for (pin, location) in &lowered.unmodelled {
+        for (pin, location) in &block.unmodelled {
             if !pins.contains_key(pin) {
                 return Err(suggesting(
                     error(
@@ -1355,22 +1590,16 @@ pub(crate) fn part_models(
             unmodelled.push(pin.clone());
         }
         unmodelled_all.extend(unmodelled.iter().cloned());
-        models.push(PartSimModel {
-            location: block.location.clone(),
-            unit: block.unit.clone(),
-            pins: lowered.roles.into_iter().map(|(role, (pin, _))| (role, pin)).collect(),
-            unmodelled,
-            spec: lowered.spec,
-            supply_sets: sets,
-        });
+        lists.push((index, unmodelled));
     }
-    if let Some(first) = blocks.first() {
+    if let Some(&first) = chosen.first() {
+        let location = &blocks[first].model.location;
         for pin in &unmodelled_all {
             if let Some((role, _)) = assigned.get(pin) {
                 return Err(error(
                     "SIM015",
                     format!("pin {} is listed as unmodelled but is sim role {role}", repr(pin)),
-                    &first.location,
+                    location,
                 ));
             }
         }
@@ -1379,12 +1608,12 @@ pub(crate) fn part_models(
                 return Err(error(
                     "SIM016",
                     format!("pin {} of part {} has no sim role; list it in unmodelled = ...;", repr(pin), repr(part)),
-                    &first.location,
+                    location,
                 ));
             }
         }
     }
-    Ok(models)
+    Ok(lists)
 }
 
 /// The component attributes a param may stand in for, and the dimensions each accepts.

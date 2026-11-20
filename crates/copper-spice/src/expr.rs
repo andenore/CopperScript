@@ -156,6 +156,10 @@ fn lex(text: &str, dialect: Dialect) -> Result<Vec<Tok>, String> {
             '=' => Tok::Op("=="),
             '(' => Tok::LParen,
             ')' => Tok::RParen,
+            // Braces nested inside an expression (`{IF(V(A) > {VTH}, 1, 0)}`,
+            // as TI's PSpice regulator models write a parameter) group like parentheses.
+            '{' => Tok::LParen,
+            '}' => Tok::RParen,
             ',' => Tok::Comma,
             '?' => Tok::Question,
             ':' => Tok::Colon,

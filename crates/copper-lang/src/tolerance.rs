@@ -657,9 +657,11 @@ fn add_members(
 /// or `U1.A` on a multi-unit part) with its spec.
 fn unit_specs<'a>(component: &SimComponent, lookup: &Lookup<'a>) -> Vec<(String, &'a SimSpec)> {
     let Some(part) = (lookup.part)(&component.part) else { return Vec::new() };
-    let count = part.sim.len();
-    part.sim
-        .iter()
+    // The blocks one run uses: a unit's macro and vendor models are one instance.
+    let blocks = crate::simulation::select_models(&part.sim, crate::simulation::ModelChoice::Default);
+    let count = blocks.len();
+    blocks
+        .into_iter()
         .map(|block| {
             let instance = match (&block.unit, count) {
                 (Some(unit), n) if n > 1 => format!("{}.{unit}", component.reference),

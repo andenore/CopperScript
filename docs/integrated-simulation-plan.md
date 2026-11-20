@@ -378,6 +378,50 @@ Acceptance: `--check-model` passes for every CopperLib part with a `sim`
 block; the analyzer's `SoilSweep` runs with vendor amplifier models and the
 difference from the macro models is reported.
 
+Built on 20 November 2026. Diagnostics SIM106 to SIM109.
+
+- A unit can carry a built-in block and a `sim spice` block: its macro and
+  vendor models. `copper sim --models default|macro|vendor`; the default is
+  the macro model, which needs no download.
+- `copper sim --check-model PART BOARD`: supply current, open-loop gain, gain
+  bandwidth, unity-gain frequency, phase margin, follower bandwidth and
+  peaking, noise and slew rate for amplifiers; quiescent current, output
+  voltage, output resistance, line rejection, dropout, efficiency, noise and
+  start-up for regulators and references. It passes when the models load,
+  the operating points converge and every declared figure is reproduced
+  within the printed tolerance. This checks the macro model against its own
+  block, not against the part. Vendor figures are printed beside it and
+  marked where they differ by more than 25 %, 3 dB or 30 degrees.
+- Vendor files downloaded by hand: `download = "..."` beside `sha256` in the
+  block, `copper models add BOARD FILE`, SIM108 when the file is missing.
+  Vendor caches now belong to the board's project, not the part's directory.
+- Reader: files that are not UTF-8 are read as Latin-1; braces nested in an
+  expression group like parentheses.
+- CopperLib branch `sim-models` (local, needs this branch of CopperScript):
+  blocks for OPA2277, OPA2182, OPA2189, OPA547, OPA548 (macro and TI vendor
+  model), TLV75718P, TPS7A2018P, TPS7A2025P, AP2112K-3.3 and the RECOM
+  R-78B, R-78E and R-78K converters, each with data-sheet citations. All pass
+  `--check-model`.
+
+Open:
+
+- No Analog Devices model is loaded, so `SoilSweep` with vendor amplifier
+  models has not run. The ADA4817-1, ADA4807-1 and AD8130 files have to be
+  downloaded by hand; the analyzer parts carry the steps.
+- TI's TLV757 model has `.IC` inside its subcircuit and the TPS7A20 model
+  reads a global parameter; neither loads.
+- LTC6268 has no block (its data sheet could not be fetched). Adjustable and
+  isolated regulators, fully differential amplifiers, current-sense
+  amplifiers and comparators have no model kind.
+- A single `cmrr_corner` far below the gain bandwidth lets the common-mode
+  term feed forward near the gain bandwidth (OPA2189 showed a 33 MHz follower
+  until the corner was removed); a regulator's `psrr_corner` passes a fast
+  input edge to the output.
+- Vendor transients in the debug build: 100 s for the OPA2277 follower step;
+  the OPA2182 step fails with a collapsing time step.
+- Vendor models differ from the data sheets in places (OPA548 supply current
+  4.3 mA against 17 mA; OPA2189 slew 11.6 V/us against 20 V/us).
+
 ### F7. Device and netlist coverage
 
 Scope, in order of how often vendor files need it:

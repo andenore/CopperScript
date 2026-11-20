@@ -123,6 +123,30 @@ pub const COMMANDS: &[Command] = &[
                 help: "run a bench's steps, Monte Carlo runs and worst-case corners on up to N threads (default: one per core); the results do not depend on N",
             },
             Opt {
+                flag: "--models {default,macro,vendor}",
+                help: "for parts that declare a built-in block and a sim spice block for one unit: default runs the built-in macro model, vendor the sim spice model (its file must be cached), macro built-in models only (a part with only a sim spice model is SIM107)",
+            },
+            Opt {
+                flag: "--check-model PART",
+                help: "instead of the benches, run the standard bench set on PART of the board's library (by qualified or plain name): its macro model against the values its block declares, beside its vendor model; exit 1 when a figure is out of tolerance or a model does not load or converge",
+            },
+            Opt {
+                flag: "--supply VOLTS",
+                help: "with --check-model: the supply span of an amplifier (default 10 V, as +/-5 V) or the input voltage of a regulator or reference (default |output_voltage| + dropout + 1 V)",
+            },
+            Opt {
+                flag: "--tie PIN=ROLE",
+                help: "with --check-model: tie a vendor subcircuit's pin that the macro block leaves unmodelled to a role's node (vp, vn, out, in, gnd, ...); repeatable or comma-separated; other such pins are left open",
+            },
+            Opt {
+                flag: "--no-tran",
+                help: "with --check-model: leave out the transient figures (slew rate, start-up)",
+            },
+            Opt {
+                flag: "--tran-budget SECONDS",
+                help: "with --check-model: the wall time each transient run may take (default 120); a run that takes longer is reported as not finished and its figure is not judged",
+            },
+            Opt {
                 flag: "--timing",
                 help: "print each bench's wall time, solver work and time per phase (also COPPER_SIM_TIMING=1); adds timing to the JSON",
             },

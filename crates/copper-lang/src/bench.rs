@@ -465,6 +465,9 @@ pub struct Bench {
     /// For one analysis of a bench with several: the analysis's name (the
     /// bench's `name` is then `BENCH.SECTION`).
     pub section: Option<String>,
+    /// Which of a part's macro and vendor models run (`copper sim --models`);
+    /// set by the runner, [`simulation::ModelChoice::Default`] when compiled.
+    pub model_choice: simulation::ModelChoice,
 }
 
 impl Bench {
@@ -491,11 +494,14 @@ impl Bench {
         target_view(design, self.module.as_deref())
     }
 
-    /// The part sim models of a component simulated with [`Treatment::PartModel`].
-    pub fn models<'a>(&'a self, design: &'a Design, component: &SimComponent) -> &'a [PartSimModel] {
+    /// The part sim models a component simulated with [`Treatment::PartModel`]
+    /// runs with: per unit, the built-in or the `sim spice` block as
+    /// [`Bench::model_choice`] selects when the unit has both
+    /// ([`simulation::select_models`]).
+    pub fn models<'a>(&'a self, design: &'a Design, component: &SimComponent) -> Vec<&'a PartSimModel> {
         match (&component.treatment, self.part(design, component)) {
-            (Treatment::PartModel, Some(part)) => &part.sim,
-            _ => &[],
+            (Treatment::PartModel, Some(part)) => simulation::select_models(&part.sim, self.model_choice),
+            _ => Vec::new(),
         }
     }
 }
@@ -2482,6 +2488,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
         initial_conditions,
         fixtures: target.fixtures.clone(),
         section: None,
+        model_choice: simulation::ModelChoice::Default,
     })
 }
 
@@ -3109,19 +3116,23 @@ pub fn spec_fields(spec: &SimSpec) -> Vec<(&'static str, Value)> {
             simulation::SpiceSource::Url { url, sha256, member } => {
                 (text(url), text(sha256), member.as_deref().map_or(Value::Null, text), Value::Null)
             }
+            simulation::SpiceSource::Registered { sha256, member, .. } => {
+                (Value::Null, text(sha256), member.as_deref().map_or(Value::Null, text), Value::Null)
+            }
             simulation::SpiceSource::File(file) => (Value::Null, Value::Null, Value::Null, text(file)),
         };
-        entries.push((
-            "spice",
-            object(vec![
-                ("source", source),
-                ("sha256", sha256),
-                ("member", member),
-                ("file", file),
-                ("subckt", text(&model.subckt)),
-                ("dialect", text(&model.dialect)),
-            ]),
-        ));
+        let mut fields = vec![
+            ("source", source),
+            ("sha256", sha256),
+            ("member", member),
+            ("file", file),
+            ("subckt", text(&model.subckt)),
+            ("dialect", text(&model.dialect)),
+        ];
+        if let simulation::SpiceSource::Registered { download, .. } = &model.source {
+            fields.push(("download", text(download)));
+        }
+        entries.push(("spice", object(fields)));
     }
     if let Some(output) = spec.output {
         entries.push(("output", text(output.name())));

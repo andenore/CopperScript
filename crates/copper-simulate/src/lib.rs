@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod check_model;
 pub mod evaluate;
 pub mod format;
 pub mod lower;
@@ -36,6 +37,7 @@ use std::path::{Path, PathBuf};
 use copper_lang::CopperScriptError;
 use copper_lang::bench::load_benches;
 use copper_lang::compiler::Design;
+pub use copper_lang::simulation::ModelChoice;
 
 pub use copper_sim::timing;
 pub use run::{BenchRun, Status, run_bench};
@@ -63,7 +65,27 @@ impl std::error::Error for SimulateError {}
 /// Run the benches of the board in `board_file` (already compiled to
 /// `design`): all of them, or the one named `only`.
 pub fn simulate(board_file: &Path, design: &Design, only: Option<&str>) -> Result<Vec<BenchRun>, SimulateError> {
-    let benches = load_benches(board_file, design).map_err(SimulateError::Compile)?;
+    simulate_with(board_file, design, only, ModelChoice::Default)
+}
+
+/// [`simulate`] with a choice between the macro and vendor models of parts
+/// that declare both (`copper sim --models`).
+pub fn simulate_with(
+    board_file: &Path,
+    design: &Design,
+    only: Option<&str>,
+    choice: ModelChoice,
+) -> Result<Vec<BenchRun>, SimulateError> {
+    let mut benches = load_benches(board_file, design).map_err(SimulateError::Compile)?;
+    let project = copper_lang::paths::resolve(board_file).parent().map(|dir| dir.to_string_lossy().into_owned());
+    for bench in &mut benches {
+        bench.model_choice = choice;
+        // A bench library's vendor models live in the board's project cache, as the board's parts' do.
+        if let Some(project) = &project {
+            copper_lang::simulation::bind_library(&mut bench.library, project);
+            copper_lang::simulation::bind_library(&mut bench.target_library, project);
+        }
+    }
     if benches.is_empty() {
         let directory = board_file.parent().unwrap_or(Path::new(".")).join(copper_lang::bench::BENCH_DIRECTORY);
         return Err(SimulateError::NoBench(format!(

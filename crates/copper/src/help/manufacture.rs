@@ -368,7 +368,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "models",
         group: Group::Manufacture,
-        summary: "the 3D models a board's parts name by https:// URL: list them or fetch the missing ones",
+        summary: "the 3D and SPICE models a board's parts pin by hash: list them, fetch the missing ones, or add a file downloaded by hand",
         options: &[
             Opt {
                 flag: "--locked",

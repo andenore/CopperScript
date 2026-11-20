@@ -1269,5 +1269,10 @@ pub fn load_design(path: &Path, locked: bool, offline: bool) -> std::result::Res
     if suffix != ".copper" {
         return Err(LoadError::Load(format!("unsupported source format {}; expected .copper", repr(&suffix))));
     }
-    compile_design_file(&resolved, locked, offline).map_err(LoadError::Compile)
+    let mut design = compile_design_file(&resolved, locked, offline).map_err(LoadError::Compile)?;
+    // Vendor SPICE files live in the cache of the board's project, wherever the part was declared.
+    if let Some(directory) = resolved.parent() {
+        crate::simulation::bind_spice_project(&mut design.electrical, &directory.to_string_lossy());
+    }
+    Ok(design)
 }
