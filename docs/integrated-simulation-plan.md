@@ -5,7 +5,8 @@ Status, 20 November 2026: the simulator exists and is on branch
 for what comes next. What is built is summarised under [Built](#built); its
 syntax is in the [language reference](language-reference.md#simulation). The
 detailed build notes of the first phases (P0 to P3) are in the history of this
-file at commit `2361c46d`.
+file at commit `2361c46d`. What follows F1 to F11 is proposed in the
+[simulation improvement plan](simulation-improvement-plan.md).
 
 Goal: circuit simulation as a normal part of a CopperScript project, at the
 level people use LTspice for: put sources on a circuit, run AC, transient,
