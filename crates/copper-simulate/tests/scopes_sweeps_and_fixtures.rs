@@ -333,7 +333,7 @@ fn dc_sweeps_of_a_diode_an_amplifier_and_a_param() {
     assert!(rel(value(r, 0, "at_20k"), 3.0 / (1.0 + 3.0 / 1e5)) < 1e-6);
     // Outputs: the swept value as the axis.
     let json = copper_simulate::results::results_json(&runs, "Analog");
-    assert!(json.contains("\"kind\": \"dc\"") && json.contains("\"sweep\": ["));
+    assert!(json.contains("\"kind\": \"dc\"") && json.contains("\"quantity\": \"sweep\""));
     let csv = copper_simulate::results::plots_csv(bench(&runs, "IV"));
     assert!(csv.starts_with("step,label,sweep,"), "{}", &csv[..60]);
     let html = copper_simulate::report::html(bench(&runs, "IV"), "Analog");

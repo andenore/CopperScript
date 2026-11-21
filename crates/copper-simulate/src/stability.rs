@@ -149,15 +149,11 @@ fn root_value(root: &Root, nodes: Option<&Vec<String>>) -> Value {
     ]
     .into_iter()
     .collect();
-    if s.im == 0.0 {
-        entries.insert("real".to_owned(), Value::Bool(true));
-    }
-    if root.origin {
-        entries.insert("origin".to_owned(), Value::Bool(true));
-    }
-    if let Some(nodes) = nodes {
-        entries.insert("nodes".to_owned(), Value::Array(nodes.iter().map(|n| Value::from(n.as_str())).collect()));
-    }
+    entries.insert("real".to_owned(), Value::Bool(s.im == 0.0));
+    entries.insert("origin".to_owned(), Value::Bool(root.origin));
+    // Zeros dominate no nodes: an empty list.
+    let nodes = nodes.map(|nodes| nodes.iter().map(|n| Value::from(n.as_str())).collect()).unwrap_or_default();
+    entries.insert("nodes".to_owned(), Value::Array(nodes));
     Value::Object(entries)
 }
 
@@ -179,11 +175,9 @@ pub fn json(run: &BenchRun) -> Vec<Value> {
             ]
             .into_iter()
             .collect();
-            if let Some(t) = &pz.result.transfer {
-                entries
-                    .insert("transfer".to_owned(), Value::from(format!("{} / {}", output_name(t), t.input).as_str()));
-                entries.insert("zeros".to_owned(), Value::Array(zeros));
-            }
+            let transfer = pz.result.transfer.as_ref().map(|t| format!("{} / {}", output_name(t), t.input));
+            entries.insert("transfer".to_owned(), transfer.map(Value::from).unwrap_or(Value::Null));
+            entries.insert("zeros".to_owned(), Value::Array(zeros));
             Some(Value::Object(entries))
         })
         .collect()
@@ -214,27 +208,53 @@ pub fn figure(run: &BenchRun) -> Option<String> {
         let f = r.hertz().abs();
         (lo.min(f), hi.max(f))
     });
-    lo = 10f64.powf(lo.log10().floor());
-    hi = 10f64.powf(hi.log10().ceil());
+    // Half a decade clear of the outermost roots, so markers at the ends stay off the frame.
+    lo = 10f64.powf((lo.log10() - 0.5).floor());
+    hi = 10f64.powf((hi.log10() + 0.5).ceil());
     if hi <= lo {
         hi = lo * 10.0;
     }
     let min_damping = roots.iter().filter_map(|r| r.damping()).fold(0.0f64, f64::min);
-    let (y_lo, y_hi) = ((min_damping * 1.1).min(-0.2), 1.1);
+    let (y_lo, y_hi) = ((min_damping * 1.1).min(-0.2), 1.15);
+    let several = run.steps.len() > 1;
+    let top = if several { TOP + 18.0 } else { TOP };
+    let height = HEIGHT + (top - TOP);
     let plot_w = WIDTH - LEFT - RIGHT;
     let plot_h = HEIGHT - TOP - BOTTOM;
     let x = |f: f64| LEFT + plot_w * (f.log10() - lo.log10()) / (hi.log10() - lo.log10());
-    let y = |d: f64| TOP + plot_h * (y_hi - d) / (y_hi - y_lo);
+    let y = |d: f64| top + plot_h * (y_hi - d) / (y_hi - y_lo);
     let mut svg = vec![format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {WIDTH} {HEIGHT}\" width=\"100%\" role=\"img\" aria-label=\"pole map\" font-family=\"system-ui, sans-serif\">"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {WIDTH} {height}\" width=\"100%\" role=\"img\" aria-label=\"pole map\" font-family=\"Helvetica, Arial, sans-serif\">"
     )];
-    svg.push(format!("<rect x=\"0\" y=\"0\" width=\"{WIDTH}\" height=\"{HEIGHT}\" fill=\"#ffffff\"/>"));
+    svg.push(format!("<rect x=\"0\" y=\"0\" width=\"{WIDTH}\" height=\"{height}\" fill=\"#ffffff\"/>"));
     svg.push(format!(
         "<text x=\"{LEFT}\" y=\"22\" font-size=\"15\" font-weight=\"bold\" fill=\"#1f2933\">Poles and zeros: natural frequency and damping</text>"
     ));
     svg.push(format!(
-        "<text x=\"{LEFT}\" y=\"40\" font-size=\"12\" fill=\"#52606d\">x pole, o zero; real roots at damping 1 (decaying) or -1 (growing); below 0 the right half-plane: the circuit oscillates or latches</text>"
+        "<text x=\"{LEFT}\" y=\"40\" font-size=\"12\" fill=\"#52606d\">x pole, o zero. Real roots at damping 1 (decaying); below 0, shaded, they grow: the circuit oscillates or latches. Numbered poles are listed below.</text>"
     ));
+    let styles = crate::styles::StepStyles::of(run);
+    if several {
+        // One colour per step.
+        let mut x = LEFT;
+        for (k, step) in run.steps.iter().enumerate() {
+            let (color, _) = styles.get(k);
+            let label: Vec<String> = step.stepped.iter().map(|(_, value)| value.to_string()).collect();
+            let label = label.join(", ");
+            svg.push(format!(
+                "<line x1=\"{x:.2}\" y1=\"{0:.2}\" x2=\"{1:.2}\" y2=\"{0:.2}\" stroke=\"{color}\" stroke-width=\"2\"/><text x=\"{2:.2}\" y=\"{3:.2}\" font-size=\"11\" fill=\"#1f2933\">{4}</text>",
+                TOP + 8.0,
+                x + 16.0,
+                x + 22.0,
+                TOP + 12.0,
+                escape(&label)
+            ));
+            x += 40.0 + crate::report::text_px(&label, 11.0);
+            if x > WIDTH - RIGHT - 120.0 {
+                break;
+            }
+        }
+    }
     // The right half-plane band.
     svg.push(format!(
         "<rect x=\"{LEFT}\" y=\"{:.2}\" width=\"{plot_w:.2}\" height=\"{:.2}\" fill=\"#fbe3da\"/>",
@@ -246,12 +266,12 @@ pub fn figure(run: &BenchRun) -> Option<String> {
     while decade <= hi * 1.0001 {
         let gx = x(decade);
         svg.push(format!(
-            "<line x1=\"{gx:.2}\" y1=\"{TOP}\" x2=\"{gx:.2}\" y2=\"{:.2}\" stroke=\"#d9e0e7\"/>",
-            TOP + plot_h
+            "<line x1=\"{gx:.2}\" y1=\"{top}\" x2=\"{gx:.2}\" y2=\"{:.2}\" stroke=\"#d9e0e7\"/>",
+            top + plot_h
         ));
         svg.push(format!(
             "<text x=\"{gx:.2}\" y=\"{:.2}\" font-size=\"11\" fill=\"#52606d\" text-anchor=\"middle\">{}</text>",
-            TOP + plot_h + 16.0,
+            top + plot_h + 16.0,
             escape(&hertz(decade))
         ));
         decade *= 10.0;
@@ -275,15 +295,20 @@ pub fn figure(run: &BenchRun) -> Option<String> {
     svg.push(format!(
         "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"12\" fill=\"#52606d\" text-anchor=\"middle\">natural frequency |s| / 2 pi</text>",
         LEFT + plot_w / 2.0,
-        HEIGHT - 8.0
+        height - 8.0
     ));
     svg.push(format!(
         "<text x=\"14\" y=\"{:.2}\" font-size=\"12\" fill=\"#52606d\" transform=\"rotate(-90 14 {:.2})\" text-anchor=\"middle\">damping</text>",
-        TOP + plot_h / 2.0,
-        TOP + plot_h / 2.0
+        top + plot_h / 2.0,
+        top + plot_h / 2.0
     ));
+    svg.push(format!(
+        "<rect x=\"{LEFT}\" y=\"{top}\" width=\"{plot_w:.2}\" height=\"{plot_h:.2}\" fill=\"none\" stroke=\"#52606d\"/>"
+    ));
+    let styles = crate::styles::StepStyles::of(run);
+    let mut labels: Vec<(f64, f64, String, String)> = Vec::new();
     for (k, pz) in &steps {
-        let (color, _) = crate::report::step_style(*k);
+        let (color, _) = styles.get(*k);
         for (pole, title) in pz.result.poles.iter().zip(&pz.nodes) {
             if pole.value.im < 0.0 || pole.value.abs() == 0.0 {
                 continue;
@@ -304,6 +329,20 @@ pub fn figure(run: &BenchRun) -> Option<String> {
                 py - 5.0
             ));
         }
+        // The least damped (and any growing) poles of the step, labelled.
+        for p in notable(pz, if several { 1 } else { 3 }) {
+            let pole = &pz.result.poles[p];
+            let Some(d) = pole.damping() else { continue };
+            let text = format!("{}{}", root_text(pole), dominated(pz, p));
+            let text = if several {
+                let values: Vec<String> = run.steps[*k].stepped.iter().map(|(_, v)| v.to_string()).collect();
+                format!("{}: {text}", values.join(", "))
+            } else {
+                text
+            };
+            let color = if pole.right_half_plane() { "#d4380d".to_owned() } else { color.to_owned() };
+            labels.push((x(pole.hertz().abs()), y(d), text, color));
+        }
         for zero in &pz.result.zeros {
             if zero.value.im < 0.0 || zero.value.abs() == 0.0 {
                 continue;
@@ -317,6 +356,31 @@ pub fn figure(run: &BenchRun) -> Option<String> {
             ));
         }
     }
+    // The labelled poles: a number beside each marker, the text in a list under the map.
+    labels.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let list_top = height + 4.0;
+    // Tags of poles at nearly the same place sit side by side.
+    let mut tags: Vec<(f64, f64)> = Vec::new();
+    for (n, (px, py, text, color)) in labels.iter().enumerate() {
+        let (mut tx, ty) = (px + 6.0, py - 6.0);
+        while tags.iter().any(|(x, y)| (x - tx).abs() < 9.0 && (y - ty).abs() < 11.0) {
+            tx += 9.0;
+        }
+        tags.push((tx, ty));
+        svg.push(format!(
+            "<text class=\"pole-tag\" x=\"{tx:.2}\" y=\"{ty:.2}\" font-size=\"11\" font-weight=\"bold\" fill=\"{color}\" stroke=\"#ffffff\" stroke-width=\"3\" paint-order=\"stroke\">{}</text>",
+            n + 1
+        ));
+        svg.push(format!(
+            "<text class=\"pole-label\" x=\"{LEFT}\" y=\"{:.2}\" font-size=\"11\" fill=\"#1f2933\"><tspan font-weight=\"bold\" fill=\"{color}\">{}</tspan>  {}</text>",
+            list_top + 15.0 * (n as f64 + 1.0),
+            n + 1,
+            escape(text)
+        ));
+    }
+    let total = list_top + 15.0 * labels.len() as f64 + 10.0;
+    svg[0] = svg[0].replace(&format!("viewBox=\"0 0 {WIDTH} {height}\""), &format!("viewBox=\"0 0 {WIDTH} {total}\""));
+    svg[1] = format!("<rect x=\"0\" y=\"0\" width=\"{WIDTH}\" height=\"{total}\" fill=\"#ffffff\"/>");
     svg.push("</svg>".to_owned());
     Some(svg.join("\n"))
 }

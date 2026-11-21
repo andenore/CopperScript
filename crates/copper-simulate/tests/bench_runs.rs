@@ -175,7 +175,7 @@ fn expression_functions_over_an_ac_result() {
     assert!(table.contains("corner_gain") && table.contains("FAIL") && table.contains("R_VALUE = 2 kohm"), "{table}");
     let json = copper_simulate::results::results_json(&runs, "RC");
     let parsed = copper_json::parse(&json).unwrap();
-    assert_eq!(parsed.get("schema").and_then(|v| v.as_str()), Some("copperscript-sim/v0.1"));
+    assert_eq!(parsed.get("schema").and_then(|v| v.as_str()), Some("copperscript-sim/v1"));
     assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("fail"));
     let csv = copper_simulate::results::plots_csv(run);
     assert!(csv.starts_with("step,label,frequency_hz,db(h) [dB],phase(h) [deg]\n"), "{csv}");

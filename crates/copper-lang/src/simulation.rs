@@ -238,7 +238,8 @@ impl SimKind {
         SimKind::ALL.into_iter().find(|kind| kind.name() == name)
     }
 
-    fn keys(self) -> Vec<&'static str> {
+    /// Every key a block of this kind takes: roles, optional roles, parameters and the other keys.
+    pub fn keys(self) -> Vec<&'static str> {
         let mut keys: Vec<&str> = self.roles().to_vec();
         keys.extend(self.optional_roles());
         keys.extend(self.parameters().iter().map(|(name, _)| *name));

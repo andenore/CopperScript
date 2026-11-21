@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod frontend;
 pub mod pyerr;
 pub mod server;
+pub mod simulation;
 pub mod text;
 
 pub use server::serve;

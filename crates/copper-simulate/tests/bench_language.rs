@@ -646,5 +646,10 @@ fn stepped_analysis_bounds_are_shown() {
     assert!(text.contains("ac 10 Hz to 1 kHz..10 kHz, 5 points per decade, 2 steps"), "{text}");
     let json = copper_simulate::results::results_json(&runs, "RC");
     let compact: String = json.split_whitespace().collect();
-    assert!(compact.contains("\"to_hz\":[1000.0,10000.0]") && compact.contains("\"stepped\":[\"to_hz\"]"), "{json}");
+    // A bound that differs between steps is null on the bench, with each step's value on the step.
+    assert!(compact.contains("\"to_hz\":null") && compact.contains("\"stepped\":[\"to_hz\"]"), "{json}");
+    assert!(
+        compact.contains("\"analysis\":{\"to_hz\":1000.0}") && compact.contains("\"analysis\":{\"to_hz\":10000.0}"),
+        "{json}"
+    );
 }

@@ -49,6 +49,7 @@ mod route_board;
 mod route_global;
 mod si_check;
 mod sim;
+mod sim_watch;
 mod source_build;
 mod state;
 mod summarize;

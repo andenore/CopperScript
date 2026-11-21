@@ -75,7 +75,8 @@ Known weak spots of what is built:
   slew checks are opt-in and were not rerun.
 - No Analog Devices model has been loaded: analog.com refuses automated
   downloads.
-- The HTML reports were looked at once; nobody has used them for real work.
+- The HTML reports have been looked at page kind by page kind (F10) but not
+  used for real design work.
 
 ## Forward plan
 
@@ -565,6 +566,34 @@ Needs the JSON schema frozen as `copperscript-sim/v1`.
 
 Acceptance: the views are looked at on the analyzer's results before the
 phase is called done (charts first, per the EMI figures rule).
+
+Built on 21 November 2026, except the CopperReview view. No new diagnostics.
+
+- `sim-results.json` is frozen as `copperscript-sim/v1`, described in
+  `docs/sim-results-schema.md` and pinned by a shape test. Stepped analysis
+  fields, the x vector (`axis`, `steps[].x`) and noise outputs were made
+  regular; NaN and infinity are `null`.
+- Every page kind was rendered and looked at. Steps with a steady state share
+  an axis in periods of their own fundamental; a start-up is drawn on log
+  time; beyond 8 steps colour and dash encode the stepped parameters; loop
+  gain pages mark crossover and phase margin; the pole map numbers the least
+  damped poles.
+- The pages are interactive and self-contained (inline script, no network):
+  zoom, pan, two cursors with differences, curves toggled from the legend,
+  linear or log axes. Checked in headless Chrome over DevTools (22 checks).
+  With scripting off the static figure shows. Page size of all examples
+  11.0 MB to 8.0 MB.
+- Language server: completion and hover in `sim` blocks and benches from
+  `copper_lang::sim_reference`, the table the checkers also use; a
+  "Run bench" code lens.
+- `copper sim --watch` (polling, 0.5 s debounce).
+- `make/board.mk` has a `sim` target for boards whose settings set
+  `SIM_BENCHES = yes`.
+
+Open: the simulation view in CopperReview (the schema document lists what it
+reads); the VS Code extension was not run in VS Code itself; `--watch` does
+not watch packages outside the board directory; the log-time rule is tuned
+on two cases; the reports have still not been used for real design work.
 
 ### F11. One solver for all checks
 

@@ -252,7 +252,7 @@ fn noise_of_an_rc_lowpass_through_the_chain() {
     // JSON: the noise summary and the analysis are in the results; a nominal bench has no variation.
     let json = copper_simulate::results::results_json(std::slice::from_ref(&run), "RC");
     assert!(json.contains("\"kind\": \"noise\"") && json.contains("\"total_rms_v\""));
-    assert!(!json.contains("\"variation\""));
+    assert!(json.contains("\"variation\": null"));
     // A hotter board: density as sqrt(T).
     let hot = bench.replace("input = INPUT;", "input = INPUT; temperature = 85degC;");
     let path = project("noise-hot", &[("board.copper", RC), ("benches/noise.copper", &hot)]);

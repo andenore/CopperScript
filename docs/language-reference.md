@@ -4052,7 +4052,8 @@ frequency axis, so it is not allowed in a `let`, a measure or inside another
 expression (`SIM113`). The HTML page draws a figure of its own below the time
 plots: one panel per spectrum, a logarithmic axis of the harmonic number
 `f / f0` (to the 50th) with levels in dB relative to the fundamental for a
-coherent spectrum, drawn as stems with harmonics 2 to 9 marked, and of
+coherent spectrum, drawn as stems with harmonics 2 to 9 marked and the
+fundamental (0 dBc at every step) drawn once, and of
 frequency with levels in dB relative to 1 of `x`'s unit for a windowed one,
 drawn as a line; each step is one colour. `BENCH.spectrum.csv` has one row per
 step, spectrum and bin (`frequency_hz`, `harmonic`, `amplitude`,
@@ -4244,8 +4245,8 @@ damped with the nodes they dominate; the HTML page draws the poles and zeros
 by natural frequency against damping, the right half-plane shaded, and
 tables them; the JSON has `pole_zero`, per step `stable`, `unknowns`,
 `infinite_eigenvalues`, the `poles` (`re_hz`, `im_hz`, `frequency_hz`,
-`damping`, `right_half_plane`, `refined`, `real`, `origin`, `nodes`) and with
-a transfer function `transfer` and `zeros`.
+`damping`, `right_half_plane`, `refined`, `real`, `origin`, `nodes`),
+`transfer` and `zeros` (`null` and empty without a transfer function).
 
 The analysis is dense, `O(n^3)` in the unknowns, and takes circuits of up to
 1500 unknowns; the analyzer's front end (about 90) takes well under a second.
@@ -4276,41 +4277,101 @@ worst step against its limits (headed `BENCH NAME (BOARD)`, or `BENCH NAME
 (module MODULE of BOARD)` for a bench of a module, then the analysis at the
 steps' values: a bound that differs between steps as its range, `tran 0 to
 300 us..60 ms`), and writes into `--out`
-(default `build/sim`): `sim-results.json` (schema `copperscript-sim/v0.1`: the
-solver and its version, per bench its board and, for a bench of a module, the
-module, the model fidelity of every component, supply and bench model, every
-param per step, each
-measure per step with its limits and pass or fail, the plotted vectors; for
-a noise bench `noise`, the contributors per step, for a pole-zero bench
-`pole_zero`, the poles and zeros per step, for a Monte Carlo or
-worst-case bench `variation`, the statistics per step and measure, and for a
-transient bench `transient` per step, the solver's accepted and rejected
-steps, Newton iterations and step sizes (with a steady state also
-`steady_iterations`, `steady_periods`, `steady_residual` and, when it settled
-period by period, `steady_fallback`; with noise `noise_generators`), with the
-plotted vectors on `time_s` instead of `frequency_hz` (a dc sweep: `sweep`)
-and the plotted spectra in `spectra`; a tran analysis records
-`steady_period_s` and `noise_seed` when it has them; a measure with a
-`where` adds `where`, `covered_steps` and a per-step `covered`, and a step
-whose value is never `"value": null` with `"never": true`; the `analysis`
-holds the values at the bench's steps, a field that differs between steps
-an array of one value per step with `stepped` naming those fields; the
-`noise` entries are one per step and output, with `step` and `output`; one
-analysis of a bench with several adds `bench` and `section`),
-`BENCH.csv` (the plotted vectors, SI base units), `BENCH.spectrum.csv` (the
-plotted spectra, [Spectra](#spectra)) and `BENCH.html` (the plots,
-one curve per step, magnitude-like panels above phase-like ones on a shared
-logarithmic frequency axis, limit lines or windows where a measure's limit
-applies to a plotted quantity, one per distinct limit over the steps it
-covers, then the measures table and the models; a
-transient bench's panels share a linear time axis, each curve drawn from the
-first, lowest, highest and last sample of each pixel column, while the CSV
-and JSON keep every time point, and a dc sweep's a linear axis of the swept
-value; noise densities are drawn on a logarithmic value axis, log-log;
-dimensionless values are shown in percent, and a limit that names a param
-shows its nominal value, `max 4.4 V (PUMP_SWING)`). The
-exit status is 1 when a measure is outside its limits or a bench cannot be
-solved, 2 for usage and compile errors, 0 otherwise.
+(default `build/sim`): `sim-results.json` (schema `copperscript-sim/v1`,
+every field described in [the results schema](sim-results-schema.md): the
+solver and its version, per bench its board and module, the files written
+for it, the analysis and its axis, the model fidelity of every component,
+supply and bench model, every param per step with the step's axis values,
+each measure per step with its limits, pass or fail and how a limit is
+drawn, the plotted vectors and spectra, noise contributors, poles and zeros,
+Monte Carlo or worst-case statistics and, with `--timing`, where the time
+went; every field is always present, `null` or empty where it does not
+apply), `BENCH.csv` (the plotted vectors, SI base units),
+`BENCH.spectrum.csv` (the plotted spectra, [Spectra](#spectra)) and
+`BENCH.html` (the report page below). The exit status is 1 when a measure
+is outside its limits or a bench cannot be solved, 2 for usage and compile
+errors, 0 otherwise.
+
+`copper sim BOARD --watch` runs the benches, then keeps watching the board's
+directory (sources, parts, benches, local model files) and the project's
+vendor model cache, polling every 0.3 s: once the files have been still for
+0.5 s, a changed bench file reruns the benches it declares, any other change
+reruns every bench, and the results document and pages hold the latest run of
+every bench. A compile error is printed and the watch goes on; Ctrl-C stops
+it. Files of package dependencies outside the board's directory are not
+watched. Board builds run the benches with `make sim` (and `make all`) when
+the board's settings set `SIM_BENCHES = yes` ([Make builds](make-builds.md)).
+
+#### The report page
+
+`BENCH.html` is one self-contained page: no network access, no library,
+the data inline. Without scripting it shows static plots; with scripting the
+same plots become interactive.
+
+- Plots: one panel per plotted expression, magnitude-like panels above
+  phase-like ones on a shared x axis, one curve per step; a measure's limit
+  is drawn where it applies to a plotted quantity (lines for `min(P)` and
+  `max(P)`, a window for `at(P, x)`), one per distinct limit over the steps
+  it covers. Frequency axes are logarithmic. A transient bench's time axis is
+  linear, except that a start-up is drawn on logarithmic time: a record with
+  at least 80 % of its change in its first tenth whose curves settle (stay
+  within 1 % of their range of their final values) more than a hundred times
+  later than the first of them moves, from half that first move. A delayed
+  step response stays on linear time. Steps whose records differ in length by more than three times are
+  not squeezed onto one axis: with `steady` at every step they share an axis
+  in periods of each step's own fundamental (the waveforms overlay for
+  comparison), otherwise each time scale gets its own figure. A dc sweep has
+  a linear axis of the swept value. Noise analyses draw positive panels on a
+  logarithmic value axis. More than six panels are drawn shorter. Long
+  records are drawn as the lowest and highest sample of each pixel column;
+  the CSV and JSON keep every point. Dimensionless values read in percent,
+  and a limit that names a param shows its nominal value,
+  `max 4.4 V (PUMP_SWING)`.
+- Steps: up to eight steps each get their own colour and dash. Beyond eight,
+  the stepped params are grouped into factors (params that move together,
+  as in a zipped step, are one), the factor with the most levels up to eight
+  sets the colour, the combinations of the others (up to four) the dash, and
+  the legend shows one row per encoding; a factor of more than eight levels
+  and nothing smaller is drawn on a sequential colour ramp. With more than
+  eight steps the measures table has one row per step.
+- Loop gain (`analysis loop`): the 0 dB and -180 degree lines, each step's
+  crossover and phase margin, the least margin labelled.
+- Spectra: the fundamental of a coherent spectrum is drawn once (0 dBc at
+  every step); the region below the integration floor is shaded.
+- Poles (`analysis pz`): natural frequency against damping, half a decade
+  clear of the outermost roots; the least damped poles are numbered and
+  listed under the map with the nets they dominate.
+- Monte Carlo: per measure a histogram with value ticks, the nominal and the
+  limits, and the smallest margin when the limits lie beyond the axis.
+- A bench with several analyses links its pages to each other.
+
+Interaction (each figure): drag across a panel to zoom the x axis, shift-drag
+or the arrow keys to pan, double-click or `Reset` for the whole axis; the y
+axes follow the visible data. Click to place cursor A and again for cursor
+B (later clicks move the nearer one): the readout lists every visible curve
+at both cursors with the difference, `B - A` on the x axis and, on time
+axes, `1/(B - A)`; without cursors it follows the pointer. The legend shows
+or hides steps, one by one or by stepped value; `All` and `None` show or hide
+every step. `x: log` switches a frequency or time axis between linear and
+logarithmic, the `y:` label of a positive panel its value axis. The chart
+data holds every sample of a frequency sweep and at most 6000 evenly spaced
+samples per step of a time record.
+
+#### Editor support
+
+The language server (`copper lsp`) completes and explains benches and `sim`
+blocks from the same table the checkers take their names from
+(`copper_lang::sim_reference`): bench statements at the start of a statement,
+analysis kinds after `analysis` (or `analysis NAME:`), each kind's options
+inside its braces with their unit and meaning, model kinds after `sim`,
+`replace X with` and `model NAME:`, a kind's roles and parameters inside its
+block with their unit and meaning, the `montecarlo` keys, a measure's
+`min`, `max` and `where`, and the functions and probes with their signatures
+in a `measure`, `let` or `plot` expression. Hover shows the same text. A bench
+file gets a "Run bench NAME" code lens on its header; it runs `copper sim
+BOARD --bench NAME` with the pages in `build/sim` beside the board (the board
+is the `.copper` file beside `benches/` that declares the bench's target) and
+reports the verdict as a message, the whole output in the log.
 
 The simulated circuit: every net of the target (the board, or the module on
 its own) is a node of its name and the ground net is the reference. Passives are ideal elements of their value between their

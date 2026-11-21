@@ -114,8 +114,12 @@ fn rc_step_time_constant_outputs_and_errors() {
     assert!((measure(r, 0, "final") - (1.0 - (-7.9f64).exp())).abs() < 1e-3);
     // Outputs: the time axis in JSON and CSV, per-step solver work, the time figure.
     let json = copper_simulate::results::results_json(&runs, "RC");
-    assert!(json.contains("\"kind\": \"tran\"") && json.contains("\"time_s\"") && json.contains("\"accepted_steps\""));
-    assert!(!json.contains("\"frequency_hz\""));
+    assert!(
+        json.contains("\"kind\": \"tran\"")
+            && json.contains("\"quantity\": \"time\"")
+            && json.contains("\"accepted_steps\"")
+    );
+    assert!(!json.contains("\"quantity\": \"frequency\""));
     let csv = copper_simulate::results::plots_csv(r);
     assert!(csv.starts_with("step,label,time_s,"), "{}", &csv[..80]);
     let html = copper_simulate::report::html(r, "RC");

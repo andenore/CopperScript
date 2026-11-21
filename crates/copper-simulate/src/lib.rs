@@ -6,7 +6,7 @@
 //! [`copper_sim::Circuit`] ([`lower`]), runs the bench's analysis once per
 //! combination of its `step` values ([`run`]), evaluates the typed `let`,
 //! `measure` and `plot` expressions ([`evaluate`]) and writes the results:
-//! a `copperscript-sim/v0.1` JSON document ([`results`]), a CSV of the
+//! a `copperscript-sim/v1` JSON document ([`results`]), a CSV of the
 //! plotted vectors and one self-contained HTML page per bench with inline
 //! SVG plots ([`report`]).
 //!
@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chart;
 pub mod check_model;
 pub mod evaluate;
 pub mod format;
@@ -29,6 +30,7 @@ pub mod results;
 pub mod run;
 pub mod spice;
 pub mod stability;
+pub mod styles;
 pub mod transient;
 pub mod variation;
 
@@ -76,6 +78,18 @@ pub fn simulate_with(
     only: Option<&str>,
     choice: ModelChoice,
 ) -> Result<Vec<BenchRun>, SimulateError> {
+    simulate_matching(board_file, design, only, &|_| true, choice)
+}
+
+/// [`simulate_with`], running only the selected benches that `keep` accepts
+/// (`copper sim --watch` reruns the benches of a changed bench file).
+pub fn simulate_matching(
+    board_file: &Path,
+    design: &Design,
+    only: Option<&str>,
+    keep: &dyn Fn(&copper_lang::bench::Bench) -> bool,
+    choice: ModelChoice,
+) -> Result<Vec<BenchRun>, SimulateError> {
     let mut benches = load_benches(board_file, design).map_err(SimulateError::Compile)?;
     let project = copper_lang::paths::resolve(board_file).parent().map(|dir| dir.to_string_lossy().into_owned());
     for bench in &mut benches {
@@ -110,7 +124,7 @@ pub fn simulate_with(
             names.join(", ")
         )));
     }
-    Ok(selected.into_iter().map(|bench| run_bench(design, bench)).collect())
+    Ok(selected.into_iter().filter(|bench| keep(bench)).map(|bench| run_bench(design, bench)).collect())
 }
 
 /// True when any measure fails or any bench could not be solved.
@@ -140,8 +154,17 @@ pub fn write_outputs(runs: &[BenchRun], board: &str, directory: &Path) -> std::i
             copper_json::text::write_text(&csv, &results::spectra_csv(run))?;
             written.push(csv);
         }
+        // The sections of one bench link to each other.
+        let sections: Vec<&str> = if run.section.is_some() {
+            runs.iter()
+                .filter(|other| other.section.is_some() && other.bench_name() == run.bench_name())
+                .map(|other| other.name.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let html = directory.join(format!("{stem}.html"));
-        copper_json::text::write_text(&html, &report::html(run, board))?;
+        copper_json::text::write_text(&html, &report::html_with(run, board, &sections))?;
         written.push(html);
     }
     Ok(written)

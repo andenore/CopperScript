@@ -51,7 +51,52 @@ pub fn axis_unit(units: Units, largest: f64) -> (String, f64) {
             let (name, scale) = unit_for(dimension, largest);
             (name.to_owned(), scale)
         }
-        None => (units.base_text(), 1.0),
+        None => (display_base(units), 1.0),
+    }
+}
+
+/// The base-unit text of units without a named dimension, for people: a
+/// density per root hertz reads `V/A/rtHz` or `1/rtHz` rather than
+/// `V/A*s^(1/2)` or `s^(1/2)`.
+pub fn display_base(units: Units) -> String {
+    let root_hertz = Units::of(Dimension::VoltageNoiseDensity).per(Units::of(Dimension::Voltage));
+    if units.doubled_exponents()[2] % 2 != 0 {
+        let rest = units.per(root_hertz);
+        let text = match rest.dimension() {
+            Some(Dimension::Ratio) => "1".to_owned(),
+            Some(dimension) => dimension
+                .units()
+                .iter()
+                .find(|(_, scale)| *scale == "1")
+                .map(|(name, _)| (*name).to_owned())
+                .unwrap_or_else(|| rest.base_text()),
+            None => rest.base_text(),
+        };
+        return format!("{text}/rtHz");
+    }
+    units.base_text()
+}
+
+/// How a value of these units is written: the named units of its dimension
+/// with their scales (smallest first), whether it reads in percent, and the
+/// text of units without a name. The interactive page picks a unit per value
+/// from these by the rule of [`quantity_text`].
+pub fn unit_choices(units: Units) -> (Vec<(&'static str, f64)>, bool, String) {
+    match units.dimension() {
+        Some(Dimension::Ratio) => (Vec::new(), units.is_dimensionless(), String::new()),
+        Some(dimension) => {
+            let mut choices: Vec<(&'static str, f64)> = dimension
+                .units()
+                .iter()
+                .map(|(name, scale)| (*name, scale.parse::<f64>().unwrap_or(1.0)))
+                .filter(|(name, _)| {
+                    !matches!(dimension, Dimension::Resistance | Dimension::Impedance) || *name != "mohm"
+                })
+                .collect();
+            choices.sort_by(|a, b| a.1.total_cmp(&b.1));
+            (choices, false, String::new())
+        }
+        None => (Vec::new(), false, display_base(units)),
     }
 }
 
@@ -65,7 +110,7 @@ pub fn quantity_text(value: f64, units: Units, digits: usize, percent: bool) -> 
     let dimension = match units.dimension() {
         Some(Dimension::Ratio) if !percent => return significant(value, digits),
         Some(dimension) => dimension,
-        None => return format!("{} {}", scientific(value, digits), units.base_text()),
+        None => return format!("{} {}", scientific(value, digits), display_base(units)),
     };
     let (unit, scale) = unit_for(dimension, value);
     // A ratio far below its smallest unit (a numerically zero error) in scientific notation,
@@ -229,6 +274,13 @@ mod tests {
         let conductance = Units::of(Dimension::Current).per(Units::of(Dimension::Voltage));
         assert_eq!(quantity_text(2e-5, conductance, 3, false), "2e-5 A/V");
         assert_eq!(significant(0.02351, 3), "0.0235");
+        // A relative noise density (an impedance noise over the impedance) per root hertz.
+        let relative = Units::of(Dimension::VoltageNoiseDensity).per(Units::of(Dimension::Voltage));
+        assert_eq!(display_base(relative), "1/rtHz");
+        assert_eq!(
+            display_base(Units::of(Dimension::VoltageNoiseDensity).per(Units::of(Dimension::Current))),
+            "ohm/rtHz"
+        );
         assert_eq!(significant(937.5, 3), "938");
     }
 }

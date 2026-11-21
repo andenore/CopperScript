@@ -637,7 +637,7 @@ fn object(entries: Vec<(&str, Value)>) -> Value {
 
 /// A number, or null for NaN ("never", or no value).
 fn number(value: f64) -> Value {
-    if value.is_nan() { Value::Null } else { Value::Float(value) }
+    if value.is_finite() { Value::Float(value) } else { Value::Null }
 }
 
 fn optional(value: Option<f64>) -> Value {
@@ -662,13 +662,16 @@ fn corner_value(corner: &Option<(f64, Vec<i8>)>, variables: &[String]) -> Value 
 /// The variation of a bench as JSON (`variation` of a bench in the results).
 pub fn value_of(run: &BenchRun, variation: &VariationRun) -> Value {
     let mut method = vec![("kind", Value::from(variation.method.name()))];
-    if let Method::MonteCarlo { runs, seed, distribution } = &variation.method {
-        method.push(("runs", Value::from(i64::from(*runs))));
-        method.push((
-            "seed",
-            i64::try_from(*seed).map(Value::from).unwrap_or_else(|_| Value::from(seed.to_string().as_str())),
-        ));
-        method.push(("distribution", Value::from(distribution.name())));
+    match &variation.method {
+        Method::MonteCarlo { runs, seed, distribution } => {
+            method.push(("runs", Value::from(i64::from(*runs))));
+            method.push(("seed", Value::from(*seed)));
+            method.push(("distribution", Value::from(distribution.name())));
+        }
+        // The corners are the runs: no count, seed or distribution of their own.
+        Method::WorstCase => {
+            method.extend([("runs", Value::Null), ("seed", Value::Null), ("distribution", Value::Null)]);
+        }
     }
     let steps = variation
         .steps
@@ -688,28 +691,28 @@ pub fn value_of(run: &BenchRun, variation: &VariationRun) -> Value {
                         ("yield", optional(m.yield_fraction)),
                         ("worst_run", m.worst_run.map(|k| Value::from(k as i64)).unwrap_or(Value::Null)),
                     ];
-                    match variation.method {
-                        Method::MonteCarlo { .. } => {
-                            entries.push(("mean", optional(m.mean)));
-                            entries.push(("std", optional(m.std)));
-                            entries.push(("values", Value::Array(m.values.iter().map(|v| number(*v)).collect())));
-                        }
-                        Method::WorstCase => {
-                            entries.push(("low_corner", corner_value(&m.low_corner, &variation.variables)));
-                            entries.push(("high_corner", corner_value(&m.high_corner, &variation.variables)));
-                            entries.push((
-                                "sensitivity",
-                                Value::Object(
-                                    variation
-                                        .variables
-                                        .iter()
-                                        .zip(&m.sensitivity)
-                                        .map(|(name, d)| (name.clone(), number(*d)))
-                                        .collect(),
-                                ),
-                            ));
-                        }
-                    }
+                    // Every field for both methods: the other method's are null (or empty).
+                    let worst = matches!(variation.method, Method::WorstCase);
+                    entries.push(("mean", optional(m.mean)));
+                    entries.push(("std", optional(m.std)));
+                    entries.push(("values", Value::Array(m.values.iter().map(|v| number(*v)).collect())));
+                    entries.push(("low_corner", corner_value(&m.low_corner, &variation.variables)));
+                    entries.push(("high_corner", corner_value(&m.high_corner, &variation.variables)));
+                    entries.push((
+                        "sensitivity",
+                        if worst {
+                            Value::Object(
+                                variation
+                                    .variables
+                                    .iter()
+                                    .zip(&m.sensitivity)
+                                    .map(|(name, d)| (name.clone(), number(*d)))
+                                    .collect(),
+                            )
+                        } else {
+                            Value::Null
+                        },
+                    ));
                     object(entries)
                 })
                 .collect();
@@ -800,9 +803,9 @@ fn histogram(
     label: &str,
 ) -> String {
     const W: f64 = 640.0;
-    const H: f64 = 170.0;
+    const H: f64 = 196.0;
     const LEFT: f64 = 12.0;
-    const BOTTOM: f64 = 40.0;
+    const BOTTOM: f64 = 62.0;
     let mut lo = values.iter().copied().fold(nominal, f64::min);
     let mut hi = values.iter().copied().fold(nominal, f64::max);
     for limit in [limits.0, limits.1].into_iter().flatten() {
@@ -870,19 +873,49 @@ fn histogram(
             x(v)
         ));
         svg.push(format!(
-            "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"11\" fill=\"{colour}\" text-anchor=\"middle\" font-family=\"Helvetica,Arial,sans-serif\">{name}</text>",
-            x(v),
-            base_y + 14.0
+            "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"11\" fill=\"{colour}\" text-anchor=\"{}\" font-family=\"Helvetica,Arial,sans-serif\" stroke=\"#ffffff\" stroke-width=\"3\" paint-order=\"stroke\">{name}</text>",
+            if x(v) > W / 2.0 { x(v) - 4.0 } else { x(v) + 4.0 },
+            base_y - plot_h + 10.0,
+            if x(v) > W / 2.0 { "end" } else { "start" }
         ));
     }
-    // The axis ends, in the measure's units.
-    for (v, anchor, at) in [(lo, "start", LEFT), (hi, "end", W - LEFT)] {
+    // Value ticks in the measure's units.
+    let (ticks, _) = crate::report::linear_ticks(lo, hi, 5.0, false);
+    for t in ticks.into_iter().filter(|t| *t >= lo && *t <= hi) {
         svg.push(format!(
-            "<text x=\"{at:.2}\" y=\"{:.2}\" font-size=\"11\" fill=\"#52606d\" text-anchor=\"{anchor}\" font-family=\"Helvetica,Arial,sans-serif\">{}</text>",
-            H - 6.0,
-            escape(&measure_text(v, units))
+            "<line x1=\"{0:.2}\" y1=\"{base_y:.2}\" x2=\"{0:.2}\" y2=\"{1:.2}\" stroke=\"#aab4be\"/><text x=\"{0:.2}\" y=\"{2:.2}\" font-size=\"11\" fill=\"#52606d\" text-anchor=\"middle\" font-family=\"Helvetica,Arial,sans-serif\">{3}</text>",
+            x(t),
+            base_y + 4.0,
+            base_y + 17.0,
+            escape(&measure_text(t, units))
         ));
     }
+    // The tallest bar's count, and limits too far out to draw.
+    let mut info = format!("{} runs in {bins} bins, the tallest {}", values.len(), most as usize);
+    let outside: Vec<String> = [("min", limits.0), ("max", limits.1)]
+        .into_iter()
+        .filter_map(|(name, limit)| {
+            limit.filter(|v| *v < lo || *v > hi).map(|v| format!("{name} {}", measure_text(v, units)))
+        })
+        .collect();
+    if !outside.is_empty() {
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let margin = [limits.0.map(|min| low - min), limits.1.map(|max| max - high)]
+            .into_iter()
+            .flatten()
+            .fold(f64::INFINITY, f64::min);
+        info.push_str(&format!(
+            "; limits {} beyond the axis, smallest margin {}",
+            outside.join(", "),
+            measure_text(margin, units)
+        ));
+    }
+    svg.push(format!(
+        "<text x=\"{LEFT}\" y=\"{:.2}\" font-size=\"11\" fill=\"#52606d\" font-family=\"Helvetica,Arial,sans-serif\">{}</text>",
+        base_y + 36.0,
+        escape(&info)
+    ));
     svg.push("</svg>".to_owned());
     svg.join("")
 }

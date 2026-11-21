@@ -39,6 +39,7 @@ pub mod query;
 pub mod remote_models;
 pub mod serializer;
 pub mod silkscreen;
+pub mod sim_reference;
 pub mod simulation;
 pub mod snapshot;
 pub mod spice_models;

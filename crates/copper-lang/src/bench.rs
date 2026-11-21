@@ -2748,7 +2748,7 @@ struct SweepSources<'a> {
 
 /// `analysis dc { sweep = NAME; from = q; to = q; step = q; }` or `points = N` (`SIM074`).
 fn dc_analysis(item: &AnalysisDecl, scope: &ValueScope, sources: &SweepSources) -> Result<DcAnalysis> {
-    const PROPERTIES: [&str; 5] = ["sweep", "from", "to", "step", "points"];
+    let properties = crate::sim_reference::option_names("dc");
     let mut name: Option<(String, Location)> = None;
     let mut written: IndexMap<&str, (&Scalar, &Location)> = IndexMap::new();
     for entry in &item.entries {
@@ -2776,12 +2776,12 @@ fn dc_analysis(item: &AnalysisDecl, scope: &ValueScope, sources: &SweepSources) 
                         format!(
                             "unknown analysis dc property {}; expected one of: {}",
                             repr(other),
-                            PROPERTIES.join(", ")
+                            properties.join(", ")
                         ),
                         &entry.location,
                     ),
                     other,
-                    &PROPERTIES,
+                    &properties,
                 ));
             }
         }
@@ -3192,7 +3192,7 @@ fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<Analysis> {
                         return Err(suggesting(
                             error("SIM040", format!("unknown analysis ac property {}", repr(other)), &entry.location),
                             other,
-                            &["from", "to", "points_per_decade"],
+                            &crate::sim_reference::option_names("ac"),
                         ));
                     }
                 }
@@ -3219,7 +3219,7 @@ fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<Analysis> {
                 &item.location,
             ),
             other,
-            &["ac", "dc", "loop", "noise", "op", "pz", "tran"],
+            &crate::sim_reference::ANALYSES.iter().map(|kind| kind.name).collect::<Vec<_>>(),
         )),
     }
 }

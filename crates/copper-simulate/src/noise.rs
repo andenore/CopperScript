@@ -513,7 +513,10 @@ fn output_section(run: &BenchRun, k: usize, several: bool) -> String {
     ];
     let mut header = vec!["<th>contributor</th>".to_owned()];
     for step in &run.steps {
-        header.push(format!("<th title=\"{}\">RMS, share</th>", escape(&step.label)));
+        // The stepped values name the column; the table's first row says what the cells are.
+        let values: Vec<String> = step.stepped.iter().map(|(_, value)| value.to_string()).collect();
+        let name = if values.is_empty() { "RMS, share".to_owned() } else { values.join(", ") };
+        header.push(format!("<th title=\"{}\">{}</th>", escape(&step.label), escape(&name)));
     }
     out.push(format!("<tr>{}</tr>", header.join("")));
     let mut total = vec!["<td><b>total</b></td>".to_owned()];

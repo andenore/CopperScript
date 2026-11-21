@@ -1,8 +1,9 @@
-//! `copper sim BOARD [--bench NAME] [--out DIR] [--jobs N] [--models MODE] [--timing] [--locked] [--offline]`:
+//! `copper sim BOARD [--bench NAME] [--out DIR] [--jobs N] [--models MODE] [--timing] [--watch] [--locked] [--offline]`:
 //! run the board's benches (`benches/*.copper` beside it): the analysis of
 //! each, once per step, its measures against their limits, and the results
 //! JSON, the CSV of plotted vectors and one HTML page per bench in `--out`.
-//! Exit status 1 when a measure fails or a bench cannot be solved.
+//! Exit status 1 when a measure fails or a bench cannot be solved. With
+//! `--watch` it then reruns on changes ([`crate::sim_watch`]) until interrupted.
 //!
 //! `copper sim --check-model PART BOARD [--supply V] [--tie PIN=ROLE] [--no-tran] [--tran-budget S]`
 //! runs the standard bench set of [`copper_simulate::check_model`] on a part
@@ -19,7 +20,7 @@ use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with, write_o
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--models {default,macro,vendor}] [--check-model PART] [--supply VOLTS] [--tie PIN=ROLE] [--no-tran] [--tran-budget SECONDS] [--timing] [--locked] [--offline] board";
+const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--models {default,macro,vendor}] [--check-model PART] [--supply VOLTS] [--tie PIN=ROLE] [--no-tran] [--tran-budget SECONDS] [--timing] [--watch] [--locked] [--offline] board";
 
 /// Where the files go without `--out`.
 const DEFAULT_OUT: &str = "build/sim";
@@ -46,6 +47,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         flag("--no-tran"),
         value("--tran-budget"),
         flag("--timing"),
+        flag("--watch"),
         flag("--locked"),
         flag("--offline"),
     ];
@@ -58,12 +60,20 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nrun the board's simulation benches (the bench files in benches/ beside the board): each bench's \
              analysis once per combination of its step values, with its measures against their limits. Prints a table \
-             of each measure's worst step against its limits, then writes sim-results.json (copperscript-sim/v0.1: solver, \
-             model fidelity of every component, params per step, measures, plotted vectors), BENCH.csv of the plotted \
-             vectors and BENCH.html with the plots (one curve per step, magnitude above phase on a shared logarithmic \
-             frequency axis, or a linear time axis for analysis tran; the loop gain's Bode plot for analysis loop; a map \
-             and a table of the poles for analysis pz, whose built-in measure stable fails on a pole in the right \
-             half-plane) and the measures table. Amplifier models whose sim block declares quiescent_current draw \
+             of each measure's worst step against its limits, then writes sim-results.json (copperscript-sim/v1, every field \
+             described in docs/sim-results-schema.md: solver, model fidelity of every component, params per step, \
+             measures, plotted vectors), BENCH.csv of the plotted vectors and BENCH.html with the plots (one curve per \
+             step, magnitude above phase on a shared logarithmic frequency axis, or a time axis for analysis tran: \
+             logarithmic when the change is in the first tenth of the record, in periods of each step's fundamental \
+             when steps with a steady state differ in length, one figure per time scale otherwise; beyond eight steps \
+             colour and dash follow the stepped params; the loop gain's Bode plot with each step's phase margin for \
+             analysis loop; a map and a table of the poles for analysis pz, whose built-in measure stable fails on a \
+             pole in the right half-plane) and the measures table. The page is interactive without any network or \
+             library: drag to zoom the x axis, shift-drag or arrow keys to pan, double-click for the whole axis, click \
+             for cursors A and B with the values of every visible curve and their differences, the legend toggles \
+             steps, and x and y axes switch between linear and logarithmic; without scripting it shows the static \
+             plots. --watch keeps running: a changed bench file reruns its benches, any other change in the board's \
+             directory or the vendor model cache reruns every bench. Amplifier models whose sim block declares quiescent_current draw \
              supply current through their supply pins (I() of a supply reads it), and a psrr couples their rails to \
              their outputs. Rail models (sim regulator and sim reference: set point, dropout, output impedance, line \
              rejection, current limit, enable and soft-start, quiescent current; a regulator with an efficiency is an \
@@ -168,6 +178,22 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Some(_) => return usage_error(err, "argument --jobs: expected a positive whole number"),
     }
     let board_path = PathBuf::from(pypath::display(&board));
+    if parsed.flag("--watch") {
+        if check.is_some() {
+            return usage_error(err, "--watch reruns the benches; it takes no --check-model");
+        }
+        let watch = crate::sim_watch::Watch {
+            board: board_path,
+            out: PathBuf::from(pypath::display(parsed.value("--out").unwrap_or(DEFAULT_OUT))),
+            only: parsed.value("--bench").map(str::to_owned),
+            choice,
+            locked,
+            offline,
+            // A bounded watch, for tests: COPPER_SIM_WATCH_RUNS=N stops after N runs.
+            runs: std::env::var("COPPER_SIM_WATCH_RUNS").ok().and_then(|n| n.parse().ok()),
+        };
+        return crate::sim_watch::run(&watch, out, err);
+    }
     let design = match load_design(&board_path, locked, offline) {
         Ok(design) => design,
         Err(failure @ (LoadError::Compile(_) | LoadError::Load(_))) => {

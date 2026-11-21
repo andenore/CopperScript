@@ -118,6 +118,15 @@ Code. Close discards that buffer and restores disk-backed import analysis.
   at the duplicate). Findings without a precise source subject use the document
   start. Imported compiler errors attach their original location as related
   information.
+- Benches and `sim` blocks: completion and hover of bench statements, analysis
+  kinds and options, model kinds, roles and parameters (with unit and meaning),
+  `montecarlo` keys and the bench functions and probes, all from
+  `copper_lang::sim_reference`, the table the checkers take their names from
+  (see [Editor support](language-reference.md#editor-support)). A bench file
+  gets a "Run bench NAME" code lens; its `copper.sim.runBench` command
+  (`workspace/executeCommand`) runs `copper sim BOARD --bench NAME` in the
+  background and reports the verdict with `window/showMessage`, the output
+  with `window/logMessage`. The VS Code client shows both.
 - Quick fixes (code actions) apply machine-applicable replacements (`U3.SDAA` ->
   `U3.SDA`, `componnet` -> `component`, unknown constraint targets) and declare
   `no_connect` for every pin of an UNMARKED_PIN warning, inserted as the last

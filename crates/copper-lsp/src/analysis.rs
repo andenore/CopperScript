@@ -462,6 +462,26 @@ fn symbol_char(token: &copper_lang::Token) -> bool {
     matches!(token.kind, TokenKind::Identifier | TokenKind::Number)
 }
 
+/// The headers of the blocks open after `tokens` (outermost first) and the
+/// words of the statement they end in, as completion reads them.
+fn block_headers(tokens: &[&copper_lang::Token]) -> (Vec<Vec<String>>, Vec<String>) {
+    let mut stack: Vec<Vec<String>> = Vec::new();
+    let mut header: Vec<String> = Vec::new();
+    for token in tokens {
+        if token.kind == TokenKind::Symbol && token.text == "{" {
+            stack.push(std::mem::take(&mut header));
+        } else if token.kind == TokenKind::Symbol && token.text == "}" {
+            stack.pop();
+            header = Vec::new();
+        } else if token.kind == TokenKind::Symbol && token.text == ";" {
+            header = Vec::new();
+        } else {
+            header.push(token.text.clone());
+        }
+    }
+    (stack, header)
+}
+
 /// `index_unit`: the document symbol, then each named declaration.
 fn index_unit(unit: &mut Unit, index: usize) {
     let Some(document) = unit.parsed.document.as_ref() else { return };
@@ -1011,8 +1031,34 @@ impl Analysis {
                 ),
                 ("range", range),
             ]),
-            None => Value::Null,
+            None => self.sim_hover(offset).unwrap_or(Value::Null),
         })
+    }
+
+    /// Hover inside benches and sim blocks: statements, analysis kinds and
+    /// options, model keys, functions and probes ([`crate::simulation::hover`]).
+    fn sim_hover(&self, offset: usize) -> Option<Value> {
+        let root = self.root();
+        let tokens: Vec<&copper_lang::Token> = root.parsed.tokens.iter().filter(|t| t.kind != TokenKind::Eof).collect();
+        let at = tokens.iter().position(|t| t.location.offset <= offset && offset <= t.end_offset && symbol_char(t))?;
+        let (stack, header) = block_headers(&tokens[..at]);
+        let call = tokens.get(at + 1).is_some_and(|t| t.text == "(");
+        let context = crate::simulation::context(&stack, &header);
+        let text = crate::simulation::hover(&tokens[at].text, call, context, &header)?;
+        Some(object([
+            ("contents", object([("kind", Value::from("plaintext")), ("value", Value::Str(text))])),
+            ("range", root.text.range(tokens[at].location.offset, tokens[at].end_offset)),
+        ]))
+    }
+
+    /// The code lenses of the document: "Run bench NAME" on each bench header.
+    pub fn code_lenses(&self) -> Value {
+        let root = self.root();
+        if !root.document().is_some_and(|document| document.kind == DocumentKind::Bench) {
+            return Value::Array(Vec::new());
+        }
+        let tokens: Vec<&copper_lang::Token> = root.parsed.tokens.iter().filter(|t| t.kind != TokenKind::Eof).collect();
+        crate::simulation::code_lenses(&root.text, &tokens, &root.path)
     }
 
     pub fn definition(&self, position: &Value) -> PyResult<Value> {
@@ -1089,7 +1135,21 @@ impl Analysis {
                 header.push(token.text.clone());
             }
         }
-        if tokens.last().is_some_and(|t| t.text == ".") {
+        // Benches and sim blocks: statements, analyses, model keys and functions from the checkers' table.
+        let sim = crate::simulation::context(&stack, &header);
+        if sim != crate::simulation::Context::None && !tokens.last().is_some_and(|t| t.text == ".") {
+            for (name, kind, detail) in crate::simulation::completions(sim) {
+                candidates.insert(name, (kind, detail));
+            }
+            if sim == crate::simulation::Context::Expression {
+                for index in 1..root.symbols.len() {
+                    candidates.insert(
+                        root.symbols[index].name.clone(),
+                        (6, self.description(SymbolRef { unit: ROOT, index })),
+                    );
+                }
+            }
+        } else if tokens.last().is_some_and(|t| t.text == ".") {
             let mut i = tokens.len() as i64 - 2;
             let mut parts: Vec<&str> = Vec::new();
             while i >= 0 && symbol_char(tokens[i as usize]) {
@@ -1766,6 +1826,86 @@ mod tests {
             assert_eq!(properties(group), keys(group).as_slice(), "{group}");
         }
         assert!(KEYWORDS.contains(&"build"));
+    }
+
+    /// A board and its bench on disk; the analysis of the bench document.
+    fn bench_analysis(name: &str, bench: &str) -> Analysis {
+        let directory = std::env::temp_dir().join(format!("copper-lsp-bench-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("benches")).unwrap();
+        std::fs::write(
+            directory.join("board.copper"),
+            "board RC {\n    use library \"tiny\";\n    component R1: RESISTOR { value = 1kohm; }\n    net VIN { R1.1; }\n    net VOUT { R1.2; }\n}\n",
+        )
+        .unwrap();
+        let path = directory.join("benches").join("b.copper");
+        std::fs::write(&path, bench).unwrap();
+        analyse_path(&path, Sources::new([]), IndexMap::new()).unwrap()
+    }
+
+    fn position(text: &str, marker: &str) -> Value {
+        let offset = text.find(marker).unwrap() + marker.len();
+        let line = text[..offset].matches('\n').count();
+        let character = offset - text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        object([("line", int(line)), ("character", int(character))])
+    }
+
+    fn labels(value: &Value) -> Vec<String> {
+        match value {
+            Value::Array(items) => {
+                items.iter().filter_map(|item| item.get("label")?.as_str().map(str::to_owned)).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bench_completion_hover_and_the_run_lens() {
+        let text = "bench B for RC {\n    analysis tran { stop = 1ms; ma }\n    measure m = th\n}\n";
+        let analysis = bench_analysis("complete", text);
+        // Options of analysis tran, filtered by the typed prefix.
+        let options = labels(&analysis.completion(&position(text, "stop = 1ms; ma")).unwrap());
+        assert_eq!(options, ["max_step"]);
+        // Functions in a measure's expression.
+        let functions = labels(&analysis.completion(&position(text, "measure m = th")).unwrap());
+        assert_eq!(functions, ["thd"]);
+        // Statements at the start of a line of the bench body.
+        let statements = labels(&analysis.completion(&position(text, "bench B for RC {\n")).unwrap());
+        assert!(
+            statements.contains(&"analysis".to_owned()) && statements.contains(&"measure".to_owned()),
+            "{statements:?}"
+        );
+        // Hover on an analysis option and on a kind.
+        let hover = analysis.hover(&position(text, "analysis tran { st")).unwrap();
+        let value = hover.get("contents").and_then(|c| c.get("value")).and_then(Value::as_str).unwrap().to_owned();
+        assert!(value.starts_with("analysis tran stop (s)"), "{value}");
+        let hover = analysis.hover(&position(text, "analysis tr")).unwrap();
+        let value = hover.get("contents").and_then(|c| c.get("value")).and_then(Value::as_str).unwrap().to_owned();
+        assert!(value.starts_with("analysis tran\n\na transient run"), "{value}");
+        // The lens runs this bench on the board beside benches/.
+        let lenses = analysis.code_lenses();
+        let Value::Array(lenses) = lenses else { panic!("lenses") };
+        assert_eq!(lenses.len(), 1);
+        let command = lenses[0].get("command").unwrap();
+        assert_eq!(command.get("title").and_then(Value::as_str), Some("Run bench B"));
+        assert_eq!(command.get("command").and_then(Value::as_str), Some(crate::simulation::RUN_BENCH));
+        let Some(Value::Array(arguments)) = command.get("arguments") else { panic!("arguments") };
+        assert!(arguments[0].as_str().unwrap().ends_with("board.copper") && arguments[1].as_str() == Some("B"));
+    }
+
+    #[test]
+    fn sim_block_keys_complete_in_a_part() {
+        let text = "part AMP {\n    category = \"amplifier.opamp\";\n    sim opamp { gbw = 1MHz; inp = 1; gb }\n}\n";
+        let directory = std::env::temp_dir().join(format!("copper-lsp-part-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("amp.copper");
+        std::fs::write(&path, text).unwrap();
+        let analysis = analyse_path(&path, Sources::new([]), IndexMap::new()).unwrap();
+        let keys = labels(&analysis.completion(&position(text, "inp = 1; gb")).unwrap());
+        assert_eq!(keys, ["gbw"]);
+        let hover = analysis.hover(&position(text, "sim opamp { g")).unwrap();
+        let value = hover.get("contents").and_then(|c| c.get("value")).and_then(Value::as_str).unwrap().to_owned();
+        assert_eq!(value, "sim opamp gbw (Hz)\n\ngain-bandwidth product");
     }
 
     #[test]

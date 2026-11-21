@@ -103,6 +103,64 @@ test("workspace providers use actual server with unsaved versions", {skip: !copp
   } finally {for (const d of subscriptions) d.dispose();}
 });
 
+test("a bench's run lens runs copper sim through the server", {skip: !copper}, async () => {
+  const fs = require("node:fs"), os = require("node:os");
+  const providers = {}, commands = {}, subscriptions = [], messages = [];
+  const disposable = {dispose() {}};
+  // A copy of the RC example: the run writes build/sim beside the board.
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "copper-lens-"));
+  fs.mkdirSync(path.join(project, "benches"));
+  fs.copyFileSync(path.join(root, "examples/simulation/rc_filter.copper"), path.join(project, "rc_filter.copper"));
+  fs.copyFileSync(path.join(root, "examples/simulation/benches/rc_filter_ac.copper"), path.join(project, "benches/rc_filter_ac.copper"));
+  const benchPath = path.join(project, "benches/rc_filter_ac.copper");
+  const uri = s => ({scheme: "file", fsPath: fileURLToPath(s), toString: () => s});
+  const folder = {uri: uri(pathToFileURL(project).href)};
+  const doc = {uri: uri(pathToFileURL(benchPath).href), languageId: "copper", version: 1, getText: () => fs.readFileSync(benchPath, "utf8")};
+  class Range {constructor(...args) {this.args = args;}}
+  class Item {constructor(...args) {this.args = args;}}
+  class CodeLens {constructor(range, command) {Object.assign(this, {range, command});}}
+  let shown;
+  const done = new Promise(resolve => { shown = resolve; });
+  const vscode = {
+    Uri: {parse: uri}, Range, CompletionItem: Item, Diagnostic: Item, DocumentSymbol: Item, Hover: Item, Location: Item,
+    DiagnosticRelatedInformation: Item, CodeLens, DiagnosticSeverity: {Error: 0, Warning: 1},
+    languages: {
+      createDiagnosticCollection: () => ({...disposable, clear() {}, delete() {}, set() {}}),
+      ...Object.fromEntries(["CompletionItem", "Hover", "Definition", "DocumentSymbol", "CodeLens"].map(kind =>
+        [`register${kind}Provider`, (selector, provider) => {providers[kind] = provider; return disposable;}]))
+    },
+    commands: {registerCommand: (name, run) => {commands[name] = run; return disposable;}},
+    window: {createOutputChannel: () => ({...disposable, appendLine() {}}), async showWarningMessage() {},
+      async showInformationMessage(message) {messages.push(message); shown();},
+      async showErrorMessage(message) {messages.push(message); shown();}},
+    workspace: {
+      isTrusted: true, textDocuments: [doc], getWorkspaceFolder: () => folder,
+      getConfiguration: () => ({get: name => name === "compilerCommand" ? [copper] : true}),
+      ...Object.fromEntries(["OpenTextDocument", "ChangeTextDocument", "SaveTextDocument", "CloseTextDocument", "ChangeConfiguration"].map(kind =>
+        [`onDid${kind}`, () => disposable])),
+      createFileSystemWatcher: () => ({...disposable, onDidCreate: () => disposable, onDidChange: () => disposable, onDidDelete: () => disposable})
+    }
+  };
+  const api = activateLsp(vscode, {subscriptions});
+  try {
+    const lenses = await providers.CodeLens.provideCodeLenses(doc);
+    assert.equal(lenses.length, 1);
+    assert.equal(lenses[0].command.title, "Run bench RcCorner");
+    await commands[lenses[0].command.command](...lenses[0].command.arguments);
+    await done;
+    assert.match(messages[0], /copper sim: pass\. PASS: 2 of 2/);
+    assert.ok(fs.existsSync(path.join(project, "build/sim/RcCorner.html")));
+    const connection = [...api.clients.values()][0].connection;
+    const exited = connection.child.exitCode === null ? new Promise(resolve => connection.child.once("exit", resolve)) : null;
+    await connection.stop();
+    await exited;
+  } finally {
+    for (const d of subscriptions) d.dispose();
+    // The server process may still hold the directory for a moment on Windows.
+    fs.rmSync(project, {recursive: true, force: true, maxRetries: 20, retryDelay: 100});
+  }
+});
+
 test("untrusted workspaces never start the language server", () => {
   const subscriptions = [], disposable = {dispose() {}};
   const original = cp.spawn; cp.spawn = () => { throw new Error("must not spawn"); };

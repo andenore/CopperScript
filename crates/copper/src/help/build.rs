@@ -116,7 +116,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--out OUT",
-                help: "directory for sim-results.json, BENCH.csv and BENCH.html (default: build/sim)",
+                help: "directory for sim-results.json (schema copperscript-sim/v1, docs/sim-results-schema.md), BENCH.csv and the interactive BENCH.html (default: build/sim)",
             },
             Opt {
                 flag: "--jobs N",
@@ -149,6 +149,10 @@ pub const COMMANDS: &[Command] = &[
             Opt {
                 flag: "--timing",
                 help: "print each bench's wall time, solver work and time per phase (also COPPER_SIM_TIMING=1); adds timing to the JSON",
+            },
+            Opt {
+                flag: "--watch",
+                help: "after the run, keep watching the board's directory (sources, parts, benches, local model files) and the vendor model cache, and rerun on a change: a changed bench file reruns its benches, anything else every bench; stop with Ctrl-C",
             },
             Opt {
                 flag: "--locked",

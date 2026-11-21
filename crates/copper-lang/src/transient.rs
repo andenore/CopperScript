@@ -92,7 +92,10 @@ impl SpectrumWindow {
 /// The seed of transient noise without `seed`.
 pub const DEFAULT_SEED: u64 = 1;
 
-const PROPERTIES: [&str; 9] = ["stop", "start", "max_step", "reltol", "uic", "steady", "noise", "seed", "window"];
+/// The properties of `analysis tran`, from [`crate::sim_reference::ANALYSES`].
+fn properties() -> Vec<&'static str> {
+    crate::sim_reference::option_names("tran")
+}
 
 /// Lower `analysis tran { ... }`.
 pub(crate) fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<TranAnalysis> {
@@ -219,11 +222,11 @@ pub(crate) fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<TranAn
                     format!(
                         "unknown analysis tran property {}; expected one of: {}",
                         repr(other),
-                        PROPERTIES.join(", ")
+                        properties().join(", ")
                     ),
                     &entry.location,
                 );
-                if let Some(suggestion) = close_match(other, &PROPERTIES) {
+                if let Some(suggestion) = close_match(other, &properties()) {
                     failure.hint = Some(format!("did you mean {}?", repr(&suggestion)));
                     failure.replacement = Some(suggestion);
                 }

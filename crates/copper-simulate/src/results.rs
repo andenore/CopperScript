@@ -1,64 +1,17 @@
-//! The `copperscript-sim/v0.1` results document, the CSV of plotted vectors
+//! The `copperscript-sim/v1` results document, the CSV of plotted vectors
 //! and the compact text table of `copper sim`.
 //!
-//! # JSON
-//!
-//! ```text
-//! { "schema": "copperscript-sim/v0.1",
-//!   "solver": { "name", "version", "method" },
-//!   "board", "status": "pass" | "fail" | "error",
-//!   "benches": [ { "name", "board", "module" (a bench of a module only),
-//!     "bench", "section" (one analysis of a bench with several: the bench's name and the analysis's),
-//!     "file", "status", "error",
-//!     "analysis": { "kind": "ac", "from_hz", "to_hz", "points_per_decade" } | { "kind": "op" }
-//!                 | { "kind": "noise", "from_hz", "to_hz", "points_per_decade", "output", "input", "temperature_k" }
-//!                 | { "kind": "tran", "stop_s", "start_s", "max_step_s", "reltol", "uic" (when set),
-//!                     "steady_period_s" (with a steady state), "noise_seed" (with transient noise) }
-//!                 | { "kind": "dc", "sweep", "units", "dimension", "from", "to", "points" }
-//!                 | { "kind": "loop", "from_hz", "to_hz", "points_per_decade", "probe", "net" }
-//!                 | { "kind": "pz", "input", "output" },
-//!                 (the values at the bench's steps: a field that differs between steps is an
-//!                  array with one value per step, and "stepped" lists those fields)
-//!     "models": [ { "name", "kind": "component" | "supply" | "model", "part", "bench", "fidelity", "model", "inactive_parameters" } ],
-//!     "steps": [ { "index", "label", "stepped": { NAME: quantity }, "params": { NAME: quantity },
-//!                  "transient" (analysis tran only): { "accepted_steps", "rejected_steps", "newton_iterations",
-//!                                 "factorizations", "breakpoints", "smallest_step_s", "largest_step_s",
-//!                                 "steady_iterations", "steady_periods", "steady_residual", "steady_fallback"
-//!                                 (with a steady state), "noise_generators" (with noise) } } ],
-//!     "measures": [ { "name", "expression", "units", "dimension", "limits", "where" (a scoped limit only),
-//!                     "covered_steps" (a scoped limit only), "worst_step", "status",
-//!                     "steps": [ { "value", "min", "max", "pass", "covered" (a scoped limit only),
-//!                                  "never" (true, with "value" null: an upto or downto that never holds) } ] } ],
-//!     "plots": [ { "expression", "units", "dimension", "steps": [ { "frequency_hz": [...], "values": [...] } ] } ],
-//!               (analysis tran: "time_s" instead of "frequency_hz", every recorded time point;
-//!                analysis dc: "sweep", the swept value in SI base units)
-//!     "spectra" (plot spectrum(...) only): [ { "expression", "units", "dimension", "steps": [ { "fundamental_hz",
-//!                "periods", "window", "samples", "start_s", "span_s", "uniform_steps", "integration_floor",
-//!                "frequency_hz": [...], "amplitude": [...] } ] } ],
-//!     "noise" (analysis noise only): [ { "step", "output", "from_hz", "to_hz", "total_rms_v",
-//!                "contributors": [ { "contributor", "owner", "rms_v", "share" } ] } ],   (one per step and output)
-//!     "pole_zero" (analysis pz only): [ { "step", "stable", "unknowns", "infinite_eigenvalues",
-//!                "poles": [ { "re_hz", "im_hz", "frequency_hz", "damping", "right_half_plane", "refined",
-//!                             "real" (a real pole), "origin" (a pole at the origin), "nodes": [...] } ],
-//!                "transfer", "zeros": [ ... ] (with input and output) } ],   (one per step)
-//!     "variation" (montecarlo or worstcase only): { "method": { "kind", "runs", "seed", "distribution" },
-//!                "variables": [...], "yield", "steps": [ { "index", "runs", "yield",
-//!                "measures": [ { "name", "nominal", "min", "max", "yield", "worst_run",
-//!                                "mean", "std", "values" (montecarlo) | "low_corner", "high_corner", "sensitivity" (worstcase) } ] } ] },
-//!     "timing" (copper sim --timing only): { "wall_s", "steps_s": [...], "phases": { "assembly_s", "devices_s",
-//!                "factor_s", "solve_s", "step_control_s", "storage_s", "evaluation_s" },
-//!                "factorizations": { "ordered", "refactored", "dense" } } } ] }
-//! ```
-//!
-//! The optional `noise` and `variation` fields appear only for benches that
-//! use them, `timing` only when asked for; with them, a measure's `steps` values are the worst run's (see
-//! [`crate::variation`]).
+//! The document's shape is frozen and described field by field in
+//! [`docs/sim-results-schema.md`](../../../docs/sim-results-schema.md); the
+//! test `tests/results_schema.rs` pins it. A field is added only with a new
+//! schema version; every field listed there is always present (`null` or an
+//! empty array where it does not apply).
 //!
 //! Values are SI base units (`units` is the base-unit text: `A`, `deg`, `dB`,
 //! `1` for dimensionless). Fidelity is `ideal` (a passive or an ideal DC
 //! supply), `macro` (a part's built-in `sim` model, or a bench `model`),
-//! `replaced` (a bench `replace`), `ignored`, and for supplies also `ground`
-//! and `component`. A bench supply is a supply with `bench` true.
+//! `vendor` (a `sim spice` subcircuit), `replaced` (a bench `replace`),
+//! `ignored`, and for supplies also `ground` and `component`.
 
 use copper_json::{Dumps, Object, Value};
 use copper_lang::serializer::quantity_value;
@@ -67,7 +20,7 @@ use crate::format::{base_unit, quantity_text};
 use crate::run::{AnalysisRun, BenchRun, Status};
 
 /// The `schema` of the results document.
-pub const SCHEMA: &str = "copperscript-sim/v0.1";
+pub const SCHEMA: &str = "copperscript-sim/v1";
 
 /// The solver identity recorded in every result.
 pub fn solver() -> Value {
@@ -87,12 +40,13 @@ fn object(entries: Vec<(&str, Value)>) -> Value {
     Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
 }
 
+/// A float; `null` where it is not finite, so the document stays strict JSON.
 fn number(value: f64) -> Value {
-    Value::Float(value)
+    if value.is_finite() { Value::Float(value) } else { Value::Null }
 }
 
 fn optional(value: Option<f64>) -> Value {
-    value.map(Value::Float).unwrap_or(Value::Null)
+    value.map(number).unwrap_or(Value::Null)
 }
 
 fn units_fields(units: copper_lang::expression::Units) -> Vec<(&'static str, Value)> {
@@ -107,33 +61,101 @@ pub fn step_analyses(run: &BenchRun) -> Vec<&AnalysisRun> {
     if run.steps.is_empty() { vec![&run.analysis] } else { run.steps.iter().map(|step| &step.analysis).collect() }
 }
 
-/// The `analysis` of a bench: the values at its steps; a field that differs
-/// between steps is an array of one value per step, listed in `stepped`.
-fn analysis_value(run: &BenchRun) -> Value {
+/// The `analysis` of a bench and of each of its steps: the bench's holds
+/// every field, `null` where it differs between steps (those fields are
+/// listed in `stepped`); each step's holds only the stepped fields, with its
+/// own values.
+fn analysis_values(run: &BenchRun) -> (Value, Vec<Value>) {
     let analyses = step_analyses(run);
-    let objects: Vec<Value> = analyses.iter().map(|analysis| single_analysis_value(analysis)).collect();
-    let Some(Value::Object(first)) = objects.first() else { return single_analysis_value(&run.analysis) };
+    let objects: Vec<Object> = analyses
+        .iter()
+        .map(|analysis| match single_analysis_value(analysis) {
+            Value::Object(fields) => fields,
+            _ => Object::new(),
+        })
+        .collect();
+    let Some(first) = objects.first() else { return (single_analysis_value(&run.analysis), Vec::new()) };
     let mut merged = Object::new();
     let mut stepped = Vec::new();
     for (key, value) in first.iter() {
-        let column: Vec<Value> = objects
-            .iter()
-            .map(|object| match object {
-                Value::Object(fields) => fields.get(key).cloned().unwrap_or(Value::Null),
-                _ => Value::Null,
-            })
-            .collect();
-        if column.iter().all(|other| other == value) {
+        if objects.iter().all(|fields| fields.get(key) == Some(value)) {
             merged.insert(key.clone(), value.clone());
         } else {
-            merged.insert(key.clone(), Value::Array(column));
-            stepped.push(Value::from(key.as_str()));
+            merged.insert(key.clone(), Value::Null);
+            stepped.push(key.clone());
         }
     }
-    if !stepped.is_empty() {
-        merged.insert("stepped".to_owned(), Value::Array(stepped));
+    merged.insert("stepped".to_owned(), Value::Array(stepped.iter().map(|key| Value::from(key.as_str())).collect()));
+    let per_step = if run.steps.is_empty() {
+        Vec::new()
+    } else {
+        objects
+            .iter()
+            .map(|fields| {
+                Value::Object(
+                    stepped.iter().map(|key| (key.clone(), fields.get(key).cloned().unwrap_or(Value::Null))).collect(),
+                )
+            })
+            .collect()
+    };
+    (Value::Object(merged), per_step)
+}
+
+/// The outputs of a noise analysis, from its joined text `V(A), V(B, C)`.
+fn noise_outputs(text: &str) -> Vec<Value> {
+    let mut outputs = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                outputs.push(Value::from(current.trim()));
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
     }
-    Value::Object(merged)
+    if !current.trim().is_empty() {
+        outputs.push(Value::from(current.trim()));
+    }
+    outputs
+}
+
+/// The plots' axis of a bench, `null` for an operating point or poles.
+fn axis_value(run: &BenchRun) -> Value {
+    let (quantity, name, units, scale) = match &run.analysis {
+        AnalysisRun::Op | AnalysisRun::Pz { .. } => return Value::Null,
+        AnalysisRun::Tran { .. } => {
+            ("time", "time".to_owned(), copper_lang::expression::Units::of(copper_units::Dimension::Time), "linear")
+        }
+        AnalysisRun::Dc { name, units, .. } => ("sweep", name.clone(), *units, "linear"),
+        _ => (
+            "frequency",
+            "frequency".to_owned(),
+            copper_lang::expression::Units::of(copper_units::Dimension::Frequency),
+            "log",
+        ),
+    };
+    let mut entries = vec![("quantity", Value::from(quantity)), ("name", Value::from(name.as_str()))];
+    entries.extend(units_fields(units));
+    entries.push(("scale", Value::from(scale)));
+    object(entries)
+}
+
+/// The files `copper sim` writes for a bench, by name (`null` where it writes none).
+fn files_value(run: &BenchRun) -> Value {
+    let stem = file_stem(&run.name);
+    let solved = run.error.is_none();
+    let file = |present: bool, suffix: &str| if present { Value::from(format!("{stem}{suffix}")) } else { Value::Null };
+    object(vec![
+        ("html", Value::from(format!("{stem}.html"))),
+        ("csv", file(solved && !run.plots.is_empty(), ".csv")),
+        ("spectrum_csv", file(solved && !run.spectra.is_empty(), ".spectrum.csv")),
+    ])
 }
 
 fn single_analysis_value(analysis: &AnalysisRun) -> Value {
@@ -150,26 +172,19 @@ fn single_analysis_value(analysis: &AnalysisRun) -> Value {
             ("from_hz", number(*from)),
             ("to_hz", number(*to)),
             ("points_per_decade", Value::from(i64::from(*points_per_decade))),
-            ("output", Value::from(output.as_str())),
+            ("outputs", Value::Array(noise_outputs(output))),
             ("input", input.as_deref().map(Value::from).unwrap_or(Value::Null)),
             ("temperature_k", number(*kelvin)),
         ]),
-        AnalysisRun::Tran { stop, start, max_step, reltol, steady, noise } => {
-            let mut entries = vec![
-                ("kind", Value::from("tran")),
-                ("stop_s", number(*stop)),
-                ("start_s", number(*start)),
-                ("max_step_s", optional(*max_step)),
-                ("reltol", number(*reltol)),
-            ];
-            if let Some(period) = steady {
-                entries.push(("steady_period_s", number(*period)));
-            }
-            if let Some(seed) = noise {
-                entries.push(("noise_seed", Value::from((*seed).min(i64::MAX as u64) as i64)));
-            }
-            object(entries)
-        }
+        AnalysisRun::Tran { stop, start, max_step, reltol, steady, noise } => object(vec![
+            ("kind", Value::from("tran")),
+            ("stop_s", number(*stop)),
+            ("start_s", number(*start)),
+            ("max_step_s", optional(*max_step)),
+            ("reltol", number(*reltol)),
+            ("steady_period_s", optional(*steady)),
+            ("noise_seed", noise.map(Value::from).unwrap_or(Value::Null)),
+        ]),
         AnalysisRun::Dc { name, units, from, to, points } => {
             let mut entries = vec![("kind", Value::from("dc")), ("sweep", Value::from(name.as_str()))];
             entries.extend(units_fields(*units));
@@ -192,9 +207,9 @@ fn single_analysis_value(analysis: &AnalysisRun) -> Value {
     }
 }
 
-/// One bench as JSON.
+/// One bench as JSON (see [`docs/sim-results-schema.md`](../../../docs/sim-results-schema.md)).
 pub fn bench_value(run: &BenchRun) -> Value {
-    let analysis = analysis_value(run);
+    let (analysis, step_analysis) = analysis_values(run);
     let models = run
         .models
         .iter()
@@ -221,96 +236,18 @@ pub fn bench_value(run: &BenchRun) -> Value {
             let stepped: Object =
                 step.stepped.iter().map(|(name, value)| (name.clone(), quantity_value(value))).collect();
             let params: Object = step.params.iter().map(|(name, value)| (name.clone(), number(*value))).collect();
-            let mut entries = vec![
+            object(vec![
                 ("index", Value::from(index as i64)),
                 ("label", Value::from(step.label.as_str())),
                 ("stepped", Value::Object(stepped)),
                 ("params", Value::Object(params)),
-            ];
-            if let Some(stats) = &step.transient {
-                let mut fields = vec![
-                    ("accepted_steps", Value::from(stats.accepted_steps as i64)),
-                    ("rejected_steps", Value::from(stats.rejected_steps as i64)),
-                    ("newton_iterations", Value::from(stats.newton_iterations as i64)),
-                    ("factorizations", Value::from(stats.factorizations as i64)),
-                    ("breakpoints", Value::from(stats.breakpoints as i64)),
-                    ("smallest_step_s", number(stats.smallest_step)),
-                    ("largest_step_s", number(stats.largest_step)),
-                ];
-                if stats.steady_periods > 0 {
-                    fields.push(("steady_iterations", Value::from(stats.steady_iterations as i64)));
-                    fields.push(("steady_periods", Value::from(stats.steady_periods as i64)));
-                    fields.push(("steady_residual", number(stats.steady_residual)));
-                    if let Some(reason) = &stats.steady_fallback {
-                        fields.push(("steady_fallback", Value::from(reason.as_str())));
-                    }
-                }
-                if stats.noise_generators > 0 {
-                    fields.push(("noise_generators", Value::from(stats.noise_generators as i64)));
-                }
-                entries.push(("transient", object(fields)));
-            }
-            object(entries)
+                ("analysis", step_analysis.get(index).cloned().unwrap_or_else(|| Value::Object(Object::new()))),
+                ("x", Value::Array(step.axis.iter().map(|x| number(*x)).collect())),
+                ("transient", step.transient.as_ref().map(transient_value).unwrap_or(Value::Null)),
+            ])
         })
         .collect();
-    let measures = run
-        .measures
-        .iter()
-        .enumerate()
-        .map(|(k, measure)| {
-            let values: Vec<Value> = run
-                .steps
-                .iter()
-                .map(|step| {
-                    let m = &step.measures[k];
-                    let mut entries = vec![
-                        ("value", if m.never { Value::Null } else { number(m.value) }),
-                        ("min", optional(m.min)),
-                        ("max", optional(m.max)),
-                        ("pass", m.pass.map(Value::Bool).unwrap_or(Value::Null)),
-                    ];
-                    if measure.scope.is_some() {
-                        entries.push(("covered", Value::Bool(m.covered)));
-                    }
-                    if m.never {
-                        entries.push(("never", Value::Bool(true)));
-                    }
-                    object(entries)
-                })
-                .collect();
-            let failing = run.steps.iter().any(|step| step.measures[k].pass == Some(false));
-            let status = if !measure.has_limits() {
-                "no_limit"
-            } else if run.error.is_some() {
-                "error"
-            } else if failing {
-                "fail"
-            } else {
-                "pass"
-            };
-            let mut entries = vec![
-                ("name", Value::from(measure.name.as_str())),
-                ("expression", Value::from(measure.expression.as_str())),
-            ];
-            entries.extend(units_fields(measure.units));
-            entries.push(("limits", Value::from(measure.limit_text.as_str())));
-            if let Some(scope) = &measure.scope {
-                let covered: Vec<Value> = (0..run.steps.len())
-                    .filter(|&s| run.steps[s].measures[k].covered)
-                    .map(|s| Value::from(s as i64))
-                    .collect();
-                entries.push(("where", Value::from(scope.as_str())));
-                entries.push(("covered_steps", Value::Array(covered)));
-            }
-            entries.extend([
-                ("worst_step", measure.worst.map(|s| Value::from(s as i64)).unwrap_or(Value::Null)),
-                ("status", Value::from(status)),
-                ("steps", Value::Array(values)),
-            ]);
-            object(entries)
-        })
-        .collect();
-    let axis_key = axis_name(&run.analysis);
+    let measures = run.measures.iter().enumerate().map(|(k, measure)| measure_value(run, k, measure)).collect();
     let plots = run
         .plots
         .iter()
@@ -319,12 +256,7 @@ pub fn bench_value(run: &BenchRun) -> Value {
             let steps: Vec<Value> = run
                 .steps
                 .iter()
-                .map(|step| {
-                    object(vec![
-                        (axis_key, Value::Array(step.axis.iter().map(|f| number(*f)).collect())),
-                        ("values", Value::Array(step.plots[k].iter().map(|v| number(*v)).collect())),
-                    ])
-                })
+                .map(|step| object(vec![("values", Value::Array(step.plots[k].iter().map(|v| number(*v)).collect()))]))
                 .collect();
             let mut entries = vec![("expression", Value::from(plot.expression.as_str()))];
             entries.extend(units_fields(plot.units));
@@ -359,71 +291,138 @@ pub fn bench_value(run: &BenchRun) -> Value {
                 .collect();
             let mut entries = vec![("expression", Value::from(plot.expression.as_str()))];
             entries.extend(units_fields(plot.units));
+            entries.push(("coherent", Value::Bool(plot.coherent)));
             entries.push(("steps", Value::Array(steps)));
             object(entries)
         })
         .collect();
-    let mut target = vec![("board", Value::from(run.board.as_str()))];
-    if let Some(module) = &run.module {
-        target.push(("module", Value::from(module.as_str())));
-    }
-    let mut entries = vec![("name", Value::from(run.name.as_str()))];
-    entries.extend(target);
-    if let Some(section) = &run.section {
-        entries.push(("bench", Value::from(run.bench_name())));
-        entries.push(("section", Value::from(section.as_str())));
-    }
-    entries.extend(vec![
-        ("file", Value::from(run.file.as_str())),
-        ("status", Value::from(run.status().name())),
-        ("error", run.error.as_deref().map(Value::from).unwrap_or(Value::Null)),
-        ("analysis", analysis),
-        ("models", Value::Array(models)),
-        ("steps", Value::Array(steps)),
-        ("measures", Value::Array(measures)),
-        ("plots", Value::Array(plots)),
-    ]);
-    if !spectra.is_empty() {
-        entries.push(("spectra", Value::Array(spectra)));
-    }
     let noise: Vec<Value> = run
         .steps
         .iter()
         .enumerate()
         .flat_map(|(index, step)| step.noise.iter().map(move |noise| crate::noise::step_value(index, noise)))
         .collect();
-    if !noise.is_empty() {
-        entries.push(("noise", Value::Array(noise)));
-    }
-    let pole_zero = crate::stability::json(run);
-    if !pole_zero.is_empty() {
-        entries.push(("pole_zero", Value::Array(pole_zero)));
-    }
-    if let Some(variation) = &run.variation {
-        entries.push(("variation", crate::variation::value_of(run, variation)));
-    }
-    if let Some(timing) = &run.timing {
-        let phases: Object = copper_sim::timing::Phase::ALL
-            .iter()
-            .zip(timing.phases)
-            .map(|(phase, seconds)| (format!("{}_s", phase.name()), number(seconds)))
-            .collect();
-        let counts: Object = copper_sim::timing::Counter::ALL
-            .iter()
-            .zip(timing.counts)
-            .map(|(counter, count)| (counter.name().to_owned(), Value::from(count as i64)))
-            .collect();
-        entries.push((
-            "timing",
+    let variation =
+        run.variation.as_ref().map(|variation| crate::variation::value_of(run, variation)).unwrap_or(Value::Null);
+    object(vec![
+        ("name", Value::from(run.name.as_str())),
+        ("bench", Value::from(run.bench_name())),
+        ("section", run.section.as_deref().map(Value::from).unwrap_or(Value::Null)),
+        ("board", Value::from(run.board.as_str())),
+        ("module", run.module.as_deref().map(Value::from).unwrap_or(Value::Null)),
+        ("file", Value::from(run.file.as_str())),
+        ("status", Value::from(run.status().name())),
+        ("error", run.error.as_deref().map(Value::from).unwrap_or(Value::Null)),
+        ("files", files_value(run)),
+        ("analysis", analysis),
+        ("axis", axis_value(run)),
+        ("models", Value::Array(models)),
+        ("steps", Value::Array(steps)),
+        ("measures", Value::Array(measures)),
+        ("plots", Value::Array(plots)),
+        ("spectra", Value::Array(spectra)),
+        ("noise", Value::Array(noise)),
+        ("pole_zero", Value::Array(crate::stability::json(run))),
+        ("variation", variation),
+        ("timing", run.timing.as_ref().map(timing_value).unwrap_or(Value::Null)),
+    ])
+}
+
+/// A step's transient solver statistics; the steady-state fields are 0 or
+/// `null` without a steady state.
+fn transient_value(stats: &copper_sim::TranStats) -> Value {
+    let steady = stats.steady_periods > 0;
+    object(vec![
+        ("accepted_steps", Value::from(stats.accepted_steps as i64)),
+        ("rejected_steps", Value::from(stats.rejected_steps as i64)),
+        ("newton_iterations", Value::from(stats.newton_iterations as i64)),
+        ("factorizations", Value::from(stats.factorizations as i64)),
+        ("breakpoints", Value::from(stats.breakpoints as i64)),
+        ("smallest_step_s", number(stats.smallest_step)),
+        ("largest_step_s", number(stats.largest_step)),
+        ("steady_iterations", Value::from(stats.steady_iterations as i64)),
+        ("steady_periods", Value::from(stats.steady_periods as i64)),
+        ("steady_residual", if steady { number(stats.steady_residual) } else { Value::Null }),
+        (
+            "steady_fallback",
+            stats.steady_fallback.as_deref().filter(|_| steady).map(Value::from).unwrap_or(Value::Null),
+        ),
+        ("noise_generators", Value::from(stats.noise_generators as i64)),
+    ])
+}
+
+/// One measure over the bench's steps.
+fn measure_value(run: &BenchRun, k: usize, measure: &crate::run::MeasureRun) -> Value {
+    let values: Vec<Value> = run
+        .steps
+        .iter()
+        .map(|step| {
+            let m = &step.measures[k];
             object(vec![
-                ("wall_s", number(timing.wall_s)),
-                ("steps_s", Value::Array(timing.steps_s.iter().map(|s| number(*s)).collect())),
-                ("phases", Value::Object(phases)),
-                ("factorizations", Value::Object(counts)),
-            ]),
-        ));
-    }
+                ("value", if m.never { Value::Null } else { number(m.value) }),
+                ("min", optional(m.min)),
+                ("max", optional(m.max)),
+                ("pass", m.pass.map(Value::Bool).unwrap_or(Value::Null)),
+                ("covered", Value::Bool(m.covered)),
+                ("never", Value::Bool(m.never)),
+                ("at", optional(m.at.filter(|at| at.is_finite()))),
+            ])
+        })
+        .collect();
+    let failing = run.steps.iter().any(|step| step.measures[k].pass == Some(false));
+    let status = if !measure.has_limits() {
+        "no_limit"
+    } else if run.error.is_some() {
+        "error"
+    } else if failing {
+        "fail"
+    } else {
+        "pass"
+    };
+    let covered: Vec<Value> =
+        (0..run.steps.len()).filter(|&s| run.steps[s].measures[k].covered).map(|s| Value::from(s as i64)).collect();
+    let mark = match &measure.mark {
+        None => Value::Null,
+        Some(crate::run::LimitMark::Lines { plot }) => {
+            object(vec![("kind", Value::from("lines")), ("plot", Value::from(*plot as i64))])
+        }
+        Some(crate::run::LimitMark::Window { plot }) => {
+            object(vec![("kind", Value::from("window")), ("plot", Value::from(*plot as i64))])
+        }
+    };
+    let mut entries =
+        vec![("name", Value::from(measure.name.as_str())), ("expression", Value::from(measure.expression.as_str()))];
+    entries.extend(units_fields(measure.units));
+    entries.extend([
+        ("limits", Value::from(measure.limit_text.as_str())),
+        ("where", measure.scope.as_deref().map(Value::from).unwrap_or(Value::Null)),
+        ("covered_steps", Value::Array(covered)),
+        ("mark", mark),
+        ("worst_step", measure.worst.map(|s| Value::from(s as i64)).unwrap_or(Value::Null)),
+        ("status", Value::from(status)),
+        ("steps", Value::Array(values)),
+    ]);
     object(entries)
+}
+
+/// The `--timing` record of a bench.
+fn timing_value(timing: &crate::run::BenchTiming) -> Value {
+    let phases: Object = copper_sim::timing::Phase::ALL
+        .iter()
+        .zip(timing.phases)
+        .map(|(phase, seconds)| (format!("{}_s", phase.name()), number(seconds)))
+        .collect();
+    let counts: Object = copper_sim::timing::Counter::ALL
+        .iter()
+        .zip(timing.counts)
+        .map(|(counter, count)| (counter.name().to_owned(), Value::from(count)))
+        .collect();
+    object(vec![
+        ("wall_s", number(timing.wall_s)),
+        ("steps_s", Value::Array(timing.steps_s.iter().map(|s| number(*s)).collect())),
+        ("phases", Value::Object(phases)),
+        ("factorizations", Value::Object(counts)),
+    ])
 }
 
 /// The `--timing` report: per bench its wall time, the solver's work and

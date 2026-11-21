@@ -36,6 +36,7 @@ Targets:
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
 | `route` | `copper build`: package escape/routing, saved copper fill and DRC (CopperScript's own; KiCad's with `KICAD_CLI`) |
+| `sim` | `copper sim`: the board's simulation benches against their limits, results and pages under `build/BOARD/sim`; only for boards whose settings set `SIM_BENCHES = yes` (then `all` runs it too): `rc-filter`, and the unregistered `howland-pump`, `preamp`, `precision-rectifier`, `spice-amplifier`, `vendor-models`, `impedance-analyzer` (`make EXAMPLE=preamp sim`) |
 | `release` | Checksummed bundle of a board's order export, its route run and BOM for manual archiving (see [Release bundles](#release-bundles)) |
 | `compile-examples` (root only) | Compile the registered examples and compatibility fixtures |
 | `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |

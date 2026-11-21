@@ -132,6 +132,13 @@ function activateLsp(vscode, context) {
   function notify(entry, method, params) {
     if (entry.retired || disposed) return;
     if (method === "window/logMessage") { output.appendLine(params.message); return; }
+    if (method === "window/showMessage") {
+      // A finished `copper sim` run of the "Run bench" lens: its verdict.
+      output.appendLine(params.message);
+      const show = params.type === 1 ? vscode.window.showErrorMessage : vscode.window.showInformationMessage;
+      if (show) void show.call(vscode.window, params.message);
+      return;
+    }
     if (method !== "textDocument/publishDiagnostics") return;
     const uri = vscode.Uri.parse(params.uri);
     const document = vscode.workspace.textDocuments.find(d => key(d.uri) === key(uri));
@@ -278,6 +285,23 @@ function activateLsp(vscode, context) {
           return action;
         });
       }}, {providedCodeActionKinds: [vscode.CodeActionKind.QuickFix]})] : []),
+    // "Run bench NAME" on a bench header: the server runs `copper sim` and reports back.
+    ...(vscode.languages.registerCodeLensProvider ? [vscode.languages.registerCodeLensProvider(selector, {
+      async provideCodeLenses(doc, token) {
+        const items = await query(doc, "textDocument/codeLens", null, token);
+        return (items || []).filter(item => item.command).map(item => new vscode.CodeLens(range(item.range), {
+          title: item.command.title, command: "copperscript.runBench",
+          arguments: [doc.uri.toString(), item.command.command, item.command.arguments || []]}));
+      }})] : []),
+    ...(vscode.commands?.registerCommand ? [vscode.commands.registerCommand("copperscript.runBench", async (uri, command, args) => {
+      const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri);
+      const entry = doc && client(doc);
+      if (!entry) return;
+      try { await entry.ready; } catch (_) { return; }
+      if (entry.retired || !entry.connection || entry.connection.closed) return;
+      output.appendLine(`copper sim ${args[0]} --bench ${args[1]}: running`);
+      await entry.connection.request("workspace/executeCommand", {command, arguments: args});
+    })] : []),
     vscode.workspace.onDidOpenTextDocument(syncAll),
     vscode.workspace.onDidChangeTextDocument(event => syncAll(event.document)),
     vscode.workspace.onDidSaveTextDocument(doc => {

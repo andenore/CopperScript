@@ -288,6 +288,11 @@ fn capabilities() -> Value {
                 ("definitionProvider", Value::Bool(true)),
                 ("documentSymbolProvider", Value::Bool(true)),
                 ("codeActionProvider", object([("codeActionKinds", Value::Array(vec![Value::from("quickfix")]))])),
+                ("codeLensProvider", object([("resolveProvider", Value::Bool(false))])),
+                (
+                    "executeCommandProvider",
+                    object([("commands", Value::Array(vec![Value::from(crate::simulation::RUN_BENCH)]))]),
+                ),
             ]),
         ),
         ("serverInfo", object([("name", Value::from("CopperScript")), ("version", Value::from("0.1.0"))])),
@@ -400,6 +405,11 @@ impl Server {
                 self.shared.schedule();
                 Ok(Value::Null)
             }
+            "textDocument/codeLens" => {
+                let analysis = self.snapshot_analysis(item(item(params, "textDocument")?, "uri")?)?;
+                Ok(analysis.code_lenses())
+            }
+            "workspace/executeCommand" => self.execute_command(params),
             "textDocument/codeAction" => {
                 let analysis = self.snapshot_analysis(item(item(params, "textDocument")?, "uri")?)?;
                 analysis.code_actions(params)
@@ -418,6 +428,60 @@ impl Server {
             }
             other => Err(PyError::NotImplemented(other.to_owned())),
         }
+    }
+
+    /// `workspace/executeCommand`: `copper.sim.runBench [BOARD, BENCH]` runs
+    /// `copper sim BOARD --bench BENCH` (pages in `build/sim` beside the
+    /// board) in the background; the editor gets the verdict as a message and
+    /// the whole output in the log.
+    fn execute_command(&mut self, params: &Value) -> PyResult<Value> {
+        let command = item(params, "command")?.as_str().unwrap_or_default().to_owned();
+        if command != crate::simulation::RUN_BENCH {
+            return Err(PyError::Value(format!("unknown command {command}")));
+        }
+        let arguments = match params.get("arguments") {
+            Some(Value::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let (Some(board), Some(bench)) =
+            (arguments.first().and_then(Value::as_str), arguments.get(1).and_then(Value::as_str))
+        else {
+            return Err(PyError::Value(format!("{command} takes a board file and a bench name")));
+        };
+        let board = std::path::PathBuf::from(board);
+        let out = board.parent().unwrap_or(std::path::Path::new(".")).join("build").join("sim");
+        let executable = std::env::current_exe().map_err(|failure| PyError::Value(failure.to_string()))?;
+        let shared = Arc::clone(&self.shared);
+        let bench = bench.to_owned();
+        std::thread::Builder::new()
+            .name("copper-lsp-sim".to_owned())
+            .spawn(move || {
+                let run = std::process::Command::new(&executable)
+                    .arg("sim")
+                    .arg(&board)
+                    .arg("--bench")
+                    .arg(&bench)
+                    .arg("--out")
+                    .arg(&out)
+                    .output();
+                let (message, log, kind) = match run {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                        let code = output.status.code();
+                        let kind = if code == Some(0) { 3 } else { 1 };
+                        (crate::simulation::summary(&stdout, &stderr, code), format!("{stdout}{stderr}"), kind)
+                    }
+                    Err(failure) => (format!("copper sim: cannot start: {failure}"), String::new(), 1),
+                };
+                let _ =
+                    shared.writer.notify("window/logMessage", object([("type", int(4)), ("message", Value::Str(log))]));
+                let _ = shared
+                    .writer
+                    .notify("window/showMessage", object([("type", int(kind)), ("message", Value::Str(message))]));
+            })
+            .map_err(|failure| PyError::Value(failure.to_string()))?;
+        Ok(Value::Null)
     }
 
     fn response(id: &Value, key: &str, value: Value) -> Value {

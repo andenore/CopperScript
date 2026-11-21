@@ -47,10 +47,12 @@ measures) in `--out`. A failing measure or an unsolvable bench exits 1. A
 noise bench adds its contributors, and a `montecarlo` or `worstcase` bench
 its statistics per measure, to the table, the JSON and the page; a limit
 then applies to the worst run. A transient bench (`analysis tran`) writes
-its traces on `time_s` in the JSON and CSV, the solver's step counts per
-step in the JSON, and plots against a linear time axis; a dc sweep
-(`analysis dc`) writes its traces on `sweep` and plots against the swept
-value. A limit scoped with `where` shows the steps it covers in the table
+its traces on `time_s` in the CSV (in the JSON each step's `x` with the
+bench's `axis`, [results schema](sim-results-schema.md)) and the solver's
+step counts per step, and plots against time; a dc sweep (`analysis dc`)
+writes its traces on `sweep` and plots against the swept value. The page is
+interactive (zoom, cursors, step toggles, log axes) and needs no network.
+`--watch` reruns the affected benches when a file changes. A limit scoped with `where` shows the steps it covers in the table
 (`max 1 % where R_SOIL <= 100ohm (2 of 3 steps)`), the JSON and the page.
 Files in `benches/` that start `fixture NAME for TARGET` are shared setup
 for the benches that name them (`using NAME`), not benches. A part with a

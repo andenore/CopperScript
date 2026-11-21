@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Benches: a "Run bench NAME" code lens on each bench header runs `copper sim BOARD --bench NAME` through the language server and shows the verdict; completion and hover inside benches and `sim` blocks come from the server.
+
 ## 0.4.0
 
 - Run the language server as `copper lsp` from the Rust `copper` binary; Python is no longer required.

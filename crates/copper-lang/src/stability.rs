@@ -123,7 +123,7 @@ pub(crate) fn loop_analysis(
                 pin = Some((endpoint, net));
             }
             other => {
-                return Err(unknown("loop", other, &["from", "to", "points_per_decade", "probe"], &entry.location));
+                return Err(unknown("loop", other, &crate::sim_reference::option_names("loop"), &entry.location));
             }
         }
     }
@@ -188,7 +188,7 @@ pub(crate) fn pz_analysis(
                 }
                 _ => return Err(error("SIM100", "analysis pz input names a source", &entry.location)),
             },
-            other => return Err(unknown("pz", other, &["input", "output"], &entry.location)),
+            other => return Err(unknown("pz", other, &crate::sim_reference::option_names("pz"), &entry.location)),
         }
     }
     if input.is_some() != output.is_some() {

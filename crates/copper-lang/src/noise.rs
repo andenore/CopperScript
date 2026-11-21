@@ -230,7 +230,7 @@ pub(crate) fn analysis(
             },
             "temperature" => temp = Some(temperature(single()?, &entry.location)?),
             other => {
-                let keys = ["from", "to", "points_per_decade", "output", "input", "temperature"];
+                let keys = crate::sim_reference::option_names("noise");
                 let mut failure =
                     error("SIM040", format!("unknown analysis noise property {}", repr(other)), &entry.location);
                 if let Some(suggestion) = close_match(other, &keys) {

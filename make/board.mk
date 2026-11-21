@@ -54,6 +54,16 @@ edit:
 editor-overlay:
 	$(if $(strip $(RUN_DIR)),,$(error Set RUN_DIR to an existing completed routing run))
 	$(COPPER) editor-overlay "$(RUN_DIR)/run.json" --kicad-python "$(KICAD_PYTHON)" -o "$(RUN_DIR)/editor-overlay.json"
+# Simulation benches (benches/ beside the source) against their limits, with
+# the results JSON and interactive pages under $(OUT)/sim. Settings of boards
+# that have benches set SIM_BENCHES = yes; then `all` runs it too.
+SIM_BENCHES ?=
+ifneq ($(strip $(SIM_BENCHES)),)
+.PHONY: sim
+all: sim
+sim:
+	$(COPPER) sim "$(SOURCE)" $(RESOLVE_ARGS) --out "$(OUT)/sim"
+endif
 # Atomic route + saved fill + DRC (CopperScript's own, or KiCad's with KICAD_CLI).
 # Every default run has a fresh directory. RUN_DIR selects a new/empty path;
 # intentionally no recursive clean target.
