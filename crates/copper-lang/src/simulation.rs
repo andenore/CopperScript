@@ -174,6 +174,7 @@ impl SimKind {
                 ("quiescent_current", Dimension::Current),
                 ("psrr", Dimension::Gain),
                 ("psrr_corner", Dimension::Frequency),
+                ("input_offset_drift", Dimension::VoltageDrift),
             ],
             SimKind::Source => &[
                 ("ac_phase", Dimension::Angle),
@@ -208,6 +209,7 @@ impl SimKind {
                 ("quiescent_current", Dimension::Current),
                 ("voltage_noise", Dimension::VoltageNoiseDensity),
                 ("voltage_noise_corner", Dimension::Frequency),
+                ("temperature_coefficient", Dimension::TemperatureCoefficient),
             ],
             SimKind::Load => &[("resistance", Dimension::Resistance), ("capacitance", Dimension::Capacitance)],
             // `emission_coefficient` and `grading_coefficient` are plain numbers (`Ratio`).
@@ -1204,7 +1206,13 @@ fn check_range(kind: SimKind, key: &str, value: &Quantity, location: &Location) 
     }
     let signed = matches!(
         key,
-        "input_offset_voltage" | "input_bias_current" | "input_offset_current" | "ac_phase" | "threshold"
+        "input_offset_voltage"
+            | "input_bias_current"
+            | "input_offset_current"
+            | "ac_phase"
+            | "threshold"
+            | "input_offset_drift"
+            | "temperature_coefficient"
     ) || (matches!(kind, SimKind::Regulator | SimKind::Reference) && key == "output_voltage");
     let zero = value.base_value().is_zero();
     if (positive && (zero || value.base_value().is_negative())) || (!signed && value.base_value().is_negative()) {

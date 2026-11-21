@@ -437,7 +437,7 @@ fn place(
                 };
                 ports.push(node);
             }
-            crate::spice::instantiate(c, "U1", spice, &ports).map(|_| ())
+            crate::spice::instantiate(c, "U1", spice, &ports, crate::lower::NOMINAL_CELSIUS).map(|_| ())
         }
     }
 }

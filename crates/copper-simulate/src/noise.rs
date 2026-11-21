@@ -80,6 +80,14 @@ pub fn analysis_run(noise: &NoiseAnalysis) -> AnalysisRun {
     }
 }
 
+/// The noise temperature, K: the analysis's own `temperature`, else the run's (`TEMP`).
+pub fn kelvin(analysis: &NoiseAnalysis, lowered: &Lowered) -> f64 {
+    match analysis.temperature {
+        Some(_) => analysis.kelvin(),
+        None => crate::lower::kelvin(lowered.celsius),
+    }
+}
+
 /// Solve the noise analysis of a lowered bench at `params`.
 pub fn solve(lowered: &Lowered, analysis: &NoiseAnalysis, params: &Params) -> Result<Box<NoiseSolution>, SimError> {
     let sweep = Sweep::Decade {
@@ -98,7 +106,7 @@ pub fn solve_sweep(lowered: &Lowered, analysis: &NoiseAnalysis, sweep: &Sweep) -
             output: lowered.wiring.node(output),
             reference: reference.as_ref().map(|node| lowered.wiring.node(node)),
             input: analysis.input.as_ref().map(|input| input.instance.clone()),
-            temperature: analysis.kelvin(),
+            temperature: kelvin(analysis, lowered),
             combination: None,
         };
         outputs.push(copper_sim::noise(&lowered.circuit, sweep, &spec)?);
@@ -300,7 +308,7 @@ fn derived(
         output: String::new(),
         reference: None,
         input: analysis.input.as_ref().filter(|_| input).map(|input| input.instance.clone()),
-        temperature: analysis.kelvin(),
+        temperature: kelvin(analysis, evaluator.lowered),
         combination: Some(terms),
     };
     copper_sim::noise(&evaluator.lowered.circuit, &Sweep::List(axis), &spec).map_err(|error| {

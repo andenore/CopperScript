@@ -530,22 +530,23 @@ pub fn bench_analysis_text(run: &BenchRun) -> String {
             )
         }
         AnalysisRun::Pz { .. } => analysis_text(first),
-        AnalysisRun::Noise { points_per_decade, output, input, kelvin, .. } => {
+        AnalysisRun::Noise { points_per_decade, output, input, .. } => {
             let pick = |k: usize| -> Vec<f64> {
                 analyses
                     .iter()
                     .filter_map(|a| match a {
-                        AnalysisRun::Noise { from, to, .. } => Some(if k == 0 { *from } else { *to }),
+                        AnalysisRun::Noise { from, to, kelvin, .. } => Some([*from, *to, *kelvin][k]),
                         _ => None,
                     })
                     .collect()
             };
+            let kelvin = |k: f64| format!("{} K", crate::format::significant(k, 5));
             format!(
-                "noise of {output}{} {} to {}, {points_per_decade} points per decade, {} K",
+                "noise of {output}{} {} to {}, {points_per_decade} points per decade, {}",
                 input.as_ref().map(|input| format!(" referred to {input},")).unwrap_or_default(),
                 range(pick(0), &hz),
                 range(pick(1), &hz),
-                crate::format::significant(*kelvin, 5)
+                range(pick(2), &kelvin)
             )
         }
         AnalysisRun::Tran { .. } => {

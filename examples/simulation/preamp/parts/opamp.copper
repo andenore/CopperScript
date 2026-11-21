@@ -18,6 +18,7 @@ part OPAMP_LOW_NOISE {
         input_capacitance_common = 2pF;
         input_bias_current = 1nA;
         input_offset_voltage = 0.01mV;  // 10 uV
+        input_offset_drift = 0.2uV/degC;
         voltage_noise = 2.2nV/rtHz;
         voltage_noise_corner = 5Hz;
         current_noise = 0.5pA/rtHz;

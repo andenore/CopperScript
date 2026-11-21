@@ -324,7 +324,8 @@ fn unsupported_constructs_name_file_line_element_and_construct() {
         (".SUBCKT A X\nQ1 X X 0 QX\n.MODEL QX NPN(QCO=1E-12)\n.ENDS\n", "QCO"),
         (".SUBCKT A X\nC1 X 0 1P IC=1\n.ENDS\n", "IC="),
         (".SUBCKT A X\nV1 X 0 SFFM(0 1 1K 5 100)\n.ENDS\n", "SFFM"),
-        (".SUBCKT A X\nD1 X 0 DX\n.MODEL DX D(TNOM=50)\n.ENDS\n", "TNOM"),
+        // A model measured at 50 degC runs scaled at 27 degC, but not with a coefficient the reader lacks.
+        (".SUBCKT A X\nD1 X 0 DX\n.MODEL DX D(TNOM=50 TM1=1E-3)\n.ENDS\n", "TM1"),
         (".SUBCKT A X\nD1 X 0 DX\n.MODEL DX D(FOO=1)\n.ENDS\n", "FOO"),
     ];
     for (text, construct) in cases {

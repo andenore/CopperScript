@@ -709,9 +709,13 @@ pub fn analysis_run(analysis: &Analysis, params: &Params) -> AnalysisRun {
         }
         Analysis::Noise(noise) => {
             let mut run = crate::noise::analysis_run(noise);
-            if let AnalysisRun::Noise { from, to, .. } = &mut run {
+            if let AnalysisRun::Noise { from, to, kelvin, .. } = &mut run {
                 *from = value(&noise.from, params);
                 *to = value(&noise.to, params);
+                // Without a temperature of its own the analysis runs at the bench's (`TEMP`).
+                if noise.temperature.is_none() {
+                    *kelvin = crate::lower::kelvin(crate::lower::celsius(params));
+                }
             }
             run
         }

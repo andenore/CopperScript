@@ -7,10 +7,11 @@
 //! terminal resistances, plain resistors for those resistances (thermal
 //! noise like any resistor) and [`crate::behavioral::Law`] branches whose
 //! currents and charges are the model equations below, evaluated with exact
-//! derivatives ([`crate::behavioral::Dual`]). All equations are SPICE3's at
-//! the nominal temperature 27 °C (`V_T = kT/q`, [`THERMAL_VOLTAGE`]); the
-//! temperature parameters (`EG`, `XTI`, `XTB`, `TNOM` at 27 °C) therefore have
-//! no effect. A P-type device (PNP, P-channel) evaluates the N-type
+//! derivatives ([`crate::behavioral::Dual`]). All equations are SPICE3's,
+//! with `V_T = kT/q` at the device's temperature (the `vt` field of each
+//! parameter set, [`THERMAL_VOLTAGE`] at 27 °C); [`crate::temperature`]
+//! scales the parameters from the model's `TNOM` (`EG`, `XTI`, `XTB`,
+//! mobility and threshold). A P-type device (PNP, P-channel) evaluates the N-type
 //! equations on its negated voltages and negates the currents and charges.
 //!
 //! # Bipolar transistor (`Q`)
@@ -226,6 +227,8 @@ pub struct BjtParams {
     pub kf: f64,
     /// `AF`.
     pub af: f64,
+    /// `V_T = k T / q` at the device's temperature, V ([`THERMAL_VOLTAGE`] at 27 °C).
+    pub vt: f64,
 }
 
 impl Default for BjtParams {
@@ -269,6 +272,7 @@ impl Default for BjtParams {
             tr: 0.0,
             kf: 0.0,
             af: 1.0,
+            vt: THERMAL_VOLTAGE,
         }
     }
 }
@@ -293,7 +297,9 @@ pub struct BjtState {
 impl BjtParams {
     fn validate(&self, name: &str) -> Result<(), SimError> {
         let bad = |detail: String| Err(SimError::InvalidValue { element: name.to_string(), detail });
-        for (what, x) in [("IS", self.is), ("BF", self.bf), ("BR", self.br), ("NF", self.nf), ("NR", self.nr)] {
+        for (what, x) in
+            [("IS", self.is), ("BF", self.bf), ("BR", self.br), ("NF", self.nf), ("NR", self.nr), ("V_T", self.vt)]
+        {
             if !(x.is_finite() && x > 0.0) {
                 return bad(format!("{what} must be positive, got {x}"));
             }
@@ -371,7 +377,7 @@ impl BjtParams {
 
     /// The model equations of the module docs at `(v_be, v_bc)` (N-type polarity).
     pub fn state(&self, vbe: &Dual, vbc: &Dual) -> BjtState {
-        let vt = THERMAL_VOLTAGE;
+        let vt = self.vt;
         let n = vbe.d.len();
         let cbe = junction(vbe, self.is, self.nf * vt);
         let cbc = junction(vbc, self.is, self.nr * vt);
@@ -464,6 +470,8 @@ pub struct JfetParams {
     pub kf: f64,
     /// `AF`.
     pub af: f64,
+    /// `V_T = k T / q` at the device's temperature, V ([`THERMAL_VOLTAGE`] at 27 °C).
+    pub vt: f64,
 }
 
 impl Default for JfetParams {
@@ -485,6 +493,7 @@ impl Default for JfetParams {
             fc: 0.5,
             kf: 0.0,
             af: 1.0,
+            vt: THERMAL_VOLTAGE,
         }
     }
 }
@@ -492,7 +501,7 @@ impl Default for JfetParams {
 impl JfetParams {
     fn validate(&self, name: &str) -> Result<(), SimError> {
         let bad = |detail: String| Err(SimError::InvalidValue { element: name.to_string(), detail });
-        for (what, x) in [("BETA", self.beta), ("IS", self.is), ("N", self.n), ("PB", self.pb)] {
+        for (what, x) in [("BETA", self.beta), ("IS", self.is), ("N", self.n), ("PB", self.pb), ("V_T", self.vt)] {
             if !(x.is_finite() && x > 0.0) {
                 return bad(format!("{what} must be positive, got {x}"));
             }
@@ -642,6 +651,8 @@ pub struct MosParams {
     pub oxide_capacitance: f64,
     /// Level 1 or 3.
     pub level: MosLevel,
+    /// `V_T = k T / q` at the device's temperature, V ([`THERMAL_VOLTAGE`] at 27 °C).
+    pub vt: f64,
 }
 
 impl Default for MosParams {
@@ -674,6 +685,7 @@ impl Default for MosParams {
             flicker_divisor: 1.0,
             oxide_capacitance: 0.0,
             level: MosLevel::One,
+            vt: THERMAL_VOLTAGE,
         }
     }
 }
@@ -681,7 +693,7 @@ impl Default for MosParams {
 impl MosParams {
     fn validate(&self, name: &str) -> Result<(), SimError> {
         let bad = |detail: String| Err(SimError::InvalidValue { element: name.to_string(), detail });
-        for (what, x) in [("beta (KP W / L)", self.beta), ("PHI", self.phi), ("PB", self.pb)] {
+        for (what, x) in [("beta (KP W / L)", self.beta), ("PHI", self.phi), ("PB", self.pb), ("V_T", self.vt)] {
             if !(x.is_finite() && x > 0.0) {
                 return bad(format!("{what} must be positive, got {x}"));
             }
@@ -787,7 +799,7 @@ impl MosParams {
         let n = vgs.d.len();
         let zero = Dual::constant(0.0, n);
         let one = Dual::constant(1.0, n);
-        let vt = THERMAL_VOLTAGE;
+        let vt = self.vt;
         let phi = self.phi;
         let (leff, weff) = (l3.length, l3.width);
         // The square root of the surface potential, continued for a forward-biased bulk.
@@ -1063,7 +1075,7 @@ impl DeviceBranch {
             DeviceBranch::Jfet { params, part } => {
                 let s = params.polarity;
                 let v = normalised(u, s);
-                let nvt = params.n * THERMAL_VOLTAGE;
+                let nvt = params.n * params.vt;
                 let i = match part {
                     FetPart::Source => junction(&v[0], params.is, nvt),
                     FetPart::Drain => junction(&v[1], params.is, nvt),
@@ -1076,8 +1088,8 @@ impl DeviceBranch {
                 let s = params.polarity;
                 let v = normalised(u, s);
                 let i = match part {
-                    FetPart::Source => junction(&v[0], params.is_source, THERMAL_VOLTAGE),
-                    FetPart::Drain => junction(&v[0], params.is_drain, THERMAL_VOLTAGE),
+                    FetPart::Source => junction(&v[0], params.is_source, params.vt),
+                    FetPart::Drain => junction(&v[0], params.is_drain, params.vt),
                     FetPart::Channel => params.drain_current(&v[0], &v[1], &v[2]),
                     FetPart::GateSource | FetPart::GateDrain | FetPart::GateBulk => Dual::constant(0.0, n),
                 };
@@ -1251,7 +1263,7 @@ impl Circuit {
         let c = internal(&mut x, params.rc, "rc", "c", pins.c)?;
         let b = internal(&mut x, params.rb, "rb", "b", pins.b)?;
         let e = internal(&mut x, params.re, "re", "e", pins.e)?;
-        let vt = THERMAL_VOLTAGE;
+        let vt = params.vt;
         let vcrit = critical_voltage(params.is, vt);
         let s = params.polarity;
         let junction_limits = vec![Limit::Junction { vt, vcrit, sign: s }; 2];
@@ -1349,7 +1361,7 @@ impl Circuit {
         let mut x = Expansion::begin(self, name, &parts, &nodes)?;
         let d = fet_resistor(&mut x, params.rd, "rd", "d", pins.d)?;
         let s = fet_resistor(&mut x, params.rs, "rs", "s", pins.s)?;
-        let nvt = params.n * THERMAL_VOLTAGE;
+        let nvt = params.n * params.vt;
         let limit = Limit::Junction { vt: nvt, vcrit: critical_voltage(params.is, nvt), sign: params.polarity };
         let controls = vec![Control::Voltage(pins.g, s), Control::Voltage(pins.g, d)];
         let limits = vec![limit, limit];
@@ -1404,7 +1416,7 @@ impl Circuit {
         let s = fet_resistor(&mut x, params.rs, "rs", "s", pins.s)?;
         let sign = params.polarity;
         let mos = |part| DeviceBranch::Mos { params: p.clone(), part };
-        let vt = THERMAL_VOLTAGE;
+        let vt = params.vt;
         let mut channel_noise = vec![LawNoise::Channel { gate_controls: [0, 0], count: 1 }];
         if params.kf > 0.0 {
             channel_noise.push(LawNoise::Flicker { kf: params.kf, af: params.af, divisor: params.flicker_divisor });

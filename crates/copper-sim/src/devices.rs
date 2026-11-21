@@ -5,8 +5,10 @@
 //!
 //! [`Circuit::diode`] adds a macro instance `D` with the junction element
 //! `D.j` ([`ElementKind::Diode`]) and, with a series resistance, the resistor
-//! `D.rs` from the anode to the internal node `D#a`. The junction at 27 °C
-//! (`V_T = kT/q = 25.865 mV`), with `n` the emission coefficient:
+//! `D.rs` from the anode to the internal node `D#a`. The junction at its
+//! temperature (`V_T = kT/q`, [`DiodeParams::thermal_voltage`]: 25.865 mV at
+//! 27 °C; [`crate::temperature`] scales the parameters), with `n` the
+//! emission coefficient:
 //!
 //! ```text
 //! I(v) = I_S (exp(v / (n V_T)) - 1)                                   forward and reverse
@@ -105,6 +107,9 @@ pub struct DiodeParams {
     pub recombination_emission: f64,
     /// PSpice's high-injection knee current `IKF`, A (`None` for none).
     pub knee_current: Option<f64>,
+    /// `V_T = k T / q` at the junction's temperature, V ([`THERMAL_VOLTAGE`]
+    /// at 27 °C; [`DiodeParams::at_temperature`] sets it with the rest).
+    pub thermal_voltage: f64,
 }
 
 impl Default for DiodeParams {
@@ -127,6 +132,7 @@ impl Default for DiodeParams {
             recombination_current: 0.0,
             recombination_emission: 2.0,
             knee_current: None,
+            thermal_voltage: THERMAL_VOLTAGE,
         }
     }
 }
@@ -142,6 +148,7 @@ impl DiodeParams {
         };
         positive("saturation_current", self.saturation_current)?;
         positive("emission_coefficient", self.emission_coefficient)?;
+        positive("thermal_voltage", self.thermal_voltage)?;
         non_negative("series_resistance", self.series_resistance)?;
         non_negative("junction_capacitance", self.junction_capacitance)?;
         positive("junction_potential", self.junction_potential)?;
@@ -175,7 +182,7 @@ impl DiodeParams {
 
     /// `n V_T`, V.
     pub fn nvt(&self) -> f64 {
-        self.emission_coefficient * THERMAL_VOLTAGE
+        self.emission_coefficient * self.thermal_voltage
     }
 
     /// Junction current and its derivative `(I, dI/dv)` at `v` (G_MIN included).
@@ -196,7 +203,7 @@ impl DiodeParams {
             (i, g) = (i * k, g * k + i * dk);
         }
         if self.recombination_current > 0.0 {
-            let nrvt = self.recombination_emission * THERMAL_VOLTAGE;
+            let nrvt = self.recombination_emission * self.thermal_voltage;
             let (er, der) = limited_exp(v / nrvt);
             let irec = self.recombination_current * (er - 1.0);
             let grec = self.recombination_current * der / nrvt;

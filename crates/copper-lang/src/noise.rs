@@ -1,13 +1,13 @@
 //! `analysis noise { ... }` of benches (`docs/language-reference.md`,
 //! "Noise analysis"): the sweep, the output probe, the optional input source
-//! and the resistor temperature.
+//! and the noise temperature of a bench without `param TEMP`.
 //!
 //! ```copper
 //! analysis noise {
 //!     from = 10Hz; to = 100kHz; points_per_decade = 20;
 //!     output = V(OUT);            // or V(P, N), or several: V(A), V(B)
 //!     input = SRC;                // a source model: bench model or replacement
-//!     temperature = 27degC;       // or 300.15K; 27 degC by default
+//!     temperature = 27degC;       // or 300.15K; by default the bench's TEMP (27 degC)
 //! }
 //! ```
 
@@ -61,7 +61,7 @@ pub struct NoiseAnalysis {
     /// Every output, the first included: `output = V(A), V(B, C);`.
     pub outputs: Vec<(Node, Option<Node>)>,
     pub input: Option<NoiseInput>,
-    /// `None` is the default, 27 degC.
+    /// `None` is the default: the bench temperature (`param TEMP`, 27 degC without it).
     pub temperature: Option<Temperature>,
 }
 

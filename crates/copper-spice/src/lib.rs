@@ -27,8 +27,9 @@
 //! | `.MODEL name TYPE (...)`, `AKO:` | `D`, `NPN`/`PNP` (Gummel–Poon), `NJF`/`PJF`, `NMOS`/`PMOS` levels 1 and 3 (with `TOX`, Meyer's gate charge), `SW`, `CSW`, `VSWITCH`, `ISWITCH`, `RES`, `CAP`, `IND`; parameters are checked by name |
 //! | `.INCLUDE`, `.INC`, `.LIB file`, `.LIB file SECTION` | local files only, relative to the including file; a fetched model is one file |
 //! | `.LIB name` / `.ENDL` sections | their cards belong to the file (all of them, unless an including `.LIB file SECTION` picks one) |
-//! | `.OPTIONS` | solver and output controls are ignored and listed in [`Library::notes`]; others are rejected |
-//! | `R C L K` | values may be expressions of parameters; a resistor model's `R`, `TC1`, `TC2`, `T_ABS` (noise temperature, and the resistance at it), LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
+//! | `.OPTIONS` | solver and output controls are ignored and listed in [`Library::notes`]; `TNOM=` sets the nominal temperature of models without their own; others are rejected |
+//! | `.TEMP` | ignored and noted: the bench sets the temperature ([`Library::instantiate_at`]) |
+//! | `R C L K` | values may be expressions of parameters; `TC1`, `TC2` (element `TC =` or a `RES`/`CAP`/`IND` model) from the model's `TNOM`; `T_ABS` (the element's temperature; a resistor's noise temperature), `T_REL_GLOBAL`; LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
 //! | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC` the waveform's value at 0 |
 //! | `E G` linear, `F H` | |
 //! | `E G POLY(n)`, `F H POLY(n)` | SPICE2 coefficient order |
@@ -43,7 +44,9 @@
 //! Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin
 //! acos atan atan2 sinh cosh tanh min max limit pwr pwrs pow u stp uramp
 //! floor ceil round int hypot if table ddt delay`, the operators of [`expr`] and
-//! `PI`, `TEMP` (27). Derivatives for Newton iteration are exact (forward
+//! `PI`, `TEMP` (the run's temperature, degC), `TNOM`. Devices are scaled with
+//! SPICE3's temperature equations from their model's `TNOM`
+//! ([`copper_sim::temperature`]). Derivatives for Newton iteration are exact (forward
 //! automatic differentiation in [`copper_sim::behavioral`]).
 //!
 //! # Rejected
@@ -54,10 +57,11 @@
 //! and `CHEBYSHEV` sources; `LAPLACE` beyond a rational function and one
 //! delay; `SDT`, `IDT`, `ABSDELAY` and random functions; `SFFM`, `AM` and
 //! damped `SIN`; element `IC=`; MOSFET levels other than 1 and 3 (BSIM by
-//! name), LTspice's `VDMOS`, `KF` with `TOX`; models measured at a `TNOM`
-//! other than 27 degC; diode `ISR`, `IKF` outside the PSpice dialect; BJT
+//! name), LTspice's `VDMOS`, `KF` with `TOX`; temperature coefficients the
+//! reader does not model (`TM1`, `TM2`, `BEX`, `BEXV`, a MOSFET's `TCV`) away
+//! from the model's `TNOM`; diode `ISR`, `IKF` outside the PSpice dialect; BJT
 //! `PTF`, quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; `.OPTIONS` that
-//! may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`, `.TEMP`. Unsupported
+//! may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`. Unsupported
 //! elements and models inside a subcircuit are reported when that
 //! subcircuit is instantiated, so a library stays usable for its other parts.
 
@@ -259,6 +263,31 @@ impl Library {
         nodes: &[NodeId],
         params: &[(String, f64)],
     ) -> Result<Instance, SpiceError> {
+        self.instantiate_at(circuit, name, subckt, nodes, params, NOMINAL_CELSIUS)
+    }
+
+    /// [`Library::instantiate`] at `celsius` degrees Celsius: the value of
+    /// `TEMP`, and the temperature every device and temperature coefficient
+    /// is evaluated at, from the model's `TNOM` (or `.OPTIONS TNOM`, else 27
+    /// degC).
+    pub fn instantiate_at(
+        &self,
+        circuit: &mut Circuit,
+        name: &str,
+        subckt: &str,
+        nodes: &[NodeId],
+        params: &[(String, f64)],
+        celsius: f64,
+    ) -> Result<Instance, SpiceError> {
+        if !(celsius.is_finite() && celsius > -273.15) {
+            return Err(SpiceError {
+                file: String::new(),
+                line: 0,
+                element: Some(name.to_string()),
+                kind: ErrorKind::Circuit,
+                message: format!("temperature {celsius} degC is not above absolute zero"),
+            });
+        }
         let key = subckt.to_ascii_uppercase();
         let Some(&index) = self.netlist.scopes[0].subckts.get(&key) else {
             let known = self.subckts().join(", ");
@@ -274,7 +303,7 @@ impl Library {
         let sub = &self.netlist.subckts[index];
         let first = circuit.elements().len();
         let params: Vec<(String, f64)> = params.iter().map(|(k, v)| (k.to_ascii_uppercase(), *v)).collect();
-        let mut f = flatten::Flattener { lib: &self.netlist, c: circuit, aux: 0 };
+        let mut f = flatten::Flattener { lib: &self.netlist, c: circuit, aux: 0, celsius };
         let globals = f.global_params()?;
         f.subckt(sub, name, nodes, &params, &globals, 0)?;
         let mut ports: Vec<(String, Vec<(String, f64)>)> = sub.ports.iter().map(|p| (p.clone(), Vec::new())).collect();

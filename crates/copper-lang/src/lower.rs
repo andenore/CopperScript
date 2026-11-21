@@ -1892,6 +1892,8 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
             crate::tolerance::TOLERANCE,
             crate::tolerance::MATCH,
             crate::tolerance::MATCH_TOLERANCE,
+            crate::tolerance::TEMPCO,
+            crate::tolerance::TEMPCO2,
         ],
         location,
     )?;

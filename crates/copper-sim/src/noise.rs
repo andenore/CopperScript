@@ -89,7 +89,7 @@ pub struct NoiseSpec {
     /// refer the output noise to: its transfer to the output gives the
     /// input-referred density.
     pub input: Option<String>,
-    /// Temperature of the resistors, K.
+    /// The temperature of the thermal generators (resistors, switches, FET channels), K.
     pub temperature: f64,
     /// When set, the output is `sum_k w_k(f) (V(node_k) - V(reference_k))`
     /// instead of `output` and `reference`: one `(node, reference, weights)`

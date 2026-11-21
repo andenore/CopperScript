@@ -42,8 +42,15 @@ pub fn library(model: &SpiceModel) -> Result<(Arc<Library>, PathBuf, String), St
     Ok((loaded?, path, hash))
 }
 
-/// Expand the model's subcircuit as `instance` on `ports` (in terminal order).
-pub fn instantiate(c: &mut Circuit, instance: &str, model: &SpiceModel, ports: &[NodeId]) -> Result<Instance, String> {
+/// Expand the model's subcircuit as `instance` on `ports` (in terminal order)
+/// at `celsius` degrees Celsius.
+pub fn instantiate(
+    c: &mut Circuit,
+    instance: &str,
+    model: &SpiceModel,
+    ports: &[NodeId],
+    celsius: f64,
+) -> Result<Instance, String> {
     let (lib, path, _) = library(model)?;
     if let Some(declared) = lib.ports(&model.subckt)
         && declared.len() != ports.len()
@@ -57,7 +64,7 @@ pub fn instantiate(c: &mut Circuit, instance: &str, model: &SpiceModel, ports: &
             ports.len()
         ));
     }
-    lib.instantiate(c, instance, &model.subckt, ports, &model.params).map_err(|e| format!("SIM078: {e}"))
+    lib.instantiate_at(c, instance, &model.subckt, ports, &model.params, celsius).map_err(|e| format!("SIM078: {e}"))
 }
 
 /// `spice OPA810 (opa810_a.lib, sha256 1a2b3c4d...)` for the model list.

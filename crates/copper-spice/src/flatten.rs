@@ -38,6 +38,18 @@ pub(crate) struct Flattener<'a> {
     pub c: &'a mut Circuit,
     /// Auxiliary networks made so far (for `DDT`), for unique names.
     pub aux: usize,
+    /// The temperature of the run, degrees Celsius (`TEMP`).
+    pub celsius: f64,
+}
+
+/// Degrees Celsius in kelvin; 27 degC is [`copper_sim::temperature::NOMINAL_TEMPERATURE`] exactly.
+pub(crate) fn kelvin(celsius: f64) -> f64 {
+    if celsius == NOMINAL_CELSIUS { copper_sim::temperature::NOMINAL_TEMPERATURE } else { celsius + ZERO_CELSIUS }
+}
+
+/// `x (1 + c1 dt + c2 dt^2)`.
+fn tempco(x: f64, c1: f64, c2: f64, dt: f64) -> f64 {
+    x * (1.0 + c1 * dt + c2 * dt * dt)
 }
 
 type Res<T> = Result<T, SpiceError>;
@@ -269,7 +281,8 @@ impl<'a> Flattener<'a> {
                             Expr::Time
                         }
                         "PI" => Expr::Const(std::f64::consts::PI),
-                        "TEMP" | "TNOM" => Expr::Const(NOMINAL_CELSIUS),
+                        "TEMP" => Expr::Const(self.celsius),
+                        "TNOM" => Expr::Const(self.lib.tnom.unwrap_or(NOMINAL_CELSIUS)),
                         "TRUE" => Expr::Const(1.0),
                         "FALSE" => Expr::Const(0.0),
                         _ => return Err(format!("{n} is not a defined parameter")),
@@ -456,15 +469,14 @@ impl<'a> Flattener<'a> {
                     Some(v) => constant!(v),
                     None => 0.0,
                 };
-                let mut celsius = None;
-                let mut tnom = NOMINAL_CELSIUS;
+                let mut p = BTreeMap::new();
                 if let Some(m) = model {
                     let model = self.model(frame, m, &["RES", "R"], &e.loc, &name)?;
-                    let p = self.model_params(
+                    p = self.model_params(
                         frame,
                         &model,
-                        &["R", "TC1", "TC2", "T_ABS", "T_MEASURED", "TNOM", "TCE"],
-                        &["T_REL_GLOBAL", "T_REL_LOCAL"],
+                        &["R", "TC1", "TC2", "T_ABS", "T_MEASURED", "TNOM", "TCE", "T_REL_GLOBAL"],
+                        &["T_REL_LOCAL"],
                         &name,
                     )?;
                     r *= p.get("R").copied().unwrap_or(1.0);
@@ -477,11 +489,9 @@ impl<'a> Flattener<'a> {
                     if p.get("TCE").is_some_and(|v| *v != 0.0) {
                         return Err(fail(ErrorKind::Unsupported, format!("resistor model {m}: TCE is not supported")));
                     }
-                    celsius = p.get("T_ABS").copied();
-                    tnom = p.get("T_MEASURED").or(p.get("TNOM")).copied().unwrap_or(NOMINAL_CELSIUS);
                 }
-                let t = celsius.unwrap_or(NOMINAL_CELSIUS);
-                r *= 1.0 + tc1 * (t - tnom) + tc2 * (t - tnom).powi(2);
+                let (t, tnom) = (self.device_celsius(&p), self.nominal_celsius(&p));
+                r = tempco(r, tc1, tc2, t - tnom);
                 let (na, nb) = (frame.node(self.c, a), frame.node(self.c, b));
                 if r == 0.0 || !r.is_finite() {
                     return Err(fail(
@@ -489,7 +499,15 @@ impl<'a> Flattener<'a> {
                         format!("resistance {r} ohm; a resistor needs a nonzero value"),
                     ));
                 }
-                let kelvin = if *noiseless { Some(0.0) } else { celsius.map(|c| (c + ZERO_CELSIUS).max(0.0)) };
+                // A temperature of its own (T_ABS, T_REL_GLOBAL) is also its noise temperature.
+                let own = p.contains_key("T_ABS") || p.get("T_REL_GLOBAL").is_some_and(|x| *x != 0.0);
+                let kelvin = if *noiseless {
+                    Some(0.0)
+                } else if own {
+                    Some((t + ZERO_CELSIUS).max(0.0))
+                } else {
+                    None
+                };
                 if r > 0.0 {
                     let id = self.c.resistor(&name, na, nb, r).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
                     if let Some(k) = kelvin {
@@ -504,63 +522,74 @@ impl<'a> Flattener<'a> {
                     sim(self.c.vccs(&format!("{name}.neg"), na, nb, na, nb, 2.0 / r))?;
                 }
             }
-            Card::Capacitor { a, b, model, value } => {
+            Card::Capacitor { a, b, model, value, tc } | Card::Inductor { a, b, model, value, tc } => {
+                let capacitor = matches!(e.card, Card::Capacitor { .. });
                 let mut v = constant!(value);
+                let mut tc1 = match tc.first() {
+                    Some(x) => constant!(x),
+                    None => 0.0,
+                };
+                let mut tc2 = match tc.get(1) {
+                    Some(x) => constant!(x),
+                    None => 0.0,
+                };
+                let mut p = BTreeMap::new();
                 if let Some(m) = model {
-                    let model = self.model(frame, m, &["CAP", "C"], &e.loc, &name)?;
-                    let p = self.model_params(
-                        frame,
-                        &model,
-                        &["C", "VC1", "VC2", "TC1", "TC2", "T_MEASURED", "TNOM"],
-                        &["T_ABS", "T_REL_GLOBAL", "T_REL_LOCAL"],
-                        &name,
-                    )?;
-                    if p.get("VC1").is_some_and(|x| *x != 0.0) || p.get("VC2").is_some_and(|x| *x != 0.0) {
+                    let (kinds, scale, coefficients): (&[&str], &str, [&str; 2]) = if capacitor {
+                        (&["CAP", "C"], "C", ["VC1", "VC2"])
+                    } else {
+                        (&["IND", "L"], "L", ["IL1", "IL2"])
+                    };
+                    let model = self.model(frame, m, kinds, &e.loc, &name)?;
+                    let known = [
+                        scale,
+                        coefficients[0],
+                        coefficients[1],
+                        "TC1",
+                        "TC2",
+                        "T_MEASURED",
+                        "TNOM",
+                        "T_ABS",
+                        "T_REL_GLOBAL",
+                    ];
+                    p = self.model_params(frame, &model, &known, &["T_REL_LOCAL"], &name)?;
+                    if coefficients.iter().any(|c| p.get(*c).is_some_and(|x| *x != 0.0)) {
+                        let what = if capacitor {
+                            "capacitor model {m}: voltage coefficients VC1/VC2 are not supported"
+                        } else {
+                            "inductor model {m}: current coefficients IL1/IL2 are not supported"
+                        };
+                        return Err(fail(ErrorKind::Unsupported, what.replace("{m}", m)));
+                    }
+                    v *= p.get(scale).copied().unwrap_or(1.0);
+                    if let Some(x) = p.get("TC1") {
+                        tc1 = *x;
+                    }
+                    if let Some(x) = p.get("TC2") {
+                        tc2 = *x;
+                    }
+                }
+                v = tempco(v, tc1, tc2, self.device_celsius(&p) - self.nominal_celsius(&p));
+                let (na, nb) = (frame.node(self.c, a), frame.node(self.c, b));
+                if capacitor {
+                    if v < 0.0 || !v.is_finite() {
                         return Err(fail(
                             ErrorKind::Unsupported,
-                            format!("capacitor model {m}: voltage coefficients VC1/VC2 are not supported"),
+                            format!("capacitance {v} F: negative capacitors are not supported"),
                         ));
                     }
-                    v *= p.get("C").copied().unwrap_or(1.0);
-                }
-                if v < 0.0 || !v.is_finite() {
-                    return Err(fail(
-                        ErrorKind::Unsupported,
-                        format!("capacitance {v} F: negative capacitors are not supported"),
-                    ));
-                }
-                let (na, nb) = (frame.node(self.c, a), frame.node(self.c, b));
-                if v > 0.0 {
-                    sim(self.c.capacitor(&name, na, nb, v))?;
-                }
-            }
-            Card::Inductor { a, b, model, value } => {
-                let mut v = constant!(value);
-                if let Some(m) = model {
-                    let model = self.model(frame, m, &["IND", "L"], &e.loc, &name)?;
-                    let p = self.model_params(
-                        frame,
-                        &model,
-                        &["L", "IL1", "IL2", "TC1", "TC2", "T_MEASURED", "TNOM"],
-                        &["T_ABS", "T_REL_GLOBAL", "T_REL_LOCAL"],
-                        &name,
-                    )?;
-                    if p.get("IL1").is_some_and(|x| *x != 0.0) || p.get("IL2").is_some_and(|x| *x != 0.0) {
+                    if v > 0.0 {
+                        sim(self.c.capacitor(&name, na, nb, v))?;
+                    }
+                } else {
+                    if v <= 0.0 || !v.is_finite() {
                         return Err(fail(
                             ErrorKind::Unsupported,
-                            format!("inductor model {m}: current coefficients IL1/IL2 are not supported"),
+                            format!("inductance {v} H: an inductor needs a positive value"),
                         ));
                     }
-                    v *= p.get("L").copied().unwrap_or(1.0);
+                    sim(self.c.inductor(&name, na, nb, v))?;
                 }
-                if v <= 0.0 || !v.is_finite() {
-                    return Err(fail(
-                        ErrorKind::Unsupported,
-                        format!("inductance {v} H: an inductor needs a positive value"),
-                    ));
-                }
-                let (na, nb) = (frame.node(self.c, a), frame.node(self.c, b));
-                sim(self.c.inductor(&name, na, nb, v))?;
             }
             Card::Coupling { inductors, k } => {
                 let k = constant!(k);
@@ -834,6 +863,44 @@ impl<'a> Flattener<'a> {
             .map_err(|x| at(loc, ErrorKind::Circuit, name, x.to_string()))
     }
 
+    /// The temperature a model was measured at, degrees Celsius: its `TNOM`
+    /// (or `T_MEASURED`), else `.OPTIONS TNOM`, else 27 degC.
+    fn nominal_celsius(&self, p: &BTreeMap<String, f64>) -> f64 {
+        p.get("TNOM").or(p.get("T_MEASURED")).copied().unwrap_or(self.lib.tnom.unwrap_or(NOMINAL_CELSIUS))
+    }
+
+    /// A device's temperature, degrees Celsius: its model's `T_ABS`, else the
+    /// run's temperature plus `T_REL_GLOBAL`.
+    fn device_celsius(&self, p: &BTreeMap<String, f64>) -> f64 {
+        match p.get("T_ABS") {
+            Some(t) => *t,
+            None => self.celsius + p.get("T_REL_GLOBAL").copied().unwrap_or(0.0),
+        }
+    }
+
+    /// Temperature parameters that act only away from `TNOM` and are not
+    /// modelled: an error when nonzero and the device is not at `TNOM`.
+    fn reject_off_nominal(&self, m: &Model, p: &BTreeMap<String, f64>, names: &[&str], element: &str) -> Res<()> {
+        let (t, tnom) = (self.device_celsius(p), self.nominal_celsius(p));
+        if t == tnom {
+            return Ok(());
+        }
+        for n in names {
+            if p.get(*n).is_some_and(|v| *v != 0.0) {
+                return Err(at(
+                    &m.loc,
+                    ErrorKind::Unsupported,
+                    element,
+                    format!(
+                        "model {} ({}): parameter {n} is not supported at a temperature other than the model's TNOM ({t} degC here, TNOM {tnom} degC)",
+                        m.name, m.kind
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn model(&self, frame: &Frame, name: &str, kinds: &[&str], loc: &Loc, element: &str) -> Res<Model> {
         let Some(m) = self.find_model(frame.scope, name) else {
             return Err(at(loc, ErrorKind::Undefined, element, format!("model {name} is not defined")));
@@ -915,23 +982,6 @@ impl<'a> Flattener<'a> {
         Ok(())
     }
 
-    fn check_tnom(m: &Model, p: &BTreeMap<String, f64>, element: &str) -> Res<()> {
-        if let Some(t) = p.get("TNOM").or(p.get("T_MEASURED"))
-            && (*t - NOMINAL_CELSIUS).abs() > 1e-9
-        {
-            return Err(at(
-                &m.loc,
-                ErrorKind::Unsupported,
-                element,
-                format!(
-                    "model {}: TNOM = {t} degC; models measured at a temperature other than 27 degC are not supported (no temperature scaling)",
-                    m.name
-                ),
-            ));
-        }
-        Ok(())
-    }
-
     fn diode_params(&mut self, frame: &mut Frame, m: &Model, area: f64, element: &str) -> Res<DiodeParams> {
         let p = self.model_params(
             frame,
@@ -966,8 +1016,6 @@ impl<'a> Flattener<'a> {
                 "NBVL",
                 "CJSW",
                 "JSW",
-            ],
-            &[
                 "EG",
                 "XTI",
                 "TIKF",
@@ -983,12 +1031,12 @@ impl<'a> Flattener<'a> {
                 "TCV",
                 "T_ABS",
                 "T_REL_GLOBAL",
-                "T_REL_LOCAL",
             ],
+            &["T_REL_LOCAL"],
             element,
         )?;
         Self::check_level(m, &p, element, "diode")?;
-        Self::check_tnom(m, &p, element)?;
+        self.reject_off_nominal(m, &p, &["TM1", "TM2"], element)?;
         Self::reject_nonzero(m, &p, &["IBVL", "CJSW", "JSW"], element)?;
         let pspice = self.lib.dialect == crate::Dialect::Pspice;
         if !pspice {
@@ -1017,7 +1065,17 @@ impl<'a> Flattener<'a> {
         let area = area * p.get("AREA").copied().unwrap_or(1.0);
         let d = DiodeParams::default();
         let get = |names: &[&str]| names.iter().find_map(|n| p.get(*n)).copied();
-        Ok(DiodeParams {
+        let temp = copper_sim::DiodeTemperature {
+            nominal: kelvin(self.nominal_celsius(&p)),
+            eg: get(&["EG"]).unwrap_or(1.11),
+            xti: get(&["XTI"]).unwrap_or(3.0),
+            tbv: [get(&["TBV1"]).unwrap_or(0.0), get(&["TBV2"]).unwrap_or(0.0)],
+            tcv: get(&["TCV"]).unwrap_or(0.0),
+            trs: [get(&["TRS1", "TRS"]).unwrap_or(0.0), get(&["TRS2"]).unwrap_or(0.0)],
+            tikf: get(&["TIKF"]).unwrap_or(0.0),
+            ttt: [get(&["TTT1"]).unwrap_or(0.0), get(&["TTT2"]).unwrap_or(0.0)],
+        };
+        let nominal = DiodeParams {
             recombination_current: get(&["ISR"]).unwrap_or(0.0) * area,
             recombination_emission: get(&["NR"]).unwrap_or(2.0),
             knee_current: get(&["IKF", "IK"]).filter(|x| *x > 0.0).map(|x| x * area),
@@ -1033,7 +1091,9 @@ impl<'a> Flattener<'a> {
             forward_bias_coefficient: get(&["FC"]).unwrap_or(0.5),
             flicker_coefficient: get(&["KF"]).unwrap_or(0.0),
             flicker_exponent: get(&["AF"]).unwrap_or(1.0),
-        })
+            thermal_voltage: d.thermal_voltage,
+        };
+        Ok(nominal.at_temperature(kelvin(self.device_celsius(&p)), &temp))
     }
 
     fn bjt_params(&mut self, frame: &mut Frame, m: &Model, area: f64, element: &str) -> Res<BjtParams> {
@@ -1100,8 +1160,6 @@ impl<'a> Flattener<'a> {
             "QUASIMOD",
             "C2",
             "C4",
-        ];
-        const INERT: &[&str] = &[
             "EG",
             "XTI",
             "XTB",
@@ -1115,17 +1173,13 @@ impl<'a> Flattener<'a> {
             "TRC2",
             "T_ABS",
             "T_REL_GLOBAL",
-            "T_REL_LOCAL",
             "BEX",
             "BEXV",
-            "CN",
-            "D",
-            "MJS",
-            "NKF",
         ];
+        const INERT: &[&str] = &["T_REL_LOCAL", "CN", "D", "MJS", "NKF"];
         let p = self.model_params(frame, m, KNOWN, INERT, element)?;
         Self::check_level(m, &p, element, "bipolar")?;
-        Self::check_tnom(m, &p, element)?;
+        self.reject_off_nominal(m, &p, &["BEX", "BEXV"], element)?;
         Self::reject_nonzero(m, &p, &["PTF", "ISS", "QCO", "RCO", "QUASIMOD", "C2", "C4"], element)?;
         if p.get("NK").is_some_and(|v| *v != 0.5) {
             return Err(at(
@@ -1146,7 +1200,18 @@ impl<'a> Flattener<'a> {
         let get = |names: &[&str]| names.iter().find_map(|n| p.get(*n)).copied();
         let d = BjtParams::default();
         let positive = |x: Option<f64>| x.filter(|v| *v > 0.0 && v.is_finite());
-        Ok(BjtParams {
+        let pair = |a: &str, b: &str| [get(&[a]).unwrap_or(0.0), get(&[b]).unwrap_or(0.0)];
+        let temp = copper_sim::BjtTemperature {
+            nominal: kelvin(self.nominal_celsius(&p)),
+            eg: get(&["EG"]).unwrap_or(1.11),
+            xti: get(&["XTI"]).unwrap_or(3.0),
+            xtb: get(&["XTB"]).unwrap_or(0.0),
+            tre: pair("TRE1", "TRE2"),
+            trb: pair("TRB1", "TRB2"),
+            trm: pair("TRM1", "TRM2"),
+            trc: pair("TRC1", "TRC2"),
+        };
+        let nominal = BjtParams {
             polarity: if m.kind == "PNP" { -1.0 } else { 1.0 },
             is: get(&["IS"]).unwrap_or(d.is) * area,
             bf: get(&["BF"]).unwrap_or(d.bf),
@@ -1184,7 +1249,9 @@ impl<'a> Flattener<'a> {
             tr: get(&["TR"]).unwrap_or(0.0),
             kf: get(&["KF"]).unwrap_or(0.0),
             af: get(&["AF"]).unwrap_or(1.0),
-        })
+            vt: d.vt,
+        };
+        Ok(nominal.at_temperature(kelvin(self.device_celsius(&p)), &temp))
     }
 
     fn jfet_params(&mut self, frame: &mut Frame, m: &Model, area: f64, element: &str) -> Res<JfetParams> {
@@ -1214,12 +1281,19 @@ impl<'a> Flattener<'a> {
                 "NR",
                 "TNOM",
                 "T_MEASURED",
+                "VTOTC",
+                "BETATCE",
+                "XTI",
+                "EG",
+                "TCV",
+                "BEX",
+                "T_ABS",
+                "T_REL_GLOBAL",
             ],
-            &["VTOTC", "BETATCE", "XTI", "EG", "T_ABS", "T_REL_GLOBAL", "T_REL_LOCAL"],
+            &["T_REL_LOCAL"],
             element,
         )?;
         Self::check_level(m, &p, element, "JFET")?;
-        Self::check_tnom(m, &p, element)?;
         Self::reject_nonzero(m, &p, &["ALPHA", "VK", "ISR"], element)?;
         if p.get("B").is_some_and(|v| *v != 1.0) {
             return Err(at(
@@ -1231,7 +1305,19 @@ impl<'a> Flattener<'a> {
         }
         let d = JfetParams::default();
         let get = |n: &str| p.get(n).copied();
-        Ok(JfetParams {
+        // PSpice divides the saturation current's exponents by N and has XTI = 3; SPICE3 has neither.
+        let pspice = self.lib.dialect == crate::Dialect::Pspice;
+        let temp = copper_sim::JfetTemperature {
+            nominal: kelvin(self.nominal_celsius(&p)),
+            eg: get("EG").unwrap_or(1.11),
+            xti: get("XTI").unwrap_or(if pspice { 3.0 } else { 0.0 }),
+            per_emission: pspice,
+            vtotc: get("VTOTC").unwrap_or(0.0),
+            tcv: get("TCV").unwrap_or(0.0),
+            betatce: get("BETATCE").unwrap_or(0.0),
+            bex: get("BEX").unwrap_or(0.0),
+        };
+        let nominal = JfetParams {
             polarity: if m.kind == "PJF" { -1.0 } else { 1.0 },
             vto: get("VTO").unwrap_or(d.vto),
             beta: get("BETA").unwrap_or(d.beta) * area,
@@ -1247,7 +1333,9 @@ impl<'a> Flattener<'a> {
             fc: get("FC").unwrap_or(0.5),
             kf: get("KF").unwrap_or(0.0),
             af: get("AF").unwrap_or(1.0),
-        })
+            vt: d.vt,
+        };
+        Ok(nominal.at_temperature(kelvin(self.device_celsius(&p)), &temp))
     }
 
     fn mos_params(
@@ -1325,8 +1413,13 @@ impl<'a> Flattener<'a> {
                 "DELTA",
                 "VMAX",
                 "NFS",
+                "T_ABS",
+                "T_REL_GLOBAL",
+                "BEX",
+                "TCV",
             ],
-            &["XTI", "EG", "T_ABS", "T_REL_GLOBAL", "T_REL_LOCAL", "BEX", "TCV"],
+            // SPICE3's level 1 and 3 scale with temperature without XTI and EG.
+            &["XTI", "EG", "T_REL_LOCAL"],
             element,
         )?;
         let level = p.get("LEVEL").copied().unwrap_or(1.0);
@@ -1345,13 +1438,14 @@ impl<'a> Flattener<'a> {
             return Err(at(&m.loc, ErrorKind::Unsupported, element, detail));
         }
         let level3 = level == 3.0;
-        Self::check_tnom(m, &p, element)?;
+        self.reject_off_nominal(m, &p, &["BEX", "TCV"], element)?;
+        // SPICE3's process parameters (mos1temp, mos3temp) at the model's nominal temperature.
+        let nominal_kelvin = kelvin(self.nominal_celsius(&p));
         Self::reject_nonzero(m, &p, &["RSH"], element)?;
         if !level3 {
             Self::reject_nonzero(m, &p, &["WD"], element)?;
         }
         let get = |n: &str| p.get(n).copied();
-        // SPICE3's process parameters (mos1temp, mos3temp) at the nominal temperature.
         let tox = get("TOX").filter(|t| *t > 0.0).or(if level3 { Some(1e-7) } else { None });
         let cox_area = tox.map(|t| copper_sim::semiconductors::EPS_OXIDE / t);
         if get("KF").is_some_and(|kf| kf != 0.0) && cox_area.is_some() {
@@ -1385,15 +1479,14 @@ impl<'a> Flattener<'a> {
                     format!("model {}: NSUB = {nsub} /cm³ is below the intrinsic carrier density 1.45e10 /cm³", m.name),
                 ));
             }
-            let vt = copper_sim::devices::THERMAL_VOLTAGE;
+            let vt = copper_sim::thermal_voltage(nominal_kelvin);
             let charge = copper_sim::noise::ELEMENTARY_CHARGE;
             let phi_v = *phi.get_or_insert_with(|| (2.0 * vt * (nsub / 1.45e10).ln()).max(0.1));
             let gamma_v = *gamma.get_or_insert_with(|| {
                 (2.0 * copper_sim::semiconductors::EPS_SILICON * charge * nsub * 1e6).sqrt() / cox
             });
             if vto.is_none() {
-                let kelvin = NOMINAL_CELSIUS + ZERO_CELSIUS;
-                let egfet = 1.16 - 7.02e-4 * kelvin * kelvin / (kelvin + 1108.0);
+                let egfet = copper_sim::temperature::energy_gap(nominal_kelvin);
                 let tpg = get("TPG").unwrap_or(1.0);
                 let wkfng = if tpg != 0.0 { 3.25 + 0.5 * egfet - polarity * tpg * 0.5 * egfet } else { 3.2 };
                 let wkfngs = wkfng - (3.25 + 0.5 * egfet + polarity * 0.5 * phi_v);
@@ -1454,7 +1547,7 @@ impl<'a> Flattener<'a> {
             (d, s) => (d.unwrap_or(cj * ad), s.unwrap_or(cj * as_)),
         };
         let d = MosParams::default();
-        Ok(MosParams {
+        let nominal = MosParams {
             polarity,
             vto: vto.unwrap_or(0.0),
             beta: kp * weff / leff * mult,
@@ -1482,7 +1575,9 @@ impl<'a> Flattener<'a> {
             flicker_divisor: 1.0,
             oxide_capacitance: cox_area.map_or(0.0, |c| c * weff * leff * mult),
             level: mos_level,
-        })
+            vt: d.vt,
+        };
+        Ok(nominal.at_temperature(kelvin(self.device_celsius(&p)), nominal_kelvin))
     }
 
     #[allow(clippy::too_many_arguments)]

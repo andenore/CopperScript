@@ -75,7 +75,6 @@ Known weak spots of what is built:
   slew checks are opt-in and were not rerun.
 - No Analog Devices model has been loaded: analog.com refuses automated
   downloads.
-- Everything runs at 27 degC.
 - The HTML reports were looked at once; nobody has used them for real work.
 
 ## Forward plan
@@ -481,6 +480,31 @@ Scope:
 
 Acceptance: diode forward voltage and bandgap-style closed forms over
 temperature; a vendor model with `TNOM` other than 27 degC loads.
+
+Built on 21 November 2026. Diagnostics SIM110 and SIM111.
+
+- Bench temperature is the reserved parameter `TEMP` (degC, default 27), so
+  it steps, zips and derives like any other. Thermal noise and every
+  junction's thermal voltage follow it.
+- Device scaling after SPICE3 (`diotemp`, `bjttemp`, `jfettemp`, `mos1temp`,
+  `mos3temp`) in `copper-sim/src/temperature.rs`. `TNOM`, `T_MEASURED`,
+  `.OPTIONS TNOM`, `T_ABS` and `T_REL_GLOBAL` are honoured; `.TEMP` is
+  ignored with a note; `TEMP` reads the run temperature in expressions.
+- `tempco` and `tempco2` on passive components; SPICE `TC1`, `TC2` on R, C
+  and L.
+- A capacitor part's `esr`, `esl` (or `self_resonance`) and an inductor
+  part's `esr` are in the circuit, with the field names the EMI checks use.
+- Macro models: voltage noise scales as the square root of temperature;
+  `input_offset_drift` on amplifiers, `temperature_coefficient` on
+  references.
+- Example: `preamp` bench `TemperatureSweep` at -40, 27 and 85 degC.
+
+Open: no result compared with PSpice or ngspice at a temperature; no real
+vendor model run over temperature; the BJT substrate junction scaling follows
+ngspice from memory, not from its source; `TM1`, `TM2`, `BEX`, `BEXV` and
+MOSFET `TCV` are rejected away from `TNOM`; macro-model bias current, gain,
+bandwidth and slew rate do not change with temperature; no part-level default
+tempco.
 
 ### F9. Spectrum and long-run analyses
 

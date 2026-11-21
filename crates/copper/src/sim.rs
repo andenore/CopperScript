@@ -74,6 +74,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              a run uses the macro model unless --models vendor is given (--models macro refuses a part with only a \
              sim spice model, SIM107). A vendor file registered by hand (sim spice sha256 with a download note) \
              that is not in the cache is SIM108, naming what to download and copper models add. \
+             A bench runs at 27 degC unless it declares param TEMP (in degC; steppable like any param, SIM110): \
+             resistor and device noise, every junction's thermal voltage and SPICE models (scaled from their TNOM or \
+             .OPTIONS TNOM; TC1/TC2 of R, C and L) follow it, as do a passive component's tempco and tempco2 (SIM111), \
+             an op-amp's input_offset_drift and voltage noise and a reference's temperature_coefficient. A \
+             capacitor part's esr and esl (or self_resonance) and an inductor part's esr (its DC resistance) are in \
+             series with the element. \
              --check-model PART runs a standard bench set on a part of the board's library instead of the benches \
              (amplifiers: supply current, open-loop gain, gain-bandwidth, phase margin, follower bandwidth, voltage \
              noise and slew rate; regulators and references: quiescent current, output voltage, output resistance, \

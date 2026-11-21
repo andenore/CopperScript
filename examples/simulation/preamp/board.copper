@@ -7,6 +7,7 @@
 // benches/noise.copper: output and input-referred noise, the contributors.
 // benches/gain_montecarlo.copper: the gain spread over 200 boards.
 // benches/offset_worstcase.copper: the output offset at the worst corners.
+// benches/temperature.copper: offset and noise from -40 degC to 85 degC.
 // Run them with `copper sim examples/simulation/preamp/board.copper`.
 board LowNoisePreamp {
     use library "tiny";
@@ -14,9 +15,10 @@ board LowNoisePreamp {
 
     component U1: p.OPAMP_LOW_NOISE;
     component C_IN: CAPACITOR { value = 10uF; tolerance = 20%; }   // input coupling
-    component R_B: RESISTOR { value = 100kohm; tolerance = 1%; }   // input bias return
-    component R_G: RESISTOR { value = 1kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
-    component R_F: RESISTOR { value = 10kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; }
+    component R_B: RESISTOR { value = 100kohm; tolerance = 1%; tempco = 100ppm/degC; }   // input bias return
+    // The pair tracks: one tempco for both, so the gain does not drift.
+    component R_G: RESISTOR { value = 1kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; tempco = 25ppm/degC; }
+    component R_F: RESISTOR { value = 10kohm; tolerance = 0.1%; match = "GAIN"; match_tolerance = 0.02%; tempco = 25ppm/degC; }
     component C_F: CAPACITOR { value = 100pF; tolerance = 5%; }    // feedback pole, 159 kHz
     component R_OUT: RESISTOR { value = 100ohm; tolerance = 1%; }  // isolates cable capacitance
     component C_VP: CAPACITOR { value = 100nF; role = decoupling; decouples = U1.VP; }

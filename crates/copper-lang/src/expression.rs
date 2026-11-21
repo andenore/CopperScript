@@ -24,22 +24,23 @@ fn error(code: &str, message: impl Into<String>, location: &Location) -> CopperS
 }
 
 /// The base units a physical dimension is a product of.
-const BASES: [&str; 6] = ["V", "A", "s", "m", "deg", "dB"];
+const BASES: [&str; 7] = ["V", "A", "s", "m", "deg", "dB", "degC"];
 const VOLT: usize = 0;
 const AMPERE: usize = 1;
 const SECOND: usize = 2;
 const METRE: usize = 3;
 const DEGREE: usize = 4;
 const DECIBEL: usize = 5;
+const CELSIUS: usize = 6;
 
-/// A physical dimension as exponents of V, A, s, m, deg and dB. Exponents
-/// are stored doubled, so that `rtHz` (s^-1/2) stays an integer.
+/// A physical dimension as exponents of V, A, s, m, deg, dB and degC.
+/// Exponents are stored doubled, so that `rtHz` (s^-1/2) stays an integer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Units([i8; 6]);
+pub struct Units([i8; 7]);
 
 /// The dimensions a simulation quantity may have, in lookup order: a unit
 /// shared by two dimensions (`ohm`) resolves to the first.
-pub const SIM_DIMENSIONS: [Dimension; 18] = [
+pub const SIM_DIMENSIONS: [Dimension; 22] = [
     Dimension::Voltage,
     Dimension::Resistance,
     Dimension::Capacitance,
@@ -58,6 +59,10 @@ pub const SIM_DIMENSIONS: [Dimension; 18] = [
     Dimension::Angle,
     Dimension::VoltageNoiseDensity,
     Dimension::CurrentNoiseDensity,
+    Dimension::Temperature,
+    Dimension::TemperatureCoefficient,
+    Dimension::QuadraticTemperatureCoefficient,
+    Dimension::VoltageDrift,
 ];
 
 /// The dimension of a simulation unit (`kohm`, `dB`, `nV/rtHz`, `%`).
@@ -82,10 +87,10 @@ pub fn sim_quantity(value: &str, unit: &str) -> Option<Quantity> {
 }
 
 impl Units {
-    pub const DIMENSIONLESS: Units = Units([0; 6]);
+    pub const DIMENSIONLESS: Units = Units([0; 7]);
 
     fn base(index: usize, doubled: i8) -> Units {
-        let mut exponents = [0; 6];
+        let mut exponents = [0; 7];
         exponents[index] = doubled;
         Units(exponents)
     }
@@ -114,6 +119,10 @@ impl Units {
             Dimension::Angle => Units::base(DEGREE, 2),
             Dimension::VoltageNoiseDensity => v.times(root_s),
             Dimension::CurrentNoiseDensity => a.times(root_s),
+            Dimension::Temperature => Units::base(CELSIUS, 2),
+            Dimension::TemperatureCoefficient => Units::DIMENSIONLESS.per(Units::base(CELSIUS, 2)),
+            Dimension::QuadraticTemperatureCoefficient => Units::DIMENSIONLESS.per(Units::base(CELSIUS, 4)),
+            Dimension::VoltageDrift => v.per(Units::base(CELSIUS, 2)),
         }
     }
 
@@ -137,8 +146,8 @@ impl Units {
         self == Units::DIMENSIONLESS
     }
 
-    /// The doubled exponents of V, A, s, m, deg and dB.
-    pub fn doubled_exponents(self) -> [i8; 6] {
+    /// The doubled exponents of V, A, s, m, deg, dB and degC.
+    pub fn doubled_exponents(self) -> [i8; 7] {
         self.0
     }
 

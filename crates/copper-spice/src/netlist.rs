@@ -58,12 +58,16 @@ pub enum Card {
         b: String,
         model: Option<String>,
         value: Value,
+        /// `TC = TC1, TC2` on the element.
+        tc: Vec<Value>,
     },
     Inductor {
         a: String,
         b: String,
         model: Option<String>,
         value: Value,
+        /// `TC = TC1, TC2` on the element.
+        tc: Vec<Value>,
     },
     Coupling {
         inductors: Vec<String>,
@@ -261,6 +265,9 @@ pub struct Netlist {
     pub files: Vec<PathBuf>,
     /// Cards read and ignored because they cannot change the circuit (`.OPTIONS`), one line each.
     pub notes: Vec<String>,
+    /// `.OPTIONS TNOM=`: the temperature, degrees Celsius, that models without
+    /// their own `TNOM` were measured at (27 degC without it).
+    pub tnom: Option<f64>,
 }
 
 fn err(loc: &Loc, kind: ErrorKind, message: impl Into<String>) -> SpiceError {
@@ -335,6 +342,7 @@ struct Reader {
     /// Open subcircuit definitions, innermost last.
     open: Vec<usize>,
     notes: Vec<String>,
+    tnom: Option<f64>,
     /// The files and library sections read (a file may be read once per section).
     read: Vec<(PathBuf, Option<String>)>,
 }
@@ -351,6 +359,7 @@ pub fn read_file(path: &Path, dialect: Dialect, allow_includes: bool) -> Result<
         files: Vec::new(),
         open: Vec::new(),
         notes: Vec::new(),
+        tnom: None,
         read: Vec::new(),
     };
     reader.file(path, allow_includes, None, &Loc::new(&path.display().to_string(), 0))?;
@@ -367,6 +376,7 @@ pub fn read_str(text: &str, file: &str, dialect: Dialect) -> Result<Netlist, Spi
         files: Vec::new(),
         open: Vec::new(),
         notes: Vec::new(),
+        tnom: None,
         read: Vec::new(),
     };
     reader.text(text, file, None, None)?;
@@ -386,6 +396,7 @@ impl Reader {
             top: self.top,
             files: self.files,
             notes: self.notes,
+            tnom: self.tnom,
         })
     }
 
@@ -700,7 +711,17 @@ impl Reader {
                 self.file(&path, true, section.as_deref(), loc)?;
             }
             ".OPTIONS" | ".OPTION" | ".OPT" => {
-                let names = options(rest, d, loc)?;
+                let (names, tnom) = options(rest, d, loc)?;
+                if let Some(tnom) = tnom {
+                    if !self.open.is_empty() {
+                        return Err(err(loc, ErrorKind::Unsupported, ".OPTIONS TNOM= inside a subcircuit"));
+                    }
+                    self.tnom = Some(tnom);
+                    self.notes.push(format!(
+                        "{}:{}: .OPTIONS TNOM={tnom}: models without their own TNOM were measured at {tnom} degC",
+                        loc.file, loc.line
+                    ));
+                }
                 if !names.is_empty() {
                     self.notes.push(format!(
                         "{}:{}: .OPTIONS {} ignored (simulator controls that do not change the circuit)",
@@ -709,6 +730,13 @@ impl Reader {
                         names.join(" ")
                     ));
                 }
+            }
+            ".TEMP" => {
+                // The bench decides the temperature of a run.
+                self.notes.push(format!(
+                    "{}:{}: .TEMP ignored (the bench sets the temperature: param TEMP)",
+                    loc.file, loc.line
+                ));
             }
             ".ENDL" | ".END" | ".PROBE" | ".BACKANNO" | ".PRINT" | ".PLOT" | ".SAVE" | ".WIDTH" | ".TITLE" => {}
             ".TRAN" | ".AC" | ".OP" | ".DC" | ".NOISE" | ".FOUR" | ".MEAS" | ".MEASURE" | ".STEP" | ".TF" | ".SENS" => {
@@ -802,11 +830,13 @@ const HARMLESS_OPTIONS: &[&str] = &[
     "PROBE",
 ];
 
-/// The names of an `.OPTIONS` card's options, all of which must be harmless;
-/// anything that could change the circuit (another `GMIN`, `TNOM`, `SCALE`,
-/// default MOSFET geometry) is unsupported.
-fn options(rest: &[Token], d: Dialect, loc: &Loc) -> Result<Vec<String>, SpiceError> {
+/// The names of an `.OPTIONS` card's harmless options and its `TNOM` (degrees
+/// Celsius), which sets the nominal temperature of the models; anything else
+/// that could change the circuit (another `GMIN`, `SCALE`, default MOSFET
+/// geometry) is unsupported.
+fn options(rest: &[Token], d: Dialect, loc: &Loc) -> Result<(Vec<String>, Option<f64>), SpiceError> {
     let mut names = Vec::new();
+    let mut tnom = None;
     let mut i = 0;
     while i < rest.len() {
         let Some(name) = rest[i].word() else {
@@ -826,21 +856,28 @@ fn options(rest: &[Token], d: Dialect, loc: &Loc) -> Result<Vec<String>, SpiceEr
             Some(SExpr::Num(x)) => Some(*x),
             _ => None,
         };
-        let harmless = HARMLESS_OPTIONS.contains(&name)
-            || (name == "GMIN" && number == Some(1e-12))
-            || (name == "TNOM" && number == Some(27.0));
+        if name == "TNOM" {
+            match number {
+                Some(t) if t.is_finite() && t > -273.15 => tnom = Some(t),
+                _ => {
+                    return Err(err(loc, ErrorKind::Unsupported, ".OPTIONS TNOM= needs a number of degrees Celsius"));
+                }
+            }
+            continue;
+        }
+        let harmless = HARMLESS_OPTIONS.contains(&name) || (name == "GMIN" && number == Some(1e-12));
         if !harmless {
             return Err(err(
                 loc,
                 ErrorKind::Unsupported,
                 format!(
-                    ".OPTIONS {name} is not supported: it may change the circuit (only solver and output controls, GMIN=1e-12 and TNOM=27 are ignored)"
+                    ".OPTIONS {name} is not supported: it may change the circuit (only solver and output controls and GMIN=1e-12 are ignored; TNOM= sets the models' nominal temperature)"
                 ),
             ));
         }
         names.push(name.to_string());
     }
-    Ok(names)
+    Ok((names, tnom))
 }
 
 fn words(toks: &[Token]) -> Vec<String> {
@@ -932,6 +969,10 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
                     Token::Word(w)
                         if (w == "TC" || w == "TC1" || w == "TC2") && rest.get(j + 1) == Some(&Token::Equals) =>
                     {
+                        // `TC2=` alone leaves TC1 at zero.
+                        if w == "TC2" && tc.is_empty() {
+                            tc.push(SExpr::Num(0.0));
+                        }
                         let mut k = j + 2;
                         while let Some(t @ (Token::Word(_) | Token::Expr(_))) = rest.get(k) {
                             if rest.get(k + 1) == Some(&Token::Equals) {
@@ -965,24 +1006,8 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
             }
             Ok(match letter {
                 'R' => Card::Resistor { a, b, model, value, tc, noiseless },
-                'C' => {
-                    if !tc.is_empty() {
-                        return Err(unsupported(
-                            loc,
-                            format!("{name}: temperature coefficients of capacitors are not supported"),
-                        ));
-                    }
-                    Card::Capacitor { a, b, model, value }
-                }
-                _ => {
-                    if !tc.is_empty() {
-                        return Err(unsupported(
-                            loc,
-                            format!("{name}: temperature coefficients of inductors are not supported"),
-                        ));
-                    }
-                    Card::Inductor { a, b, model, value }
-                }
+                'C' => Card::Capacitor { a, b, model, value, tc },
+                _ => Card::Inductor { a, b, model, value, tc },
             })
         }
         'K' => {

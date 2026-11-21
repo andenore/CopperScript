@@ -18,6 +18,7 @@
 //! | [`rng`] | a deterministic seeded generator (SplitMix64) for Monte Carlo runs |
 //! | [`complex`] | complex numbers |
 //! | [`devices`] | nonlinear devices: junction diode (Shockley, series resistance, junction and diffusion charge, breakdown), voltage-controlled switch with hysteresis, the op-amp transient limits (clipping, slew rate, output current) |
+//! | [`temperature`] | the thermal voltage at a temperature and SPICE3's temperature scaling of diode, BJT, JFET and MOSFET parameters from their `TNOM` |
 //! | [`waveform`] | source waveforms for transient runs: sine, pulse, piecewise linear, step |
 //! | [`newton`] | real-valued assembly with companion models, Newton iteration, the nonlinear operating point (gmin and source stepping) and the small-signal linearisation for AC |
 //! | [`transient`] | transient analysis: trapezoidal integration with a backward-Euler start, truncation-error step control, breakpoints, initial conditions (`ic`, `uic`) |
@@ -66,6 +67,7 @@ pub mod rng;
 pub mod semiconductors;
 pub mod sparse_lu;
 pub mod stability;
+pub mod temperature;
 pub mod time_measure;
 pub mod timing;
 pub mod transient;
@@ -92,5 +94,6 @@ pub use noise::{
 pub use regulator::{RegulatorParams, RegulatorPins};
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, Level3Params, MosLevel, MosParams};
 pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
+pub use temperature::{BjtTemperature, DiodeTemperature, JfetTemperature, thermal_voltage};
 pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

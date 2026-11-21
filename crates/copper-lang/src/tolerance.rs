@@ -48,6 +48,11 @@ pub const MATCH: &str = "match";
 /// The component attribute of a matched group's ratio tolerance (`match_tolerance = 0.01%;`).
 pub const MATCH_TOLERANCE: &str = "match_tolerance";
 
+/// The component attribute of a passive's linear temperature coefficient (`tempco = 100ppm/degC;`).
+pub const TEMPCO: &str = "tempco";
+/// The component attribute of a passive's quadratic temperature coefficient (`tempco2 = -0.04ppm/degC2;`).
+pub const TEMPCO2: &str = "tempco2";
+
 /// The largest number of Monte Carlo runs.
 pub const MAX_RUNS: u32 = 100_000;
 
@@ -85,7 +90,7 @@ fn percentage(value: &Scalar, label: &str, location: &Location) -> Result<Quanti
     }
 }
 
-/// Check a component's `tolerance`, `match` and `match_tolerance`; the
+/// Check a component's `tolerance`, `match`, `match_tolerance`, `tempco` and `tempco2`; the
 /// properties to store on the compiled component (empty when none is declared).
 pub(crate) fn component_properties(attributes: &Attributes, location: &Location) -> Result<Vec<(String, String)>> {
     let mut properties = Vec::new();
@@ -134,6 +139,24 @@ pub(crate) fn component_properties(attributes: &Attributes, location: &Location)
     if let (Some(group), Some(m)) = (group, match_tolerance) {
         properties.push((MATCH.to_owned(), group));
         properties.push((MATCH_TOLERANCE.to_owned(), m.to_string()));
+    }
+    for (key, dimension, example) in [
+        (TEMPCO, Dimension::TemperatureCoefficient, "tempco = 100ppm/degC;"),
+        (TEMPCO2, Dimension::QuadraticTemperatureCoefficient, "tempco2 = -0.04ppm/degC2;"),
+    ] {
+        let Some(value) = attributes.get(key) else { continue };
+        let quantity = match value {
+            Scalar::Quantity { value, unit } => sim_quantity(value, unit).filter(|q| q.dimension() == dimension),
+            _ => None,
+        };
+        let Some(quantity) = quantity else {
+            return Err(error(
+                "SIM111",
+                format!("component {key} must be a {}, such as {example}", dimension.name()),
+                location,
+            ));
+        };
+        properties.push((key.to_owned(), quantity.to_string()));
     }
     Ok(properties)
 }

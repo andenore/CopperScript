@@ -127,8 +127,9 @@ impl PassiveKind {
 /// How the bench simulates one component.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Treatment {
-    /// An ideal resistor, capacitor or inductor between the part's two pins.
-    Passive { kind: PassiveKind, value: SimQuantity },
+    /// An ideal resistor, capacitor or inductor between the part's two pins,
+    /// with the component's temperature coefficients and the part's parasitics.
+    Passive { kind: PassiveKind, value: SimQuantity, extras: Box<PassiveExtras> },
     /// The part's own `sim` blocks ([`PartDefinition::sim`]).
     PartModel,
     /// Swapped for a built-in model: the index into [`Bench::replacements`].
@@ -145,6 +146,58 @@ impl Treatment {
             Treatment::Replaced(_) => "replaced",
             Treatment::Ignored => "ignored",
         }
+    }
+}
+
+/// What a passive carries beyond its value: the component's temperature
+/// coefficients (`tempco`, `tempco2`) and, from its part's EMI facts, a
+/// capacitor's `esr`, `esl` (or `self_resonance`) and an inductor's `esr`
+/// (its DC resistance).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PassiveExtras {
+    /// The linear temperature coefficient (`ppm/degC`), from 27 degC.
+    pub tempco: Option<Quantity>,
+    /// The quadratic temperature coefficient (`ppm/degC2`), from 27 degC.
+    pub tempco2: Option<Quantity>,
+    /// A capacitor's equivalent series resistance, an inductor's DC resistance.
+    pub esr: Option<Quantity>,
+    /// A capacitor's equivalent series inductance.
+    pub esl: Option<Quantity>,
+    /// A capacitor's self-resonance, which gives its ESL when `esl` is not declared.
+    pub self_resonance: Option<Quantity>,
+}
+
+impl PassiveExtras {
+    /// The extras of `component` (a `kind`) on `part`: the parasitics a kind does not have are left out.
+    pub fn of(kind: PassiveKind, component: &ComponentInstance, part: &PartDefinition) -> PassiveExtras {
+        let stored = |key: &str| {
+            component.properties.get(key).and_then(|text| {
+                let (number, unit) = text.rsplit_once(' ')?;
+                expression::sim_quantity(number, unit)
+            })
+        };
+        let emi = part.emi.as_ref();
+        let (esr, esl, self_resonance) = match kind {
+            PassiveKind::Capacitor => (
+                emi.and_then(|e| e.esr.clone()),
+                emi.and_then(|e| e.esl.clone()),
+                emi.and_then(|e| e.self_resonance.clone()),
+            ),
+            // An inductor's `esr` is its DC resistance, as `copper emi-check` reads it.
+            PassiveKind::Inductor => (emi.and_then(|e| e.esr.clone()), None, None),
+            PassiveKind::Resistor => (None, None, None),
+        };
+        PassiveExtras {
+            tempco: stored(crate::tolerance::TEMPCO),
+            tempco2: stored(crate::tolerance::TEMPCO2),
+            esr: esr.filter(|r| !r.base_value().is_zero()),
+            esl: esl.filter(|l| !l.base_value().is_zero()),
+            self_resonance,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == PassiveExtras::default()
     }
 }
 
@@ -1484,6 +1537,56 @@ impl Scope for ExpressionScope<'_> {
     }
 }
 
+/// The param that sets the temperature of a bench's run, degrees Celsius
+/// (27 degC when no param of the name exists).
+pub const TEMPERATURE_PARAM: &str = "TEMP";
+
+/// The bench temperature `TEMP` (`SIM110`): a temperature in degC above
+/// absolute zero, at every step; with it, a noise analysis takes its
+/// temperature from it and declares none of its own.
+fn check_temperature(params: &IndexMap<String, BenchParam>, analysis: &Analysis, steps: &[Step]) -> Result<()> {
+    let Some(param) = params.get(TEMPERATURE_PARAM) else { return Ok(()) };
+    if param.value.dimension() != Dimension::Temperature {
+        return Err(error(
+            "SIM110",
+            format!(
+                "param {TEMPERATURE_PARAM} is the temperature of the run, in degC (such as param {TEMPERATURE_PARAM} = 85degC;), but it is a {}",
+                param.value.dimension().name()
+            ),
+            &param.location,
+        ));
+    }
+    let absolute_zero = Decimal::parse("-273.15").expect("a decimal");
+    let mut values = vec![(&param.value, &param.location)];
+    for step in steps {
+        for (index, name) in step.params().into_iter().enumerate() {
+            if name != TEMPERATURE_PARAM {
+                continue;
+            }
+            let stepped = if index == 0 { &step.values } else { &step.zip[index - 1].1 };
+            values.extend(stepped.iter().map(|value| (value, &step.location)));
+        }
+    }
+    for (value, location) in values {
+        if *value.base_value() <= absolute_zero {
+            return Err(error("SIM110", format!("{TEMPERATURE_PARAM} = {value} is not above absolute zero"), location));
+        }
+    }
+    if let Analysis::Noise(noise) = analysis
+        && let Some(own) = &noise.temperature
+    {
+        return Err(error(
+            "SIM110",
+            format!(
+                "the bench sets its temperature with param {TEMPERATURE_PARAM}, so analysis noise takes it from there; remove temperature = {}",
+                own.written
+            ),
+            &param.location,
+        ));
+    }
+    Ok(())
+}
+
 /// How a component with `part` and `value` simulates when it is neither
 /// replaced nor ignored; `None` when it has no model.
 fn own_treatment(
@@ -1520,7 +1623,24 @@ fn own_treatment(
                 ));
             }
         };
-        return Ok(Some(Treatment::Passive { kind, value: SimQuantity { value, param: param.map(str::to_owned) } }));
+        let extras = Box::new(PassiveExtras::of(kind, component, part));
+        return Ok(Some(Treatment::Passive {
+            kind,
+            value: SimQuantity { value, param: param.map(str::to_owned) },
+            extras,
+        }));
+    }
+    for key in [crate::tolerance::TEMPCO, crate::tolerance::TEMPCO2] {
+        if component.properties.contains_key(key) {
+            return Err(error(
+                "SIM111",
+                format!(
+                    "{} declares {key}, but it simulates with its part's sim blocks; {key} applies to resistors, capacitors and inductors",
+                    repr(&component.reference)
+                ),
+                location,
+            ));
+        }
     }
     if !part.sim.is_empty() {
         return Ok(Some(Treatment::PartModel));
@@ -2442,6 +2562,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
         let location = analyses.first().map_or(&document.location, |item| &item.location);
         measures.push(crate::stability::stable_measure(location));
     }
+    check_temperature(&params, &analysis, &steps)?;
     let initial_conditions = initial_conditions(document, &analysis, &context, &value_scope)?;
     let part_of = |name: &str| library.get(name).or_else(|| view.library.get(name));
     let lookup = crate::tolerance::Lookup {
@@ -3303,9 +3424,20 @@ pub fn bench_value(bench: &Bench) -> Value {
                 ("fidelity", component.fidelity().map(|fidelity| text(fidelity.name())).unwrap_or(Value::Null)),
             ];
             match &component.treatment {
-                Treatment::Passive { kind, value } => {
+                Treatment::Passive { kind, value, extras } => {
                     entries.push(("passive", text(kind.name())));
                     entries.push(("value", sim_quantity_value(value)));
+                    for (key, quantity) in [
+                        ("tempco", &extras.tempco),
+                        ("tempco2", &extras.tempco2),
+                        ("esr", &extras.esr),
+                        ("esl", &extras.esl),
+                        ("self_resonance", &extras.self_resonance),
+                    ] {
+                        if let Some(quantity) = quantity {
+                            entries.push((key, quantity_value(quantity)));
+                        }
+                    }
                 }
                 Treatment::Replaced(index) => entries.push(("replacement", Value::from(*index as i64))),
                 Treatment::PartModel | Treatment::Ignored => {}

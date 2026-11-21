@@ -19,7 +19,7 @@
 //!
 //! | Treatment | Elements |
 //! | --- | --- |
-//! | passive | one resistor, capacitor or inductor named by the reference, terminal `a` at the part's first pin |
+//! | passive | one resistor, capacitor or inductor named by the reference, terminal `a` at the part's first pin; a capacitor part's `esr` and `esl` (or `self_resonance`), an inductor part's `esr` (DC resistance) in series behind it (`C1.esr`, `C1.esl`, nodes `C1#esr`, `C1#esl`) |
 //! | part `sim` blocks | one macro instance per block, named by the reference (`U1`) or, for a multi-unit part, `REF.UNIT` (`U1.A`) |
 //! | part `sim spice` blocks | the subcircuit expanded by `copper-spice` as instance `U1` (`U1.A`): internal nodes `U1#NODE`, elements `U1.NAME`, nested instances `U1.X1.NAME` ([`crate::spice`]) |
 //! | `replace X with KIND` | one macro instance named `X` (`supply NAME` for a supply) on the replacement's nodes |
@@ -32,6 +32,14 @@
 //! from that node to the net, closes the loop again: the DC operating point
 //! is unchanged, and the loop gain is read across the probe
 //! ([`copper_sim::loop_gain`]).
+//!
+//! The temperature of a run is the param `TEMP` (degrees Celsius, 27 without
+//! it, [`celsius`]): passives with `tempco`/`tempco2` are valued at it from
+//! 27 degC, `sim diode` and `sim spice` devices are scaled to it
+//! (`copper_sim::temperature`), built-in voltage noise is a thermal noise
+//! (`sqrt(T / 300.15 K)`), `input_offset_drift` and a reference's
+//! `temperature_coefficient` act from 27 degC, and noise analyses without a
+//! temperature of their own run at it.
 //!
 //! Values come from the bench's params at the step being run: a passive
 //! whose value names a param, a model parameter that names one and the
@@ -176,6 +184,34 @@ pub struct Lowered {
     /// Element or macro instance name -> the component or supply it models.
     pub owners: BTreeMap<String, String>,
     pub models: Vec<ModelUse>,
+    /// The temperature of the run, degrees Celsius (`param TEMP`, 27 degC without it).
+    pub celsius: f64,
+}
+
+/// The temperature of a run at `params`, degrees Celsius: `TEMP`, else 27 degC.
+pub fn celsius(params: &Params) -> f64 {
+    params.get(copper_lang::bench::TEMPERATURE_PARAM).copied().unwrap_or(NOMINAL_CELSIUS)
+}
+
+/// Degrees Celsius in kelvin; 27 degC is `copper_sim::temperature::NOMINAL_TEMPERATURE` exactly.
+pub fn kelvin(celsius: f64) -> f64 {
+    if celsius == NOMINAL_CELSIUS {
+        copper_sim::temperature::NOMINAL_TEMPERATURE
+    } else {
+        celsius + copper_sim::noise::ZERO_CELSIUS
+    }
+}
+
+/// The temperature built-in models and passives' temperature coefficients refer to, degrees Celsius.
+pub const NOMINAL_CELSIUS: f64 = 27.0;
+
+/// `sqrt(T / 300.15 K)`: the factor on a macro model's voltage noise density at `celsius`.
+fn noise_factor(celsius: f64) -> f64 {
+    if celsius == NOMINAL_CELSIUS {
+        1.0
+    } else {
+        (kelvin(celsius) / copper_sim::temperature::NOMINAL_TEMPERATURE).sqrt()
+    }
 }
 
 fn part_of<'a>(bench: &'a Bench, design: &'a Design, component: &SimComponent) -> Result<&'a PartDefinition, String> {
@@ -360,6 +396,8 @@ struct Builder<'a> {
     transient: bool,
     /// The bench runs `analysis dc`: the op-amp's swing and current limit are active.
     dc_sweep: bool,
+    /// The temperature of the run, degrees Celsius.
+    celsius: f64,
     pin_currents: BTreeMap<(String, String), Vec<(String, f64)>>,
     members: BTreeMap<String, Vec<String>>,
     owners: BTreeMap<String, String>,
@@ -457,6 +495,11 @@ impl Builder<'_> {
                 let mut params = opamp_params(spec, &get, owner)?;
                 if params.psrr.is_some() {
                     params.psrr_span = self.nominal_span(owner, nodes)?;
+                }
+                // At the run's temperature: thermal voltage noise, the offset with its drift.
+                params.voltage_noise = params.voltage_noise.map(|e| e * noise_factor(self.celsius));
+                if let Some(drift) = get("input_offset_drift").filter(|_| self.celsius != NOMINAL_CELSIUS) {
+                    params.input_offset_voltage += drift * (self.celsius - NOMINAL_CELSIUS);
                 }
                 for key in [
                     "slew_rate",
@@ -576,6 +619,10 @@ impl Builder<'_> {
                 if params.psrr.is_some() {
                     params.psrr_input = self.nominal_input(owner, nodes)?;
                 }
+                params.voltage_noise = params.voltage_noise.map(|e| e * noise_factor(self.celsius));
+                if let Some(tc) = get("temperature_coefficient").filter(|_| self.celsius != NOMINAL_CELSIUS) {
+                    params.output_voltage *= 1.0 + tc * (self.celsius - NOMINAL_CELSIUS);
+                }
                 // The ramp acts in a transient run; elsewhere the model is at its final state.
                 if !self.transient && spec.parameters.contains_key(start_key) {
                     inactive.push(start_key.to_owned());
@@ -617,7 +664,9 @@ impl Builder<'_> {
                 ]
             }
             SimKind::Diode => {
-                let params = crate::transient::diode_params(spec, self.params);
+                // SPICE's temperature scaling from 27 degC with its defaults (EG 1.11 eV, XTI 3).
+                let params = crate::transient::diode_params(spec, self.params)
+                    .at_temperature(kelvin(self.celsius), &copper_sim::DiodeTemperature::default());
                 let (anode, cathode) = (node("anode")?, node("cathode")?);
                 self.circuit.diode(instance, anode, cathode, &params).map_err(fail)?;
                 vec![
@@ -641,7 +690,7 @@ impl Builder<'_> {
                     spec.spice.as_ref().ok_or_else(|| format!("{owner}: a sim spice block without a model file"))?;
                 let ports: Vec<NodeId> =
                     (1..=nodes.len()).map(|k| node(&k.to_string())).collect::<Result<Vec<NodeId>, String>>()?;
-                let instance_made = crate::spice::instantiate(&mut self.circuit, instance, model, &ports)
+                let instance_made = crate::spice::instantiate(&mut self.circuit, instance, model, &ports, self.celsius)
                     .map_err(|message| format!("{owner}: {message}"))?;
                 instance_made
                     .ports
@@ -730,6 +779,10 @@ pub fn lower(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -
 }
 
 fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Result<Lowered, String> {
+    let temperature = celsius(params);
+    if !(temperature.is_finite() && temperature > -copper_sim::noise::ZERO_CELSIUS) {
+        return Err(format!("SIM110: TEMP = {temperature} degC is not above absolute zero"));
+    }
     let mut b = Builder {
         circuit: Circuit::with_ground(wiring.ground()),
         design,
@@ -738,6 +791,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
         params,
         transient: matches!(bench.analysis, copper_lang::bench::Analysis::Tran(_)),
         dc_sweep: matches!(bench.analysis, copper_lang::bench::Analysis::Dc(_)),
+        celsius: celsius(params),
         pin_currents: BTreeMap::new(),
         members: BTreeMap::new(),
         owners: BTreeMap::new(),
@@ -772,7 +826,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
             inactive: Vec::new(),
         };
         match &component.treatment {
-            Treatment::Passive { kind, value } => {
+            Treatment::Passive { kind, value, extras } => {
                 let pins: Vec<&String> = part.pins.keys().collect();
                 let [first, second] = pins.as_slice() else {
                     return Err(format!(
@@ -782,7 +836,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
                         pins.len()
                     ));
                 };
-                let x = b.params.get(&override_key(reference, None)).copied().unwrap_or_else(|| b.value(value));
+                let mut x = b.params.get(&override_key(reference, None)).copied().unwrap_or_else(|| b.value(value));
                 // A capacitor of 0 F is absent (an optional stray): no element, its pins open.
                 if *kind == PassiveKind::Capacitor && x == 0.0 {
                     used.fidelity = "ideal";
@@ -790,18 +844,81 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
                     models.push(used);
                     continue;
                 }
+                // The temperature coefficients act from 27 degC: x (1 + tc dT + tc2 dT^2).
+                let dt = b.celsius - NOMINAL_CELSIUS;
+                if dt != 0.0 && (extras.tempco.is_some() || extras.tempco2.is_some()) {
+                    let tc = extras.tempco.as_ref().map_or(0.0, base);
+                    let tc2 = extras.tempco2.as_ref().map_or(0.0, base);
+                    x *= 1.0 + tc * dt + tc2 * dt * dt;
+                }
                 let (a, z) = (b.pin(reference, first), b.pin(reference, second));
+                // The parasitics in series, behind the element: C, ESR, ESL; or L, its DC resistance.
+                let esr = extras.esr.as_ref().map(base).filter(|r| *r > 0.0);
+                let esl = match kind {
+                    PassiveKind::Capacitor => extras.esl.as_ref().map(base).or_else(|| {
+                        let f = base(extras.self_resonance.as_ref()?);
+                        Some(1.0 / ((2.0 * std::f64::consts::PI * f).powi(2) * x))
+                    }),
+                    _ => None,
+                }
+                .filter(|l| *l > 0.0);
+                let mut series: Vec<(&str, f64)> = Vec::new();
+                if let Some(r) = esr {
+                    series.push(("esr", r));
+                }
+                if let Some(l) = esl {
+                    series.push(("esl", l));
+                }
+                let fail = |error: copper_sim::SimError| format!("{reference}: {error}");
+                let mut end = z;
+                if !series.is_empty() {
+                    end = b.node(&format!("{reference}#{}", series[0].0), reference);
+                }
                 let added = match kind {
-                    PassiveKind::Resistor => b.circuit.resistor(reference, a, z, x),
-                    PassiveKind::Capacitor => b.circuit.capacitor(reference, a, z, x),
-                    PassiveKind::Inductor => b.circuit.inductor(reference, a, z, x),
+                    PassiveKind::Resistor => b.circuit.resistor(reference, a, end, x),
+                    PassiveKind::Capacitor => b.circuit.capacitor(reference, a, end, x),
+                    PassiveKind::Inductor => b.circuit.inductor(reference, a, end, x),
                 };
-                added.map_err(|error| format!("{reference}: {error}"))?;
+                added.map_err(fail)?;
+                for (k, (part, amount)) in series.iter().enumerate() {
+                    let from = end;
+                    end = match series.get(k + 1) {
+                        Some((next, _)) => b.node(&format!("{reference}#{next}"), reference),
+                        None => z,
+                    };
+                    let name = format!("{reference}.{part}");
+                    if *part == "esr" {
+                        b.circuit.resistor(&name, from, end, *amount).map_err(fail)?;
+                    } else {
+                        b.circuit.inductor(&name, from, end, *amount).map_err(fail)?;
+                    }
+                }
                 b.owners.insert(reference.clone(), reference.clone());
                 b.current(reference, first, vec![(reference.clone(), 1.0)]);
                 b.current(reference, second, vec![(reference.clone(), -1.0)]);
                 used.fidelity = "ideal";
                 used.model = kind.name().to_owned();
+                let mut notes: Vec<String> = Vec::new();
+                if let (Some(_), Some(r)) = (esr, &extras.esr) {
+                    let what = if *kind == PassiveKind::Inductor { "DC resistance" } else { "ESR" };
+                    notes.push(format!("{what} {r}"));
+                }
+                match (esl, &extras.esl, &extras.self_resonance) {
+                    (Some(_), Some(l), _) => notes.push(format!("ESL {l}")),
+                    (Some(l), None, Some(f)) => {
+                        notes.push(format!("ESL {} H from self_resonance {f}", crate::format::significant(l, 4)))
+                    }
+                    _ => {}
+                }
+                if let Some(tc) = &extras.tempco {
+                    notes.push(format!("tempco {tc}"));
+                }
+                if let Some(tc2) = &extras.tempco2 {
+                    notes.push(format!("tempco2 {tc2}"));
+                }
+                if !notes.is_empty() {
+                    used.model = format!("{} ({})", used.model, notes.join(", "));
+                }
             }
             Treatment::PartModel => {
                 if bench.model_choice == ModelChoice::Macro {
@@ -940,6 +1057,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
         members: b.members,
         owners: b.owners,
         models,
+        celsius: b.celsius,
     })
 }
 

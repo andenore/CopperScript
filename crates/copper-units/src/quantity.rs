@@ -37,10 +37,19 @@ pub enum Dimension {
     VoltageNoiseDensity,
     /// Current noise spectral density (`2.5fA/rtHz`), base unit A/rtHz.
     CurrentNoiseDensity,
+    /// A temperature in degrees Celsius (`85degC`), base unit degC. Kelvin is
+    /// not a unit of it: the two differ by an offset, not a scale.
+    Temperature,
+    /// A linear temperature coefficient (`100ppm/degC`), base unit 1/degC.
+    TemperatureCoefficient,
+    /// A quadratic temperature coefficient (`0.5ppm/degC2`), base unit 1/degC².
+    QuadraticTemperatureCoefficient,
+    /// A voltage drift over temperature (`2uV/degC`), base unit V/degC.
+    VoltageDrift,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 19] = [
+    pub const ALL: [Dimension; 23] = [
         Dimension::Voltage,
         Dimension::Resistance,
         Dimension::Capacitance,
@@ -60,6 +69,10 @@ impl Dimension {
         Dimension::Angle,
         Dimension::VoltageNoiseDensity,
         Dimension::CurrentNoiseDensity,
+        Dimension::Temperature,
+        Dimension::TemperatureCoefficient,
+        Dimension::QuadraticTemperatureCoefficient,
+        Dimension::VoltageDrift,
     ];
 
     /// The Python class name.
@@ -84,6 +97,10 @@ impl Dimension {
             Dimension::Angle => "Angle",
             Dimension::VoltageNoiseDensity => "VoltageNoiseDensity",
             Dimension::CurrentNoiseDensity => "CurrentNoiseDensity",
+            Dimension::Temperature => "Temperature",
+            Dimension::TemperatureCoefficient => "TemperatureCoefficient",
+            Dimension::QuadraticTemperatureCoefficient => "QuadraticTemperatureCoefficient",
+            Dimension::VoltageDrift => "VoltageDrift",
         }
     }
 
@@ -121,6 +138,12 @@ impl Dimension {
             Dimension::VoltageNoiseDensity => &[("V/rtHz", "1"), ("uV/rtHz", "1e-6"), ("nV/rtHz", "1e-9")],
             Dimension::CurrentNoiseDensity => {
                 &[("A/rtHz", "1"), ("nA/rtHz", "1e-9"), ("pA/rtHz", "1e-12"), ("fA/rtHz", "1e-15")]
+            }
+            Dimension::Temperature => &[("degC", "1")],
+            Dimension::TemperatureCoefficient => &[("ppm/degC", "1e-6")],
+            Dimension::QuadraticTemperatureCoefficient => &[("ppm/degC2", "1e-6")],
+            Dimension::VoltageDrift => {
+                &[("V/degC", "1"), ("mV/degC", "1e-3"), ("uV/degC", "1e-6"), ("nV/degC", "1e-9")]
             }
         }
     }
@@ -252,6 +275,10 @@ mod tests {
             (Dimension::VoltageNoiseDensity, "4", "nV/rtHz", "4 nV/rtHz", "4E-9"),
             (Dimension::CurrentNoiseDensity, "2.5", "fA/rtHz", "2.5 fA/rtHz", "2.5E-15"),
             (Dimension::CurrentNoiseDensity, "1", "pA/rtHz", "1 pA/rtHz", "1E-12"),
+            (Dimension::Temperature, "-40", "degC", "-40 degC", "-40"),
+            (Dimension::TemperatureCoefficient, "100", "ppm/degC", "100 ppm/degC", "0.000100"),
+            (Dimension::QuadraticTemperatureCoefficient, "-0.5", "ppm/degC2", "-0.5 ppm/degC2", "-5E-7"),
+            (Dimension::VoltageDrift, "2", "uV/degC", "2 uV/degC", "0.000002"),
         ];
         for (dimension, value, unit, shown, base) in cases {
             let quantity = Quantity::of(dimension, &parse(value), unit).unwrap();

@@ -2791,11 +2791,11 @@ remains an ordinary part property.
 
 | Kind | Roles | Typed parameters (all optional) |
 | --- | --- | --- |
-| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`), `quiescent_current` (A), `psrr` (dB), `psrr_corner` (Hz) |
+| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`), `quiescent_current` (A), `psrr` (dB), `psrr_corner` (Hz), `input_offset_drift` (V/degC, from 27 degC; [Temperature](#temperature)) |
 | `diffamp` | `inp`, `inn`, `ref`, `fb`, `out`, `vp`, `vn` | as `opamp` |
 | `source` | `out`, `ref` | `output = voltage` (default) or `current`; `dc`, `ac` (V or A, following `output`), `ac_phase` (deg), `output_resistance` (ohm), `output_capacitance` (F), `waveform = sine { ... };`, `pulse`, `pwl` or `step` ([Transient analysis](#transient-analysis)) |
 | `regulator` | `in`, `out`, `gnd`; `en` optional | `output_voltage` (V, required; negative for a negative rail), `dropout` (V), `output_resistance` (ohm), `output_impedance_corner` (Hz), `psrr` (dB), `psrr_corner` (Hz), `output_current_limit` (A), `soft_start` (s), `enable_threshold` (V), `quiescent_current` (A), `efficiency` (%), `voltage_noise` (V/rtHz), `voltage_noise_corner` (Hz) ([Rail models](#rail-models-regulator-and-reference)) |
-| `reference` | as `regulator` | as `regulator`, with `startup_time` (s) in place of `soft_start` and no `efficiency` |
+| `reference` | as `regulator` | as `regulator`, with `startup_time` (s) in place of `soft_start` and no `efficiency`; `temperature_coefficient` (ppm/degC, from 27 degC; [Temperature](#temperature)) |
 | `diode`, `switch` | `anode`, `cathode`; `a`, `b`, `ctrl`, `ctrl_ref` | see [Transient analysis](#transient-analysis) |
 | `load` | `inp`, `ref` | `resistance` (ohm), `capacitance` (F); at least one |
 
@@ -3062,25 +3062,28 @@ end-of-file mark; a file that is not UTF-8 is read byte for byte as Latin-1
 | `.SUBCKT NAME nodes [PARAMS:] p=v ...` / `.ENDS` | nested definitions are local; instance values override the defaults |
 | `.PARAM`, `.FUNC f(a, b) {expr}`, `.MODEL` (with `AKO:`), `.INCLUDE`, `.INC`, `.LIB file`, `.LIB name` / `.ENDL` | parameters are evaluated per instance (global, the caller's, the defaults, then local ones in order); functions are inlined |
 | `.LIB file SECTION` | only the cards between `.LIB SECTION` and its `.ENDL` in that (local) file; a missing section is an error naming it |
-| `.OPTIONS` | solver and output controls (`RELTOL`, `ITL4`, `NOPAGE`, ...; `GMIN=1e-12`, `TNOM=27`) are read and ignored, and the model list names them (`.OPTIONS RELTOL ITL4 ignored`); any other option (`SCALE`, `DEFL`, another `GMIN`, ...) is rejected, as it could change the circuit |
-| `R C L K` | values may be expressions of parameters; resistor models `R`, `TC1`, `TC2`, `T_ABS` (the resistance and the noise temperature at it: `T_ABS = -273.15` is noiseless), LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
+| `.OPTIONS` | solver and output controls (`RELTOL`, `ITL4`, `NOPAGE`, ...; `GMIN=1e-12`) are read and ignored, and the model list names them (`.OPTIONS RELTOL ITL4 ignored`); `TNOM=` sets the temperature the file's models without their own `TNOM` were measured at (noted in the model list); any other option (`SCALE`, `DEFL`, another `GMIN`, ...) is rejected, as it could change the circuit |
+| `.TEMP` | ignored with a note in the model list: the bench sets the temperature ([Temperature](#temperature)) |
+| `R C L K` | values may be expressions of parameters; `TC1`, `TC2` (`TC = a, b` on the element, or on a `RES`, `CAP` or `IND` model) scale the value by `1 + TC1 dT + TC2 dT^2` from the model's `TNOM`; `T_ABS` (the element's own temperature; a resistor's noise temperature too: `T_ABS = -273.15` is noiseless) and `T_REL_GLOBAL` (degrees above the bench's); LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
 | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC`, the waveform's value at 0 |
 | `E G F H` | linear, `POLY(n)` (SPICE2 coefficient order), `VALUE = {expr}`, `TABLE {x} = (x, y) ...`, `LAPLACE {x} = {H(s)}` (and LTspice `E a b c d LAPLACE = H(s)`): a rational `H(s)` times at most one delay `exp(-s T)` (`exp(a - s T)` is the gain `exp(a)` and the delay `T`; terms added together must share their delay), realised exactly as a state-space network and an ideal delay |
 | `B V= / I=` | an expression of node voltages, of currents of elements of the same subcircuit and of `TIME` |
 | `DDT(x)`, `DELAY(x, T)` | in any behavioural expression: the exact time derivative (0 at the operating point, `j w x` in AC; `x` drives 1 F in series with a 0 V sense source whose current the expression reads) and `x` delayed by a constant `T > 0` (an ideal delay) |
 | `T a1 b1 a2 b2 Z0= TD=` (or `F=` with `NL=`, default 0.25) | the lossless transmission line (Branin's method: at each port `Z0`, noiseless, behind the other port's `v + Z0 i` one delay earlier) |
-| `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; in the `pspice` dialect also PSpice's `ISR NR` (recombination current `ISR (exp(v / NR V_T) - 1) ((1 - v/VJ)^2 + 0.005)^(M/2)`) and `IKF` (high injection: the normal current times `sqrt(IKF / (IKF + I_nrm))`); `EG`, `XTI` and temperature coefficients are accepted and have no effect at 27 degC |
-| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM IRB RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node; with `IRB` the base resistance is SPICE's current-crowding form |
-| `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area |
-| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`, and level 3 with `XJ ETA THETA KAPPA DELTA VMAX NFS WD` as well (SPICE3's `mos3load`; level 3 has no `LAMBDA`); `TOX` gives the intrinsic gate charge (below), `U0` the default `KP`, `NSUB` (with `TPG`, `NSS`) the defaults of `PHI`, `GAMMA` and `VTO` as SPICE3 derives them and, at level 3, the depletion width; a level-3 model without `TOX` takes SPICE's 100 nm; `L W AD AS PD PS M` on the element |
+| `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; in the `pspice` dialect also PSpice's `ISR NR` (recombination current `ISR (exp(v / NR V_T) - 1) ((1 - v/VJ)^2 + 0.005)^(M/2)`) and `IKF` (high injection: the normal current times `sqrt(IKF / (IKF + I_nrm))`); temperature: `TNOM` (`T_MEASURED`), `EG`, `XTI`, `TBV1`, `TBV2`, `TCV`, `TRS1` (`TRS`), `TRS2`, `TIKF`, `TTT1`, `TTT2`, `T_ABS`, `T_REL_GLOBAL`; `TM1`, `TM2` only at the model's `TNOM` |
+| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM IRB RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node; with `IRB` the base resistance is SPICE's current-crowding form; temperature: `TNOM`, `EG`, `XTI`, `XTB`, `TRE1`, `TRE2`, `TRB1`, `TRB2`, `TRM1`, `TRM2`, `TRC1`, `TRC2`, `T_ABS`, `T_REL_GLOBAL`; `BEX`, `BEXV` only at `TNOM` |
+| `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area; temperature: `TNOM`, `EG`, `XTI`, `VTOTC`, `BETATCE`, `TCV`, `BEX`, `T_ABS`, `T_REL_GLOBAL` |
+| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`, and level 3 with `XJ ETA THETA KAPPA DELTA VMAX NFS WD` as well (SPICE3's `mos3load`; level 3 has no `LAMBDA`); `TOX` gives the intrinsic gate charge (below), `U0` the default `KP`, `NSUB` (with `TPG`, `NSS`) the defaults of `PHI`, `GAMMA` and `VTO` as SPICE3 derives them and, at level 3, the depletion width; a level-3 model without `TOX` takes SPICE's 100 nm; `L W AD AS PD PS M` on the element; temperature: `TNOM`, `T_ABS`, `T_REL_GLOBAL` (SPICE3's level 1 and 3 have no `XTI` or `EG`, which are accepted and have no effect); `BEX`, `TCV` only at `TNOM` |
 | `S W` | `SW`/`CSW` (hysteresis), PSpice `VSWITCH`/`ISWITCH` (the smooth switch); `ON` / `OFF` after the model set the state the operating point starts from, which decides a hysteresis switch whose control sits inside its band (a smooth switch has no state, so the flag has no effect) |
 | `X` | with `PARAMS:` or bare `name=value` |
 
 Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin acos
 atan atan2 sinh cosh tanh min max limit pwr pwrs pow u stp uramp floor ceil
 round int hypot if table`, the operators `+ - * / ** ^ == != < <= > >= && ||
-& | ! ?:`, `PI`, `TEMP` (27). Device equations and their noise are those of
-SPICE3 at 27 degC (`copper_sim::semiconductors`). Newton iteration uses the
+& | ! ?:`, `PI`, `TEMP` (the bench temperature, degC) and `TNOM`. Device
+equations and their noise are those of SPICE3 at the bench temperature,
+scaled from each model's `TNOM` ([Temperature](#temperature),
+`copper_sim::semiconductors`, `copper_sim::temperature`). Newton iteration uses the
 exact derivatives of every expression and device equation (forward-mode
 automatic differentiation), junction and FET voltage limiting, and for a
 circuit with such elements pseudo-transient continuation besides gmin and
@@ -3125,12 +3128,13 @@ non-rational `H(s)` other than one delay (`sqrt(s)`, a sum of differently
 delayed terms, `exp(+s T)`); `SDT`, `IDT`, `ABSDELAY` and random functions;
 `SFFM`, `AM` and damped `SIN`; element `IC=`; MOSFET levels other than 1
 and 3 (BSIM by name), LTspice's `VDMOS` (the three-terminal `M` card and the
-model type), `RSH`, and `KF` with `TOX`; models measured at a `TNOM` other
-than 27 degC; diode `ISR`, `IKF` outside the `pspice` dialect; BJT `PTF`,
+model type), `RSH`, and `KF` with `TOX`; temperature coefficients the
+reader does not model (`TM1`, `TM2`, `BEX`, `BEXV`, a MOSFET's `TCV`) at a
+temperature other than the model's `TNOM`; diode `ISR`, `IKF` outside the `pspice` dialect; BJT `PTF`,
 quasi-saturation (`QUASIMOD`, `RCO`, `QCO`); JFET `ALPHA`, `VK`, `ISR`, `B`;
 saturating and hysteretic inductors and cores; unknown model parameters;
-`.OPTIONS` that may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`,
-`.TEMP`. Analysis cards of a test deck at the top level (`.TRAN`, `.AC`,
+`.OPTIONS` that may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`.
+Analysis cards of a test deck at the top level (`.TRAN`, `.AC`,
 ...) have no effect.
 
 **Real models checked.** Texas Instruments' own model archives, fetched by
@@ -3156,7 +3160,7 @@ the follower is the small-signal `-3 dB` bandwidth at unity gain.
 | OPA1656 (SBOMAW6) | yes | converges | GBW 53.1 MHz | 53 MHz |
 | TLV9002 (SBOMAL2) | yes | converges | GBW 1.13 MHz | 1 MHz |
 | TL431 (SLVM071) | yes (needs `VALUE {expr}` without `=`) | converges, but to 100.45 V at 10 mA, not regulating; a current ramp in a transient run settles at 2.000 V | - | 2.495 V; not resolved |
-| CSD18563Q5A (SLPM082) | no: BSIM3 (`LEVEL=7`) channel; also `TNOM=25` | - | - | V_GS(th) 2 V |
+| CSD18563Q5A (SLPM082) | no: BSIM3 (`LEVEL=7`) channel (its `TNOM=25` alone would now load) | - | - | V_GS(th) 2 V |
 
 The OPA1612's 40 MHz is the data sheet's closed-loop bandwidth at unity
 gain, not its open-loop crossover; its gain-bandwidth product is specified
@@ -3312,6 +3316,7 @@ bench CurrentFlatness for HowlandPump {
 | --- | --- |
 | `use library "..."` | Parts for bench components, besides the board's. Package imports are not supported in benches yet (`SIM031`). |
 | `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
+| `param TEMP = 85degC;` | The temperature of the run (27 degC without it), steppable like any param ([Temperature](#temperature); `SIM110`). |
 | `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). A capacitor of 0 F (bench or board, also a stepped or param value) is absent: no element, its pins open, so a fixture can hold an optional stray that a bench sets to 0 F. |
 | `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it; a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. Nets of one name are one net with the pins of all of them: a bench adds a pin to a fixture's net by declaring the net again with that pin. |
 | `replace X with KIND { ... }` | Swaps a board component or supply for a built-in model; roles name nodes: a board net, a bench net or `COMPONENT.PIN` (`SIM038`, `SIM039`). |
@@ -3324,7 +3329,7 @@ bench CurrentFlatness for HowlandPump {
 | `analysis loop { from; to; points_per_decade; probe = U1.OUT; }` | The loop gain at a component pin, read through a 0 V probe in series with it ([Stability analysis](#stability-analysis); `SIM098`). |
 | `analysis pz;`, `analysis pz { input = SRC; output = V(OUT); }` | The poles of the linearised circuit, and the zeros of `V(OUT)` per unit of `SRC`; the built-in measure `stable` ([Stability analysis](#stability-analysis); `SIM100`). |
 | `ic V(NODE) = q;`, `ic C1 = q;`, `ic L1 = q;` | The state a transient run starts from: a node voltage, a capacitor's voltage, an inductor's current ([Transient analysis](#transient-analysis); `SIM075`). |
-| `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; temperature = 27degC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, or of several (`output = V(A), V(B);`), optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
+| `analysis noise { from; to; points_per_decade; output = V(OUT); input = SRC; }` | A noise sweep of `V(OUT)` or `V(P, N)`, or of several (`output = V(A), V(B);`), optionally referred to a source ([Noise analysis](#noise-analysis); `SIM040`, `SIM094`). |
 | `tolerance TARGET = q;` | The tolerance of a param, of a passive component (overriding its own `tolerance`) or of a model parameter `COMPONENT.PARAMETER` ([Tolerances, Monte Carlo and worst case](#tolerances-monte-carlo-and-worst-case); `SIM091`). |
 | `tolerance A, B = t match m;` | A matched group of passives and model parameters (`RN.resistance` is one member per unit that declares it): every member within `t`, every ratio within `m` (`SIM091`, `SIM092`). |
 | `montecarlo { runs = N; seed = S; distribution = uniform; }`, `worstcase;` | Runs the bench over its tolerances: sampled boards, or the sensitivity corners (`SIM090`, `SIM092`, `SIM093`). |
@@ -3560,8 +3565,12 @@ bench MeasurementNoise for LowNoisePreamp {
 `output = V(V_MON_1), V(I_MON);`, each named once (`SIM094`). `input`
 names a source: a bench `model` of kind `source`, or a component or supply
 replaced with one (`SIM094`); without it `input_noise()` is an error.
-`temperature` is the resistors' temperature in `degC` or `K` (27 degC when
-not given; it cannot be a param or stepped).
+Every generator is evaluated at the bench temperature (`param TEMP`, 27
+degC without it; [Temperature](#temperature)). A bench without `TEMP` may
+instead give the analysis a noise temperature of its own, `temperature =
+27degC;` (`degC` or `K`, not a param): the noise of every generator is then
+taken at it while the devices stay at 27 degC. With `TEMP` the analysis
+declares none (`SIM110`).
 
 With several outputs every noise probe names its quantity: `noise(V(V_MON_1))`,
 `noise(V(V_MON_1), U1)`, `input_noise(V(I_MON))` (`SIM095`), and the results
@@ -3618,6 +3627,86 @@ pole's `1/f^2` skirt; where white and 1/f noise meet, the error is below
 analysis range. The HTML page adds a table of every contributor's RMS over
 the analysis band and its share of the output noise power, ranked; the
 results JSON has it per step (`noise`, see [Running benches](#running-benches)).
+
+### Temperature
+
+```copper
+bench TemperatureSweep for LowNoisePreamp {
+    ...
+    param TEMP = 27degC;
+    step TEMP in -40degC, 27degC, 85degC;
+    analysis noise { from = 1Hz; to = 1MHz; points_per_decade = 10; output = V(VOUT); input = J_IN; }
+    measure en_out_1khz = at(noise(), 1kHz) { max = 80nV/rtHz; }
+}
+```
+
+(`examples/simulation/preamp/benches/temperature.copper`.) A bench runs at
+27 degC unless it has a param `TEMP`, a temperature in `degC`: a bench
+param, or a board or module param of that name, overridden, stepped (also
+zipped), derived from other params, varied by a `tolerance` or named in a
+`where` like any other param. It must be a temperature above absolute zero
+at every step (`SIM110`). Kelvin is not a unit of a param (it differs from
+degC by an offset). The results list `TEMP` among each step's params.
+
+What follows the temperature `T`:
+
+| What | At `T` |
+| --- | --- |
+| thermal noise | every resistor (a passive, a `load`, a source's output resistance, an ESR), a switch and the FET channels: `4 k T / R`; a noise analysis without a `temperature` of its own runs at `T`, and its header shows the temperatures of the steps |
+| a resistor, capacitor or inductor component with `tempco` (and `tempco2`) | `value (1 + tempco dT + tempco2 dT^2)`, `dT = T - 27 degC` |
+| `sim diode` | SPICE's diode at `T` from 27 degC with SPICE's defaults `EG = 1.11 eV`, `XTI = 3`: its saturation current, junction potential and capacitance, and `V_T = k T / q` in its junction |
+| `sim opamp`, `diffamp` | the voltage noise as a thermal noise, `voltage_noise sqrt(T / 300.15 K)`; the offset `input_offset_voltage + input_offset_drift dT` |
+| `sim regulator`, `reference` | the output noise as `voltage_noise sqrt(T / 300.15 K)`; a reference's `output_voltage (1 + temperature_coefficient dT)` |
+| `sim spice` | `TEMP` in its expressions; every diode, BJT, JFET and MOSFET with SPICE3's temperature equations from its model's `TNOM` (or `.OPTIONS TNOM`, else 27 degC), `V_T` at its temperature in every junction; `TC1`, `TC2` of `R`, `C` and `L` from `TNOM`; a model's `T_ABS` (its own temperature) and `T_REL_GLOBAL` (degrees above `T`) |
+
+Nothing else depends on the temperature: an amplifier's current noise (the
+shot noise of a bias current), bias currents, gain, bandwidth and slew rate,
+a regulator's set point, sources and supplies stay as declared. A model
+parameter that is not data-sheet shaped is not invented: drift exists only
+as `input_offset_drift` (V/degC) and a reference's `temperature_coefficient`
+(ppm/degC), both from 27 degC, the temperature the built-in models'
+figures are taken at.
+
+**Passives.** A resistor, capacitor or inductor component takes its
+temperature coefficients like its tolerance, as attributes, in `ppm/degC`
+and `ppm/degC2`:
+
+```copper
+component R_B: RESISTOR { value = 100kohm; tolerance = 1%; tempco = 100ppm/degC; }
+component C_REF: CAPACITOR { value = 10nF; tempco = -30ppm/degC; tempco2 = 0.2ppm/degC2; }
+```
+
+They change nothing at 27 degC; a tempco on a component that simulates
+with its part's sim blocks, or in another unit, is `SIM111`.
+
+**Parasitics from the part.** A capacitor part's `esr` and `esl` (the EMI
+facts of [EMI roles and switching metadata](#emi-roles-and-switching-metadata)),
+or without `esl` the ESL its `self_resonance` gives,
+`1 / ((2 pi f_sr)^2 C)`, and an inductor part's `esr` (its DC resistance,
+as `copper emi-check` reads it) are in series with the element, behind its
+second terminal: `C1` then `C1.esr` and `C1.esl` through internal nodes
+`C1#esr`, `C1#esl`. `I(C1)` is the current through the chain, `noise(C1)`
+includes the ESR's thermal noise, and the model list names them
+(`capacitor (ESR 10 mohm, ESL 0.5 nH)`). An inductor's `esl` and
+`self_resonance` and a resistor's parasitics are not modelled.
+
+**Device temperature scaling** (`copper_sim::temperature`, SPICE3's
+`diotemp`, `bjttemp`, `jfettemp`, `mos1temp` and `mos3temp`), with
+`E_g(T) = 1.16 - 7.02e-4 T^2 / (T + 1108)` eV and `dT = T - T_nom`:
+
+| Device | Equations |
+| --- | --- |
+| junction potential and capacitance (all devices) | `VJ(T) = VJ T/T_nom - 3 V_T ln(T/T_nom) + E_g(T) - E_g(T_nom) T/T_nom`; `CJ0(T) = CJ0 (1 + M (4e-4 (T - T_ref) - (VJ(T) - pbo) / pbo)) / (1 + M (4e-4 (T_nom - T_ref) - (VJ - pbo) / pbo))`, `pbo` the potential at `T_ref = 300.15 K` |
+| diode | `IS exp((T/T_nom - 1) EG / (N V_T) + XTI / N ln(T/T_nom))` (and `ISR` with `NR`); `BV (1 + TBV1 dT + TBV2 dT^2) - TCV dT`; `RS`, `TT` with `TRS1/2`, `TTT1/2`; `IKF (1 + TIKF dT)` |
+| BJT | `IS exp((T/T_nom - 1) EG / V_T + XTI ln(T/T_nom))`; `BF`, `BR` times `(T/T_nom)^XTB`; `ISE`, `ISC` times `exp(factlog / NE)` (`NC`) over it; the three junctions; `RE RB RBM RC` with their `TR1/2` |
+| JFET | `IS exp((T/T_nom - 1) EG / V_T) (T/T_nom)^XTI` (SPICE3, `XTI = 0`); in the `pspice` dialect PSpice's `exp(... / (N V_T)) (T/T_nom)^(XTI/N)` with `XTI = 3`; `VTO + VTOTC dT - TCV dT`; `BETA 1.01^(BETATCE dT) (T/T_nom)^BEX`; `PB`, `CGS`, `CGD` with the grading `M` |
+| MOSFET 1, 3 | `KP` (and `U0`) times `(T/T_nom)^-1.5`; `PHI(T)` as `VJ(T)`; `VTO(T) = VTO - type GAMMA sqrt(PHI) + (E_g(T_nom) - E_g(T)) / 2 + type (PHI(T) - PHI) / 2 + type GAMMA sqrt(PHI(T))`; `IS` (`JS`) times `exp(-E_g(T)/V_T(T) + E_g(T_nom)/V_T(T_nom))`; `PB` and the junction capacitances |
+
+Where they differ from PSpice: the JFET outside the `pspice` dialect (above);
+SPICE3's junction capacitance agrees with PSpice's only when `TNOM` is 27
+degC; the BJT's substrate junction is scaled (as ngspice does; SPICE3f5
+leaves it); a resistor model's exponential `TCE` is rejected. The process parameters a MOSFET derives from `NSUB`
+(`PHI`, `VTO`) are evaluated at its `TNOM`, as SPICE3 does.
 
 ### Tolerances, Monte Carlo and worst case
 
@@ -4095,6 +4184,8 @@ components that form a loop of voltage sources.
 | `SIM107` | when a bench runs with `--models macro`: a part whose unit has only a `sim spice` block |
 | `SIM108` | when a bench runs: a vendor file registered by hand (`sha256` with `download`) that is not in the cache, naming its download note and `copper models add` |
 | `SIM109` | `copper sim --check-model`: no such part (or several), no sim block, a unit with only a `sim spice` block, a kind without a bench set, a `--tie` of a pin the part does not have |
+| `SIM110` | `param TEMP`: not a temperature in degC, a value (nominal or stepped, or derived at a step when run) not above absolute zero, or beside a noise analysis's own `temperature` |
+| `SIM111` | component `tempco`, `tempco2`: not in `ppm/degC` (`ppm/degC2`), or on a component that simulates with its part's sim blocks |
 
 ## KiCad schematic export
 
@@ -4132,6 +4223,10 @@ engineering values use a space and the shared fixed-point quantity formatter.
 | Angle | `deg` |
 | Voltage noise density | `V/rtHz`, `uV/rtHz`, `nV/rtHz` |
 | Current noise density | `A/rtHz`, `nA/rtHz`, `pA/rtHz`, `fA/rtHz` |
+| Temperature | `degC` (kelvin differs by an offset and is no unit of it; only a noise analysis's `temperature` takes `K`) |
+| Temperature coefficient | `ppm/degC` |
+| Quadratic temperature coefficient | `ppm/degC2` |
+| Voltage drift | `V/degC`, `mV/degC`, `uV/degC`, `nV/degC` |
 
 Component values take the first seven dimensions; the others serve the
 attributes that name them (EMI facts, `sim` blocks, bench expressions). A
