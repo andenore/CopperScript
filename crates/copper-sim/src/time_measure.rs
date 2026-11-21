@@ -187,6 +187,29 @@ fn periods(t: &[f64], x: &[f64], f0: f64) -> Result<(usize, Vec<f64>), String> {
     let end = t[t.len() - 1];
     let begin = (end - k as f64 / f0).max(t[0]);
     let n = k * SAMPLES_PER_PERIOD;
+    Ok((k, resample(t, x, begin, end, n)?))
+}
+
+/// The last whole periods of `f0` in `t`: their number and the time they start at.
+pub(crate) fn whole_periods(t: &[f64], x: &[f64], f0: f64) -> Result<(usize, f64), String> {
+    check(t, x).map_err(|e| e.to_string())?;
+    if !(f0.is_finite() && f0 > 0.0) {
+        return Err(format!("the fundamental must be a positive frequency, got {f0} Hz"));
+    }
+    let span = t[t.len() - 1] - t[0];
+    let k = (span * f0 * (1.0 + 1e-9)).floor() as usize;
+    if k == 0 {
+        return Err(format!(
+            "the recorded time ({span:e} s) holds no whole period of {f0} Hz; run longer or lower the start time"
+        ));
+    }
+    let end = t[t.len() - 1];
+    Ok((k, (end - k as f64 / f0).max(t[0])))
+}
+
+/// `n` uniform samples of the piecewise-linear `x` at `begin + (end - begin) j / n`,
+/// `j = 0 .. n - 1` (the end itself excluded: one whole period of a periodic record).
+pub(crate) fn resample(t: &[f64], x: &[f64], begin: f64, end: f64, n: usize) -> Result<Vec<f64>, String> {
     // `value_at` at increasing times, with one pass over the record instead
     // of a search (and a check of the whole record) per sample.
     let (first, last) = (t[0], t[t.len() - 1]);
@@ -207,7 +230,7 @@ fn periods(t: &[f64], x: &[f64], f0: f64) -> Result<(usize, Vec<f64>), String> {
             x[i - 1] + f * (x[i] - x[i - 1])
         });
     }
-    Ok((k, samples))
+    Ok(samples)
 }
 
 fn amplitude(samples: &[f64], cycles: usize) -> f64 {

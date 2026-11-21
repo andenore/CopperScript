@@ -31,12 +31,16 @@ pub enum AnalysisRun {
         input: Option<String>,
         kelvin: f64,
     },
-    /// A transient run from 0 to `stop`, recorded from `start` (nominal params; s).
+    /// A transient run from 0 to `stop`, recorded from `start` (nominal params; s);
+    /// with `steady`, from the periodic steady state of that period at `start`;
+    /// with `noise`, transient noise of that seed.
     Tran {
         stop: f64,
         start: f64,
         max_step: Option<f64>,
         reltol: f64,
+        steady: Option<f64>,
+        noise: Option<u64>,
     },
     /// A dc sweep of `name` (its units) from `from` to `to` over `points` points (nominal params, SI).
     Dc {
@@ -90,6 +94,8 @@ pub struct StepRun {
     pub measures: Vec<MeasureValue>,
     /// One vector per plotted expression (in plot order), over `axis`.
     pub plots: Vec<Vec<f64>>,
+    /// One spectrum per plotted `spectrum(...)` (in plot order).
+    pub spectra: Vec<copper_sim::spectrum::Spectrum>,
     /// The analysis at this step's params (its bounds may name stepped params).
     pub analysis: AnalysisRun,
     /// The output noise over the analysis band and its contributors, per output (`analysis noise`).
@@ -181,6 +187,21 @@ pub struct PlotRun {
     pub units: Units,
 }
 
+/// A plotted `spectrum(x)` or `spectrum(x, f0)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpectrumPlot {
+    pub expression: String,
+    /// The units of `x` (the amplitudes).
+    pub units: Units,
+    /// With a fundamental: coherent over its whole periods, levels in dB relative to it.
+    pub coherent: bool,
+}
+
+/// Whether a plotted expression is `spectrum(...)`.
+pub fn is_spectrum(expression: &Expression) -> bool {
+    matches!(&expression.kind, ExpressionKind::Call { function: Function::Spectrum, .. })
+}
+
 /// Pass, fail or could not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -216,6 +237,8 @@ pub struct BenchRun {
     pub steps: Vec<StepRun>,
     pub measures: Vec<MeasureRun>,
     pub plots: Vec<PlotRun>,
+    /// The plotted spectra (`analysis tran`), each step's in [`StepRun::spectra`].
+    pub spectra: Vec<SpectrumPlot>,
     /// Why the bench could not be solved.
     pub error: Option<String>,
     /// Monte Carlo or worst-case statistics, one entry per step (`montecarlo`, `worstcase`).
@@ -480,8 +503,24 @@ pub fn explain(error: &SimError, lowered: &Lowered) -> String {
             crate::format::quantity_text(*step, Units::of(copper_units::Dimension::Time), 3, false),
             culprits(nodes, elements, lowered)
         ),
+        SimError::SteadyState(detail) => {
+            format!("SIM112: no periodic steady state: {}", lowered_names(detail, lowered))
+        }
         other => other.to_string(),
     }
+}
+
+/// A solver message with the element names it quotes (`"R1.n"`) in source terms where they differ.
+fn lowered_names(detail: &str, lowered: &Lowered) -> String {
+    let mut text = detail.to_owned();
+    for element in lowered.circuit.elements() {
+        let quoted = format!("{:?}", element.name());
+        let owner = lowered.owner(element.name());
+        if text.contains(&quoted) && owner != element.name() {
+            text = text.replace(&quoted, &format!("{quoted} (in {owner})"));
+        }
+    }
+    text
 }
 
 /// `; it changes most at net "X" (R1.2, C1.1) and in D1`: solver names in source terms.
@@ -518,7 +557,16 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             .and_then(|item| bench.part(design, item))
             .is_some_and(|part| part.pins.len() == 2 && part.pins.keys().next().is_some_and(|first| first == pin))
     };
-    let plotted: Vec<&Expression> = bench.plots.iter().flat_map(|plot| plot.expressions.iter()).collect();
+    let (spectral, plotted): (Vec<&Expression>, Vec<&Expression>) =
+        bench.plots.iter().flat_map(|plot| plot.expressions.iter()).partition(|expression| is_spectrum(expression));
+    let spectra: Vec<SpectrumPlot> = spectral
+        .iter()
+        .map(|expression| SpectrumPlot {
+            expression: expression_text(expression, &two_terminal),
+            units: expression.ty.units,
+            coherent: matches!(&expression.kind, ExpressionKind::Call { arguments, .. } if arguments.len() == 2),
+        })
+        .collect();
     let plots: Vec<PlotRun> = plotted
         .iter()
         .map(|expression| PlotRun {
@@ -577,6 +625,7 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
         steps: Vec::new(),
         measures: Vec::new(),
         plots,
+        spectra,
         error: None,
         variation: bench.variation.as_ref().map(crate::variation::VariationRun::new),
         timing: None,
@@ -726,6 +775,8 @@ pub fn analysis_run(analysis: &Analysis, params: &Params) -> AnalysisRun {
                 start: options.start,
                 max_step: options.max_step,
                 reltol: options.reltol,
+                steady: options.steady,
+                noise: options.noise.as_ref().map(|noise| noise.seed),
             }
         }
         Analysis::Dc(dc) => AnalysisRun::Dc {
@@ -899,9 +950,31 @@ pub(crate) fn run_step(
         measures.push(MeasureValue { value, never: result.never, min, max, pass, at, covered });
     }
     let mut plots = Vec::new();
+    let mut spectra = Vec::new();
     for plot in &bench.plots {
         for expression in &plot.expressions {
             let text = expression_text(expression, &|_, _| false);
+            if let ExpressionKind::Call { function: Function::Spectrum, arguments } = &expression.kind {
+                let x = evaluator.eval(&arguments[0]).map_err(|error| format!("plot {text}: {error}"))?;
+                let f0 = match arguments.get(1) {
+                    Some(f0) => Some(evaluator.eval(f0).map_err(|error| format!("plot {text}: {error}"))?),
+                    None => None,
+                };
+                if x.never || f0.as_ref().is_some_and(|f0| f0.never) {
+                    return Err(format!(
+                        "plot {text}: it reads an upto or downto that never holds, so it has no values"
+                    ));
+                }
+                let window = match &bench.analysis {
+                    Analysis::Tran(tran) => crate::transient::window(tran),
+                    _ => copper_sim::spectrum::Window::BlackmanHarris,
+                };
+                let f0 = f0.map(|f0| f0.samples[0].re);
+                let spectrum = crate::transient::spectrum(solution.axis(), &x.reals(), f0, window)
+                    .map_err(|error| format!("plot {text}: {error}"))?;
+                spectra.push(spectrum);
+                continue;
+            }
             let result = evaluator.eval(expression).map_err(|error| format!("plot {text}: {error}"))?;
             if result.never {
                 return Err(format!("plot {text}: it reads an upto or downto that never holds, so it has no values"));
@@ -917,6 +990,7 @@ pub(crate) fn run_step(
         axis: solution.axis().to_vec(),
         measures,
         plots,
+        spectra,
         noise: crate::noise::summary(&solution, &lowered, &bench.analysis),
         transient: match &solution {
             Solution::Tran(result) => Some(result.stats().clone()),

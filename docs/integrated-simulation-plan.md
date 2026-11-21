@@ -64,8 +64,8 @@ Known weak spots of what is built:
 
 - Transient results at the default tolerances carry about 0.2 % integration
   error on the analyzer's start-up bench: a change of rounding in the solver
-  moves its measures by that much. Harmonics below about 1e-5 % are inside
-  that error and are not meaningful.
+  moves its measures by that much. Harmonics below the integration floor
+  (F9) are not meaningful.
 - The TL431 vendor model loads but does not regulate at its operating point
   (100 V at 10 mA; a current ramp in transient settles at 2.0 V against
   2.495 V). The cause is not established.
@@ -520,6 +520,34 @@ Scope:
 Acceptance: spectrum of known waveforms; shooting against a long transient
 on the precision rectifier; the analyzer's `Distortion` bench uses steady
 state instead of a settling run.
+
+Built on 21 November 2026. Diagnostics SIM112 to SIM115.
+
+- Spectrum: `plot spectrum(x, f0)` (coherent over whole periods, no window)
+  and `spectrum(x)` (windowed, Blackman-Harris by default); measures `spur`,
+  `sfdr`, `sinad`, `snr`; `BENCH.spectrum.csv`. FFT in
+  `copper-sim/src/spectrum.rs` (radix 2 and Bluestein).
+- Integration floor, measured on a linear RC: about 0.02 sqrt(reltol)
+  (-74 dBc at the default) when the error control chooses the steps, about
+  3e-7 when `max_step` keeps them uniform. The plot shades below it. The
+  earlier statement of a 1e-5 % floor was wrong for adaptive steps.
+- Periodic steady state: `steady = F0` in `analysis tran`, Newton shooting
+  with matrix-free GMRES, falling back to settling period by period with a
+  note. Refused with delays, `ic`, `uic` and sources that do not repeat.
+- Transient noise: `noise = true; seed = N;` with `max_step` setting the
+  bandwidth; white and 1/f generators of the noise analysis. RC output RMS
+  within 1.5 % of the noise analysis.
+- `step P from a to b by s;` and `points n`. Nested DC sweeps and a DC sweep
+  around an AC analysis were already covered by `step`.
+- Analyzer `Distortion` uses steady state: 21.5 s to 9.3 s. Its old 50 ms
+  settling run had not settled at 1 kHz in moist loam (pump peak 347.1 mV,
+  now 339.2 mV, which a 400 ms run confirms).
+
+Open: the 1 MHz, 0.65 V `Distortion` step does not converge by shooting and
+falls back; the floor rule comes from one circuit; flicker noise in transient
+is checked only analytically; windowed spectra are amplitudes per bin, with
+no density view; a time plot of steps with different periods squeezes the
+short ones against the left edge (seen on `Distortion`).
 
 ### F10. Viewing and editor support
 

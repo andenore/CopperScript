@@ -2439,13 +2439,22 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
                         return Err(error("SIM041", format!("param {} is stepped twice", repr(name)), &item.location));
                     }
                     let label = format!("step {name}");
-                    let column = written
-                        .iter()
-                        .map(|value| {
-                            simulation::typed_value(value, param.dimension(), &label, &ValueScope::Part, &item.location)
+                    let column = match &item.range {
+                        Some(range) => step_range(range, param.dimension(), &label, &item.location)?,
+                        None => written
+                            .iter()
+                            .map(|value| {
+                                simulation::typed_value(
+                                    value,
+                                    param.dimension(),
+                                    &label,
+                                    &ValueScope::Part,
+                                    &item.location,
+                                )
                                 .map(|value| value.value)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    };
                     typed.push((name.clone(), column));
                 }
                 let mut typed = typed.into_iter();
@@ -2455,6 +2464,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             BenchStatement::Let(item) => {
                 check_name(&item.name, &item.location, &let_types, &measures, &values)?;
                 let expression = expression::check(&item.expression, &scope)?;
+                crate::transient::check_spectrum_use(&expression, "a let", false)?;
                 let uses_reference =
                     expression::uses_reference(&expression, &|name| referencing.iter().any(|item| item == name));
                 let_types.insert(item.name.clone(), expression.ty);
@@ -2466,6 +2476,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             BenchStatement::Measure(item) => {
                 check_name(&item.name, &item.location, &let_types, &measures, &values)?;
                 let expression = expression::check(&item.expression, &scope)?;
+                crate::transient::check_spectrum_use(&expression, "a measure", false)?;
                 if expression.ty.swept {
                     return Err(error(
                         "SIM043",
@@ -2510,6 +2521,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
                 let mut expressions = Vec::new();
                 for written in &item.expressions {
                     let expression = expression::check(written, &scope)?;
+                    crate::transient::check_spectrum_use(&expression, "an expression of a plot", true)?;
                     if !expression.ty.swept {
                         let reason = if swept {
                             &format!("it does not vary with {axis}")
@@ -2611,6 +2623,85 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
         section: None,
         model_choice: simulation::ModelChoice::Default,
     })
+}
+
+/// The most values of a stepped range.
+pub const STEP_RANGE_VALUES: usize = 1000;
+
+/// The values of `step P from a to b by s;` (from `a` towards `b` by `s`,
+/// with `b` itself when the steps do not land on it) or `step P from a to b
+/// points n;` (`n` evenly spaced values, both ends included), exactly in
+/// decimals (`SIM115`).
+fn step_range(range: &StepRange, dimension: Dimension, label: &str, location: &Location) -> Result<Vec<Quantity>> {
+    let typed = |value: &Scalar| {
+        simulation::typed_value(value, dimension, label, &ValueScope::Part, location).map(|value| value.value)
+    };
+    let (from, to) = (typed(&range.from)?, typed(&range.to)?);
+    let unit = from.display_unit();
+    let quantity = |base: Decimal| {
+        Quantity::from_base(dimension, base, unit).map_err(|failure| error("SIM115", failure.to_string(), location))
+    };
+    let arithmetic = |failure: copper_units::DecimalError| error("SIM115", failure.to_string(), location);
+    let (a, b) = (from.base_value().clone(), to.base_value().clone());
+    if a == b {
+        return Err(error(
+            "SIM115",
+            format!("{label} runs from {from} to {to}; a range needs two different ends"),
+            location,
+        ));
+    }
+    let span = b.sub(&a).map_err(arithmetic)?;
+    let mut values = Vec::new();
+    match (&range.by, &range.points) {
+        (Some(by), _) => {
+            let by = typed(by)?;
+            let step = by.base_value().clone();
+            if step.is_negative() || step.is_zero() {
+                return Err(error("SIM115", format!("{label} steps by {by}; the spacing must be positive"), location));
+            }
+            let count = span.abs().div(&step).map_err(arithmetic)?;
+            let whole = count.to_integral_value(copper_units::Rounding::Down);
+            if whole.to_i64().is_none_or(|n| n as usize >= STEP_RANGE_VALUES) {
+                return Err(error(
+                    "SIM115",
+                    format!("{label} from {from} to {to} by {by} is more than {STEP_RANGE_VALUES} values"),
+                    location,
+                ));
+            }
+            let signed = if span.is_negative() { step.copy_negate() } else { step };
+            let mut value = a.clone();
+            for _ in 0..=whole.to_i64().unwrap_or(0) {
+                values.push(quantity(value.clone())?);
+                value = value.add(&signed).map_err(arithmetic)?;
+            }
+            if values.last().is_none_or(|last| *last.base_value() != b) {
+                values.push(quantity(b.clone())?);
+            }
+        }
+        (None, Some(points)) => {
+            let n = match points {
+                Scalar::Int(n) => usize::try_from(n.clone()).ok().filter(|n| (2..=STEP_RANGE_VALUES).contains(n)),
+                _ => None,
+            };
+            let Some(n) = n else {
+                return Err(error(
+                    "SIM115",
+                    format!("{label} points is a whole number of values from 2 to {STEP_RANGE_VALUES}, ends included"),
+                    location,
+                ));
+            };
+            let intervals = Decimal::from_i64(n as i64 - 1);
+            for k in 0..n {
+                let offset =
+                    span.mul(&Decimal::from_i64(k as i64)).map_err(arithmetic)?.div(&intervals).map_err(arithmetic)?;
+                values.push(quantity(if k + 1 == n { b.clone() } else { a.add(&offset).map_err(arithmetic)? })?);
+            }
+        }
+        (None, None) => {
+            return Err(error("SIM115", format!("{label} needs by or points"), location));
+        }
+    }
+    Ok(values)
 }
 
 /// The `where` of a measure's limits: comparisons of params, checked like
@@ -2832,6 +2923,13 @@ fn initial_conditions(
                 &item.location,
             ));
         };
+        if tran.steady.is_some() {
+            return Err(error(
+                "SIM112",
+                "analysis tran steady finds the periodic state the run starts in, so it takes no ic; leave the ic out or the steady",
+                &item.location,
+            ));
+        }
         let (target, dimension, what) = match &item.target {
             InitialConditionTarget::Node(node) => {
                 if tran.uic {
@@ -3507,6 +3605,19 @@ pub fn bench_value(bench: &Bench) -> Value {
             ];
             if tran.uic {
                 entries.push(("uic", Value::Bool(true)));
+            }
+            if let Some(steady) = &tran.steady {
+                entries.push(("steady", sim_quantity_value(steady)));
+            }
+            if tran.noise {
+                entries.push(("noise", Value::Bool(true)));
+                entries.push((
+                    "seed",
+                    Value::from(tran.seed.unwrap_or(crate::transient::DEFAULT_SEED).min(i64::MAX as u64) as i64),
+                ));
+            }
+            if let Some(window) = tran.window {
+                entries.push(("window", text(window.name())));
             }
             object(entries)
         }

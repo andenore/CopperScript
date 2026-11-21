@@ -660,6 +660,309 @@ pub fn figure(run: &BenchRun) -> Option<String> {
     Some(svg.join("\n"))
 }
 
+/// The shade of the region below the integration floor.
+const FLOOR_FILL: &str = "#eef1f4";
+/// The height of a spectrum panel.
+const SPECTRUM_HEIGHT: f64 = 240.0;
+/// The highest harmonic a coherent spectrum is drawn to.
+const SPECTRUM_HARMONICS: f64 = 50.0;
+
+/// The legend of the steps at `y` (one entry per step, wrapped); returns the `y` below it.
+fn step_legend(run: &BenchRun, out: &mut Vec<String>, mut y: f64) -> f64 {
+    if run.steps.len() <= 1 {
+        return y;
+    }
+    let names: Vec<&str> = run.steps[0].stepped.iter().map(|(name, _)| name.as_str()).collect();
+    let prefix = format!("{}:", names.join(", "));
+    y += 18.0;
+    out.push("<g class=\"legend\">".to_owned());
+    out.push(text_el(LEFT, y + 4.0, 11.0, MUTED, "legend-title", "", false, &prefix));
+    let start = LEFT + text_px(&prefix, 11.0) + 12.0;
+    let mut x = start;
+    for (k, step) in run.steps.iter().enumerate() {
+        let label: Vec<String> = step.stepped.iter().map(|(_, value)| value.to_string()).collect();
+        let label = label.join(", ");
+        let width = 30.0 + text_px(&label, 11.0) + 18.0;
+        if x + width > WIDTH - RIGHT && x > start {
+            x = start;
+            y += 18.0;
+        }
+        let (color, dash) = step_style(k);
+        let dash = if dash.is_empty() { String::new() } else { format!(" stroke-dasharray=\"{dash}\"") };
+        out.push(format!(
+            "<line class=\"legend-glyph\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\" stroke-width=\"2\"{dash}/>",
+            n(x),
+            n(y),
+            n(x + 22.0),
+            n(y)
+        ));
+        out.push(text_el(x + 30.0, y + 4.0, 11.0, INK, "legend-entry", "", false, &label));
+        x += width;
+    }
+    out.push("</g>".to_owned());
+    y
+}
+
+/// The figure of a bench's spectra (`plot spectrum(...)` in `analysis tran`):
+/// one panel per spectrum, levels in dB against a logarithmic axis, the
+/// harmonic number `f / f0` for a coherent spectrum (in dB relative to the
+/// fundamental, its harmonics 2 to 9 marked) and frequency for a windowed
+/// one (in dB relative to 1 of its unit). Each step is one curve, drawn as
+/// the largest bin of each pixel column. The region below the integration
+/// floor (`copper_sim::spectrum::integration_floor`: the harmonics a linear
+/// circuit shows at the run's tolerance and step regime) is shaded and
+/// labelled; components there are not established.
+pub fn spectrum_figure(run: &BenchRun) -> Option<String> {
+    if run.spectra.is_empty() || run.steps.is_empty() || run.error.is_some() {
+        return None;
+    }
+    let plot_w = WIDTH - LEFT - RIGHT;
+    let mut out: Vec<String> = Vec::new();
+    let title = format!("{}: {}", run.name, {
+        let names: Vec<&str> = run.spectra.iter().map(|s| s.expression.as_str()).collect();
+        names.join(", ")
+    });
+    let steps = if run.steps.len() > 1 { format!("; {} steps", run.steps.len()) } else { String::new() };
+    let subtitle = format!("bench for {}; {}{steps}", run.target(), bench_analysis_text(run));
+    out.push(text_el(LEFT, 26.0, 16.0, INK, "title", "", true, &fit(&title, 16.0, plot_w)));
+    out.push(text_el(LEFT, 46.0, 12.0, MUTED, "subtitle", "", false, &fit(&subtitle, 12.0, plot_w)));
+    let mut y = step_legend(run, &mut out, 54.0) + 16.0;
+    for (k, plot) in run.spectra.iter().enumerate() {
+        let spectra: Vec<&copper_sim::spectrum::Spectrum> = run.steps.iter().map(|step| &step.spectra[k]).collect();
+        // Per step: the axis value and level of every bin above 0 Hz, and the floor level.
+        let mut curves: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut floors: Vec<(f64, bool, f64)> = Vec::new();
+        for (step, s) in run.steps.iter().zip(&spectra) {
+            let reference = if plot.coherent { s.harmonic(1).filter(|a| *a > 0.0) } else { Some(1.0) };
+            let reference = reference?;
+            let scale = s.fundamental.unwrap_or(1.0);
+            curves.push(
+                s.frequencies
+                    .iter()
+                    .zip(&s.amplitudes)
+                    .skip(1)
+                    .map(|(f, a)| (f / scale, 20.0 * (a / reference).max(1e-15).log10()))
+                    .collect(),
+            );
+            let (uniform, floor) = crate::results::spectrum_floor(step, s);
+            let top = if plot.coherent { 1.0 } else { s.peak().max(f64::MIN_POSITIVE) };
+            let reltol = match &step.analysis {
+                crate::run::AnalysisRun::Tran { reltol, .. } => *reltol,
+                _ => 1e-4,
+            };
+            floors.push((20.0 * (top * floor).log10(), uniform, reltol));
+        }
+        let lo = curves.iter().filter_map(|c| c.first().map(|p| p.0)).fold(f64::INFINITY, f64::min);
+        let nyquist = curves.iter().filter_map(|c| c.last().map(|p| p.0)).fold(0.0, f64::max);
+        let hi = if plot.coherent { nyquist.min(SPECTRUM_HARMONICS) } else { nyquist };
+        if !(lo.is_finite() && hi > lo && lo > 0.0) {
+            continue;
+        }
+        let floor_db = floors.iter().map(|f| f.0).fold(f64::NEG_INFINITY, f64::max);
+        let shown: Vec<f64> =
+            curves.iter().flat_map(|c| c.iter().filter(|p| p.0 <= hi).map(|p| p.1)).filter(|v| v.is_finite()).collect();
+        let peak_db = shown.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let lowest = shown.iter().copied().fold(f64::INFINITY, f64::min);
+        let top_db = ((peak_db + 5.0) / 20.0).ceil() * 20.0;
+        // Down to the data (bins far below the floor, numerical zeros, are cut at 40 dB
+        // under it), and to 20 dB under the floor when the data reaches within 10 dB of it.
+        let lowest = lowest.max(floor_db - 40.0);
+        let floor_shown = lowest - 10.0 <= floor_db;
+        let bottom_db = if floor_shown { lowest.min(floor_db - 20.0) } else { lowest - 10.0 };
+        let bottom_db = ((bottom_db / 20.0).floor() * 20.0).max(top_db - 240.0);
+        let (lx_lo, lx_hi) = (lo.log10(), hi.log10());
+        let px = |f: f64| LEFT + (f.log10() - lx_lo) / (lx_hi - lx_lo) * plot_w;
+        let y0 = y + PANEL_LABEL;
+        let py = |v: f64| {
+            y0 + SPECTRUM_HEIGHT - (v.clamp(bottom_db, top_db) - bottom_db) / (top_db - bottom_db) * SPECTRUM_HEIGHT
+        };
+        let level = if plot.coherent {
+            "dB relative to the fundamental (dBc)".to_owned()
+        } else {
+            format!("dB relative to 1 {}", crate::format::base_unit(plot.units))
+        };
+        let window = spectra.first().map_or("", |s| s.window.name());
+        let how = if plot.coherent {
+            format!("coherent over {} whole periods", spectra[0].periods)
+        } else {
+            let width = spectra.first().map_or(0.0, |s| s.bin_width());
+            format!("{window} window over the record, bins of {}", hertz(width))
+        };
+        out.push(format!("<g class=\"panel spectrum\" data-spectrum=\"{k}\">"));
+        out.push(text_el(
+            LEFT,
+            y + 14.0,
+            12.0,
+            INK,
+            "panel-label",
+            "",
+            true,
+            &fit(&format!("{}: {level}, {how}", plot.expression), 12.0, plot_w),
+        ));
+        out.push(format!(
+            "<defs><clipPath id=\"spectrum{k}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath></defs>",
+            n(LEFT),
+            n(y0),
+            n(plot_w),
+            n(SPECTRUM_HEIGHT)
+        ));
+        // The integration floor: shaded below, labelled.
+        let floor_y = py(floor_db);
+        out.push(format!(
+            "<rect class=\"floor\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{FLOOR_FILL}\"/>",
+            n(LEFT),
+            n(floor_y),
+            n(plot_w),
+            n((y0 + SPECTRUM_HEIGHT - floor_y).max(0.0))
+        ));
+        let step_db = if top_db - bottom_db > 120.0 { 20.0 } else { 10.0 };
+        let mut tick = bottom_db;
+        while tick <= top_db + 1e-9 {
+            let yy = py(tick);
+            out.push(format!(
+                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{GRID}\" stroke-width=\"1\"/>",
+                n(LEFT),
+                n(yy),
+                n(LEFT + plot_w),
+                n(yy)
+            ));
+            out.push(text_el(LEFT - 6.0, yy + 4.0, 11.0, MUTED, "tick", "end", false, &format!("{tick:.0}")));
+            tick += step_db;
+        }
+        for (f, major, labelled) in frequency_grid(lo, hi) {
+            let x = px(f);
+            out.push(format!(
+                "<line class=\"fgrid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>",
+                n(x),
+                n(y0),
+                n(x),
+                n(y0 + SPECTRUM_HEIGHT),
+                if major { GRID_MAJOR } else { GRID }
+            ));
+            // Harmonic numbers are short: every 1-2-5 line is labelled.
+            if labelled || plot.coherent {
+                let text = if plot.coherent { crate::format::significant(f, 3) } else { hertz(f) };
+                out.push(text_el(x, y0 + SPECTRUM_HEIGHT + 16.0, 11.0, MUTED, "tick", "middle", false, &text));
+            }
+        }
+        out.push(format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{MUTED}\" stroke-width=\"1\"/>",
+            n(LEFT),
+            n(y0),
+            n(plot_w),
+            n(SPECTRUM_HEIGHT)
+        ));
+        out.push(format!("<g clip-path=\"url(#spectrum{k})\">"));
+        for (s, curve) in curves.iter().enumerate() {
+            let (color, dash) = step_style(s);
+            let dash = if dash.is_empty() { String::new() } else { format!(" stroke-dasharray=\"{dash}\"") };
+            // The largest bin of each pixel column, so peaks survive.
+            let mut columns: Vec<(f64, f64)> = Vec::new();
+            for &(f, v) in curve.iter().filter(|p| p.0 <= hi * (1.0 + 1e-9)) {
+                let x = px(f).round();
+                match columns.last_mut() {
+                    Some(last) if last.0 == x => last.1 = last.1.max(v),
+                    _ => columns.push((x, v)),
+                }
+            }
+            if plot.coherent {
+                // A line spectrum: one stem per pixel column from the bottom, each
+                // step's stems a little apart so overlapping ones stay visible.
+                let offset = (s as f64 - (curves.len() as f64 - 1.0) / 2.0) * 2.0;
+                let bottom = y0 + SPECTRUM_HEIGHT;
+                let path: Vec<String> = columns
+                    .iter()
+                    .filter(|(_, v)| *v > bottom_db)
+                    .map(|(x, v)| format!("M {} {} V {}", n(x + offset), n(bottom), n(py(*v))))
+                    .collect();
+                if !path.is_empty() {
+                    out.push(format!(
+                        "<path class=\"curve stems\" data-step=\"{s}\" d=\"{}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\"><title>{}</title></path>",
+                        path.join(" "),
+                        escape(&run.steps[s].label)
+                    ));
+                }
+            }
+            let points: Vec<String> = columns.iter().map(|(x, v)| format!("{},{}", n(*x), n(py(*v)))).collect();
+            if !plot.coherent && points.len() >= 2 {
+                out.push(format!(
+                    "<polyline class=\"curve\" data-step=\"{s}\" points=\"{}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\" stroke-linejoin=\"round\"{dash}><title>{}</title></polyline>",
+                    points.join(" "),
+                    escape(&run.steps[s].label)
+                ));
+            }
+            if plot.coherent {
+                // Harmonics 2 to 9, the ones thd adds up.
+                let sp = spectra[s];
+                for h in 2..=copper_sim::time_measure::THD_HARMONICS {
+                    let (Some(a), Some(a1)) = (sp.harmonic(h), sp.harmonic(1)) else { continue };
+                    let v = 20.0 * (a / a1).max(1e-15).log10();
+                    if (h as f64) <= hi && v >= bottom_db {
+                        let offset = (s as f64 - (curves.len() as f64 - 1.0) / 2.0) * 2.0;
+                        out.push(format!(
+                            "<circle class=\"harmonic\" data-harmonic=\"{h}\" cx=\"{}\" cy=\"{}\" r=\"3\" fill=\"{BACKGROUND}\" stroke=\"{color}\" stroke-width=\"1.5\"><title>{}: harmonic {h} {v:.1} dBc</title></circle>",
+                            n(px(h as f64).round() + offset),
+                            n(py(v)),
+                            escape(&run.steps[s].label)
+                        ));
+                    }
+                }
+            }
+        }
+        out.push("</g>".to_owned());
+        let (_, uniform, reltol) =
+            floors.iter().copied().fold((f64::NEG_INFINITY, true, 0.0), |a, f| if f.0 > a.0 { f } else { a });
+        let regime = if uniform { "uniform steps" } else { "adaptive steps" };
+        let several = floors.iter().any(|f| (f.0 - floor_db).abs() > 0.5);
+        let floor_text = format!(
+            "{}integration floor, {floor_db:.0} dB{} at reltol {}, {regime}{}",
+            if floor_shown { "shaded: below the " } else { "below the plotted range: the " },
+            if plot.coherent { "c" } else { "" },
+            crate::format::significant(reltol, 2),
+            if several { " (the highest of the steps)" } else { "" }
+        );
+        // At the foot of the shaded band, left: clear of the components near the floor line.
+        let label_y =
+            if floor_y + 14.0 < y0 + SPECTRUM_HEIGHT - 2.0 { y0 + SPECTRUM_HEIGHT - 6.0 } else { floor_y - 5.0 };
+        out.push(halo(LEFT + 6.0, label_y, 11.0, "start", "floor-label", &floor_text));
+        out.push("</g>".to_owned());
+        let axis_title = if plot.coherent { "harmonic of the fundamental (f / f0)" } else { "frequency" };
+        out.push(text_el(
+            LEFT + plot_w / 2.0,
+            y0 + SPECTRUM_HEIGHT + 34.0,
+            11.0,
+            MUTED,
+            "axis-title",
+            "middle",
+            false,
+            axis_title,
+        ));
+        y = y0 + SPECTRUM_HEIGHT + 34.0 + PANEL_GAP;
+    }
+    let mut lines = vec![
+        "Amplitude spectrum of the transient record taken as linear between its points and resampled uniformly; peak amplitudes. A component below the shaded floor is inside the integration error; a tighter reltol, or a max_step that keeps the steps uniform, lowers the floor.".to_owned(),
+    ];
+    lines.push(fidelity_line(run));
+    y += 6.0;
+    for line in lines.iter().flat_map(|line| wrap(line, 11.0, plot_w)) {
+        out.push(text_el(LEFT, y, 11.0, MUTED, "footer", "", false, &line));
+        y += 15.0;
+    }
+    let height = y;
+    let mut svg = vec![format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"sim-spectrum\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" font-family=\"Helvetica, Arial, sans-serif\">",
+        n(WIDTH),
+        n(height),
+        n(WIDTH),
+        n(height)
+    )];
+    svg.push(format!("<title>{}</title>", escape(&title)));
+    svg.push(format!("<rect width=\"{}\" height=\"{}\" fill=\"{BACKGROUND}\"/>", n(WIDTH), n(height)));
+    svg.extend(out);
+    svg.push("</svg>".to_owned());
+    Some(svg.join("\n"))
+}
+
 /// Decimals that show every tick of this spacing exactly (`0.25` needs two).
 fn tick_decimals(step: f64) -> usize {
     let exponent = step.log10().floor();
@@ -852,6 +1155,10 @@ pub fn html(run: &BenchRun, board: &str) -> String {
             _ => SCRIPT.to_owned(),
         };
         page.push(format!("<script>{script}</script>"));
+    }
+    // After the time figure, whose tooltip script reads the page's first figure.
+    if let Some(svg) = spectrum_figure(run) {
+        page.push(format!("<figure class=\"spectrum\">\n{svg}\n</figure>"));
     }
     if run.error.is_none() && !run.measures.is_empty() {
         // Columns name the stepped values only; the params are named once above the

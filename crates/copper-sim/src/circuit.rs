@@ -382,6 +382,10 @@ pub struct Circuit {
     /// Resistors whose thermal noise is taken at their own temperature, K
     /// (0 K: noiseless), by element index.
     pub(crate) noise_temperature: BTreeMap<usize, f64>,
+    /// Current sources whose value at each transient point is set by the
+    /// run itself (the generators of transient noise, [`crate::transient`]),
+    /// by element index; zero at the operating point.
+    pub(crate) injected: std::collections::BTreeSet<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +421,7 @@ impl Circuit {
             linearized: BTreeMap::new(),
             linearized_law: BTreeMap::new(),
             noise_temperature: BTreeMap::new(),
+            injected: std::collections::BTreeSet::new(),
         }
     }
 

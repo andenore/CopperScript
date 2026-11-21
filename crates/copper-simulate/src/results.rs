@@ -12,7 +12,8 @@
 //!     "file", "status", "error",
 //!     "analysis": { "kind": "ac", "from_hz", "to_hz", "points_per_decade" } | { "kind": "op" }
 //!                 | { "kind": "noise", "from_hz", "to_hz", "points_per_decade", "output", "input", "temperature_k" }
-//!                 | { "kind": "tran", "stop_s", "start_s", "max_step_s", "reltol", "uic" (when set) }
+//!                 | { "kind": "tran", "stop_s", "start_s", "max_step_s", "reltol", "uic" (when set),
+//!                     "steady_period_s" (with a steady state), "noise_seed" (with transient noise) }
 //!                 | { "kind": "dc", "sweep", "units", "dimension", "from", "to", "points" }
 //!                 | { "kind": "loop", "from_hz", "to_hz", "points_per_decade", "probe", "net" }
 //!                 | { "kind": "pz", "input", "output" },
@@ -21,7 +22,9 @@
 //!     "models": [ { "name", "kind": "component" | "supply" | "model", "part", "bench", "fidelity", "model", "inactive_parameters" } ],
 //!     "steps": [ { "index", "label", "stepped": { NAME: quantity }, "params": { NAME: quantity },
 //!                  "transient" (analysis tran only): { "accepted_steps", "rejected_steps", "newton_iterations",
-//!                                 "factorizations", "breakpoints", "smallest_step_s", "largest_step_s" } } ],
+//!                                 "factorizations", "breakpoints", "smallest_step_s", "largest_step_s",
+//!                                 "steady_iterations", "steady_periods", "steady_residual", "steady_fallback"
+//!                                 (with a steady state), "noise_generators" (with noise) } } ],
 //!     "measures": [ { "name", "expression", "units", "dimension", "limits", "where" (a scoped limit only),
 //!                     "covered_steps" (a scoped limit only), "worst_step", "status",
 //!                     "steps": [ { "value", "min", "max", "pass", "covered" (a scoped limit only),
@@ -29,6 +32,9 @@
 //!     "plots": [ { "expression", "units", "dimension", "steps": [ { "frequency_hz": [...], "values": [...] } ] } ],
 //!               (analysis tran: "time_s" instead of "frequency_hz", every recorded time point;
 //!                analysis dc: "sweep", the swept value in SI base units)
+//!     "spectra" (plot spectrum(...) only): [ { "expression", "units", "dimension", "steps": [ { "fundamental_hz",
+//!                "periods", "window", "samples", "start_s", "span_s", "uniform_steps", "integration_floor",
+//!                "frequency_hz": [...], "amplitude": [...] } ] } ],
 //!     "noise" (analysis noise only): [ { "step", "output", "from_hz", "to_hz", "total_rms_v",
 //!                "contributors": [ { "contributor", "owner", "rms_v", "share" } ] } ],   (one per step and output)
 //!     "pole_zero" (analysis pz only): [ { "step", "stable", "unknowns", "infinite_eigenvalues",
@@ -148,13 +154,22 @@ fn single_analysis_value(analysis: &AnalysisRun) -> Value {
             ("input", input.as_deref().map(Value::from).unwrap_or(Value::Null)),
             ("temperature_k", number(*kelvin)),
         ]),
-        AnalysisRun::Tran { stop, start, max_step, reltol } => object(vec![
-            ("kind", Value::from("tran")),
-            ("stop_s", number(*stop)),
-            ("start_s", number(*start)),
-            ("max_step_s", optional(*max_step)),
-            ("reltol", number(*reltol)),
-        ]),
+        AnalysisRun::Tran { stop, start, max_step, reltol, steady, noise } => {
+            let mut entries = vec![
+                ("kind", Value::from("tran")),
+                ("stop_s", number(*stop)),
+                ("start_s", number(*start)),
+                ("max_step_s", optional(*max_step)),
+                ("reltol", number(*reltol)),
+            ];
+            if let Some(period) = steady {
+                entries.push(("steady_period_s", number(*period)));
+            }
+            if let Some(seed) = noise {
+                entries.push(("noise_seed", Value::from((*seed).min(i64::MAX as u64) as i64)));
+            }
+            object(entries)
+        }
         AnalysisRun::Dc { name, units, from, to, points } => {
             let mut entries = vec![("kind", Value::from("dc")), ("sweep", Value::from(name.as_str()))];
             entries.extend(units_fields(*units));
@@ -213,18 +228,27 @@ pub fn bench_value(run: &BenchRun) -> Value {
                 ("params", Value::Object(params)),
             ];
             if let Some(stats) = &step.transient {
-                entries.push((
-                    "transient",
-                    object(vec![
-                        ("accepted_steps", Value::from(stats.accepted_steps as i64)),
-                        ("rejected_steps", Value::from(stats.rejected_steps as i64)),
-                        ("newton_iterations", Value::from(stats.newton_iterations as i64)),
-                        ("factorizations", Value::from(stats.factorizations as i64)),
-                        ("breakpoints", Value::from(stats.breakpoints as i64)),
-                        ("smallest_step_s", number(stats.smallest_step)),
-                        ("largest_step_s", number(stats.largest_step)),
-                    ]),
-                ));
+                let mut fields = vec![
+                    ("accepted_steps", Value::from(stats.accepted_steps as i64)),
+                    ("rejected_steps", Value::from(stats.rejected_steps as i64)),
+                    ("newton_iterations", Value::from(stats.newton_iterations as i64)),
+                    ("factorizations", Value::from(stats.factorizations as i64)),
+                    ("breakpoints", Value::from(stats.breakpoints as i64)),
+                    ("smallest_step_s", number(stats.smallest_step)),
+                    ("largest_step_s", number(stats.largest_step)),
+                ];
+                if stats.steady_periods > 0 {
+                    fields.push(("steady_iterations", Value::from(stats.steady_iterations as i64)));
+                    fields.push(("steady_periods", Value::from(stats.steady_periods as i64)));
+                    fields.push(("steady_residual", number(stats.steady_residual)));
+                    if let Some(reason) = &stats.steady_fallback {
+                        fields.push(("steady_fallback", Value::from(reason.as_str())));
+                    }
+                }
+                if stats.noise_generators > 0 {
+                    fields.push(("noise_generators", Value::from(stats.noise_generators as i64)));
+                }
+                entries.push(("transient", object(fields)));
             }
             object(entries)
         })
@@ -308,6 +332,37 @@ pub fn bench_value(run: &BenchRun) -> Value {
             object(entries)
         })
         .collect();
+    let spectra: Vec<Value> = run
+        .spectra
+        .iter()
+        .enumerate()
+        .map(|(k, plot)| {
+            let steps: Vec<Value> = run
+                .steps
+                .iter()
+                .map(|step| {
+                    let s = &step.spectra[k];
+                    let (uniform, floor) = spectrum_floor(step, s);
+                    object(vec![
+                        ("fundamental_hz", optional(s.fundamental)),
+                        ("periods", Value::from(s.periods as i64)),
+                        ("window", Value::from(s.window.name())),
+                        ("samples", Value::from(s.samples as i64)),
+                        ("start_s", number(s.start)),
+                        ("span_s", number(s.span)),
+                        ("uniform_steps", Value::Bool(uniform)),
+                        ("integration_floor", number(floor)),
+                        ("frequency_hz", Value::Array(s.frequencies.iter().map(|f| number(*f)).collect())),
+                        ("amplitude", Value::Array(s.amplitudes.iter().map(|a| number(*a)).collect())),
+                    ])
+                })
+                .collect();
+            let mut entries = vec![("expression", Value::from(plot.expression.as_str()))];
+            entries.extend(units_fields(plot.units));
+            entries.push(("steps", Value::Array(steps)));
+            object(entries)
+        })
+        .collect();
     let mut target = vec![("board", Value::from(run.board.as_str()))];
     if let Some(module) = &run.module {
         target.push(("module", Value::from(module.as_str())));
@@ -328,6 +383,9 @@ pub fn bench_value(run: &BenchRun) -> Value {
         ("measures", Value::Array(measures)),
         ("plots", Value::Array(plots)),
     ]);
+    if !spectra.is_empty() {
+        entries.push(("spectra", Value::Array(spectra)));
+    }
     let noise: Vec<Value> = run
         .steps
         .iter()
@@ -393,6 +451,13 @@ pub fn timing_text(runs: &[BenchRun]) -> String {
                 sum(|s| s.breakpoints),
                 timing.wall_s * 1e3 / accepted.max(1) as f64,
             ));
+            let periods = sum(|s| s.steady_periods);
+            if periods > 0 {
+                lines.push(format!(
+                    "  steady state: {} Newton iterations, {periods} periods integrated (adaptive and replayed) before the recorded run",
+                    sum(|s| s.steady_iterations)
+                ));
+            }
         }
         let total: f64 = timing.phases.iter().sum();
         let mut parts: Vec<String> = copper_sim::timing::Phase::ALL
@@ -452,6 +517,50 @@ pub fn file_stem(name: &str) -> String {
 
 fn csv_field(text: &str) -> String {
     if text.contains([',', '"', '\n']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_owned() }
+}
+
+/// Whether a step's record has uniform steps over a spectrum's span, and the
+/// integration floor relative to its largest component
+/// (`copper_sim::spectrum::integration_floor`).
+pub fn spectrum_floor(step: &crate::run::StepRun, s: &copper_sim::spectrum::Spectrum) -> (bool, f64) {
+    let reltol = match &step.analysis {
+        AnalysisRun::Tran { reltol, .. } => *reltol,
+        _ => 1e-4,
+    };
+    let uniform = copper_sim::spectrum::uniform_steps(&step.axis, s.start, s.start + s.span);
+    (uniform, copper_sim::spectrum::integration_floor(reltol, uniform))
+}
+
+/// The plotted spectra of a bench: one row per step, spectrum and bin
+/// (`frequency_hz`, the harmonic number `f / f0` of a coherent spectrum,
+/// the peak amplitude in SI base units, and its level in dB: relative to the
+/// fundamental with one, else to 1 of the base unit).
+pub fn spectra_csv(run: &BenchRun) -> String {
+    let mut lines = vec!["step,label,spectrum,frequency_hz,harmonic,amplitude,level_db".to_owned()];
+    for (index, step) in run.steps.iter().enumerate() {
+        for (plot, s) in run.spectra.iter().zip(&step.spectra) {
+            let reference = s.harmonic(1).filter(|a| *a > 0.0).unwrap_or(1.0);
+            for (f, a) in s.frequencies.iter().zip(&s.amplitudes) {
+                let harmonic = s.fundamental.map(|f0| copper_json::python_float_repr(f / f0)).unwrap_or_default();
+                let level = 20.0 * (a / reference).max(1e-300).log10();
+                lines.push(
+                    [
+                        index.to_string(),
+                        csv_field(&step.label),
+                        csv_field(&format!("{} [{}]", plot.expression, base_unit(plot.units))),
+                        copper_json::python_float_repr(*f),
+                        harmonic,
+                        copper_json::python_float_repr(*a),
+                        copper_json::python_float_repr(level),
+                    ]
+                    .join(","),
+                );
+            }
+        }
+    }
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
 }
 
 /// The plotted vectors of a bench: one row per step and frequency, one column per plotted expression (SI base units).
@@ -556,12 +665,19 @@ pub fn bench_analysis_text(run: &BenchRun) -> String {
             let stops = field(&|a| if let AnalysisRun::Tran { stop, .. } = a { Some(*stop) } else { None });
             let starts = field(&|a| if let AnalysisRun::Tran { start, .. } = a { Some(*start) } else { None });
             let steps = field(&|a| if let AnalysisRun::Tran { max_step, .. } = a { *max_step } else { None });
+            let periods = field(&|a| if let AnalysisRun::Tran { steady, .. } = a { *steady } else { None });
             let mut text = format!("tran 0 to {}", range(stops, &time));
             if starts.iter().any(|start| *start > 0.0) {
                 text.push_str(&format!(", recorded from {}", range(starts, &time)));
             }
             if !steps.is_empty() {
                 text.push_str(&format!(", max step {}", range(steps, &time)));
+            }
+            if !periods.is_empty() {
+                text.push_str(&format!(", periodic steady state of {}", range(periods, &time)));
+            }
+            if let AnalysisRun::Tran { noise: Some(seed), .. } = first {
+                text.push_str(&format!(", with noise (seed {seed})"));
             }
             text
         }
@@ -604,7 +720,7 @@ pub fn analysis_text(analysis: &AnalysisRun) -> String {
             crate::format::hertz(*to),
             crate::format::significant(*kelvin, 5)
         ),
-        AnalysisRun::Tran { stop, start, max_step, .. } => {
+        AnalysisRun::Tran { stop, start, max_step, steady, noise, .. } => {
             let time =
                 |t: f64| quantity_text(t, copper_lang::expression::Units::of(copper_units::Dimension::Time), 3, false);
             let mut text = format!("tran 0 to {}", time(*stop));
@@ -613,6 +729,12 @@ pub fn analysis_text(analysis: &AnalysisRun) -> String {
             }
             if let Some(step) = max_step {
                 text.push_str(&format!(", max step {}", time(*step)));
+            }
+            if let Some(period) = steady {
+                text.push_str(&format!(", periodic steady state of {}", time(*period)));
+            }
+            if let Some(seed) = noise {
+                text.push_str(&format!(", with noise (seed {seed})"));
             }
             text
         }
@@ -696,6 +818,13 @@ pub fn text_table(runs: &[BenchRun]) -> String {
         for row in rows {
             let cells: Vec<String> = (0..5).map(|c| pad(&row[c], widths[c])).collect();
             lines.push(format!("  {}", cells.join("  ").trim_end()));
+        }
+        // Steps whose steady state the shooting method left to settling period by period.
+        for step in &run.steps {
+            if let Some(reason) = step.transient.as_ref().and_then(|stats| stats.steady_fallback.as_ref()) {
+                let at = if run.steps.len() > 1 { format!(" at {}", step.label) } else { String::new() };
+                lines.push(format!("  note{at}: {reason}"));
+            }
         }
         lines.extend(crate::noise::text_lines(run));
         lines.extend(crate::stability::text_lines(run));

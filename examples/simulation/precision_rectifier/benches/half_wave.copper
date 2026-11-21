@@ -28,4 +28,7 @@ bench HalfWave for PrecisionRectifier {
     measure output_delay = cross(V(OUT), 10mV) - cross(V(VIN), 10mV) { max = 2us; }
     measure distortion = thd(V(OUT), 1kHz) { min = 42%; max = 45%; }
     plot V(VIN), V(OUT), V(AMP);
+    // The half-wave's harmonics: odd ones from the 3rd vanish for an ideal rectifier,
+    // so what shows there is the turn-off kick and the slewing near the zero crossings.
+    plot spectrum(V(OUT), 1kHz);
 }

@@ -551,6 +551,11 @@ impl<'a> Evaluator<'a> {
             | Function::Overshoot
             | Function::Harmonic
             | Function::Thd
+            | Function::Spectrum
+            | Function::Spur
+            | Function::Sfdr
+            | Function::Sinad
+            | Function::Snr
             | Function::Integrate => Err(format!("{}: evaluated by the transient functions", text())),
             Function::Upto | Function::Downto | Function::If | Function::Stable | Function::Damping => {
                 Err(format!("{}: evaluated above", text()))

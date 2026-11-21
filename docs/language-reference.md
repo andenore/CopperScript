@@ -3325,6 +3325,8 @@ bench CurrentFlatness for HowlandPump {
 | `ignore X, Y;` | Removes components or supplies; their pins are open (`SIM038`). |
 | `analysis ac { from; to; points_per_decade; }`, `analysis op;` | One analysis, or several, each with its own measures and plots ([Several analyses](#several-analyses); `SIM040`, `SIM097`). `0 < from < to`; `points_per_decade` is 1 to 10000. `analysis NAME: KIND { ... }` names one of several. |
 | `analysis tran { stop; start; max_step; reltol; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
+| `analysis tran { ...; steady = 1kHz; }` | The run starts at `start` in the periodic steady state of that fundamental (or period, `steady = 1ms;`), found by shooting ([Periodic steady state](#periodic-steady-state); `SIM112`). |
+| `analysis tran { ...; max_step = 20ns; noise = true; seed = 7; }` | Transient noise: the circuit's noise generators as seeded random currents sampled every `max_step` ([Transient noise](#transient-noise); `SIM114`). |
 | `analysis dc { sweep = NAME; from; to; step; }` (or `points = N;`) | Operating points over a swept param, source or supply ([DC sweep](#dc-sweep); `SIM074`). |
 | `analysis loop { from; to; points_per_decade; probe = U1.OUT; }` | The loop gain at a component pin, read through a 0 V probe in series with it ([Stability analysis](#stability-analysis); `SIM098`). |
 | `analysis pz;`, `analysis pz { input = SRC; output = V(OUT); }` | The poles of the linearised circuit, and the zeros of `V(OUT)` per unit of `SRC`; the built-in measure `stable` ([Stability analysis](#stability-analysis); `SIM100`). |
@@ -3334,6 +3336,7 @@ bench CurrentFlatness for HowlandPump {
 | `tolerance A, B = t match m;` | A matched group of passives and model parameters (`RN.resistance` is one member per unit that declares it): every member within `t`, every ratio within `m` (`SIM091`, `SIM092`). |
 | `montecarlo { runs = N; seed = S; distribution = uniform; }`, `worstcase;` | Runs the bench over its tolerances: sampled boards, or the sensitivity corners (`SIM090`, `SIM092`, `SIM093`). |
 | `step PARAM in a, b, c;` | Repeats the run over values of the param's dimension; several steps nest, the first outermost (`SIM041`). |
+| `step PARAM from a to b by s;`, `step PARAM from a to b points n;` | A stepped range: from `a` towards `b` by `s` (with `b` itself when the steps do not land on it; `a > b` runs down), or `n` evenly spaced values with both ends, computed exactly in decimals, at most 1000 values (`SIM115`). It nests with other steps like a list; a zipped step takes lists only. |
 | `step A, B in (a1, b1), (a2, b2);` | A zipped step: the params move together, one tuple per run, each tuple with one value per param (`SIM041`). It nests with other steps like a plain one. |
 | `reference NAME { PARAM = q; ... }` | A reference run: at every step the bench is also solved with these params overridden (derived params that are not overridden follow them), for `reference(x, NAME)`. It models a calibration standard: `z / reference(z / z_true, CARD)` is a result calibrated on the standard (`SIM047`). |
 | `let NAME = expr;` | A named expression, visible to later statements (`SIM042`). It is evaluated when a measure or plot first reads it, directly or through another let; a let that nothing reads is checked but never evaluated, so it cannot stop the run (a `0 / 0` at `t = 0` of a let a transient bench does not read). |
@@ -3842,6 +3845,9 @@ waveform's value just before 0. `max_step` bounds the time step (default
 default `0.01%`) is the truncation error each step may make, relative to the
 largest value the node voltage or inductor current has had. Times may name
 params (`stop = T_STOP;`) and step with them. Errors are `SIM069`.
+`steady` ([Periodic steady state](#periodic-steady-state)), `noise` and
+`seed` ([Transient noise](#transient-noise)) and `window`
+([Spectra](#spectra)) are described below.
 
 **Initial conditions.** `ic V(NODE) = q;` sets a node's voltage against
 ground at `t = 0`, `ic C1 = q;` a capacitor's voltage (its first pin against
@@ -3944,14 +3950,174 @@ its current limit; without one they carry none.
 | `overshoot(x)` | how far `x` passes its last value, as a fraction of its step from its first value (dimensionless; zero without overshoot) |
 | `harmonic(x, f0, n)` | the peak amplitude of harmonic `n` (1 the fundamental) of `f0`, over the last whole periods of `f0` in the record (resampled at 512 points per period) |
 | `thd(x, f0)`, `thd(x, f0, n)` | total harmonic distortion: `sqrt(A_2^2 + ... + A_9^2) / A_1` over the same periods, or to harmonic `n` (a whole number from 2 to 255) |
+| `spur(x, f0)`, `spur(x, f0, from, to)` | the largest component of `x`'s coherent spectrum ([Spectra](#spectra)) that is not a harmonic of `f0` (nor 0 Hz), peak amplitude in `x`'s unit; above 0 Hz up to `9.5 f0` (the harmonics `thd` counts), or in the band from `from` to `to` |
+| `sfdr(x, f0)` | spurious-free dynamic range, dB: the fundamental against the largest other component in the same band, harmonic or not |
+| `sinad(x, f0)`, `snr(x, f0)` | dB: the fundamental's power against all other power in the band, and against all but harmonics 2 to 9; both take a band `(x, f0, from, to)` too. Without transient noise they measure the integration error and the interpolation images, not the circuit |
 
 `settle`, `overshoot`, `harmonic` and `thd` need `analysis tran`
-(`SIM070`); their arguments are checked like the windows (`SIM071`). Outside
+(`SIM070`); their arguments are checked like the windows (`SIM071`); the
+spectral measures and `spectrum` need it too, and their arguments are
+`SIM113`. Outside
 `analysis tran`, `rms` and `pp` reduce over the samples of the frequency
 axis as `mean` does, the windows take frequencies, and `cross(x, level)` is
 the first frequency at which `x` crosses `level` (`cross(db(H), -3dB)`).
 A measure must reduce a swept value (`SIM043`); `plot` draws it against
 time.
+
+#### Periodic steady state
+
+```copper
+analysis tran { stop = 2ms; max_step = 5us; steady = 1kHz; }   // two periods of the steady state
+measure distortion = thd(V(OUT), 1kHz);
+```
+
+(`examples/simulation/impedance_analyzer/benches/distortion.copper`.)
+`steady = F0;` (a frequency) or `steady = PERIOD;` (a time, `1 / F0`) starts
+the run at `start` (default 0) in the periodic solution of that period and
+records from there to `stop`, instead of integrating from the operating
+point at 0 and waiting for coupling capacitors and other slow parts to
+settle. It may name a param (`steady = F_DRIVE;`) and step with it.
+
+It is found by shooting: Newton's method on the change of the state over
+one period, `F(s) = phi(s) - s`, where the state `s` is the unknowns whose
+truncation error the run controls (node voltages, or with behavioural
+sources the nodes of charge-storing elements, and inductor currents) and
+`phi` integrates one period from it, restarted there with backward Euler as
+after a breakpoint. Each Newton step solves `(M - I) d = -F(s)` by GMRES,
+where the monodromy matrix `M` is applied by difference quotients: the
+period's own time steps replayed from a perturbed state, with the step sizes,
+methods and switch states held so the map is smooth. Once the corrections are
+small the period itself is evaluated on those held steps too, so the step
+control's choices do not keep moving the fixed point. It stops when a
+correction is within the truncation-error tolerance on every state unknown
+(at most 20 Newton iterations); the operating point with the sources at
+`start` is the first guess. A linear circuit converges in two iterations; the
+cost of each is a period plus one replayed period per GMRES vector, about one
+per mode of the circuit that a period does not damp. The JSON's `transient`
+block per step has `steady_iterations`, `steady_periods` (adaptive and
+replayed) and `steady_residual` (the last change over a period, in tolerance
+units).
+
+When the shooting method cannot proceed (a replayed period that does not
+converge, as for an amplifier slewing hard at the start of the period, or no
+convergence in 20 iterations), the run settles instead by integrating
+periods from the last integrated state until the change per period,
+extrapolated over the slowest mode, is within the tolerance (at most 400
+periods); the text table and the JSON (`steady_fallback`) say so and why. It
+fails with `SIM112` when even that does not settle, when a source's waveform
+does not repeat with the period from `start` on (a sine of a whole fraction
+of its frequency and a started, unending pulse train do; a `pwl`, a `step`, a
+pulse with `cycles` or a sine whose `delay` lies after `start` do not), and
+when the circuit has an ideal delay or transmission line (its state is its
+whole delayed history). `ic`, `uic` and `noise` cannot be combined with it
+(`SIM112`). Autonomous oscillators (no drive to set the period) are not
+handled. Behavioural sources that read time directly are not checked for
+periodicity.
+
+Checked against closed forms and long runs: an RC low-pass with a corner at a
+sixtieth of the drive (a hundred periods to settle) matches its steady state
+within 9e-5 of the amplitude in 2 Newton iterations and 4 periods, about 20
+times faster than a 150-period run; a diode peak detector matches a 400-period run
+within 12 uV; the precision rectifier's measures match a 20-period run within
+6 uV (peak, mean, turn-off kick) and its output waveform within 0.44 mV
+(`copper-simulate` test `spectrum_steady_noise_runs`).
+
+#### Spectra
+
+```copper
+plot spectrum(V(OUT), 1kHz);   // over the last whole periods of 1 kHz, in dBc
+plot spectrum(V(OUT));         // the whole record, windowed, in dB relative to 1 V
+measure spur = spur(V(OUT), 1kHz);
+measure sfdr = sfdr(V(OUT), 1kHz, 0Hz, 20kHz);
+```
+
+`spectrum(x, f0)` is the amplitude spectrum of the last whole periods of
+`f0` in the record (the periods `harmonic` and `thd` read): the record,
+taken as linear between its points, is resampled uniformly at the larger of
+512 points per period and its own density, and transformed (a radix-2 FFT,
+or Bluestein's algorithm for other lengths). Every component periodic in
+those periods falls on a bin, harmonic `n` on bin `n K` for `K` periods, so
+no window is applied; a two-tone test is coherent when `f0` divides both
+tones. `spectrum(x)` takes the whole record at the larger of 1024 points and
+its own number of points, removes the mean (kept as the 0 Hz bin) and applies
+the window `analysis tran { window = ...; }` names: `blackman_harris` (the
+default, sidelobes below -92 dB), `hann`, `flat_top` (amplitude within
+0.01 dB between bins) or `rectangular` (`SIM113` otherwise); amplitudes are
+divided by the window's coherent gain. Amplitudes are peak values (the
+0 Hz bin the mean), per bin: a noise spectrum's level depends on the bin
+width, which the plot names.
+
+`spectrum(...)` is a whole plot expression and nothing else: it has its own
+frequency axis, so it is not allowed in a `let`, a measure or inside another
+expression (`SIM113`). The HTML page draws a figure of its own below the time
+plots: one panel per spectrum, a logarithmic axis of the harmonic number
+`f / f0` (to the 50th) with levels in dB relative to the fundamental for a
+coherent spectrum, drawn as stems with harmonics 2 to 9 marked, and of
+frequency with levels in dB relative to 1 of `x`'s unit for a windowed one,
+drawn as a line; each step is one colour. `BENCH.spectrum.csv` has one row per
+step, spectrum and bin (`frequency_hz`, `harmonic`, `amplitude`,
+`level_db`), and the results JSON a `spectra` entry per plotted spectrum with
+per step its fundamental, periods, window, samples, span, every bin's
+frequency and amplitude, and the integration floor.
+
+**The integration floor.** A transient record is a numerical solution, and
+its small harmonics are only as good as the integration. A linear RC
+low-pass driven by a sine, which has no harmonics, shows harmonics 2 to 20
+of about `0.02 sqrt(reltol)` of the fundamental (2e-4, -74 dBc, at the
+default `reltol`) when the step is left to the error control, and of 0.7e-7
+to 2.3e-7 when `max_step` keeps every step equal (`T / 200` here) at any
+`reltol` up to 1e-5: the step changes within a period make the integration
+time-varying, which is what turns a sine into harmonics. The plot shades the
+region below the floor, `0.02 sqrt(reltol)` or 3e-7 (-130 dBc) when at least
+95 % of the record's steps are within 1 % of the longest, relative to the
+fundamental (to the largest component of a windowed spectrum); a component
+there is not established. A distortion bench therefore sets `max_step` to a
+few hundredths of a period or less. The linear interpolation between recorded
+points also shows: a sine recorded at `M` points per period has images of
+about `1 / M^2` of it at harmonics `M - 1` and `M + 1`.
+
+Measures on the coherent spectrum (`spur`, `sfdr`, `sinad`, `snr`; table
+above) read the band above 0 Hz up to `9.5 f0` unless given one. Checked
+against closed forms: a sine on an offset, a trapezoidal square wave's odd
+harmonics `4 A / (pi n) sinc(n t_r / T)` to 2e-5 of `A`, and a two-tone signal
+with a harmonic (its spur to 1e-9 V, SFDR to 1e-5 dB, SINAD and SNR to 1e-4 dB), the interpolation
+of each tone taken into account; windows against their scalloping and
+sidelobes (`copper-sim` test `spectrum_closed_forms`).
+
+#### Transient noise
+
+```copper
+analysis tran { stop = 40ms; start = 0.5ms; max_step = 200ns; noise = true; seed = 7; }
+measure rms = rms(V(OUT));
+```
+
+`noise = true;` runs the circuit with its noise generators, the ones the
+noise analysis uses ([Noise analysis](#noise-analysis)), as random currents
+beside their elements: resistor thermal noise at the run's temperature,
+diode and device shot noise `2 q |I|` following the device's current, device
+flicker noise `KF |I|^AF / f` likewise, amplifier and rail-model voltage and
+current noise with their 1/f corners, FET channel noise at its operating
+point's `g_m`. Each generator is a waveform sampled every `max_step`
+(required, `SIM114`) and linear between the samples: its white part
+independent normal samples of variance `S / (2 max_step)`, whose density is
+`S sinc^4(f max_step)`: flat within 0.3 dB to `0.1 / max_step` and half at
+`0.32 / max_step`, so `max_step` sets the noise band; its 1/f part a sum of
+first-order processes with corners two per decade from a tenth of `1 / stop`
+to `0.5 / max_step` (within 3 % of `1 / f` between them). The steps
+land on every sample time (the error control restarts its estimate there), so
+a noise run takes about `stop / max_step` steps. The sequences come from a
+SplitMix64 generator seeded by `seed` (default 1): the same seed gives the
+same run. The operating point at 0 is noiseless, so record from a few time
+constants on. `I(X)` of a noisy resistor reads its terminal current without
+the generator beside it.
+
+Checked statistically: an RC low-pass's output RMS against the noise
+analysis's integral of the same bench (kT/C) within 1.6 % (100 ohm and
+100 nF, sampled every tau / 50 for 4000 tau, where the RMS scatters by about
+1 %), and within 0.3 % for 1 kohm and 1 nF over 4 ms (`copper-sim` test
+`steady_and_noise`, `copper-simulate` test `spectrum_steady_noise_runs`).
+With noise, `snr` and `sinad` measure real noise. Steady state and noise do
+not combine (`SIM112`).
 
 ### DC sweep
 
@@ -3991,6 +4157,18 @@ it, linear between points; `settle`, `overshoot`, `harmonic` and `thd` do
 not. `plot` draws against the swept value, named on the axis; the JSON and
 CSV put it in `sweep` (SI base units) and the analysis records `sweep`,
 `units`, `from`, `to` and `points`.
+
+**Two swept quantities, and a dc sweep around an ac analysis.** `step`
+gives both. A `step` around `analysis dc` is the outer loop of a nested
+sweep: one curve per stepped value (`step R_LOAD from 1kohm to 3kohm points
+3;` beside `analysis dc { sweep = J2; ... }`). A source whose `dc` names a
+param (`replace J1 with source { ...; dc = VB; ac = 1V; }`), stepped around
+`analysis ac`, is a dc sweep as the outer loop of the ac analysis: each step
+solves the operating point at its bias and the small-signal response there
+(a diode's gain against its bias current matches `r_d / (R + r_d)` within
+2e-3 in the `copper-simulate` test `spectrum_steady_noise_runs`); a section
+`analysis op;` of the same bench reads the bias per step. The swept source of
+`analysis dc` overrides a stepped `dc` of the same source.
 
 ### Stability analysis
 
@@ -4107,15 +4285,20 @@ a noise bench `noise`, the contributors per step, for a pole-zero bench
 `pole_zero`, the poles and zeros per step, for a Monte Carlo or
 worst-case bench `variation`, the statistics per step and measure, and for a
 transient bench `transient` per step, the solver's accepted and rejected
-steps, Newton iterations and step sizes, with the plotted vectors on
-`time_s` instead of `frequency_hz` (a dc sweep: `sweep`); a measure with a
+steps, Newton iterations and step sizes (with a steady state also
+`steady_iterations`, `steady_periods`, `steady_residual` and, when it settled
+period by period, `steady_fallback`; with noise `noise_generators`), with the
+plotted vectors on `time_s` instead of `frequency_hz` (a dc sweep: `sweep`)
+and the plotted spectra in `spectra`; a tran analysis records
+`steady_period_s` and `noise_seed` when it has them; a measure with a
 `where` adds `where`, `covered_steps` and a per-step `covered`, and a step
 whose value is never `"value": null` with `"never": true`; the `analysis`
 holds the values at the bench's steps, a field that differs between steps
 an array of one value per step with `stepped` naming those fields; the
 `noise` entries are one per step and output, with `step` and `output`; one
 analysis of a bench with several adds `bench` and `section`),
-`BENCH.csv` (the plotted vectors, SI base units) and `BENCH.html` (the plots,
+`BENCH.csv` (the plotted vectors, SI base units), `BENCH.spectrum.csv` (the
+plotted spectra, [Spectra](#spectra)) and `BENCH.html` (the plots,
 one curve per step, magnitude-like panels above phase-like ones on a shared
 logarithmic frequency axis, limit lines or windows where a measure's limit
 applies to a plotted quantity, one per distinct limit over the steps it
@@ -4186,6 +4369,10 @@ components that form a loop of voltage sources.
 | `SIM109` | `copper sim --check-model`: no such part (or several), no sim block, a unit with only a `sim spice` block, a kind without a bench set, a `--tie` of a pin the part does not have |
 | `SIM110` | `param TEMP`: not a temperature in degC, a value (nominal or stepped, or derived at a step when run) not above absolute zero, or beside a noise analysis's own `temperature` |
 | `SIM111` | component `tempco`, `tempco2`: not in `ppm/degC` (`ppm/degC2`), or on a component that simulates with its part's sim blocks |
+| `SIM112` | `analysis tran steady`: not a time or frequency, not positive, with `uic`, `ic` or `noise`; when a bench runs, a source that does not repeat with the period, an ideal delay or transmission line, no steady state found |
+| `SIM113` | spectra: `spectrum(...)` in a let, a measure or inside another expression, `spectrum`, `spur`, `sfdr`, `sinad`, `snr` outside `analysis tran` or with arguments that are not a waveform and frequencies, an unknown `window` |
+| `SIM114` | transient noise: `noise` not true or false, `noise` without `max_step`, a `seed` that is not a whole number from 0 or without `noise` |
+| `SIM115` | stepped ranges: no `by` or `points`, equal ends, a spacing that is not positive, more than 1000 values, `points` outside 2 to 1000 |
 
 ## KiCad schematic export
 

@@ -450,6 +450,12 @@ impl Form {
 
 /// The value of an independent source under `ctx`.
 pub(crate) fn source_value(c: &Circuit, index: usize, value: &SourceValue, ctx: &Context) -> f64 {
+    // A transient noise generator: the value the run set for this step.
+    if let (Some(_), Some(prev)) = (ctx.time, ctx.prev)
+        && c.injected.contains(&index)
+    {
+        return prev.delayed[index] * ctx.source_scale;
+    }
     let base = match (ctx.time, c.waveforms.get(&index)) {
         (Some(t), Some(w)) => {
             if ctx.left {

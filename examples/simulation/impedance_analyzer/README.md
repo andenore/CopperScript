@@ -355,7 +355,7 @@ frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
 | `ResistorMatching` | AC, Monte Carlo | Spread from component tolerances; what calibration removes |
 | `ResistorWorstCase` | AC, worst case | The same at the sensitivity corners |
 | `Startup` | transient | Rails coming up from models of the regulators, coupling networks charging, input ranges, settling |
-| `Distortion` | transient | Drive-current harmonics, clipping and slew headroom |
+| `Distortion` | transient, periodic steady state | Drive-current harmonics and spectrum, clipping and slew headroom |
 | `SupplyCurrent` | operating point, transient | The current per rail, idle and driving 1 MHz ([Supply current](#supply-current)) |
 
 `StrayCapacitance` adds its mask capacitor to `SoilModel`'s soil node `S_LP`
@@ -1062,28 +1062,34 @@ current error everywhere); 1.3 kohm m is outside the rated range (2.4 %,
 
 ### Distortion: reported (no requirement in SPEC.md)
 
-The drive in time, ten periods recorded after the coupling networks have
-mostly settled, relative permittivity 25. The op-amp models are linear except
-for their transient limits (output swing, slew rate, output current), so every
-harmonic here is clipping or slewing, or the settling left in the record.
+The drive in time, two periods of its periodic steady state (found by
+shooting, phase F9), relative permittivity 25. The op-amp models are linear
+except for their transient limits (output swing, slew rate, output current),
+so every harmonic here is clipping or slewing, or integration error: the
+spectrum plot shades each run's integration floor, 3e-7 of the fundamental
+where the steps stay uniform (the 100 ohm m runs) and 2e-4 where the error
+control shortens some of them (the 1.3 kohm m runs).
 
 | Drive | Soil (drive impedance) | Drive current, fundamental | THD of the drive current | Pump output peak | Headroom to clipping (4.42 V) | Slew needed (2 pi f x peak) |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 kHz, 0.3 V (nominal) | 1.3 kohm m (160 kohm) | 14.7 uA | 0.0008 % | 2.59 V | 1.83 V | 0.016 V/us |
-| 1 kHz, 0.3 V | 100 ohm m (12 kohm) | 14.9 uA | 0.010 % | 0.35 V | 4.07 V | 0.002 V/us |
+| 1 kHz, 0.3 V (nominal) | 1.3 kohm m (160 kohm) | 14.7 uA | below the floor (0.0009 % shown, 4e-6 % with a five times shorter step) | 2.59 V | 1.83 V | 0.016 V/us |
+| 1 kHz, 0.3 V | 100 ohm m (12 kohm) | 14.8 uA | below the floor (0.00001 % shown) | 0.34 V | 4.08 V | 0.002 V/us |
 | 1 kHz, 0.65 V (DDS maximum) | 1.3 kohm m | 28.3 uA | **9.5 %** (H3 8.8 %) | 4.42 V, clipped | 0 | 0.028 V/us |
-| 100 kHz, 0.3 V | 1.3 kohm m | 13.5 uA | 0.0009 % | 2.37 V | 2.05 V | 1.5 V/us |
-| 100 kHz, 0.3 V | 100 ohm m | 14.9 uA | 0.00001 % | 0.34 V | 4.08 V | 0.21 V/us |
+| 100 kHz, 0.3 V | 1.3 kohm m | 13.5 uA | below the floor (0.0010 % shown) | 2.37 V | 2.05 V | 1.5 V/us |
+| 100 kHz, 0.3 V | 100 ohm m | 14.8 uA | below the floor (0.00001 % shown) | 0.34 V | 4.08 V | 0.21 V/us |
 | 100 kHz, 0.65 V | 1.3 kohm m | 27.1 uA | **5.6 %** (H3 4.8 %) | 4.42 V, clipped | 0 | 2.8 V/us |
-| 1 MHz, 0.3 V | 1.3 kohm m | 5.9 uA | 0.0013 % | 0.61 V | 3.81 V | 3.8 V/us |
-| 1 MHz, 0.3 V | 100 ohm m | 15.4 uA | 0.00006 % | 0.33 V | 4.09 V | 2.1 V/us |
-| 1 MHz, 0.65 V | 1.3 kohm m | 12.8 uA | 0.0019 % | 1.31 V | 3.11 V | 8.2 V/us |
+| 1 MHz, 0.3 V | 1.3 kohm m | 5.9 uA | below the floor (0.0012 % shown) | 0.61 V | 3.81 V | 3.8 V/us |
+| 1 MHz, 0.3 V | 100 ohm m | 15.3 uA | 0.00016 % | 0.33 V | 4.09 V | 2.1 V/us |
+| 1 MHz, 0.65 V | 1.3 kohm m | 12.8 uA | below the floor (0.0020 % shown) | 1.31 V | 3.11 V | 8.2 V/us |
 
 - **At the nominal drive nothing clips or slews.** The drive current's THD is
-  0.0013 % or less (-98 dB) at every frequency and load but one, the
-  level of the settling left in the record; at 1 kHz into 100 ohm m it is
-  0.010 % with the pump 4 V from clipping, most likely settling as well (the
-  record starts 50 ms in; not checked with a longer run). The largest swing, 2.59 V
+  below the integration floor at every frequency and load but one (1 MHz into
+  100 ohm m, 0.00016 %, -116 dB); into 1.3 kohm m the values the table shows
+  (about 0.001 %) are integration error, as a run of the 1 kHz case with a
+  1 us step shows (4e-6 %). The 0.010 % that the settling run of earlier
+  phases gave at 1 kHz into 100 ohm m was its settling: a 400 ms run reaches
+  the steady state's 339.2 mV pump peak (the 60 ms run had 347 mV) and a THD
+  of 3e-5 % on its way down. The largest swing, 2.59 V
   at the pump output into 1.3 kohm m at 1 kHz, leaves 1.8 V to the clipping
   level. At 1 MHz the pump output swings only 0.61 V into the driest soil: the
   current there goes into the HC node's strays (5.9 of 15 uA reach the
@@ -1570,7 +1576,8 @@ sources 03f60a26cdc7), and where they stand after phases F1 and F2 of the
   steps them. Fixed: `Distortion` now reads "tran 0 to 30 us..60 ms,
   recorded from 20 us..50 ms".
 - **Transient runs were slow**: phase F1 brought `Distortion` from about 19
-  minutes to 19 s in a debug build.
+  minutes to 19 s in a debug build; phase F9's periodic steady state to about
+  8 s (12 threads), with no settling left in the record.
 - `Gohm` exists now.
 - Not taken up yet: the negative-conductance measure of `PumpOutputImpedance`
   still covers 1 kHz to 1 GHz; a window could now restrict it.

@@ -573,6 +573,20 @@ pub struct StepDecl {
     pub values: Vec<Scalar>,
     /// The other params of a zipped step, each with one value per step.
     pub zip: Vec<(String, Vec<Scalar>)>,
+    /// `step PARAM from a to b by s;` or `... points n;`: the values as a
+    /// range (`values` is then empty).
+    pub range: Option<StepRange>,
+}
+
+/// The range of `step PARAM from a to b by s;` (or `points n;`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepRange {
+    pub from: Scalar,
+    pub to: Scalar,
+    /// The spacing (`by`), or `None` with `points`.
+    pub by: Option<Scalar>,
+    /// The number of evenly spaced values, ends included, or `None` with `by`.
+    pub points: Option<Scalar>,
 }
 
 /// `reference NAME { PARAM = value; ... }`: the bench re-run with these

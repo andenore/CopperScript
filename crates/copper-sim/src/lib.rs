@@ -21,7 +21,8 @@
 //! | [`temperature`] | the thermal voltage at a temperature and SPICE3's temperature scaling of diode, BJT, JFET and MOSFET parameters from their `TNOM` |
 //! | [`waveform`] | source waveforms for transient runs: sine, pulse, piecewise linear, step |
 //! | [`newton`] | real-valued assembly with companion models, Newton iteration, the nonlinear operating point (gmin and source stepping) and the small-signal linearisation for AC |
-//! | [`transient`] | transient analysis: trapezoidal integration with a backward-Euler start, truncation-error step control, breakpoints, initial conditions (`ic`, `uic`) |
+//! | [`transient`] | transient analysis: trapezoidal integration with a backward-Euler start, truncation-error step control, breakpoints, initial conditions (`ic`, `uic`), the periodic steady state by shooting (Newton-GMRES on the period map) |
+//! | [`transient_noise`] | transient noise: the noise generators as seeded random currents, white and 1/f, band-limited by the step limit |
 //! | [`dc`] | DC sweeps: Newton operating points over a swept value with continuation, op-amp limits active |
 //! | [`sparse_lu`] | sparse LU (real and complex) for every solve: Markowitz order with threshold pivoting, refactorisation in the same order while the pattern holds |
 //! | [`stability`] | the loop gain at a probe by Tian's method; the poles and zeros of the linearised circuit, refined on the circuit's pencil, with the nodes each pole dominates |
@@ -29,6 +30,7 @@
 //! | [`real_lu`] | dense real LU, which decides the systems the sparse LU leaves to it |
 //! | [`timing`] | opt-in accounting of where an analysis spends its time (`copper sim --timing`) |
 //! | [`time_measure`] | measurements on time vectors: windows, time-weighted mean and RMS, peak to peak, crossings, settling, overshoot, harmonics and THD |
+//! | [`spectrum`] | spectra of transient records: uniform resampling over whole periods (coherent) or windowed, FFT of any length (radix 2 and Bluestein), spurs, SFDR, SINAD and SNR |
 //!
 //! The solver is a sparse LU with the equilibration and iterative refinement
 //! of the dense complex [`lu`] ([`sparse_lu`]); a system it finds singular or
@@ -66,11 +68,13 @@ pub mod regulator;
 pub mod rng;
 pub mod semiconductors;
 pub mod sparse_lu;
+pub mod spectrum;
 pub mod stability;
 pub mod temperature;
 pub mod time_measure;
 pub mod timing;
 pub mod transient;
+pub mod transient_noise;
 pub mod waveform;
 
 /// The solver's name, recorded in every simulation result.
@@ -95,5 +99,5 @@ pub use regulator::{RegulatorParams, RegulatorPins};
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, Level3Params, MosLevel, MosParams};
 pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
 pub use temperature::{BjtTemperature, DiodeTemperature, JfetTemperature, thermal_voltage};
-pub use transient::{InitialConditions, TranOptions, TranResult, TranStats, transient};
+pub use transient::{InitialConditions, TranNoise, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

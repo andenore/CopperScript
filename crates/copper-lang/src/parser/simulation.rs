@@ -214,6 +214,36 @@ impl Parser {
                 while self.accept_symbol(",") {
                     others.push(self.name("param name")?);
                 }
+                let word = |parser: &Self, text: &str| {
+                    parser.current().kind == TokenKind::Identifier && parser.current().text == text
+                };
+                if others.is_empty() && word(self, "from") {
+                    // A range: `step P from a to b by s;` or `step P from a to b points n;`.
+                    self.advance();
+                    let from = self.scalar()?;
+                    self.expect_word("to")?;
+                    let to = self.scalar()?;
+                    let (by, points) = if word(self, "by") {
+                        self.advance();
+                        (Some(self.scalar()?), None)
+                    } else if word(self, "points") {
+                        self.advance();
+                        (None, Some(self.scalar()?))
+                    } else {
+                        return Err(self.error(
+                            "SIM115",
+                            "a stepped range needs its spacing or its number of values: step P from a to b by s; or step P from a to b points n;",
+                        ));
+                    };
+                    self.expect_symbol(";")?;
+                    return Ok(Declaration::Bench(BenchStatement::Step(StepDecl {
+                        location,
+                        param,
+                        values: Vec::new(),
+                        zip: Vec::new(),
+                        range: Some(StepRange { from, to, by, points }),
+                    })));
+                }
                 self.expect_word("in")?;
                 if others.is_empty() {
                     let mut values = vec![self.scalar()?];
@@ -226,6 +256,7 @@ impl Parser {
                         param,
                         values,
                         zip: Vec::new(),
+                        range: None,
                     })));
                 }
                 // Zipped: one parenthesized tuple of values per step.
@@ -261,7 +292,7 @@ impl Parser {
                 let mut columns = columns.into_iter();
                 let values = columns.next().expect("one column per param");
                 let zip = others.into_iter().zip(columns).collect();
-                Declaration::Bench(BenchStatement::Step(StepDecl { location, param, values, zip }))
+                Declaration::Bench(BenchStatement::Step(StepDecl { location, param, values, zip, range: None }))
             }
             "reference" => {
                 let name = self.name("reference name")?;

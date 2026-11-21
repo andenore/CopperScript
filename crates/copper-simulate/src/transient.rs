@@ -13,6 +13,9 @@
 //! | `overshoot(x)` | `(peak - last) / (last - first)`, the peak on the far side of the last value |
 //! | `harmonic(x, f0, n)` | the peak amplitude of harmonic `n` of `f0`, over the last whole periods of `f0` |
 //! | `thd(x, f0)` | `sqrt(A_2^2 + ... + A_9^2) / A_1` over the same periods |
+//! | `spur(x, f0)` | the largest component of the coherent spectrum (`copper_sim::spectrum`) that is not a harmonic of `f0`, above 0 Hz up to `9.5 f0` or in a band `spur(x, f0, from, to)` |
+//! | `sfdr(x, f0)`, `sinad(x, f0)`, `snr(x, f0)` | the fundamental against the largest other component, against all other power, against all but harmonics 2 to 9, dB, over the same band |
+//! | `spectrum(x)`, `spectrum(x, f0)` | a plot only: the windowed or coherent spectrum ([`crate::run`] computes it) |
 //!
 //! Outside `analysis tran`, `rms` and `pp` reduce over the samples of the
 //! frequency axis as `mean` does, windows interpolate as `at(x, f)` does,
@@ -113,7 +116,44 @@ pub fn options(tran: &TranAnalysis, params: &Params) -> TranOptions {
         options.reltol = value(reltol, params);
     }
     options.initial.uic = tran.uic;
+    // `steady = 1ms;` is the period, `steady = 1kHz;` the fundamental.
+    options.steady = tran.steady.as_ref().map(|q| {
+        let v = value(q, params);
+        if q.value.dimension() == copper_units::Dimension::Frequency { 1.0 / v } else { v }
+    });
+    if tran.noise {
+        options.noise = Some(copper_sim::TranNoise {
+            seed: tran.seed.unwrap_or(copper_lang::transient::DEFAULT_SEED),
+            temperature: crate::lower::kelvin(crate::lower::celsius(params)),
+        });
+    }
     options
+}
+
+/// The window of `spectrum(x)` without a fundamental (`analysis tran window`, default Blackman-Harris).
+pub fn window(tran: &TranAnalysis) -> copper_sim::spectrum::Window {
+    use copper_lang::transient::SpectrumWindow;
+    use copper_sim::spectrum::Window;
+    match tran.window {
+        None | Some(SpectrumWindow::BlackmanHarris) => Window::BlackmanHarris,
+        Some(SpectrumWindow::Hann) => Window::Hann,
+        Some(SpectrumWindow::FlatTop) => Window::FlatTop,
+        Some(SpectrumWindow::Rectangular) => Window::Rectangular,
+    }
+}
+
+/// The spectrum of `x` over the time `axis`: coherent over the last whole
+/// periods of `f0`, or windowed over the whole record.
+pub fn spectrum(
+    axis: &[f64],
+    x: &[f64],
+    f0: Option<f64>,
+    window: copper_sim::spectrum::Window,
+) -> Result<copper_sim::spectrum::Spectrum, String> {
+    match f0 {
+        Some(f0) => copper_sim::spectrum::coherent(axis, x, f0),
+        None => copper_sim::spectrum::windowed(axis, x, window),
+    }
 }
 
 /// The bench's initial conditions in solver terms: node names and the
@@ -146,6 +186,11 @@ pub fn handles(function: Function, count: usize, solution: &Solution) -> bool {
         | Function::Overshoot
         | Function::Harmonic
         | Function::Thd
+        | Function::Spectrum
+        | Function::Spur
+        | Function::Sfdr
+        | Function::Sinad
+        | Function::Snr
         | Function::Integrate => true,
         Function::Min | Function::Max | Function::Mean => count == 3 || (linear && function == Function::Mean),
         Function::At => linear,
@@ -248,6 +293,24 @@ pub fn call(evaluator: &Evaluator, function: Function, x: &Value, arguments: &[E
             time_measure::thd_to(axis, &reals, scalar(evaluator, &arguments[1])?, n as usize)?
         }
         Function::Thd => time_measure::thd(axis, &reals, scalar(evaluator, &arguments[1])?)?,
+        Function::Spur | Function::Sfdr | Function::Sinad | Function::Snr => {
+            let s = copper_sim::spectrum::coherent(axis, &reals, scalar(evaluator, &arguments[1])?)?;
+            let (from, to) = if arguments.len() == 4 {
+                (scalar(evaluator, &arguments[2])?, scalar(evaluator, &arguments[3])?)
+            } else {
+                s.default_band().ok_or("the spectrum has no fundamental")?
+            };
+            match function {
+                Function::Spur => s.spur(from, to)?.1,
+                Function::Sfdr => s.sfdr(from, to)?,
+                Function::Sinad => s.sinad(from, to)?,
+                _ => s.snr(from, to)?,
+            }
+        }
+        Function::Spectrum => {
+            return Err("spectrum(...) is a plot of its own; measure it with spur, sfdr, sinad, snr, harmonic or thd"
+                .to_owned());
+        }
         other => return Err(format!("{} is not a time-domain function", other.name())),
     };
     if !value.is_finite() {

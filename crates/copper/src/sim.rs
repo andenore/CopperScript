@@ -80,6 +80,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              an op-amp's input_offset_drift and voltage noise and a reference's temperature_coefficient. A \
              capacitor part's esr and esl (or self_resonance) and an inductor part's esr (its DC resistance) are in \
              series with the element. \
+             In analysis tran, steady = PERIOD (or steady = F0) starts the run at start in the periodic steady state \
+             of that period, found by shooting (Newton on the period map, its Jacobian applied by replayed periods; \
+             settling period by period where that fails, noted; SIM112: sources that do not repeat, ideal delays, ic, \
+             uic); noise = true injects every noise generator (thermal, shot, amplifier noise with its 1/f corner) as \
+             seeded random currents sampled every max_step, which sets the noise band (seed = N, SIM114); \
+             plot spectrum(x, f0) draws the spectrum over whole periods of f0 in dB relative to the fundamental \
+             (spectrum(x): windowed, window = blackman_harris, hann, flat_top or rectangular) with the integration \
+             floor shaded, written to BENCH.spectrum.csv, and spur, sfdr, sinad and snr measure it (SIM113). \
+             step P from a to b by s; (or points n;) steps a range (SIM115). \
              --check-model PART runs a standard bench set on a part of the board's library instead of the benches \
              (amplifiers: supply current, open-loop gain, gain-bandwidth, phase margin, follower bandwidth, voltage \
              noise and slew rate; regulators and references: quiescent current, output voltage, output resistance, \

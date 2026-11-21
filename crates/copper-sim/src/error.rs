@@ -204,6 +204,9 @@ pub enum SimError {
     /// The pole-zero analysis cannot be done: a circuit too large for the
     /// dense method, a singular pencil, an eigenvalue iteration that failed.
     PoleZero(String),
+    /// No periodic steady state was found (a circuit the shooting method
+    /// does not take, sources that do not repeat with the period, no convergence).
+    SteadyState(String),
 }
 
 fn names(f: &mut fmt::Formatter<'_>, nodes: &[String], elements: &[String]) -> fmt::Result {
@@ -247,6 +250,7 @@ impl fmt::Display for SimError {
             }
             SimError::BadOptions(s) => write!(f, "invalid analysis options: {s}"),
             SimError::PoleZero(s) => write!(f, "pole-zero analysis: {s}"),
+            SimError::SteadyState(s) => write!(f, "periodic steady state: {s}"),
         }
     }
 }

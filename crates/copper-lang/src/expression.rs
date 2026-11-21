@@ -251,6 +251,18 @@ pub enum Function {
     /// `thd(x, f0)`: total harmonic distortion, harmonics 2 to 9 against the
     /// fundamental (analysis tran); `thd(x, f0, n)` to harmonic `n`.
     Thd,
+    /// `spectrum(x)`, `spectrum(x, f0)`: the amplitude spectrum of a transient
+    /// result, windowed or over whole periods of `f0`; a plot only (analysis tran).
+    Spectrum,
+    /// `spur(x, f0)`, `spur(x, f0, from, to)`: the largest component that is not
+    /// a harmonic of `f0` (analysis tran).
+    Spur,
+    /// `sfdr(x, f0)`: the fundamental against the largest other component, dB (analysis tran).
+    Sfdr,
+    /// `sinad(x, f0)`: the fundamental against everything else, dB (analysis tran).
+    Sinad,
+    /// `snr(x, f0)`: the fundamental against everything but harmonics 2 to 9, dB (analysis tran).
+    Snr,
     /// `upto(a < b)`: the axis value up to which a comparison holds from the start of the axis.
     Upto,
     /// `downto(a < b)`: the axis value down to which a comparison holds from the end of the axis.
@@ -274,7 +286,7 @@ pub enum Function {
 }
 
 impl Function {
-    pub const ALL: [Function; 30] = [
+    pub const ALL: [Function; 35] = [
         Function::Mag,
         Function::Phase,
         Function::Re,
@@ -295,6 +307,11 @@ impl Function {
         Function::Overshoot,
         Function::Harmonic,
         Function::Thd,
+        Function::Spectrum,
+        Function::Spur,
+        Function::Sfdr,
+        Function::Sinad,
+        Function::Snr,
         Function::Upto,
         Function::Downto,
         Function::Integrate,
@@ -329,6 +346,11 @@ impl Function {
             Function::Overshoot => "overshoot",
             Function::Harmonic => "harmonic",
             Function::Thd => "thd",
+            Function::Spectrum => "spectrum",
+            Function::Spur => "spur",
+            Function::Sfdr => "sfdr",
+            Function::Sinad => "sinad",
+            Function::Snr => "snr",
             Function::Upto => "upto",
             Function::Downto => "downto",
             Function::Integrate => "integrate",
@@ -360,9 +382,15 @@ impl Function {
         )
     }
 
+    /// The measures on a coherent spectrum, `f(x, f0)` or `f(x, f0, from, to)`.
+    pub fn spectral(self) -> bool {
+        matches!(self, Function::Spur | Function::Sfdr | Function::Sinad | Function::Snr)
+    }
+
     fn arity(self) -> usize {
         match self {
             Function::At | Function::Reference | Function::Cross | Function::Settle | Function::Thd => 2,
+            Function::Spur | Function::Sfdr | Function::Sinad | Function::Snr => 2,
             Function::Harmonic => 3,
             Function::NoiseRms | Function::NoiseShare | Function::If => 3,
             Function::Stable | Function::Damping => 0,
@@ -619,6 +647,21 @@ pub fn noise_quantities(expression: &Expression) -> Vec<Option<&Expression>> {
     out
 }
 
+/// Whether `expression` calls `function` anywhere (lets not followed).
+pub fn calls(expression: &Expression, function: Function) -> bool {
+    match &expression.kind {
+        ExpressionKind::Call { function: f, arguments } => {
+            *f == function || arguments.iter().any(|argument| calls(argument, function))
+        }
+        ExpressionKind::Negate(operand) => calls(operand, function),
+        ExpressionKind::Binary { left, right, .. } | ExpressionKind::Compare { left, right, .. } => {
+            calls(left, function) || calls(right, function)
+        }
+        ExpressionKind::Probe(probe) => probe.noise_quantity().flatten().is_some_and(|q| calls(q, function)),
+        _ => false,
+    }
+}
+
 /// Whether `expression` holds a call of `upto` or `downto` (its value may be "never").
 pub fn may_be_never(expression: &Expression) -> bool {
     match &expression.kind {
@@ -749,12 +792,18 @@ pub fn check(expression: &Expr, scope: &dyn Scope) -> Result<Expression> {
                 }
                 return Err(failure);
             };
-            let optional = (resolved.windowed() || resolved == Function::Thd) && arguments.len() == 3;
+            let optional = ((resolved.windowed() || resolved == Function::Thd) && arguments.len() == 3)
+                || (resolved == Function::Spectrum && arguments.len() == 2)
+                || (resolved.spectral() && arguments.len() == 4);
             if arguments.len() != resolved.arity() && !optional {
                 let count = if resolved.windowed() {
                     "1 argument, or 3 (x, from, to)".to_owned()
                 } else if resolved == Function::Thd {
                     "2 arguments, or 3 (x, f0, highest harmonic)".to_owned()
+                } else if resolved == Function::Spectrum {
+                    "1 argument (x, windowed), or 2 (x, f0)".to_owned()
+                } else if resolved.spectral() {
+                    "2 arguments (x, f0), or 4 (x, f0, from, to)".to_owned()
                 } else {
                     format!("{} argument{}", resolved.arity(), if resolved.arity() == 1 { "" } else { "s" })
                 };
@@ -1055,7 +1104,16 @@ fn call_type(
                 ExpressionType::scalar(x.units.times(Units::base(SECOND, -1)))
             }
         }
-        Function::Cross | Function::Settle | Function::Overshoot | Function::Harmonic | Function::Thd => {
+        Function::Cross
+        | Function::Settle
+        | Function::Overshoot
+        | Function::Harmonic
+        | Function::Thd
+        | Function::Spectrum
+        | Function::Spur
+        | Function::Sfdr
+        | Function::Sinad
+        | Function::Snr => {
             return crate::transient::call_type(function, arguments, scope, location);
         }
         Function::PhaseMargin | Function::GainMargin | Function::Crossover | Function::PhaseCrossover => {

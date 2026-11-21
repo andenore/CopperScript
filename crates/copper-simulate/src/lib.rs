@@ -135,6 +135,11 @@ pub fn write_outputs(runs: &[BenchRun], board: &str, directory: &Path) -> std::i
             copper_json::text::write_text(&csv, &results::plots_csv(run))?;
             written.push(csv);
         }
+        if !run.spectra.is_empty() && run.error.is_none() {
+            let csv = directory.join(format!("{stem}.spectrum.csv"));
+            copper_json::text::write_text(&csv, &results::spectra_csv(run))?;
+            written.push(csv);
+        }
         let html = directory.join(format!("{stem}.html"));
         copper_json::text::write_text(&html, &report::html(run, board))?;
         written.push(html);

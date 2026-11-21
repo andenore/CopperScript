@@ -241,13 +241,13 @@ impl NoiseResult {
 }
 
 /// A generator: a current from `from` to `to` with a density per frequency.
-struct Generator {
-    element: String,
-    kind: NoiseSourceKind,
-    from: NodeId,
-    to: NodeId,
+pub(crate) struct Generator {
+    pub(crate) element: String,
+    pub(crate) kind: NoiseSourceKind,
+    pub(crate) from: NodeId,
+    pub(crate) to: NodeId,
     /// A temperature of its own (a resistor's), K.
-    kelvin: Option<f64>,
+    pub(crate) kelvin: Option<f64>,
 }
 
 impl Generator {
@@ -274,7 +274,7 @@ impl Generator {
 
 /// The noise generators of `c`; `bias` holds each nonlinear element's
 /// operating point ([`crate::newton::linearized_at_point`]).
-fn generators(c: &Circuit, bias: &[f64]) -> Result<Vec<Generator>, SimError> {
+pub(crate) fn generators(c: &Circuit, bias: &[f64]) -> Result<Vec<Generator>, SimError> {
     let amplifiers: Vec<(usize, &str)> = c
         .macros()
         .iter()

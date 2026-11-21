@@ -586,6 +586,16 @@ fn bench_statement(statement: &BenchStatement) -> StateValue {
                     .collect();
                 fields.push(("zip", StateValue::Tuple(zip)));
             }
+            if let Some(range) = &item.range {
+                fields.push(("from", scalar(&range.from)));
+                fields.push(("to", scalar(&range.to)));
+                if let Some(by) = &range.by {
+                    fields.push(("by", scalar(by)));
+                }
+                if let Some(points) = &range.points {
+                    fields.push(("points", scalar(points)));
+                }
+            }
             syntax("StepDecl", fields)
         }
         BenchStatement::Reference(item) => syntax(
