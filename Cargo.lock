@@ -139,6 +139,9 @@ dependencies = [
 [[package]]
 name = "copper-emi"
 version = "0.1.0"
+dependencies = [
+ "copper-sim",
+]
 
 [[package]]
 name = "copper-extract"

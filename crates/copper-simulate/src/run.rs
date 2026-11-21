@@ -104,6 +104,10 @@ pub struct StepRun {
     pub transient: Option<copper_sim::TranStats>,
     /// The poles and zeros (`analysis pz`), with the nodes each pole dominates in the bench's terms.
     pub pole_zero: Option<crate::stability::PoleZeroStep>,
+    /// The simulated voltages of the target's profiled pins (`op`, `dc`, `tran`; see [`crate::evidence`]).
+    pub pins: Vec<crate::evidence::PinVoltages>,
+    /// The currents the bench's supplies deliver (`op`, `dc`, `tran`).
+    pub supplies: Vec<crate::evidence::SupplyCurrent>,
 }
 
 /// A measure at one step.
@@ -644,6 +648,8 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             return run;
         }
     };
+    // The pins whose simulated voltages the results record for the checks (`crate::evidence`).
+    let probes = crate::evidence::pin_probes(&view);
     let wiring: Wiring = match lower::wiring(&view, bench) {
         Ok(wiring) => wiring,
         Err(message) => {
@@ -672,7 +678,7 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                 .collect::<Result<Vec<bool>, String>>()
         });
         let solved = covered.and_then(|covered| {
-            let step = run_step(design, bench, &wiring, &params, &marks, &covered)?;
+            let step = run_step(design, bench, &wiring, &params, &marks, &covered, &probes)?;
             Ok((step, covered))
         });
         (params, solved, step_clock.map_or(0.0, |start| start.elapsed().as_secs_f64()))
@@ -904,6 +910,7 @@ pub(crate) fn run_step(
     params: &Params,
     marks: &Marks,
     covered: &[bool],
+    probes: &[crate::evidence::PinProbe],
 ) -> Result<(StepRun, Vec<ModelUse>), String> {
     let (lowered, solution) = solve(design, bench, wiring, params)?;
     // Reference runs: the same bench with each reference's params.
@@ -982,6 +989,7 @@ pub(crate) fn run_step(
             plots.push(result.reals());
         }
     }
+    let (pins, supplies) = crate::evidence::record(probes, bench, &lowered, &solution);
     let step = StepRun {
         label: String::new(),
         stepped: Vec::new(),
@@ -1000,6 +1008,8 @@ pub(crate) fn run_step(
             Solution::Pz(result) => Some(crate::stability::PoleZeroStep::new(result, &lowered)),
             _ => None,
         },
+        pins,
+        supplies,
     };
     let mut models = lowered.models;
     if matches!(bench.analysis, Analysis::Noise(_)) {

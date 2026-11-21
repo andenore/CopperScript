@@ -9,8 +9,10 @@ named on this page. A change of shape is a new schema version.
 
 Rules that hold everywhere:
 
-- Every field listed here is present in every document. A field that does not
-  apply is `null` (or an empty array), never left out.
+- Every field listed here is present in every document `copper sim` writes. A
+  field that does not apply is `null` (or an empty array), never left out. The
+  fields of [Added within v1](#added-within-v1) are new optional fields: a
+  document written before them lacks them, and a reader must accept that.
 - Numbers are SI base units: seconds, hertz, volts, amperes, ohms. `units` is
   the base-unit text of a value (`V`, `A`, `ohm`, `Hz`, `dB`, `deg`, `V/rtHz`;
   `1` for a dimensionless ratio, which the text table and pages show in `%`).
@@ -35,6 +37,10 @@ Code: `crates/copper-simulate/src/results.rs` (the document, `bench_value`),
 | `solver.name` | string | `copper-sim`. |
 | `solver.version` | string | The `copper-sim` crate version. |
 | `solver.method` | string | The numerical method in words. |
+| `source` | object | Added within v1. The sources the results were made from, so a check that reads them can refuse results of another version of the board or benches. |
+| `source.board_file` | string | The board file as `copper sim` was given it. |
+| `source.design_sha256` | string | SHA-256 of the compiled design (the JSON `copper compile` writes): any change to the board, its parts, packages, ratings or sim blocks changes it; a comment does not. |
+| `source.benches_sha256` | string | SHA-256 over the board's bench sources: each file of `benches/` in load order, its name relative to `benches/`, a NUL, its bytes and a NUL. |
 | `board` | string | The board's name. |
 | `status` | string | `pass`, `fail` (a measure outside its limits) or `error` (a bench could not be solved); the worst of the benches. |
 | `benches` | array | One entry per bench run, in file and declaration order. A bench with several analyses gives one entry per analysis (a section). With `--bench NAME` only that bench. |
@@ -159,6 +165,32 @@ steps has one step labelled `nominal`.
 | `benches[].steps[].transient.steady_residual` | float or null | Its final residual, `null` without a steady state. |
 | `benches[].steps[].transient.steady_fallback` | string or null | Why shooting gave up and the run settled period by period instead, `null` when shooting converged or without a steady state. |
 | `benches[].steps[].transient.noise_generators` | int | Noise generators injected (transient noise; 0 without). |
+| `benches[].steps[].pins` | array | Added within v1. `op`, `dc` and `tran` benches (empty for the others): every pin of the target's components that has an electrical profile and whose node the bench solved, for the checks of `copper check --sim-results`. |
+| `benches[].steps[].pins[]` | object | One pin. |
+| `benches[].steps[].pins[].pin` | string | `COMPONENT.PIN` (the package pin) in the bench's names: a module bench's are the module's own. |
+| `benches[].steps[].pins[].net` | string | The node it is on. |
+| `benches[].steps[].pins[].fidelity` | string | The component's fidelity in this bench (as in `models[]`). |
+| `benches[].steps[].pins[].min_v` | float | The lowest voltage against the bench's ground over the step: the operating point, the swept values or the recorded span of a transient run. |
+| `benches[].steps[].pins[].max_v` | float | The highest. |
+| `benches[].steps[].pins[].min_at` | float or null | The axis value where the lowest was reached (time, swept value); `null` for `op`. |
+| `benches[].steps[].pins[].max_at` | float or null | Where the highest was reached. |
+| `benches[].steps[].pins[].relative` | array | For each pin an absolute rating of this pin is relative to (`absolute_max = "VP+0.2V"`): the extremes of `V(pin) - V(that pin)`, taken at the same instants. Empty without relative ratings. |
+| `benches[].steps[].pins[].relative[]` | object | One reference pin. |
+| `benches[].steps[].pins[].relative[].reference` | string | `COMPONENT.PIN` of the reference. |
+| `benches[].steps[].pins[].relative[].min_v` | float | The lowest difference. |
+| `benches[].steps[].pins[].relative[].max_v` | float | The highest difference. |
+| `benches[].steps[].pins[].relative[].min_at` | float or null | Where the lowest was reached. |
+| `benches[].steps[].pins[].relative[].max_at` | float or null | Where the highest was reached. |
+| `benches[].steps[].supplies` | array | Added within v1. `op`, `dc` and `tran` benches (empty for the others): every supply the bench drives with a source or a replacement model (not the ground, an ignored supply or one driven by a component). |
+| `benches[].steps[].supplies[]` | object | One supply. |
+| `benches[].steps[].supplies[].supply` | string | Its name. |
+| `benches[].steps[].supplies[].net` | string | Its net, in the bench's names. |
+| `benches[].steps[].supplies[].voltage_v` | float | Its declared voltage. |
+| `benches[].steps[].supplies[].min_a` | float | The lowest `I(SUPPLY)` (the current it delivers into its net) over the step. |
+| `benches[].steps[].supplies[].max_a` | float | The highest. |
+| `benches[].steps[].supplies[].min_at` | float or null | Where the lowest was reached; `null` for `op`. |
+| `benches[].steps[].supplies[].max_at` | float or null | Where the highest was reached. |
+| `benches[].steps[].supplies[].mean_a` | float or null | The operating point's current, or the time-weighted mean over the recorded span of a transient run; `null` for `dc`. |
 
 ### Measures
 
@@ -344,6 +376,28 @@ measure's `steps[].value` is then the worst run's.
 | `benches[].timing.factorizations.ordered` | int | Sparse with a new ordering. |
 | `benches[].timing.factorizations.refactored` | int | Sparse in a kept ordering. |
 | `benches[].timing.factorizations.dense` | int | Dense (singular or nearly singular systems). |
+
+## Added within v1
+
+New optional fields, for the checks that take simulation results as
+evidence (plan F11; code: `crates/copper-simulate/src/evidence.rs`):
+
+- `source`: the board file and the digests of the design and the bench
+  sources. `copper check --sim-results FILE` and `copper power-check
+  --sim-results FILE` recompute both from the board they are given and refuse
+  (`SIM_RESULTS_STALE`) a document whose board, design digest or bench digest
+  differs, or that has no `source`.
+- `benches[].steps[].pins` and `benches[].steps[].supplies`: what those checks
+  read. `copper check --sim-results` judges each pin against the absolute
+  rating the board declares now (a relative rating against its `relative`
+  entry); a module bench's pins are the pins of every instance of the module.
+  `copper power-check --sim-results` lists the supplies' currents against the
+  board supplies on the same nets (a module bench's through the instance's
+  port connections).
+
+The bias point of an `ac`, `noise`, `loop` or `pz` bench is not recorded: an
+operating point the bench did not report is not evidence. Nothing else in the
+document changed; the measure values of the examples are identical.
 
 ## Changes from `copperscript-sim/v0.1`
 

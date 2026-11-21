@@ -104,7 +104,7 @@ impl Solution {
         matches!(self, Solution::Ac(_) | Solution::Noise(_) | Solution::Loop(_))
     }
 
-    fn voltage(&self, node: &str) -> Result<Vec<Complex>, SimError> {
+    pub(crate) fn voltage(&self, node: &str) -> Result<Vec<Complex>, SimError> {
         match self {
             Solution::Op(result) => Ok(vec![Complex::real(result.voltage(node)?)]),
             Solution::Ac(result) => Ok(result.voltage(node)?.to_vec()),
@@ -115,7 +115,7 @@ impl Solution {
         }
     }
 
-    fn current(&self, element: &str) -> Result<Vec<Complex>, SimError> {
+    pub(crate) fn current(&self, element: &str) -> Result<Vec<Complex>, SimError> {
         match self {
             Solution::Op(result) => Ok(vec![Complex::real(result.current(element)?)]),
             Solution::Ac(result) => result.current(element),

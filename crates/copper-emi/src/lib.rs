@@ -1,7 +1,9 @@
 //! Pure-numerics EMI/EMC screening estimators for CopperScript.
 //!
 //! Everything here is plain `f64` in SI units (metres, seconds, hertz, volts,
-//! amperes, henries, farads, ohms) with no dependency on other copper crates.
+//! amperes, henries, farads, ohms). The only other copper crate it uses is the
+//! simulator's circuit solver, `copper-sim`, which solves the circuits of
+//! [`circuit`].
 //!
 //! | Module | Contents |
 //! | --- | --- |
@@ -14,7 +16,7 @@
 //! | [`spectrum`] | complex numbers, radix-2 FFT, windows, amplitude-correct spectra |
 //! | [`lisn`] | CISPR 16-1-2 50 uH V-network impedance and noise-current to measured-voltage transfer |
 //! | [`receiver`] | EMI receiver emulation: Gaussian IF filter, peak, quasi-peak and average detectors |
-//! | [`circuit`] | linear circuit solver: modified nodal analysis in the frequency domain (R, L, C, mutual coupling, sources, VCCS), impedance and sweeps |
+//! | [`circuit`] | linear circuits in the frequency domain (R, L, C, mutual coupling, sources, VCCS, real capacitors and inductors, V-network lines), solved by `copper-sim`; impedance and sweeps |
 //! | [`harmonic`] | periodic steady state of a circuit from Fourier coefficients; complex Fourier series of trapezoidal pulse trains and triangular ripple; waveform reconstruction |
 //! | [`conducted`] | conducted-emission (CISPR Band B) prediction for a switching cell's input side: DM and CM paths, input filter, LISN, limits and margins |
 //!

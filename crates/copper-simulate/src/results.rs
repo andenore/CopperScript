@@ -3,9 +3,11 @@
 //!
 //! The document's shape is frozen and described field by field in
 //! [`docs/sim-results-schema.md`](../../../docs/sim-results-schema.md); the
-//! test `tests/results_schema.rs` pins it. A field is added only with a new
-//! schema version; every field listed there is always present (`null` or an
-//! empty array where it does not apply).
+//! test `tests/results_schema.rs` pins it. A changed field needs a new schema
+//! version; every field listed there is always present (`null` or an empty
+//! array where it does not apply). The fields added within v1 (`source`,
+//! `steps[].pins`, `steps[].supplies`, for the checks of [`crate::evidence`])
+//! are optional for readers: documents written before them lack them.
 //!
 //! Values are SI base units (`units` is the base-unit text: `A`, `deg`, `dB`,
 //! `1` for dimensionless). Fidelity is `ideal` (a passive or an ideal DC
@@ -244,6 +246,8 @@ pub fn bench_value(run: &BenchRun) -> Value {
                 ("analysis", step_analysis.get(index).cloned().unwrap_or_else(|| Value::Object(Object::new()))),
                 ("x", Value::Array(step.axis.iter().map(|x| number(*x)).collect())),
                 ("transient", step.transient.as_ref().map(transient_value).unwrap_or(Value::Null)),
+                ("pins", crate::evidence::pins_value(&step.pins)),
+                ("supplies", crate::evidence::supplies_value(&step.supplies)),
             ])
         })
         .collect();
@@ -491,20 +495,35 @@ pub fn overall(runs: &[BenchRun]) -> Status {
     }
 }
 
-/// The results document of `runs` on `board`.
+/// The results document of `runs` on `board`, without a `source` identity.
 pub fn results_value(runs: &[BenchRun], board: &str) -> Value {
-    object(vec![
-        ("schema", Value::from(SCHEMA)),
-        ("solver", solver()),
+    results_value_from(runs, board, None)
+}
+
+/// The results document of `runs` on `board`, with the identity of the
+/// sources it was made from (`source`, which the checks that read the
+/// document compare with the board they are given).
+pub fn results_value_from(runs: &[BenchRun], board: &str, source: Option<&crate::evidence::SourceIdentity>) -> Value {
+    let mut entries = vec![("schema", Value::from(SCHEMA)), ("solver", solver())];
+    if let Some(source) = source {
+        entries.push(("source", source.value()));
+    }
+    entries.extend([
         ("board", Value::from(board)),
         ("status", Value::from(overall(runs).name())),
         ("benches", Value::Array(runs.iter().map(bench_value).collect())),
-    ])
+    ]);
+    object(entries)
 }
 
 /// [`results_value`] as indented JSON text.
 pub fn results_json(runs: &[BenchRun], board: &str) -> String {
-    let mut text = Dumps::new().indent(2).dumps(&results_value(runs, board));
+    results_json_from(runs, board, None)
+}
+
+/// [`results_value_from`] as indented JSON text.
+pub fn results_json_from(runs: &[BenchRun], board: &str, source: Option<&crate::evidence::SourceIdentity>) -> String {
+    let mut text = Dumps::new().indent(2).dumps(&results_value_from(runs, board, source));
     text.push('\n');
     text
 }

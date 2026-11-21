@@ -1,7 +1,11 @@
-//! `copper power-check BOARD [--locked] [--offline]`.
+//! `copper power-check BOARD [--locked] [--offline] [--sim-results FILE]`.
+//!
+//! `--sim-results` adds each board supply's simulated current from a `copper
+//! sim` run (`copper_simulate::evidence::rail_lines`); it never runs a
+//! simulation.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
@@ -11,12 +15,13 @@ use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::power::analyze_power_states;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
-use crate::option_parser::{self, flag};
+use crate::option_parser::{self, flag, value};
+use crate::pypath;
 
-const USAGE: &str = "usage: copper power-check [-h] [--locked] [--offline] board";
+const USAGE: &str = "usage: copper power-check [-h] [--locked] [--offline] [--sim-results FILE] board";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match option_parser::parse(arguments, &[flag("--locked"), flag("--offline")]) {
+    let parsed = match option_parser::parse(arguments, &[flag("--locked"), flag("--offline"), value("--sim-results")]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper power-check: error: {message}");
@@ -50,12 +55,31 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
-    let diagnostics = analyze_power_states(&view);
+    let mut diagnostics = analyze_power_states(&view);
+    // `--sim-results`: the supplies' simulated currents, with the source of each number.
+    let mut rails = Vec::new();
+    if let Some(file) = parsed.value("--sim-results") {
+        let results = PathBuf::from(pypath::display(file));
+        let evidence = match copper_simulate::evidence::read_file(&results) {
+            Ok(evidence) => evidence,
+            Err(message) => {
+                let _ = writeln!(err, "{USAGE}\ncopper power-check: error: argument --sim-results: {message}");
+                return 2;
+            }
+        };
+        match copper_simulate::evidence::validate_source(&evidence, Path::new(board), &design) {
+            Err(reason) => diagnostics.push(copper_simulate::evidence::stale(&evidence, Path::new(board), &reason)),
+            Ok(()) => rails = copper_simulate::evidence::rail_lines(&view, &evidence),
+        }
+    }
     if diagnostics.is_empty() {
         let _ = text::print(out, &format!("OK: {} passed power-state analysis", design.electrical.name));
     }
     for diagnostic in &diagnostics {
         let _ = text::print(out, &diagnostic.to_string());
+    }
+    for line in &rails {
+        let _ = text::print(out, line);
     }
     u8::from(has_errors(&diagnostics))
 }

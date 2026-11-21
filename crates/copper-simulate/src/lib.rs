@@ -21,6 +21,7 @@
 pub mod chart;
 pub mod check_model;
 pub mod evaluate;
+pub mod evidence;
 pub mod format;
 pub mod lower;
 pub mod noise;
@@ -137,10 +138,22 @@ pub const RESULTS_FILE: &str = "sim-results.json";
 
 /// Write the results JSON, one CSV and one HTML page per bench into `directory`; returns the paths written.
 pub fn write_outputs(runs: &[BenchRun], board: &str, directory: &Path) -> std::io::Result<Vec<PathBuf>> {
+    write_outputs_from(runs, board, None, directory)
+}
+
+/// [`write_outputs`] with the identity of the sources the runs were made
+/// from in the results JSON (`source`; `copper sim` always writes it, and
+/// the checks that read the results refuse them without it).
+pub fn write_outputs_from(
+    runs: &[BenchRun],
+    board: &str,
+    source: Option<&evidence::SourceIdentity>,
+    directory: &Path,
+) -> std::io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(directory)?;
     let mut written = Vec::new();
     let json = directory.join(RESULTS_FILE);
-    copper_json::text::write_text(&json, &results::results_json(runs, board))?;
+    copper_json::text::write_text(&json, &results::results_json_from(runs, board, source))?;
     written.push(json);
     for run in runs {
         let stem = results::file_stem(&run.name);

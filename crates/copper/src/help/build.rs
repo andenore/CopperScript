@@ -60,6 +60,13 @@ pub const COMMANDS: &[Command] = &[
                 help: "prepare the board's physical macro assets (fetching pinned dependencies unless --offline) \
                        and write every macro input path to FILE, one per line",
             },
+            Opt {
+                flag: "--sim-results FILE",
+                help: "also check the pin voltages a copper sim run recorded in FILE (sim-results.json) against the \
+                       pins' absolute ratings: SIM_PIN_ABSOLUTE_HIGH / SIM_PIN_ABSOLUTE_LOW name the bench, step and \
+                       value; results made from other board or bench sources are refused (SIM_RESULTS_STALE); \
+                       check never runs a simulation",
+            },
         ],
         actions: &[],
     },
@@ -102,6 +109,12 @@ pub const COMMANDS: &[Command] = &[
                 help: "require every dependency to be pinned in copper.lock and verify it without rewriting the lock",
             },
             Opt { flag: "--offline", help: "resolve dependencies from the local cache only; never fetch" },
+            Opt {
+                flag: "--sim-results FILE",
+                help: "also list each board supply's simulated current from a copper sim run's sim-results.json \
+                       (per bench, step and bench supply, with its source); results made from other board or bench \
+                       sources are refused (SIM_RESULTS_STALE); power-check never runs a simulation",
+            },
         ],
         actions: &[],
     },

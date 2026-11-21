@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+copper-sim.workspace = true
 
 [lints]
 workspace = true

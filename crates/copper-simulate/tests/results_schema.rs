@@ -31,8 +31,8 @@ const HEADER: &str = "part HEADER {
 
 const OPAMP: &str = "part OPAMP {
     category = \"amplifier.opamp\";
-    pin INN { number = \"2\"; domains = \"analog\"; directions = \"input\"; }
-    pin INP { number = \"3\"; domains = \"analog\"; directions = \"input\"; }
+    pin INN { number = \"2\"; domains = \"analog\"; directions = \"input\"; absolute_min = \"VN-0.3V\"; absolute_max = \"VP+0.3V\"; }
+    pin INP { number = \"3\"; domains = \"analog\"; directions = \"input\"; absolute_min = \"VN-0.3V\"; absolute_max = \"VP+0.3V\"; }
     pin VN  { number = \"4\"; domains = \"power\"; directions = \"input\"; }
     pin OUT { number = \"6\"; domains = \"analog\"; directions = \"output\"; }
     pin VP  { number = \"7\"; domains = \"power\"; directions = \"input\"; }
@@ -188,7 +188,9 @@ fn the_results_document_has_the_frozen_v1_shape() {
     for run in &runs {
         assert_eq!(run.error, None, "{}", run.name);
     }
-    let json = copper_simulate::results::results_json(&runs, "Amp");
+    // With the source identity `copper sim` writes (`source`, added within v1).
+    let source = copper_simulate::evidence::SourceIdentity::of(&board, &design);
+    let json = copper_simulate::results::results_json_from(&runs, "Amp", Some(&source));
     let document = copper_json::parse(&json).unwrap();
     assert_eq!(document.get("schema").and_then(|v| v.as_str()), Some("copperscript-sim/v1"));
     let shape = shape_of(&document);

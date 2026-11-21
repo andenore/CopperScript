@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
-use copper_simulate::{BenchRun, ModelChoice, SimulateError, failed, simulate_matching, write_outputs};
+use copper_simulate::{BenchRun, ModelChoice, SimulateError, failed, simulate_matching, write_outputs_from};
 
 /// How often the files are checked.
 pub const POLL: Duration = Duration::from_millis(300);
@@ -193,7 +193,8 @@ fn run_once(
             None => latest.push(run),
         }
     }
-    match write_outputs(latest, &design.electrical.name, &watch.out) {
+    let source = copper_simulate::evidence::SourceIdentity::of(&watch.board, &design);
+    match write_outputs_from(latest, &design.electrical.name, Some(&source), &watch.out) {
         Ok(paths) => {
             let _ =
                 text::print(out, &format!("wrote {} ({} files)", copper_lang::paths::display(&watch.out), paths.len()));

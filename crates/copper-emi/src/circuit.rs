@@ -1,5 +1,6 @@
-//! Small linear circuit solver: modified nodal analysis (MNA) in the frequency
-//! domain with dense complex Gaussian elimination.
+//! Linear circuits of the EMI estimators, solved by the simulator's circuit
+//! solver (`copper-sim`): modified nodal analysis (MNA) in the frequency
+//! domain at one frequency per solve.
 //!
 //! # Model
 //!
@@ -33,17 +34,25 @@
 //!
 //! # Numerics
 //!
-//! The system is dense (sizes of tens of nodes), rows are equilibrated to a
-//! unit largest entry, and elimination uses partial pivoting. A pivot below
-//! `1e-12` after equilibration reports [`CircuitError::Singular`] (floating
-//! nodes, loops of ideal voltage sources, cut-sets of current sources); the
-//! result is also checked for non-finite values, so NaN never escapes.
+//! [`Circuit::solve`] hands the circuit to `copper-sim` as an AC analysis at
+//! one frequency: every element keeps its index (so an [`ElementId`] is also
+//! the simulator's element), node `k` is the simulator's node `k`, and the
+//! source phasors are the simulator's AC values (an AC analysis at 0 Hz opens
+//! the capacitors and shorts the inductors, as above). The stamps are the
+//! simulator's ([`copper_sim::mna`]), which are the ones in the table; the
+//! system is factored by its sparse LU with power-of-two equilibration and
+//! one step of iterative refinement, and a matrix it finds singular or nearly
+//! so gets the dense LU's verdict. A singular system (floating nodes, loops
+//! of ideal voltage sources, cut-sets of current sources) or a non-finite
+//! solution is [`CircuitError::Singular`], so NaN never escapes. A node no
+//! element touches is a floating node here too (the simulator would leave it
+//! out of the unknowns): [`CircuitError::Singular`].
 //!
-//! The solver is linear and time-invariant; it has no nonlinear devices.
+//! The circuits are linear and time-invariant; nonlinear devices are the
+//! simulator's business, not this module's.
 
 use crate::lisn::VNetwork;
 use crate::spectrum::Complex;
-use std::f64::consts::PI;
 
 /// A circuit node index. Node 0 is ground.
 pub type Node = usize;
@@ -374,127 +383,65 @@ impl Circuit {
             return Err(CircuitError::BadFrequency(frequency));
         }
         self.validate()?;
-        let w = 2.0 * PI * frequency;
-        let jw = Complex::new(0.0, w);
-        let nv = self.node_count() - 1; // non-ground nodes: rows 0..nv
-        // Branch unknown index for sources and inductors.
-        let mut branch: Vec<Option<usize>> = vec![None; self.elements.len()];
-        let mut nb = 0;
-        for (i, e) in self.elements.iter().enumerate() {
-            if matches!(e.kind, Kind::VoltageSource(_) | Kind::Inductor(_)) {
-                branch[i] = Some(nv + nb);
-                nb += 1;
-            }
-        }
-        let n = nv + nb;
-        let mut m = vec![Complex::ZERO; n * n];
-        let mut rhs = vec![Complex::ZERO; n];
-        let add = |m: &mut Vec<Complex>, r: usize, c: usize, v: Complex| {
-            m[r * n + c] = m[r * n + c] + v;
-        };
-        // Row/column of a node (None for ground).
-        let ix = |node: Node| node.checked_sub(1);
-        // Stamp an admittance y between a and b.
-        let stamp_y = |m: &mut Vec<Complex>, a: Node, b: Node, y: Complex| {
-            if let Some(ra) = ix(a) {
-                add(m, ra, ra, y);
-                if let Some(rb) = ix(b) {
-                    add(m, ra, rb, -y);
-                }
-            }
-            if let Some(rb) = ix(b) {
-                add(m, rb, rb, y);
-                if let Some(ra) = ix(a) {
-                    add(m, rb, ra, -y);
-                }
-            }
-        };
-        for (i, e) in self.elements.iter().enumerate() {
+        // A node no element touches has an empty KCL row: floating. The
+        // simulator leaves such a node out of its unknowns, so refuse it here.
+        let mut touched = vec![false; self.node_count()];
+        for e in &self.elements {
             match &e.kind {
-                Kind::Resistor(r) => stamp_y(&mut m, e.a, e.b, Complex::new(1.0 / r, 0.0)),
-                Kind::Capacitor(c) => stamp_y(&mut m, e.a, e.b, jw.scale(*c)),
-                Kind::Inductor(l) => {
-                    let k = branch[i].expect("inductor branch");
-                    if let Some(ra) = ix(e.a) {
-                        add(&mut m, ra, k, Complex::ONE);
-                        add(&mut m, k, ra, Complex::ONE);
-                    }
-                    if let Some(rb) = ix(e.b) {
-                        add(&mut m, rb, k, -Complex::ONE);
-                        add(&mut m, k, rb, -Complex::ONE);
-                    }
-                    add(&mut m, k, k, -jw.scale(*l));
-                }
-                Kind::Mutual { l1, l2, k } => {
-                    let (Kind::Inductor(la), Kind::Inductor(lb)) =
-                        (&self.elements[l1.0].kind, &self.elements[l2.0].kind)
-                    else {
-                        unreachable!("validated")
-                    };
-                    let mutual = jw.scale(k * (la * lb).sqrt());
-                    let (r1, r2) = (branch[l1.0].expect("branch"), branch[l2.0].expect("branch"));
-                    add(&mut m, r1, r2, -mutual);
-                    add(&mut m, r2, r1, -mutual);
-                }
-                Kind::VoltageSource(p) => {
-                    let k = branch[i].expect("source branch");
-                    if let Some(ra) = ix(e.a) {
-                        add(&mut m, ra, k, Complex::ONE);
-                        add(&mut m, k, ra, Complex::ONE);
-                    }
-                    if let Some(rb) = ix(e.b) {
-                        add(&mut m, rb, k, -Complex::ONE);
-                        add(&mut m, k, rb, -Complex::ONE);
-                    }
-                    rhs[k] = *p;
-                }
-                Kind::CurrentSource(p) => {
-                    if let Some(ra) = ix(e.a) {
-                        rhs[ra] = rhs[ra] - *p;
-                    }
-                    if let Some(rb) = ix(e.b) {
-                        rhs[rb] = rhs[rb] + *p;
-                    }
-                }
-                Kind::Vccs { cp, cn, gm } => {
-                    let g = Complex::new(*gm, 0.0);
-                    if let Some(ra) = ix(e.a) {
-                        if let Some(c) = ix(*cp) {
-                            add(&mut m, ra, c, g);
-                        }
-                        if let Some(c) = ix(*cn) {
-                            add(&mut m, ra, c, -g);
-                        }
-                    }
-                    if let Some(rb) = ix(e.b) {
-                        if let Some(c) = ix(*cp) {
-                            add(&mut m, rb, c, -g);
-                        }
-                        if let Some(c) = ix(*cn) {
-                            add(&mut m, rb, c, g);
-                        }
-                    }
-                }
+                Kind::Mutual { .. } => {}
+                Kind::Vccs { cp, cn, .. } => [e.a, e.b, *cp, *cn].iter().for_each(|&n| touched[n] = true),
+                _ => [e.a, e.b].iter().for_each(|&n| touched[n] = true),
             }
         }
-        let x = solve_dense(&mut m, &mut rhs, n)?;
-        let mut voltages = vec![Complex::ZERO; self.node_count()];
-        voltages[1..=nv].copy_from_slice(&x[..nv]);
-        let v = |node: Node| voltages[node];
-        let currents = self
-            .elements
-            .iter()
-            .enumerate()
-            .map(|(i, e)| match &e.kind {
-                Kind::Resistor(r) => (v(e.a) - v(e.b)).scale(1.0 / r),
-                Kind::Capacitor(c) => jw.scale(*c) * (v(e.a) - v(e.b)),
-                Kind::Inductor(_) | Kind::VoltageSource(_) => x[branch[i].expect("branch")],
-                Kind::Mutual { .. } => Complex::ZERO,
-                Kind::CurrentSource(p) => *p,
-                Kind::Vccs { cp, cn, gm } => (v(*cp) - v(*cn)).scale(*gm),
-            })
-            .collect();
+        if touched.iter().skip(1).any(|t| !t) {
+            return Err(CircuitError::Singular);
+        }
+        let (circuit, nodes, ids) = self.to_sim()?;
+        let result = copper_sim::ac(&circuit, &copper_sim::Sweep::List(vec![frequency])).map_err(|e| match e {
+            copper_sim::SimError::Singular { .. } | copper_sim::SimError::NonFinite(_) => CircuitError::Singular,
+            other => CircuitError::InvalidElement(other.to_string()),
+        })?;
+        let voltages = nodes.iter().map(|&n| from_sim(result.node_voltage(n)[0])).collect();
+        let currents = ids.iter().map(|&id| from_sim(result.element_current(id)[0])).collect();
         Ok(Solution { frequency, voltages, currents })
+    }
+
+    /// The same circuit as a `copper-sim` circuit: node `k` is the
+    /// simulator's node `k` (named `n<k>`, ground `0`), element `i` its
+    /// element `i` (named `e<i>`), and the source phasors its AC values.
+    fn to_sim(
+        &self,
+    ) -> Result<(copper_sim::Circuit, Vec<copper_sim::NodeId>, Vec<copper_sim::ElementId>), CircuitError> {
+        use copper_sim::SourceValue;
+        let mut c = copper_sim::Circuit::new();
+        let mut nodes = vec![copper_sim::NodeId::GROUND];
+        nodes.extend((1..self.node_count()).map(|k| c.node(&format!("n{k}"))));
+        let mut ids = Vec::with_capacity(self.elements.len());
+        let invalid = |e: copper_sim::SimError| CircuitError::InvalidElement(e.to_string());
+        for (i, e) in self.elements.iter().enumerate() {
+            let name = format!("e{i}");
+            let (a, b) = (nodes[e.a], nodes[e.b]);
+            let ac = |p: &Complex| SourceValue { dc: 0.0, ac: to_sim(*p) };
+            let id = match &e.kind {
+                Kind::Resistor(r) => c.resistor(&name, a, b, *r),
+                Kind::Capacitor(f) => c.capacitor(&name, a, b, *f),
+                Kind::Inductor(l) => c.inductor(&name, a, b, *l),
+                Kind::Mutual { l1, l2, k } => match (ids.get(l1.0), ids.get(l2.0)) {
+                    (Some(&x), Some(&y)) => c.coupling(&name, x, y, *k),
+                    _ => {
+                        return Err(CircuitError::InvalidElement(format!(
+                            "element {i}: mutual coupling must follow its inductors"
+                        )));
+                    }
+                },
+                Kind::VoltageSource(p) => c.voltage_source(&name, a, b, ac(p)),
+                Kind::CurrentSource(p) => c.current_source(&name, a, b, ac(p)),
+                Kind::Vccs { cp, cn, gm } => c.vccs(&name, a, b, nodes[*cp], nodes[*cn], *gm),
+            }
+            .map_err(invalid)?;
+            ids.push(id);
+        }
+        Ok((c, nodes, ids))
     }
 
     /// Solve at each frequency of `frequencies`.
@@ -529,70 +476,19 @@ pub fn log_space(start: f64, stop: f64, count: usize) -> Vec<f64> {
     (0..count).map(|i| (a + (b - a) * i as f64 / (count - 1) as f64).exp()).collect()
 }
 
-/// Solve `M x = rhs` (row-major `n x n`) by Gaussian elimination with row
-/// equilibration and partial pivoting. Destroys its inputs.
-fn solve_dense(m: &mut [Complex], rhs: &mut [Complex], n: usize) -> Result<Vec<Complex>, CircuitError> {
-    // Row equilibration: scale each row so its largest entry magnitude is 1.
-    for r in 0..n {
-        let big = (0..n).map(|c| m[r * n + c].abs()).fold(0.0, f64::max);
-        if big == 0.0 || !big.is_finite() {
-            return Err(CircuitError::Singular);
-        }
-        let s = 1.0 / big;
-        for c in 0..n {
-            m[r * n + c] = m[r * n + c].scale(s);
-        }
-        rhs[r] = rhs[r].scale(s);
-    }
-    for col in 0..n {
-        let (mut piv, mut best) = (col, m[col * n + col].abs());
-        for r in col + 1..n {
-            let a = m[r * n + col].abs();
-            if a > best {
-                piv = r;
-                best = a;
-            }
-        }
-        if best.is_nan() || best <= 1e-12 {
-            return Err(CircuitError::Singular);
-        }
-        if piv != col {
-            for c in 0..n {
-                m.swap(col * n + c, piv * n + c);
-            }
-            rhs.swap(col, piv);
-        }
-        let d = m[col * n + col];
-        for r in col + 1..n {
-            let f = m[r * n + col] / d;
-            if f.re == 0.0 && f.im == 0.0 {
-                continue;
-            }
-            for c in col..n {
-                let t = f * m[col * n + c];
-                m[r * n + c] = m[r * n + c] - t;
-            }
-            let t = f * rhs[col];
-            rhs[r] = rhs[r] - t;
-        }
-    }
-    let mut x = vec![Complex::ZERO; n];
-    for r in (0..n).rev() {
-        let mut s = rhs[r];
-        for c in r + 1..n {
-            s = s - m[r * n + c] * x[c];
-        }
-        x[r] = s / m[r * n + r];
-    }
-    if x.iter().any(|z| !(z.re.is_finite() && z.im.is_finite())) {
-        return Err(CircuitError::Singular);
-    }
-    Ok(x)
+/// An EMI phasor as a simulator complex number (the same `re + j im`).
+fn to_sim(z: Complex) -> copper_sim::Complex {
+    copper_sim::Complex::new(z.re, z.im)
 }
 
+/// A simulator complex number as an EMI phasor.
+fn from_sim(z: copper_sim::Complex) -> Complex {
+    Complex::new(z.re, z.im)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::PI;
 
     fn rel(a: Complex, b: Complex) -> f64 {
         (a - b).abs() / b.abs().max(1e-300)

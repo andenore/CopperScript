@@ -608,6 +608,33 @@ Acceptance: `emi-check` outputs unchanged on every board that has them;
 a board whose simulated pin voltage exceeds a rating fails ERC with the
 bench named.
 
+Built on 21 November 2026.
+
+- `copper-emi` solves its circuits with `copper-sim`; `copper_emi::circuit`
+  keeps its API and its own helpers (ESR/ESL chains, the V-network,
+  driving-point impedance). `emi-check` outputs are identical on the six EMI
+  examples over 149 output files and 11 268 numbers (JSON, verbose, plots,
+  routed runs, `--extract`, `--fullwave`). Below the printed precision the
+  two solvers differ by at most 3.9e-8 relative, on nodes 1e4 to 1e5 times
+  smaller than the largest voltage of the solve.
+- `copper sim` records, under schema v1, the identity of its sources
+  (`source.design_sha256`, `benches_sha256`), each pin's voltage extremes
+  (`steps[].pins`) and each supply's current (`steps[].supplies`) for `op`,
+  `dc` and `tran` benches.
+- `copper check BOARD --sim-results FILE`: SIM_PIN_ABSOLUTE_HIGH and
+  SIM_PIN_ABSOLUTE_LOW (errors, with bench, step and value),
+  SIM_PIN_NOT_CHECKED and SIM_PIN_NOT_SIMULATED (warnings). Results for
+  another board or changed sources are refused with SIM_RESULTS_STALE. The
+  check never runs a simulation and never looks for a file itself.
+- `copper power-check BOARD --sim-results FILE` lists the simulated current
+  of each rail with the bench it comes from.
+
+Open: nothing declares a rail current, so the simulated figures are shown
+and not compared; on the analyzer 26 simulated pins have no rating (the
+AD8130's and every amplifier's output and disable pins) and 85 rated pins
+are in no bench; the bias points of ac, noise, loop and pz benches are not
+used; a module bench gives the module's share of a rail, not the rail total.
+
 ## Not planned
 
 - BSIM transistor models and encrypted vendor files.

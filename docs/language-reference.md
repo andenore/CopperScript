@@ -416,6 +416,26 @@ errors. The serialized IR carries the absolute range as
 `profile.absolute_voltage` (`rating = "absolute"`); a relative bound is
 `{"reference", "offset", "limit"}`.
 
+With `copper check BOARD --sim-results FILE` the absolute ratings are also
+checked against the pin voltages a `copper sim` run recorded in `FILE`
+(`sim-results.json`, [the results schema](sim-results-schema.md#added-within-v1)):
+per step of every `op`, `dc` and `tran` bench, the extremes of each pin's
+voltage and, for a relative rating, of its difference to the reference pin at
+the same instants, so `absolute_max = "VP+0.2V"` is judged against the rail as
+it ramps. A module bench's pins are those of every instance of the module. ERC
+never runs a simulation, and it uses only results made from the board and
+benches as they are now:
+
+| Finding | Diagnostic |
+| --- | --- |
+| a simulated voltage beyond the absolute range (more than `1e-9` of the limit, at least 1 nV) | error `SIM_PIN_ABSOLUTE_HIGH` / `SIM_PIN_ABSOLUTE_LOW`, naming the bench, the worst step, the value, where on the axis it was reached and how many steps exceed it |
+| results of another board, of another version of its sources (parts, packages and ratings included; not comments) or of other bench sources, or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
+| simulated pins that declare no absolute rating (ground and passive-only pins excepted), or whose relative rating refers to a pin no bench solved | one warning `SIM_PIN_NOT_CHECKED` listing them |
+| rated pins that no bench solved with an `op`, `dc` or `tran` analysis | one warning `SIM_PIN_NOT_SIMULATED` listing the components |
+
+The bias point of an `ac`, `noise`, `loop` or `pz` bench is not used. A fixed
+rating is judged against the bench's ground.
+
 ### EMI roles and switching metadata
 
 Switching converters, clock drivers and their passives can carry optional EMI
@@ -866,6 +886,16 @@ Each name must refer to a declared supply and each value is `on`, `off`, or
 these scenarios. The current analysis warns about possible back-power into an
 off device domain; it is not transient or firmware simulation. Power states are
 board-level declarations in v0.1.
+
+`copper power-check board.copper --sim-results build/sim/sim-results.json`
+adds each board supply's simulated current: for every `op`, `dc` and `tran`
+bench whose supply drives that supply's net (a module bench's through the
+instance's port connections), `I(SUPPLY)` per bench and supply with its source
+(the operating point's value, or a transient run's mean and peak with the step
+and time of the peak). A module bench gives the module's share of the rail,
+not the rail's total. No part or supply declares a rail current, so nothing is
+compared with a declared figure; supplies no bench drove are listed as not
+simulated. Results made from other sources are refused (`SIM_RESULTS_STALE`).
 
 ## Hierarchical modules
 
@@ -4284,8 +4314,11 @@ for it, the analysis and its axis, the model fidelity of every component,
 supply and bench model, every param per step with the step's axis values,
 each measure per step with its limits, pass or fail and how a limit is
 drawn, the plotted vectors and spectra, noise contributors, poles and zeros,
-Monte Carlo or worst-case statistics and, with `--timing`, where the time
-went; every field is always present, `null` or empty where it does not
+Monte Carlo or worst-case statistics, with `--timing` where the time
+went, and for the checks that read the results ([Voltage limits](#voltage-limits),
+`copper power-check --sim-results`) the digests of the sources they were made
+from and each `op`, `dc` and `tran` step's pin voltages and supply currents;
+every field is always present, `null` or empty where it does not
 apply), `BENCH.csv` (the plotted vectors, SI base units),
 `BENCH.spectrum.csv` (the plotted spectra, [Spectra](#spectra)) and
 `BENCH.html` (the report page below). The exit status is 1 when a measure

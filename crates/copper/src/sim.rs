@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
 use copper_simulate::check_model::{CheckOptions, check_part, find_part};
-use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with, write_outputs};
+use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with, write_outputs_from};
 
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
@@ -220,7 +220,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let directory = PathBuf::from(pypath::display(parsed.value("--out").unwrap_or(DEFAULT_OUT)));
     let _ = out.write_all(copper_simulate::results::text_table(&runs).as_bytes());
     let _ = out.write_all(copper_simulate::results::timing_text(&runs).as_bytes());
-    match write_outputs(&runs, &design.electrical.name, &directory) {
+    // The results name the sources they were made from, so a check that reads them can refuse stale ones.
+    let source = copper_simulate::evidence::SourceIdentity::of(&board_path, &design);
+    match write_outputs_from(&runs, &design.electrical.name, Some(&source), &directory) {
         Ok(paths) => {
             let names: Vec<String> = paths
                 .iter()

@@ -105,6 +105,31 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
     ("POWER_DOMAIN_VOLTAGE_HIGH", "A device power domain is supplied above its maximum.", "Change the rail."),
     ("POWER_DOMAIN_VOLTAGE_LOW", "A device power domain is supplied below its minimum.", "Change the rail."),
     (
+        "SIM_PIN_ABSOLUTE_HIGH",
+        "A simulated pin voltage (copper check --sim-results: an op, dc or tran bench's recorded extremes) exceeds the pin's absolute maximum rating; the message names the bench, step, value and where it was reached.",
+        "This can damage the part: change the circuit or the bench's conditions, or the part. Read the bench's plots first; a stand-in or ignored component's result is the stand-in's.",
+    ),
+    (
+        "SIM_PIN_ABSOLUTE_LOW",
+        "A simulated pin voltage (copper check --sim-results) is below the pin's absolute minimum rating; the message names the bench, step, value and where it was reached.",
+        "Clamp or limit the signal, sequence the rails, or change the part. Read the bench's plots first.",
+    ),
+    (
+        "SIM_RESULTS_STALE",
+        "The simulation results given to --sim-results were made from another board, another version of the board's sources (its parts, packages and ratings included) or other bench sources, or carry no source identity, so they are not used.",
+        "Rerun copper sim BOARD and pass the sim-results.json it writes.",
+    ),
+    (
+        "SIM_PIN_NOT_CHECKED",
+        "Simulated pins whose voltage could not be judged: the pin declares no absolute rating, or its rating is relative to a pin no bench solved.",
+        "Declare absolute_min / absolute_max on the pin from its data sheet; an unknown rating stays unknown.",
+    ),
+    (
+        "SIM_PIN_NOT_SIMULATED",
+        "Pins that declare an absolute rating but whose voltage no bench in the results solved with an op, dc or tran analysis.",
+        "Add a bench that covers them (a module bench covers every instance of its module), or accept that only the declared supplies check them.",
+    ),
+    (
         "VOLTAGE_LIMIT_UNRESOLVED",
         "A pin voltage limit could not be evaluated (often relative to an unknown rail).",
         "Connect the reference pin to a declared supply.",

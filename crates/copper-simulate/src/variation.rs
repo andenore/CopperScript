@@ -403,7 +403,8 @@ fn evaluate(
     x: &[f64],
 ) -> Result<Vec<MeasureValue>, String> {
     let varied = varied_params(context, params, variables, x)?;
-    let (step, _) = run_step(context.design, context.bench, context.wiring, &varied, context.marks, context.covered)?;
+    let (step, _) =
+        run_step(context.design, context.bench, context.wiring, &varied, context.marks, context.covered, &[])?;
     Ok(step.measures)
 }
 

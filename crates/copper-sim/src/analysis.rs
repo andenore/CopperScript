@@ -31,7 +31,7 @@
 //! no element touches has no voltage and is an error to probe, as are
 //! unknown names. Every value is finite: a non-finite solution is an error.
 
-use crate::circuit::Circuit;
+use crate::circuit::{Circuit, ElementId, NodeId};
 use crate::complex::Complex;
 use crate::diagnose::diagnose;
 use crate::error::{AnalysisPoint, SimError};
@@ -308,6 +308,17 @@ impl AcResult {
         Ok((0..self.len())
             .map(|p| terms.iter().fold(Complex::ZERO, |s, &(e, sign)| s + self.currents[e][p].scale(sign)))
             .collect())
+    }
+    /// Complex voltage of a node by handle at every frequency: zero for the
+    /// ground and for a node no element touches (which has no unknown), for
+    /// callers that keep their own node table (`copper-emi`).
+    pub fn node_voltage(&self, node: NodeId) -> &[Complex] {
+        &self.voltages[node.index()]
+    }
+    /// Complex current of an element by handle from its terminal `a` to `b`
+    /// at every frequency (zero for a coupling).
+    pub fn element_current(&self, element: ElementId) -> &[Complex] {
+        &self.currents[element.index()]
     }
 }
 

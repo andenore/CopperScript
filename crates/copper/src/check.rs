@@ -1,11 +1,14 @@
-//! `copper check BOARD [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE]`.
+//! `copper check BOARD [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE] [--sim-results FILE]`.
 //!
 //! `--macro-inputs` also prepares the board's physical macro assets (fetching
 //! pinned dependencies unless offline) and writes every macro input path, one
 //! per line, so a build runner can route offline and record their digests.
+//!
+//! `--sim-results` adds the checks on a `copper sim` run's recorded pin
+//! voltages (`copper_simulate::evidence`); it never runs a simulation.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use copper_json::{Dumps, Object, Value, text};
 use copper_lang::compiler::{LoadError, load_design, read_source};
@@ -20,8 +23,7 @@ use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
-const USAGE: &str =
-    "usage: copper check [-h] [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE] board";
+const USAGE: &str = "usage: copper check [-h] [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE] [--sim-results FILE] board";
 
 fn print(out: &mut dyn Write, line: &str) {
     let _ = text::print(out, line);
@@ -34,7 +36,14 @@ fn plural(count: usize, word: &str) -> String {
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let parsed = match option_parser::parse(
         arguments,
-        &[flag("--locked"), flag("--offline"), flag("--json"), value("--pins"), value("--macro-inputs")],
+        &[
+            flag("--locked"),
+            flag("--offline"),
+            flag("--json"),
+            value("--pins"),
+            value("--macro-inputs"),
+            value("--sim-results"),
+        ],
     ) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -122,6 +131,27 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             if diagnostic.code == "UNMARKED_PIN" {
                 diagnostic.severity = Severity::Error;
             }
+        }
+    }
+    // `--sim-results`: pin voltages a `copper sim` run recorded, against the absolute ratings.
+    if let Some(file) = parsed.value("--sim-results") {
+        let results = PathBuf::from(pypath::display(file));
+        let evidence = match copper_simulate::evidence::read_file(&results) {
+            Ok(evidence) => evidence,
+            Err(message) => {
+                let _ = writeln!(err, "{USAGE}\ncopper check: error: argument --sim-results: {message}");
+                return 2;
+            }
+        };
+        match copper_simulate::evidence::validate_source(&evidence, path, &design) {
+            Err(reason) => diagnostics.push(copper_simulate::evidence::stale(&evidence, path, &reason)),
+            Ok(()) => match elaborate(board) {
+                Ok(view) => diagnostics.extend(copper_simulate::evidence::check_pins(&view, &evidence)),
+                Err(message) => {
+                    print(err, &format!("COMPILE ERROR: {message}"));
+                    return 2;
+                }
+            },
         }
     }
     if let Some(target) = &macro_inputs {

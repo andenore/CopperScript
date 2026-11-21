@@ -975,7 +975,8 @@ not predicted).
 synchronous) in continuous conduction. The converter is an ideal harmonic
 current source drawing the input current of the high-side switch; the network
 between it and the LISN is solved as one linear circuit
-(`copper_emi::circuit`, modified nodal analysis, one solve per harmonic):
+(`copper_emi::circuit`, modified nodal analysis by the simulator's solver
+`copper-sim`, one solve per harmonic):
 
 ```text
   converter        L_loop      K (hot capacitor pads, feed)                LISN

@@ -385,6 +385,20 @@
       "add",
       "board.copper",
       "FILE"
+     ],
+     [
+      "copper",
+      "check",
+      "board.copper",
+      "--sim-results",
+      "build/sim/sim-results.json"
+     ],
+     [
+      "copper",
+      "power-check",
+      "board.copper",
+      "--sim-results",
+      "build/sim/sim-results.json"
      ]
     ],
     "guidance": [
@@ -403,6 +417,7 @@
      "A part may carry a macro and a vendor model for one unit: a built-in block (sim opamp, sim regulator, ...) and a sim spice block with the same unit (or both without one). copper sim runs the macro model; --models vendor runs the sim spice model where a unit has one (its file must be cached), --models macro only built-in models (a part with only a sim spice model is SIM107). Each choice must cover every pin on its own (SIM106). A vendor file that cannot be fetched by a script (analog.com) is declared sim spice { sha256 = \"...\"; download = \"where to get it\"; subckt; terminals; }: download it by hand and run copper models add BOARD FILE, which checks the hash and copies it into .copper-cache/spice/<sha256>/ (a file no part declares is refused, with its SHA-256 and .SUBCKT lines printed); missing, it is SIM108 naming the download note. Vendor files live in the cache of the board's project, also for parts from a library package.",
      "copper sim --check-model PART BOARD runs a standard bench set on a part of the board's library instead of the benches: amplifiers at --supply (default 10 V as +/-5 V) get supply current, open-loop gain, gain-bandwidth (at G = 100), phase margin, follower bandwidth, voltage noise and slew rate; regulators and references quiescent current, output voltage, output resistance, line rejection, dropout, efficiency, output noise and start-up. The macro figures are judged against the values the block declares within the printed tolerances; the vendor figures are printed beside them with the difference (DIFFERS beyond 25 % or 3 dB). It passes when the models load, the operating points converge and every judged figure holds; a vendor file not in the cache is reported and leaves the verdict to the macro model. --tie PIN=vn ties a subcircuit pin the macro block leaves unmodelled (an OPA547's ILIM); --no-tran or --tran-budget SECONDS bound the slow vendor transients. SIM109 when a part cannot be checked.",
      "Temperature: a bench runs at 27 degC unless it declares param TEMP = 85degC; (degC only), which steps, zips and derives like any param (SIM110 when it is not a temperature above absolute zero, or when a noise analysis also declares its own temperature). Resistor, switch and FET channel thermal noise, the thermal voltage of every junction, sim diode and every SPICE diode, BJT, JFET and MOSFET (SPICE3's scaling from the model's TNOM or .OPTIONS TNOM; TC1/TC2 of R, C, L; TEMP in expressions) follow it. Components take tempco = 100ppm/degC; and tempco2 = 0.5ppm/degC2; like tolerance (passives only, from 27 degC; SIM111); op-amps input_offset_drift = 0.2uV/degC; references temperature_coefficient = 10ppm/degC; built-in voltage noise scales as sqrt(T / 300.15 K), current noise does not. A capacitor part's esr and esl (or self_resonance) and an inductor part's esr (its DC resistance) are in series with the element in every bench.",
+     "Simulation results feed the other checks, never the other way round: copper check BOARD --sim-results build/sim/sim-results.json checks the pin voltages the op, dc and tran benches recorded (per step: every profiled pin's extremes, and for a rating relative to a rail, e.g. absolute_max = \"VP+0.2V\", the difference to that rail at the same instant) against the pins' absolute_min and absolute_max: SIM_PIN_ABSOLUTE_HIGH / SIM_PIN_ABSOLUTE_LOW name the bench, step, value and time; SIM_PIN_NOT_CHECKED and SIM_PIN_NOT_SIMULATED list what could not be judged (no rating, a reference rail no bench solved, a rated pin no bench solved). copper power-check BOARD --sim-results FILE lists each board supply's simulated current per bench and step with its source; no part declares a rail current, so nothing is compared. The results carry source.design_sha256 and source.benches_sha256; results made from another version of the board or benches are refused (SIM_RESULTS_STALE): rerun copper sim. check and power-check never simulate.",
      "A failing measure is a finding about the circuit or the bench: read the plots and the per-step table before changing anything, and never loosen a limit or a model value to make a bench pass. A solver error names the floating net and the component pins on it, or the loop of voltage sources."
     ]
    }
