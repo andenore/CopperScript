@@ -265,6 +265,67 @@ RQ QUIET 0 R_NOISELESS 10K
     let _ = DEFAULT_TEMPERATURE;
 }
 
+/// PSpice's smooth switch resistance at control value `x` (a voltage or a
+/// current) between `off` and `on`: `exp(L_m + 3 L_r (x - x_m) / (2 x_d) - 2
+/// L_r (x - x_m)^3 / x_d^3)` with `L_m = ln sqrt(RON ROFF)`, `L_r = ln(RON /
+/// ROFF)`, `x_m` the middle and `x_d = on - off`; `RON` beyond `on`, `ROFF`
+/// beyond `off`.
+fn pspice_switch(x: f64, on: f64, off: f64, ron: f64, roff: f64) -> f64 {
+    let past = |a: f64, b: f64| if on > off { a >= b } else { a <= b };
+    if past(x, on) {
+        return ron;
+    }
+    if past(off, x) {
+        return roff;
+    }
+    let (lm, lr) = ((ron * roff).sqrt().ln(), (ron / roff).ln());
+    let (xm, xd) = ((on + off) / 2.0, on - off);
+    let u = (x - xm) / xd;
+    (lm + lr * (1.5 * u - 2.0 * u.powi(3))).exp()
+}
+
+#[test]
+fn smooth_switches_follow_pspice_across_their_transition() {
+    // The closed form the reference comparison cannot give for these two
+    // (README, "PSpice dialect"): ngspice-46's PSpice mode interpolates an
+    // ISWITCH's log resistance linearly in the current, and opens a VSWITCH
+    // whose ROFF is below its RON. A VSWITCH with RON < ROFF agrees with
+    // ngspice there (deck pspice_switch).
+    let text = "\
+.SUBCKT SW C VS OUTV OUTR OUTI
+RV VS OUTV 1K
+SV OUTV 0 C 0 VMOD
+RR VS OUTR 1K
+SR OUTR 0 C 0 RMOD
+GI 0 CI C 0 1M
+VI CI 0 DC 0
+RI VS OUTI 1K
+WI OUTI 0 VI IMOD
+.MODEL VMOD VSWITCH(RON=10 ROFF=1MEG VON=1 VOFF=0)
+.MODEL RMOD VSWITCH(RON=1MEG ROFF=1U VON=0.2 VOFF=1.2)
+.MODEL IMOD ISWITCH(RON=100 ROFF=100K ION=1M IOFF=0.2M)
+.ENDS
+";
+    let lib = Library::parse(text, "sw.lib", Dialect::Pspice).unwrap();
+    for vc in [-0.3, 0.0, 0.1, 0.25, 0.45, 0.5, 0.73, 0.9, 1.0, 1.1, 1.3] {
+        let mut c = Circuit::new();
+        let nodes: Vec<_> = ["c", "vs", "outv", "outr", "outi"].iter().map(|n| c.node(n)).collect();
+        c.voltage_source("VC", nodes[0], G, SourceValue::dc(vc)).unwrap();
+        c.voltage_source("VS", nodes[1], G, SourceValue::dc(5.0)).unwrap();
+        lib.instantiate(&mut c, "X", "SW", &nodes, &[]).unwrap();
+        let op = copper_sim::operating_point(&c).unwrap();
+        let divider = |r: f64| 5.0 * r / (1e3 + r);
+        for (node, r) in [
+            ("outv", pspice_switch(vc, 1.0, 0.0, 10.0, 1e6)),
+            ("outr", pspice_switch(vc, 0.2, 1.2, 1e6, 1e-6)),
+            ("outi", pspice_switch(vc * 1e-3, 1e-3, 0.2e-3, 100.0, 100e3)),
+        ] {
+            let v = op.voltage(node).unwrap();
+            assert!((v - divider(r)).abs() < 1e-9 * 5.0, "{node} at {vc} V: {v} vs {}", divider(r));
+        }
+    }
+}
+
 #[test]
 fn device_cards_scale_with_area() {
     // A diode with area 2 at 1 mA: V = n V_T ln(I / (2 IS) + 1) + I RS / 2.

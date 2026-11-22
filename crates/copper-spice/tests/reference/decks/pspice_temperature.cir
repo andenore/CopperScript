@@ -1,0 +1,20 @@
+PSpice dialect: TC1/TC2 of R, C and L, T_MEASURED and T_ABS of RES models
+*@ dialect pspice
+*@ ngbehavior psa
+*@ probe v(a) v(b) v(c) v(d)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+I1 0 a DC 1m
+R1 a 0 1k TC=3e-3,2e-5
+I2 0 b DC 1m
+R2 b 0 RM 1k
+.model RM RES(R=1 TC1=-1e-3 TC2=4e-6 T_MEASURED=50)
+I3 0 c DC 1m
+R3 c 0 RA 1k
+.model RA RES(R=1 TC1=2e-3 T_ABS=100)
+I4 0 d DC 1m
+R4 d 0 2k
+R5 d 0 RN 2k
+.model RN RES(R=1 TC1=1e-3 TC2=1e-5)
+.op
+.end

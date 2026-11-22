@@ -38,6 +38,14 @@
 //! for trapezoidal, the larger of this and the same difference one point
 //! earlier) and must stay below `reltol` times the largest
 //! magnitude the unknown has had so far, plus 1 uV or 1 nA. A step whose
+//! estimate exceeds that is accepted all the same when the estimate is within
+//! the rounding noise of the solution (the response of the step's matrix to
+//! a rounding of `f64::EPSILON` of the currents stamped in every row): a
+//! large capacitor's `C/h` at a short step swamps the small conductances it
+//! meets, the nodes it ties together move together by that noise from one
+//! solve to the next, and a shorter step only raises it (TI's OPA2189 model,
+//! 53 uF in its output-impedance path, at 1e-14 s steps; counted in
+//! [`TranStats::noise_limited`]). A step whose
 //! error is too large, or whose Newton iteration fails, is retried shorter;
 //! the next step grows by at most a factor of two (and is kept unchanged when
 //! it would grow by less than 20 %, so a linear circuit reuses its matrix
@@ -312,6 +320,9 @@ pub struct TranStats {
     /// Steps accepted as discontinuities of a law element (truncation error
     /// still too large at a billionth of the run; circuits with law elements only).
     pub discontinuities: usize,
+    /// Steps accepted because their truncation-error estimate was within
+    /// the rounding noise of the solution, which a shorter step only raises.
+    pub noise_limited: usize,
     /// Newton iterations of the shooting method (with a steady-state period; 0 without).
     pub steady_iterations: usize,
     /// Periods integrated by the shooting method: the adaptive ones and the
@@ -438,6 +449,9 @@ struct Tolerance<'a> {
     mask: &'a [(usize, f64)],
     scale: &'a [f64],
     reltol: f64,
+    /// Per unknown, the rounding noise of the solution, added to the
+    /// tolerance (see [`Integrator::integrate`]); `None` for none.
+    noise: Option<&'a [f64]>,
 }
 
 fn truncation(
@@ -448,7 +462,7 @@ fn truncation(
     method: Method,
     tolerance: &Tolerance,
 ) -> Option<(f64, usize)> {
-    let Tolerance { mask, scale, reltol } = *tolerance;
+    let Tolerance { mask, scale, reltol, noise } = *tolerance;
     let needed = if method == Method::Trapezoidal { 3 } else { 2 };
     if history.len() < needed {
         return None;
@@ -468,7 +482,7 @@ fn truncation(
             dd = dd.max(divided_difference(earlier, k).abs());
         }
         let error = if method == Method::Trapezoidal { h.powi(3) * dd / 2.0 } else { h * h * dd };
-        let ratio = error / (reltol * scale[k] + abs);
+        let ratio = error / (reltol * scale[k] + abs + noise.map_or(0.0, |n| n[k]));
         if worst.is_none_or(|(w, _)| ratio > w) {
             worst = Some((ratio, k));
         }
@@ -824,8 +838,22 @@ impl Integrator<'_> {
             };
             let x = solved.x;
             let control = timing::span(Phase::StepControl);
-            let tolerance = Tolerance { mask: &self.mask, scale: &run.scale, reltol: self.reltol };
-            let lte = truncation(&history, t_new, &x, h, method, &tolerance);
+            let tolerance = Tolerance { mask: &self.mask, scale: &run.scale, reltol: self.reltol, noise: None };
+            let mut lte = truncation(&history, t_new, &x, h, method, &tolerance);
+            // An estimate within the rounding noise of the solution is not
+            // truncation error: a shorter step raises that noise (a large
+            // capacitor's C/h swamps the small conductances it meets), so
+            // such a step is accepted. Judged only for a step that would
+            // otherwise be rejected.
+            if lte.is_some_and(|(ratio, _)| ratio > 1.0) {
+                let noise = solver.rounding_noise(&x);
+                let floored =
+                    truncation(&history, t_new, &x, h, method, &Tolerance { noise: Some(&noise), ..tolerance });
+                if floored.is_some_and(|(ratio, _)| ratio <= 1.0) {
+                    lte = floored;
+                    run.stats.noise_limited += 1;
+                }
+            }
             // With law elements a node can jump (a behavioural source switching
             // discontinuously): a step rejected for its truncation error at a
             // billionth of the run is accepted as a discontinuity and the

@@ -1,0 +1,18 @@
+PSpice dialect: .IC inside a subcircuit
+* Element IC= is compared with closed forms instead: ngspice uses it only
+* with UIC, in its PSpice mode too (README, PSpice dialect).
+*@ dialect pspice
+*@ ngbehavior psa
+*@ probe v(n3) v(n4)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+.subckt cell a
+.IC V(a)=1.5
+R1 a 0 2k
+C1 a 0 1n
+.ends
+X1 n3 cell
+VS s 0 DC 1
+RS s n4 1k
+X2 n4 cell
+.tran 20n 5u
+.end

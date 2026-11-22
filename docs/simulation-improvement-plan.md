@@ -142,15 +142,59 @@ data. Details in
   more circuits (0.01 to 1.02 of `0.02 sqrt(reltol)`), but it is not within
   a factor of 2 on all of them (an RLC is 20 to 100 times below).
 
-Open: no vendor model compared (the opt-in `#[ignore]` test and the
-gitignored `tests/reference/vendor/` are in place, with no deck); release
-timings of the vendor transients and the slew checks not rerun; the listed
-ngspice behaviours not adopted (reverse cubic, breakdown branch, substrate
-`G_MIN`, `r_bb` without its derivative, the non-`badmos3` level 3, `NLEV`
-noise); the sub-cause of the inverter's transient difference; JFET and
-MOSFET noise outside saturation; the PSpice and LTspice dialects (no
-simulator to compare with); the compatibility table's TI parts have no
-ngspice column.
+Follow-up, 22 November 2026:
+
+- MOSFET gate charge, established by variant decks (README): the CMOS
+  inverter's supply-current peak (7 to 8 %) is copper-sim's charge-conserving
+  partition against Meyer's capacitances and nothing else. ngspice without
+  `TOX` and with Meyer's `C_gs`, `C_gd`, `C_gb` as `i = C(v) dv/dt` sources
+  reproduces its native result (15.57 against 15.56 of the bound); with
+  copper-sim's three charges (`dq/dt` through a 1 fF capacitor charged to `q`)
+  it reproduces copper-sim's (0.000 of the bound on the output; the supply
+  current within the bound except 4.7 at the input's corner); ngspice's
+  peak is -0.5646 mA at maximum steps of 5 ps, 0.5 ps and 0.1 ps alike, so
+  its capacitance averaging is not the cause. `mos3_badmos3`'s 0.83 fF
+  (27 degC) is the same term, reproduced to seven digits from ngspice's own
+  `V_dsat`, `V_dsat(V_on)` and `d V_dsat / d v_gs`. Meyer's form pumps 1.87e-14 C per period into a
+  drain driven 90 degrees from its gate at 100 MHz (at 10 ps and 1 ps steps);
+  copper-sim's 1e-19 C. copper-sim's form is kept; the two causes are now
+  established and stay listed (`KNOWN` unchanged).
+- PSpice dialect: five self-written decks (`pspice_behavioral`,
+  `pspice_switch`, `pspice_ic`, `pspice_temperature`, `pspice_diode`) run in
+  ngspice's PSpice mode: `VALUE` with `IF`, `LIMIT`, `STP`, `MIN`, `MAX`,
+  `.PARAM` expressions, `VSWITCH`, `.IC` in a subcircuit, `TC1`/`TC2`,
+  `T_MEASURED`, `T_ABS` and the diode's `ISR`/`NR` in forward bias, 47 series
+  within their bounds (worst 0.28). Where that mode is not PSpice, shown each
+  by a self-written deck: `TABLE` (rounded corners), `ISWITCH` (log-linear
+  in the current), a `VSWITCH` with `ROFF` below `RON` (open), a `VSWITCH` in
+  `.ac` (the complex conjugate of the response), element `IC=` (ignored
+  without `UIC`), the diode's `IKF` (ngspice's own knee, reproduced to 0.4 %),
+  a vertical PNP (lateral); these are checked against PSpice's closed forms,
+  one new (`smooth_switches_follow_pspice_across_their_transition`). Not
+  established: ngspice's `ISR` in reverse bias (0.585 of PSpice's formula)
+  and its `ISR` conductance (0.26 % off its own DC derivative). The LTspice
+  dialect has no reference here; README "PSpice dialect" lists what stays
+  uncompared. `generate.py` loads the PSpice-mode code models for a deck
+  with `*@ ngbehavior`; the 27 earlier result files regenerate byte for byte.
+  Totals: 32 decks, 1119 series, 173 720 values, 128 listed.
+- Release timings (`CARGO_PROFILE_RELEASE_DEBUG=0`, this machine): the
+  vendor follower steps of `--check-model` take 0.41 s (OPA2277UA), 0.14 s
+  (OPA2182IDR), 0.05 s (OPA2189IDR) and 0.50 s (OPA548T); the whole check
+  7.2 s, 1.8 s, 1.6 s and 1.7 s. The OPA2277 step that took 100.5 s in the
+  debug build before I2 takes 1.59 s in it now (at HEAD before this follow-up
+  too, so I2's accepted stalled iterations removed it); every figure equals
+  the debug run's. The opt-in slew checks (`vendor_models.rs`,
+  `COPPER_SPICE_VENDOR_TRAN=1`, release) ran for the two models on this
+  machine: OPA2277 0.798 V/us (1069 steps) and OPA810 242 V/us (1010
+  steps), each suite under 2 s; the other ten models of the test are not in
+  a local cache and were not run.
+
+Open: the listed ngspice behaviours not adopted (reverse cubic, breakdown
+branch, substrate `G_MIN`, `r_bb` without its derivative, the non-`badmos3`
+level 3, `NLEV` noise); JFET and MOSFET noise outside saturation; the
+LTspice dialect (no simulator to compare with) and the PSpice constructs
+ngspice runs differently (closed forms only, no PSpice); ngspice's diode `ISR`
+in reverse bias; the compatibility table's TI parts have no ngspice column.
 
 ### I2. Vendor model failures
 
@@ -242,20 +286,61 @@ bounds), a variant deck or a self-written deck.
   `current_fundamental`, `pump_output_peak`, `pump_headroom` and
   `slew_needed` within 4e-6. The junction-current test alone moves nothing.
 
-Open: the CopperLib blocks of TLV75718PDRVR, TPS7A2018PDBVR and
-TPS7A2025PDBVR still carry no `sim spice` block, and the amplifier blocks no
-`note` (CopperLib was not changed; the edits are listed in the I2 report).
-The OPA2189 follower step at the reference comparison's tolerance
-(`reltol` 1e-5) still collapses at 26.85 ns, and whether it does depends on
-the last bit of `max_step`: the control node of the model's
-output-impedance source (`N3828449`, a 1.6 ps lead network) jumps by 1 to
-5 % between steps of 1e-17 s, every step is accepted as a discontinuity and
-the restart at a tenth of it shrinks the step below the floor; restarting
-at the same step instead only crawls on, so the jumping itself is not yet
-explained. The TL431 under a current source and PSpice's behaviour there
-are not settled. TLV75718P's quiescent current (5.3 uA against 25 uA) and
-the TPS7A20's line rejection (75 dB against 95 dB) were not compared with
-ngspice. No release timings were taken.
+Follow-up, 22 November 2026:
+
+- OPA2189 follower step at `reltol` 1e-5: the jumps of `N3828449` are
+  rounding noise, not the circuit. The node sits behind a 31.83 fF lead
+  capacitor on a node at -140 V of a gain chain that starts at a 53 uF
+  capacitor (`C_C10`, 0.53 s, in the output-impedance path); at a step `h`
+  its `C/h` (5e12 S at 1e-17 s) swamps the 1 ohm and 27 ohm beside it, so the
+  common voltage of the nodes it ties moves by `eps C/h`-sized amounts from
+  one solve to the next. The noise grows as `1/h` (an estimate from the
+  step's own matrix: 1.4e-4 V at 3e-14 s, 0.5 V at 1e-17 s; the observed jumps
+  are about a tenth of that), so each rejection raised the next estimate and
+  the step ran to the floor. Shown by variant decks: `C_C10` replaced by a
+  voltage source at its operating-point voltage (its voltage moves by 1e-5 V
+  in the run), or made 1000 times smaller, runs (smallest step 3.4e-14 s, no
+  discontinuity); 10 times larger fails earlier (26.38 ns). ngspice takes
+  steps of 1.7e-15 s and more there: its truncation error is that of the
+  capacitor charges, which the common-mode noise does not move. Fix
+  (`transient.rs`, `newton.rs`, general): a step whose estimate exceeds the
+  tolerance is accepted when it is within the tolerance plus the rounding
+  noise of each unknown (the response of the step's last matrix to `eps sum_j
+  |a_rj x_j|` in every row), judged only for a step that would otherwise be
+  rejected (`TranStats::noise_limited`). The step runs at 1e-5 (6 noise-limited
+  steps, smallest 4.0e-14 s) and at 1e-6, for every `max_step` tried (seven,
+  among them the last bits that failed before); the vendor step decks now run
+  at the harness's 1e-5: OPA2189 0.280 of the bound (0.280 at 1e-4), OPA2182
+  0.426 (0.424). No example measure moved and every reference series is
+  unchanged.
+- Analyzer run time: not real. HEAD and 1c8ca866, alternated three times
+  each in the debug build: 52.6, 71.7 and 51.4 s against 64.3, 58.9 and
+  54.8 s (bench sums of `--timing`); every bench's minimum is HEAD's or within
+  noise, and the solver work is identical except `Distortion`, where HEAD does
+  0.7 % more Newton iterations (132 660 against 131 758). The 47 s and 57 s
+  were one run each.
+- TPS7A20 compared with ngspice in a local variant (gitignored
+  `vendor/models/tps7a20_variant.lib`): the load switch `S_S2` written with
+  `RON` below `ROFF` (control reversed, `VON > VOFF`: the same law in
+  PSpice's formula; copper-sim gives the same operating point to ten digits
+  for both forms) and the dropout `TABLE` as explicit linear segments
+  (ngspice's PSpice mode rounds a table's corners: with the table, 1.3 times
+  the bound at 1.75 V in dropout; with the segments 0.053). Operating point
+  at 1 mA, the input from 1.5 V to 5 V and no load agree (worst 0.37 of the
+  bound). The line rejection is not compared in `.ac`: ngspice's PSpice-mode
+  `VSWITCH` returns the complex conjugate of the response there (a
+  self-written RC deck), so only magnitudes agree: TPS7A20 74.99 dB at 1 Hz in
+  both, the model's own `psrr = 178u`; TLV75718P 64.99 dB. Quiescent current
+  at no load: TLV75718P 5.2906 uA in both (its file: "quiescent current ...
+  not modeled"), TPS7A2018 5.0615 uA in both. The data-sheet differences are
+  the models'.
+- Release timings: see I1's follow-up.
+
+Open: the `sim spice` blocks of TLV75718PDRVR, TPS7A2018PDBVR and
+TPS7A2025PDBVR are on CopperLib's branch `sim-vendor-regulators` only, and
+the amplifier blocks carry no `note`. The TL431 under a current source and PSpice's
+behaviour there are not settled. The TPS7A20's start-up transient and its
+line rejection's phase are not compared with ngspice.
 
 ### I3. Analyzer on real models
 

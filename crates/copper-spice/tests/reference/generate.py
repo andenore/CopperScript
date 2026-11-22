@@ -262,18 +262,20 @@ def main():
     dll = os.environ.get("NGSPICE_DLL", DEFAULT_DLL)
     ng = Ngspice(dll)
     # The library finds no spinit, so the code model POLY needs is loaded here,
-    # and for the vendor decks the ones ngspice's PSpice mode translates
-    # LAPLACE and VSWITCH into (s_xfer in analog.cm, aswitch in xtradev.cm,
-    # which needs digital.cm).
+    # and for the vendor decks and the decks run in a compatibility mode
+    # (`*@ ngbehavior`) the ones ngspice's PSpice mode translates LAPLACE and
+    # VSWITCH into (s_xfer in analog.cm, aswitch in xtradev.cm, which needs
+    # digital.cm).
     code_models = os.environ.get("NGSPICE_CODE_MODELS", DEFAULT_CODE_MODELS)
     ng.command(f"codemodel {short_path(os.path.join(code_models, 'spice2poly.cm'))}")
-    if VENDOR in os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ""):
-        for cm in ("analog.cm", "digital.cm", "xtradev.cm"):
-            ng.command(f"codemodel {short_path(os.path.join(code_models, cm))}")
-    version = ng.version()
     decks = sys.argv[1:] or sorted(
         os.path.join(DECKS, f) for f in os.listdir(DECKS) if f.endswith(".cir")
     )
+    behaviours = [directives(open(d, encoding="utf-8").read())[4] for d in decks]
+    if VENDOR in os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "") or any(behaviours):
+        for cm in ("analog.cm", "digital.cm", "xtradev.cm"):
+            ng.command(f"codemodel {short_path(os.path.join(code_models, cm))}")
+    version = ng.version()
     for deck in decks:
         name = os.path.splitext(os.path.basename(deck))[0]
         rows = generate(ng, deck)

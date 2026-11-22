@@ -77,12 +77,13 @@ reltol=1e-6 vntol=1e-9` (copper-sim's Newton tolerances) and a small
 | `noise_transient` | a diode's shot and 1/f noise, for the transient-noise test |
 | `floor_rlc`, `floor_sallen_key`, `floor_ladder` | linear circuits on a 1 kHz sine, for the integration-floor test |
 | `ce_amp`, `diffpair`, `cmos_inverter`, `rectifier`, `rlc`, `opamp_follower` | small circuits; the op-amp is a discrete two-stage BJT subcircuit in a follower |
+| `pspice_behavioral`, `pspice_switch`, `pspice_ic`, `pspice_temperature`, `pspice_diode` | the PSpice dialect against ngspice's PSpice mode (`*@ dialect pspice`, `*@ ngbehavior psa`): `VALUE` sources with `IF`, `LIMIT`, `STP`, `MIN`, `MAX` and `.PARAM` expressions; `VSWITCH`; `.IC` inside a subcircuit; `TC1`/`TC2`, `T_MEASURED`, `T_ABS`; diode `ISR`/`NR` in forward bias (see "PSpice dialect") |
 
 Device decks run at -40, 27 and 85 degC.
 
 ## The comparison
 
-27 decks, 1072 compared series, 168 932 compared values. The bounds per
+32 decks, 1119 compared series, 173 720 compared values. The bounds per
 kind of quantity and their reasons are in the module documentation of
 `reference_comparison.rs`: DC voltages 1e-5 + 1 uV, DC currents 3e-5 (the
 `V_T` difference of the constants) + 1e-12 A, AC phasors and noise
@@ -126,8 +127,8 @@ variant deck, or by reproducing ngspice's number from a formula.
 | **reverse junction current** | JFET gate currents at 85 degC, `temperature_tnom` | up to 0.4 % of `IS` | below `-3 N V_T` SPICE uses `-IS (1 + (3 N V_T / (e v))^3)`, copper-sim the exponential; ngspice's gate currents reproduced to nine digits with the cubic. Diodes and BJTs have the same form in ngspice; their decks do not reach the bound. |
 | **MOSFET gate charge: body-effect transcapacitance** | `mos1` gate admittance at 10 GHz | 15 to 33 % of its real part (0.2 % of the imaginary part) | copper-sim's Meyer charges depend on `v_bs` through `V_on`; ngspice's Meyer capacitances do not. With `RS = RD = 0` (no `v_bs` signal) they agree exactly (variant deck). |
 | **MOSFET gate charge: ETA transcapacitance** | `mos3` gate current from a drain drive | 1.40 against 1.92 fF | the same through `V_on`'s dependence on `v_ds` (`ETA`); with `ETA = 0` they agree (variant deck). |
-| **MOSFET gate charge: linear-region partition** | `mos3_badmos3` drain current at 1 GHz, linear region | 0.95 fF | probable: copper-sim's source-drain split adds a transcapacitance of at most `C_ox / 6` (2.9 fF here) in the linear region; not isolated further. |
-| **MOSFET gate charge in transient** | `cmos_inverter` | supply-current peak 7 to 8 %, output 0.35 % of the swing at the edge (1.4 % against a ten times finer ngspice step) | the intrinsic charge: without `TOX` the transient agrees within 0.7 of the bound, without `GAMMA` it does not (variant decks). Which of the charge-partition terms and ngspice's capacitance averaging (not charge conserving) causes it is not established. |
+| **MOSFET gate charge: linear-region partition** | `mos3_badmos3` drain current at 1 GHz, linear region | 0.83 fF at 27 degC | copper-sim's `d q_gd / d v_g` against Meyer's `C_gd`: with ngspice's own `V_dsat` (1.39359 V), `V_dsat(V_on)` (0.02999 V) and `d V_dsat / d v_gs` (0.92654) read from the device, `(2/3) C_ox (b^3 + a b^2 + 4 a^2 b) / (a + b)^3 d V_dsat / d v_gs` minus ngspice's `C_gd` (6.8375 fF) is 0.8297 fF, the difference of the two drain currents to seven digits (22 November 2026). |
+| **MOSFET gate charge in transient** | `cmos_inverter` | supply-current peak 7 to 8 %, output 0.35 % of the swing at the edge | copper-sim's charge-conserving partition against Meyer's capacitances, nothing else (variant decks at 27 degC, 22 November 2026): ngspice without `TOX` and with Meyer's `C_gs`, `C_gd`, `C_gb` as `i = C(v) dv/dt` sources reproduces its own native result (15.57 against 15.56 of the bound); ngspice without `TOX` and with copper-sim's three charge branches (each `dq/dt` through a 1 fF capacitor charged to `q`) reproduces copper-sim's (output 0.000 of the bound, supply current within it except 4.7 at the input's corner at 2.5 ns, where the gate current jumps); ngspice's peak is -0.5646 mA at maximum steps of 5 ps, 0.5 ps and 0.1 ps alike (its capacitance averaging is not the cause). With `v_bs = 0` and a level-1 `V_on` the only difference of the two forms is the linear-region partition. Meyer's form is not charge conserving: driven on gate and drain 90 degrees apart at 100 MHz, ngspice's MOSFET pumps 1.873e-14 C per period into the drain at 10 ps and at 1 ps steps, copper-sim's 1e-19 C. copper-sim's form is kept. |
 | **level-3 derivatives** | `mos3`, `mos3_derivatives` AC at 1 kHz | `g_m` 7 %, `g_ds` 2.6 % | ngspice's hand-written level-3 derivatives (with `VMAX` and `ETA`) are not those of its own DC current: a fourth-order difference of ngspice's DC sweep equals copper-sim's exact `g_m` and `g_ds` to seven digits (`level3_difference_is_ngspice_derivatives`). |
 | **level 3 without VMAX** | `mos3` `M7` | drain current up to 10 % (2.6 % at the bias point) | ngspice changes SPICE3f5's level 3 without `VMAX` unless `.options badmos3`; with that option the same devices agree in DC within the bound (`mos3_badmos3`). ngspice's changed equations are not reproduced. |
 
@@ -159,12 +160,45 @@ bound.
   within a factor of 2 on every circuit (the RLC is 20 to 100 times below). The
   fundamental is within `(w h)^2 / 12` of ngspice's AC gain.
 
+## PSpice dialect
+
+ngspice's PSpice mode (`ngbehavior=psa`) is not PSpice: it reads PSpice
+syntax and translates some constructs, but its devices keep ngspice's
+equations. The five `pspice_*` decks compare what that mode runs as PSpice
+does; all 47 series agree within their bounds (worst 0.28). Where it does
+not, the comparison is against PSpice's documented closed form instead
+(22 November 2026, each shown by a self-written deck in ngspice-46):
+
+| Construct | ngspice's PSpice mode | Closed form in |
+| --- | --- | --- |
+| `E`/`G` `TABLE` | rounds the corners: 0.0125 V at the corner `(0,0)` of `(-1,-2) (0,0) (0.5,1.5)`, 0.95 V at the end point of a table that ends at 1 V; PSpice interpolates linearly. TI's TPS7A20 dropout table written as explicit linear segments agrees within the bound (0.053), the table itself 1.3 times beyond it | `spice_elements.rs`, `behavioural_value_table_b_and_functions` |
+| `ISWITCH` | interpolates `ln R` linearly in the control current (42.2 kohm at 0.3 mA between `IOFF` 0.2 mA and `ION` 1 mA), not PSpice's cubic (74.3 kohm) | `spice_elements.rs`, `smooth_switches_follow_pspice_across_their_transition` |
+| `VSWITCH` with `ROFF` below `RON` | open at `VOFF`, where PSpice's switch is `ROFF` | the same test |
+| `VSWITCH` in `.ac` | the complex conjugate of the response: an 80 ohm closed switch into 20 nF gives `0.497 + 0.500j` at 100 kHz, the RC low-pass `0.497 - 0.500j` (copper-sim) | the RC itself |
+| `C`/`L` `IC=` | ignored without `UIC`; PSpice holds the element there in the bias point | `vendor_constructs.rs`, `initial_condition_of_an_inductor_and_on_elements` |
+| diode `IKF` | ngspice's knee `I / (1 + sqrt(I / IKF))`, not PSpice's `I sqrt(IKF / (IKF + I))`: 9.240e-5 A of ngspice's 9.208e-5 A at the `pspice_diode` bias, copper-sim 9.634e-5 A, PSpice's formula 9.634e-5 A | `device_and_netlist_coverage.rs`, `diode_recombination_and_high_injection` |
+| diode `ISR` in reverse bias | 0.585 of PSpice's `ISR (exp(v / NR V_T) - 1) K_gen` at -1 V (27 and 85 degC); not established why | the same test |
+| diode `ISR`, small signal | its conductance at 0.6 V is 0.26 % off the derivative of its own DC current (a central difference of its sweep); copper-sim's is the derivative | the same test |
+| PNP | lateral (substrate leak `G_MIN` times 2.7 V across base and substrate), where PSpice's `PNP` is vertical (`LPNP` is its lateral type) | `bjt_substrate` compares the lateral form in the spice3 dialect |
+
+The BJT's `IRB` is read the same in every dialect (compared in
+`bjt_base_resistance`); quasi-saturation (`QCO`, `RCO`) is refused in every
+dialect (`spice_elements.rs`).
+
+The LTspice dialect has no reference on this machine and nothing of it is
+compared with another simulator: `^` as exclusive or, `PWR` of its base's
+magnitude, a vertical PNP, the JFET's `IS(T)` without `N` and with
+`XTI = 0`, the JFET's `M`, `noiseless` resistors, `E a b c d LAPLACE =
+H(s)`, and LTspice's readings of element `IC=` (refused, as in ngspice) and
+of the diode's `ISR` and `IKF` (refused).
+
 ## Not covered
 
 Lossy lines, `VDMOS`, BSIM, `ISS`, quasi-saturation, ngspice's `NLEV` noise
-models of JFETs and MOSFETs outside saturation, the PSpice and LTspice
-dialects (no PSpice or LTspice to compare with), and transient analyses at
-other temperatures than the decks' own.
+models of JFETs and MOSFETs outside saturation, the LTspice dialect and the
+PSpice constructs above that ngspice runs differently (no PSpice or LTspice
+to compare with), and transient analyses at other temperatures than the
+decks' own.
 
 ## Vendor models
 
@@ -184,7 +218,8 @@ Two directives serve these decks: `*@ dialect pspice` reads the deck in
 copper-sim's PSpice dialect (spice3 without it), and `*@ ngbehavior psa`
 runs it in ngspice's PSpice compatibility mode (`set ngbehavior=psa` before
 the circuit is loaded; `unset` for every other deck, so the committed
-results are unchanged). For a deck under `vendor/` the script also loads
+results are unchanged). For a deck under `vendor/`, and for a run that
+includes a deck with `*@ ngbehavior` (the `pspice_*` decks), the script also loads
 the code models that mode translates PSpice constructs into (`analog.cm`
 for `LAPLACE`, `xtradev.cm` with `digital.cm` for `VSWITCH`).
 
@@ -200,3 +235,13 @@ TL431 fed by a current source (the junction-current test copper-sim has,
 see `newton.rs`), and it opens TI's TPS7A20 load switch, a `VSWITCH` whose
 `ROFF` (1 uohm) is below its `RON` (1 Mohm), at the control voltage `VOFF`,
 where PSpice's switch is `ROFF`.
+
+Follow-up (22 November 2026): the two follower steps run at the
+comparison's own `reltol` 1e-5 (the directive removed; OPA2189 0.280 of the
+bound, OPA2182 0.426), and three decks were added: `tlv757_iq` (no load),
+`tps7a20_iq` and `tps7a20_variant` (1 mA, input 1.5 V to 5 V). The TPS7A20
+decks include `vendor/models/tps7a20_variant.lib`, TI's file with two exact
+rewrites: the load switch with `RON` below `ROFF` (control reversed, `VON >
+VOFF`, the same law in PSpice's formula) and the dropout `TABLE` as linear
+segments (see "PSpice dialect"). 8 decks, 29 series, all within their
+bounds. No `.ac` there: ngspice's PSpice-mode `VSWITCH` is conjugated in AC.

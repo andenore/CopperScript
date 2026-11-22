@@ -3234,7 +3234,9 @@ and `b = max(V_dsat - v_ds, 0)`, split as `a^2 (a + 2b)` to the source and
 then exactly Meyer's in every region (level 1, bulk on the source), and in
 saturation and below turn-on every capacitance is; in the linear region a
 source-drain transcapacitance of at most `C_ox / 6` appears that Meyer's
-model (which does not conserve charge) lacks, and the depletion-edge part of
+model (which does not conserve charge) lacks (ngspice's differences from
+copper in a CMOS inverter's supply current, 7 %, and a level-3 drain
+admittance, 0.83 fF, are exactly this term: `crates/copper-spice/tests/reference/README.md`), and the depletion-edge part of
 `C_gs` sits between gate and bulk. At level 3, `a` is `V_dsat` less its value
 at turn-on, so the charge is continuous where Meyer's capacitances jump.
 `KF` together with `TOX` is rejected: the simulators normalise flicker noise
@@ -3322,10 +3324,17 @@ and slew, OPA2182 and OPA2189 slew), ngspice-46 in PSpice mode gives the
 same figure from the same file within 2 %: the figure is the model's, not
 the reader's. The TL431, TLV75718P, OPA548, OPA2182 and OPA2189 rows are
 compared node by node with ngspice in the gitignored vendor decks of the
-reference comparison (19 series, every one within its bound). The TPS7A20
-model is not: ngspice's PSpice mode turns its load switch, a `VSWITCH` with
-`ROFF` below `RON`, into an open one (a self-written deck shows it), where
-PSpice's switch has `ROFF` at `VOFF`.
+reference comparison (every series within its bound). ngspice's PSpice mode
+turns the TPS7A20's load switch, a `VSWITCH` with `ROFF` below `RON`, into
+an open one (a self-written deck shows it), where PSpice's switch has `ROFF`
+at `VOFF`, and rounds the corners of its dropout `TABLE`; with the switch
+written with `RON` below `ROFF` and the table as linear segments (the same
+laws in PSpice) the model agrees with ngspice at 1 mA, at no load and over
+the input from 1.5 V to 5 V. The quiescent currents (TLV75718P 5.29 uA,
+TPS7A2018 5.06 uA) and the line rejection at 1 Hz (65.0 dB and 75.0 dB) are
+ngspice's too: the models' own figures (the TPS7A20 sets its rejection with
+`psrr = 178u`, -75.0 dB; the TLV75718P file says its quiescent current is
+not modelled).
 
 The OPA1612's 40 MHz is the data sheet's closed-loop bandwidth at unity
 gain, not its open-loop crossover; its gain-bandwidth product is specified

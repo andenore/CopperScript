@@ -1,0 +1,18 @@
+PSpice dialect: diode recombination current (ISR, NR) in forward bias
+* IKF, reverse bias and the small-signal conductance are not compared here
+* (README, PSpice dialect).
+*@ dialect pspice
+*@ ngbehavior psa
+*@ probe i(vd) i(vd2)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VD a 0 DC 0.6
+D1 a 0 DP
+VD2 b 0 DC 0.6
+RS2 b c 10
+D2 c 0 DQ 2
+.model DP D(IS=1e-14 N=1.05 ISR=2e-10 NR=2 RS=0.5 BV=50 IBV=1u CJO=2p TT=1n)
+.model DQ D(IS=4e-15 N=1 ISR=1e-11 NR=1.8 EG=1.11 XTI=3)
+.op
+.dc VD 0 1.1 0.01
+.end

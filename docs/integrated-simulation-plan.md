@@ -78,10 +78,13 @@ Known weak spots of what is built:
   remaining differences listed by cause; nothing has been compared with
   PSpice or LTspice beyond the OPA810 bias point. Five vendor models (TL431,
   TLV75718P, OPA548, OPA2182, OPA2189) agree with ngspice node by node in
-  local, gitignored decks (I2); the TPS7A20 cannot be compared (ngspice's
-  PSpice mode opens its load switch). Vendor-model transients are slow in the debug build (an OPA2277
-  slew test did not finish in 40 minutes), so the slew checks are opt-in and
-  were not rerun.
+  local, gitignored decks (I2), and the TPS7A20 with its load switch and
+  dropout table rewritten as the same laws ngspice's PSpice mode runs
+  correctly (I2 follow-up). The PSpice dialect is compared with that mode on
+  five self-written decks where it runs PSpice's equations, and with PSpice's
+  closed forms where it does not; the LTspice dialect is not compared. Vendor-model transients are slow in the debug build (an OPA2277
+  slew test did not finish in 40 minutes), so the slew checks are opt-in;
+  their release timings are in the improvement plan (I1 follow-up).
 - No Analog Devices model has been loaded: analog.com refuses automated
   downloads.
 - The HTML reports have been looked at page kind by page kind (F10) but not
@@ -430,8 +433,9 @@ Open:
   input edge to the output.
 - Vendor transients in the debug build: 100 s for the OPA2277 follower step.
   The OPA2182 step runs since I2 (a stalled Newton iteration on a
-  mid-supply source's current); the OPA2189 step at `reltol` 1e-5 still
-  collapses, depending on the last bit of `max_step` (I2, Open).
+  mid-supply source's current), and the OPA2189 step at `reltol` 1e-5 since
+  the I2 follow-up (a truncation-error estimate within the rounding noise of
+  the solution is accepted).
 - Vendor models differ from the data sheets in places (OPA548 supply current
   4.3 mA against 17 mA; OPA2189 slew 11.6 V/us against 20 V/us): ngspice
   gives the same figures from the same files, so they are the models' (I2);

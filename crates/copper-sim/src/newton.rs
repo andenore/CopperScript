@@ -1054,6 +1054,24 @@ impl Solver {
         scale
     }
 
+    /// Per unknown, the rounding error of the solution `x` of the last
+    /// solve: the response of the last matrix to an error of
+    /// `f64::EPSILON * sum_j |a_rj x_j|` in every row, the rounding of the
+    /// currents stamped there. A row in which a large conductance meets
+    /// small ones (a large capacitor's `C/h` at a short step) fixes the
+    /// small currents only to that precision, and the common voltage of the
+    /// nodes the conductance ties together moves by it from one solve to
+    /// the next.
+    pub(crate) fn rounding_noise(&mut self, x: &[f64]) -> Vec<f64> {
+        let n = x.len();
+        let Some(a) = self.matrix.as_ref().filter(|a| a.size() == n) else { return vec![0.0; n] };
+        let w: Vec<f64> = (0..n).map(|r| a.row(r).map(|(j, v)| (v * x[j]).abs()).sum::<f64>() * f64::EPSILON).collect();
+        match self.solve(&w) {
+            Ok(z) => z.iter().map(|v| v.abs()).collect(),
+            Err(_) => vec![0.0; n],
+        }
+    }
+
     /// Newton iteration from `x0` with junction voltages `junction0`.
     pub fn newton(
         &mut self,

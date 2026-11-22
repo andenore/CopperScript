@@ -1,0 +1,16 @@
+PSpice dialect: the smooth voltage-controlled switch (VSWITCH)
+* ISWITCH and a VSWITCH with ROFF below RON are compared with PSpice's
+* closed form instead (README, PSpice dialect).
+*@ dialect pspice
+*@ ngbehavior psa
+*@ probe v(o1) i(vs)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VC ctl 0 DC 0.5 PULSE(-0.5 1.5 100n 400n 400n 100n 1u)
+VS s 0 DC 5
+R1 s o1 1k
+S1 o1 0 ctl 0 SMOD
+.model SMOD VSWITCH(RON=10 ROFF=1meg VON=1 VOFF=0)
+.op
+.dc VC -0.5 1.5 0.02
+.tran 2n 1u
+.end
