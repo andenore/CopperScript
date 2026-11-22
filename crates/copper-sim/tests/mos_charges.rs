@@ -276,7 +276,7 @@ fn level3_device(l3: Level3Params) -> MosParams {
     }
 }
 
-/// SPICE3's level-3 drain current (`mos3load`, nominal temperature), N-type,
+/// SPICE3's level-3 drain current (`mos3load` as ngspice has it, nominal temperature), N-type,
 /// any sign of `v_ds`.
 fn mos3_id(p: &MosParams, vgs: f64, vds: f64, vbs: f64) -> f64 {
     if vds < 0.0 {
@@ -358,7 +358,8 @@ fn mos3_id(p: &MosParams, vgs: f64, vds: f64, vbs: f64) -> f64 {
             (m.kappa * (vds - vdsat) * m.alpha).sqrt()
         } else {
             let gdsat = (cdrain * (1.0 - fdrain) / vdsc).max(1e-12);
-            let emax = cdrain * oneoverxl / gdsat;
+            // ngspice's mos3load scales E_max by KAPPA (SPICE3f5, its `badmos3`, does not).
+            let emax = m.kappa * cdrain * oneoverxl / gdsat;
             let arga = 0.5 * emax * m.alpha;
             let argc = m.kappa * m.alpha;
             (arga * arga + argc * (vds - vdsat)).sqrt() - arga

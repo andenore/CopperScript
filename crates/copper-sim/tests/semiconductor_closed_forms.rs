@@ -21,10 +21,11 @@ fn rel(a: f64, b: f64) -> f64 {
 
 /// Gummel–Poon terminal currents `(I_C, I_B)` at `(v_be, v_bc)`, N-type.
 fn gummel_poon(p: &BjtParams, vbe: f64, vbc: f64) -> (f64, f64) {
-    let cbe = p.is * ((vbe / (p.nf * VT)).exp() - 1.0) + GMIN * vbe;
-    let cbc = p.is * ((vbc / (p.nr * VT)).exp() - 1.0) + GMIN * vbc;
-    let cben = p.ise * ((vbe / (p.ne * VT)).exp() - 1.0);
-    let cbcn = p.isc * ((vbc / (p.nc * VT)).exp() - 1.0);
+    // SPICE3's bjtload: the G_MIN leaks are part of the non-ideal base currents.
+    let cbe = p.is * ((vbe / (p.nf * VT)).exp() - 1.0);
+    let cbc = p.is * ((vbc / (p.nr * VT)).exp() - 1.0);
+    let cben = p.ise * ((vbe / (p.ne * VT)).exp() - 1.0) + GMIN * vbe;
+    let cbcn = p.isc * ((vbc / (p.nc * VT)).exp() - 1.0) + GMIN * vbc;
     let inv = |x: Option<f64>| x.map_or(0.0, |x| 1.0 / x);
     let q1 = 1.0 / (1.0 - vbc * inv(p.vaf) - vbe * inv(p.var));
     let q2 = cbe * inv(p.ikf) + cbc * inv(p.ikr);

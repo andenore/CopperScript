@@ -1,0 +1,17 @@
+Full-wave diode bridge with a smoothing capacitor
+* 10 V peak at 50 Hz into a bridge, 220 uF and 1 kohm; two full periods.
+*@ probe v(p,n) v(a) i(vs)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VS a b DC 0 SIN(0 10 50)
+RB b 0 1meg
+RS a a1 0.5
+D1 a1 p DR
+D2 n a1 DR
+D3 0 p DR
+D4 n 0 DR
+CF p n 220u
+RL p n 1k
+RN n 0 1meg
+.model DR D(IS=5n N=1.8 RS=0.04 CJO=60p VJ=0.7 M=0.45 TT=3u BV=600 IBV=5u)
+.tran 20u 40m
+.end

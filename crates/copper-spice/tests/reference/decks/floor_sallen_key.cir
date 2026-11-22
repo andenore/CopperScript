@@ -1,0 +1,12 @@
+Integration floor: Sallen-Key low-pass (VCVS amplifier) on a 1 kHz sine
+*@ probe v(out) v(a)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-16
+VS in 0 DC 0 AC 1 SIN(0 1 1k)
+R1 in a 10k
+R2 a b 10k
+C1 a out 10n
+C2 b 0 4.7n
+E1 out 0 b out 100k
+.ac lin 1 1k 1k
+.tran 2u 5m
+.end

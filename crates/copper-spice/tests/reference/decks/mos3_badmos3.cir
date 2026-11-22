@@ -1,0 +1,20 @@
+MOSFET level 3 without VMAX against ngspice's badmos3 (SPICE3f5) form
+* The same devices as M7 of mos3.cir, run in ngspice with .options badmos3,
+* which restores SPICE3f5's level 3: copper-sim's equations. Together with
+* mos3.cir this isolates the listed difference to what that option changes.
+*@ ngspice-options badmos3
+*@ probe i(vd1) i(vd2)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VG1 g1 0 DC 1.5
+VD1 d1 0 DC 3
+M1 d1 g1 0 0 N3C L=1.2u W=10u
+VG2 g2 0 DC 1.5 AC 1
+VD2 d2 0 DC 0.6
+M2 d2 g2 0 0 N3C L=1.2u W=10u
+.model N3C NMOS(LEVEL=3 TOX=20n NSUB=1e16 U0=600 XJ=0.3u LD=0.1u ETA=0.05 THETA=0.06 KAPPA=0.5 NFS=1e11)
+.op
+.dc VD1 0 4 0.04
+.dc VG1 0 3 0.02
+.ac dec 10 1k 1g
+.end

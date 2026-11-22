@@ -1,0 +1,46 @@
+MOSFET level 3: N and P channel, short-channel terms, KAPPA, weak inversion, gate charge
+* M1 (KAPPA = 0.2) and M2 (KAPPA = 1.0) are the same NMOS geometry; the drain
+* sweep runs both from the linear region into saturation, where KAPPA sets the
+* channel-length modulation. M3 carries the AC drive on its gate, M4 on its
+* drain. The gate sweep of M1 starts in weak inversion (NFS). M5 is a PMOS,
+* M6 an inverter-style switch for the transient. M7 has no VMAX (the plain
+* channel-length modulation) and its own drain sweep.
+*@ probe v(d6) i(vd1) i(vd2) i(vg3) i(vd3) i(vg4) i(vd4) i(vd5) i(vd7)
+*@ tran-probe v(d6) i(vd1) i(vd7)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VG1 g1 0 DC 1.5
+VD1 d1 0 DC 3
+M1 d1 g1 0 0 N3A L=1.2u W=10u
+VD2 d2 0 DC 3
+M2 d2 g1 0 0 N3B L=1.2u W=10u
+VG3 g3 0 DC 1.5 AC 1
+VD3 d3 0 DC 2
+M3 d3 g3 0 0 N3A L=1.2u W=10u
+VG4 g4 0 DC 1.5
+VD4 d4 0 DC 2 AC 1
+M4 d4 g4 0 0 N3A L=1.2u W=10u
+VG5 g5 0 DC -1.6
+VD5 d5 0 DC -2.5
+M5 d5 g5 0 0 P3 L=1.5u W=20u
+VG6 g6 0 DC 0 PULSE(0 3.3 5n 1n 1n 30n 80n)
+VDD dd 0 DC 3.3
+RD6 dd d6 10k
+C6 d6 0 0.2p
+M6 d6 g6 0 0 N3A L=1.2u W=10u
+VD7 d7 0 DC 3
+M7 d7 g1 0 0 N3C L=1.2u W=10u
+.model N3A NMOS(LEVEL=3 TOX=20n NSUB=1e16 U0=600 VMAX=1.5e5 NFS=1e11 XJ=0.3u LD=0.1u WD=0.2u
++ ETA=0.1 THETA=0.06 KAPPA=0.2 DELTA=0.4 CGSO=0.2n CGDO=0.2n CGBO=0.1n)
+.model N3B NMOS(LEVEL=3 TOX=20n NSUB=1e16 U0=600 VMAX=1.5e5 NFS=1e11 XJ=0.3u LD=0.1u WD=0.2u
++ ETA=0.1 THETA=0.06 KAPPA=1.0 DELTA=0.4 CGSO=0.2n CGDO=0.2n CGBO=0.1n)
+.model N3C NMOS(LEVEL=3 TOX=20n NSUB=1e16 U0=600 XJ=0.3u LD=0.1u ETA=0.05 THETA=0.06 KAPPA=0.5 NFS=1e11)
+.model P3 PMOS(LEVEL=3 TOX=20n NSUB=2e16 U0=250 VMAX=1e5 NFS=1e11 XJ=0.3u LD=0.1u
++ ETA=0.1 THETA=0.08 KAPPA=0.5 DELTA=0.3)
+.op
+.dc VD1 0 4 0.04
+.dc VG1 0 3 0.02
+.dc VD7 0 4 0.04
+.ac dec 10 1k 10g
+.tran 0.2n 80n
+.end

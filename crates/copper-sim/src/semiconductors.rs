@@ -20,20 +20,22 @@
 //! `v_be = V(b') - V(e')`, `v_bc = V(b') - V(c')` and `G_MIN = 1e-12 S`:
 //!
 //! ```text
-//! I_BE = IS (exp(v_be / NF V_T) - 1) + G_MIN v_be       I_BC = IS (exp(v_bc / NR V_T) - 1) + G_MIN v_bc
-//! I_LE = ISE (exp(v_be / NE V_T) - 1)                    I_LC = ISC (exp(v_bc / NC V_T) - 1)
+//! I_BE = IS (exp(v_be / NF V_T) - 1)                     I_BC = IS (exp(v_bc / NR V_T) - 1)
+//! I_LE = ISE (exp(v_be / NE V_T) - 1) + G_MIN v_be       I_LC = ISC (exp(v_bc / NC V_T) - 1) + G_MIN v_bc
 //! q_1 = 1 / (1 - v_bc / VAF - v_be / VAR)                q_2 = I_BE / IKF + I_BC / IKR
 //! q_b = q_1 (1 + sqrt(1 + 4 q_2)) / 2                     (q_b = q_1 without IKF and IKR)
 //! branch b' -> e':  I_BE / BF + I_LE      charge TF I_BE (1 + a_TF) / q_b + Q_dep(v_be; CJE, VJE, MJE)
 //! branch b' -> c':  I_BC / BR + I_LC      charge TR I_BC + Q_dep(v_bc; XCJC CJC, VJC, MJC)
 //! branch c' -> e':  (I_BE - I_BC) / q_b                                   (the transport current)
 //! branch b  -> c':  charge Q_dep(V(b) - V(c'); (1 - XCJC) CJC, VJC, MJC)  (XCJC < 1 only)
-//! branch s  -> c':  charge of the substrate junction CJS, VJS, MJS        (CJS > 0 only)
+//! branch s  -> c':  charge of the substrate junction CJS, VJS, MJS        (CJS > 0 only; vertical)
+//! branch s  -> b':  the same of a lateral device, on -v                  (CJS > 0 and `lateral`)
 //! a_TF = XTF exp(v_bc / (1.44 VTF)) (I_BE / (I_BE + ITF))^2               (for v_be > 0; zero without XTF)
 //! ```
 //!
 //! The diffusion charge is `TF I_BE` without the `1 / q_b` factor for
-//! `v_be <= 0`, as in SPICE3. With `RBM` below `RB`, the base resistance is
+//! `v_be <= 0`, as in SPICE3. As in SPICE3 the `G_MIN` leaks are base
+//! currents (in `I_LE`, `I_LC`), not part of the transport current. With `RBM` below `RB`, the base resistance is
 //! the law branch `b -> b'` of resistance `RBM + (RB - RBM) / q_b`, or with
 //! `IRB` SPICE's current-crowding form [`BjtParams::base_resistance`], else
 //! a plain resistor `RB`. Noise: shot noise of the
@@ -140,7 +142,11 @@ pub fn depletion_charge(v: &Dual, cj0: f64, vj: f64, m: f64, fc: f64) -> Dual {
 }
 
 fn junction(v: &Dual, is: f64, nvt: f64) -> Dual {
-    v.scale(1.0 / nvt).exp().offset(-1.0).scale(is).add(&v.scale(GMIN))
+    ideal_junction(v, is, nvt).add(&v.scale(GMIN))
+}
+
+fn ideal_junction(v: &Dual, is: f64, nvt: f64) -> Dual {
+    v.scale(1.0 / nvt).exp().offset(-1.0).scale(is)
 }
 
 fn critical_voltage(is: f64, vt: f64) -> f64 {
@@ -211,6 +217,10 @@ pub struct BjtParams {
     pub vjs: f64,
     /// `MJS`.
     pub mjs: f64,
+    /// A lateral device (SPICE3's `SUBS = -1`, ngspice's default for a PNP):
+    /// the substrate junction is at the internal base instead of the internal
+    /// collector, with the opposite polarity.
+    pub lateral: bool,
     /// `FC`.
     pub fc: f64,
     /// `TF`, s.
@@ -264,6 +274,7 @@ impl Default for BjtParams {
             cjs: 0.0,
             vjs: 0.75,
             mjs: 0.0,
+            lateral: false,
             fc: 0.5,
             tf: 0.0,
             xtf: 0.0,
@@ -379,18 +390,13 @@ impl BjtParams {
     pub fn state(&self, vbe: &Dual, vbc: &Dual) -> BjtState {
         let vt = self.vt;
         let n = vbe.d.len();
-        let cbe = junction(vbe, self.is, self.nf * vt);
-        let cbc = junction(vbc, self.is, self.nr * vt);
-        let cben = if self.ise > 0.0 {
-            vbe.scale(1.0 / (self.ne * vt)).exp().offset(-1.0).scale(self.ise)
-        } else {
-            Dual::constant(0.0, n)
-        };
-        let cbcn = if self.isc > 0.0 {
-            vbc.scale(1.0 / (self.nc * vt)).exp().offset(-1.0).scale(self.isc)
-        } else {
-            Dual::constant(0.0, n)
-        };
+        let cbe = ideal_junction(vbe, self.is, self.nf * vt);
+        let cbc = ideal_junction(vbc, self.is, self.nr * vt);
+        // SPICE3 (bjtload): the G_MIN leaks join the non-ideal base currents.
+        let cben = if self.ise > 0.0 { ideal_junction(vbe, self.ise, self.ne * vt) } else { Dual::constant(0.0, n) }
+            .add(&vbe.scale(GMIN));
+        let cbcn = if self.isc > 0.0 { ideal_junction(vbc, self.isc, self.nc * vt) } else { Dual::constant(0.0, n) }
+            .add(&vbc.scale(GMIN));
         let (ovaf, ovar) = (Self::inverse(self.vaf), Self::inverse(self.var));
         let q1 = vbc.scale(-ovaf).sub(&vbe.scale(ovar)).offset(1.0);
         let q1 = Dual::constant(1.0, n).div(&q1);
@@ -406,7 +412,7 @@ impl BjtParams {
         let transport = cbe.sub(&cbc).div(&qb);
         let base_emitter = cbe.scale(1.0 / self.bf).add(&cben);
         let base_collector = cbc.scale(1.0 / self.br).add(&cbcn);
-        let mut diffusion = cbe.sub(&vbe.scale(GMIN));
+        let mut diffusion = cbe.clone();
         if self.tf > 0.0 && vbe.v > 0.0 {
             let mut argtf = Dual::constant(0.0, n);
             if self.xtf > 0.0 {
@@ -422,13 +428,8 @@ impl BjtParams {
             diffusion = cbe.mul(&argtf.offset(1.0)).div(&qb);
         }
         let charge_be = diffusion.scale(self.tf).add(&depletion_charge(vbe, self.cje, self.vje, self.mje, self.fc));
-        let charge_bc = cbc.sub(&vbc.scale(GMIN)).scale(self.tr).add(&depletion_charge(
-            vbc,
-            self.xcjc * self.cjc,
-            self.vjc,
-            self.mjc,
-            self.fc,
-        ));
+        let charge_bc =
+            cbc.scale(self.tr).add(&depletion_charge(vbc, self.xcjc * self.cjc, self.vjc, self.mjc, self.fc));
         BjtState { base_emitter, base_collector, transport, qb, charge_be, charge_bc }
     }
 
@@ -879,7 +880,10 @@ impl MosParams {
             } else {
                 let gdsat = cdrain.mul(&one.sub(&fdrain)).div(&vdsc);
                 let gdsat = if gdsat.v > 1e-12 { gdsat } else { Dual::constant(1e-12, n) };
-                let emax = cdrain.div(&gdsat).scale(1.0 / leff);
+                // KAPPA scales the saturation field as in ngspice (its `badmos3`
+                // option restores SPICE3f5, which leaves it out here) and the
+                // original model; with KAPPA = 1 the two agree.
+                let emax = cdrain.div(&gdsat).scale(l3.kappa / leff);
                 let arga = emax.scale(0.5 * l3.alpha);
                 let argb = arga.mul(&arga).add(&excess.scale(l3.kappa * l3.alpha)).sqrt();
                 argb.sub(&arga)
@@ -1224,7 +1228,7 @@ impl Circuit {
 
     /// Add a Gummel–Poon bipolar transistor (see the module docs). Elements
     /// `Q.rc`, `Q.rb`, `Q.re` (when nonzero), `Q.be`, `Q.bc`, `Q.ce`
-    /// (and `Q.bx`, `Q.cs` with their capacitances); internal nodes `Q#c`,
+    /// (and `Q.bx`, `Q.cs` or, lateral, `Q.bs` with their capacitances); internal nodes `Q#c`,
     /// `Q#b`, `Q#e`. Returns the index into [`Circuit::macros`].
     pub fn bjt(&mut self, name: &str, pins: BjtPins, params: &BjtParams) -> Result<usize, SimError> {
         params.validate(name)?;
@@ -1244,7 +1248,7 @@ impl Circuit {
             parts.push("bx");
         }
         if params.cjs > 0.0 {
-            parts.push("cs");
+            parts.push(if params.lateral { "bs" } else { "cs" });
         }
         let mut x = Expansion::begin(self, name, &parts, &nodes)?;
         let internal = |x: &mut Expansion, r: f64, part: &str, node: &str, outer: NodeId| -> Result<NodeId, SimError> {
@@ -1329,14 +1333,16 @@ impl Circuit {
             )?;
         }
         if params.cjs > 0.0 {
-            let branch =
-                DeviceBranch::Depletion { polarity: s, cj0: params.cjs, vj: params.vjs, m: params.mjs, fc: None };
+            // SPICE3: the substrate junction's voltage is `type * SUBS * (V(s) - V(node))`,
+            // the node the internal collector (vertical) or base (lateral).
+            let (polarity, part, node) = if params.lateral { (-s, "bs", b) } else { (s, "cs", c) };
+            let branch = DeviceBranch::Depletion { polarity, cj0: params.cjs, vj: params.vjs, m: params.mjs, fc: None };
             add(
                 &mut x,
-                "cs",
+                part,
                 pins.s,
-                c,
-                device_law(vec![Control::Voltage(pins.s, c)], vec![Limit::None], branch, Vec::new()),
+                node,
+                device_law(vec![Control::Voltage(pins.s, node)], vec![Limit::None], branch, Vec::new()),
             )?;
         }
         let _ = params.has_internal_charge();
@@ -1508,6 +1514,8 @@ mod tests {
         let s = p.state(&vbe, &vbc);
         let ic = 1e-15 * ((0.65 / THERMAL_VOLTAGE).exp() - 1.0) * (1.0 + 4.35 / 50.0);
         assert!((s.transport.v / ic - 1.0).abs() < 1e-6, "{} vs {ic}", s.transport.v);
-        assert!((s.base_emitter.v * 200.0 / (ic / (1.0 + 4.35 / 50.0)) - 1.0).abs() < 1e-6);
+        // The base current carries the G_MIN leak besides I_BE / BF (SPICE3).
+        let ib = 1e-15 * ((0.65 / THERMAL_VOLTAGE).exp() - 1.0) / 200.0 + GMIN * 0.65;
+        assert!((s.base_emitter.v / ib - 1.0).abs() < 1e-6, "{} vs {ib}", s.base_emitter.v);
     }
 }

@@ -1,0 +1,35 @@
+Gummel-Poon base resistance: RB with IRB (current crowding) and RB with RBM (1/qb)
+* Q1 and Q2 (model QI, IRB) and Q3 and Q4 (model QM, RBM without IRB) are
+* biased alike, the AC drive on the base of the first of each pair and on the
+* collector of the second: the y-parameters with a bias-dependent r_bb.
+* Q5 is a common-emitter stage with an IRB model for the noise of r_bb.
+*@ probe v(c5) i(vb1) i(vc1) i(vb2) i(vc2) i(vb3) i(vc3) i(vb4) i(vc4)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15 chgtol=1e-18
+VB1 b1 0 DC 0.74 AC 1
+VC1 c1 0 DC 3
+Q1 c1 b1 0 QI
+VB2 b2 0 DC 0.74
+VC2 c2 0 DC 3 AC 1
+Q2 c2 b2 0 QI
+VB3 b3 0 DC 0.74 AC 1
+VC3 c3 0 DC 3
+Q3 c3 b3 0 QM
+VB4 b4 0 DC 0.74
+VC4 c4 0 DC 3 AC 1
+Q4 c4 b4 0 QM
+VS5 s5 0 DC 1.75 AC 1
+RS5 s5 b5 50
+RL5 cc c5 2k
+RE5 e5 0 1k
+Q5 c5 b5 e5 QI
+VCC cc 0 DC 5
+.model QI NPN(IS=1e-15 BF=120 VAF=60 IKF=20m RB=120 RBM=15 IRB=0.2m RE=1 RC=5
++ CJE=8p VJE=0.75 MJE=0.36 CJC=3p VJC=0.6 MJC=0.4 TF=0.3n)
+.model QM NPN(IS=1e-15 BF=120 VAF=60 IKF=20m RB=200 RBM=20 RE=1 RC=5
++ CJE=8p VJE=0.75 MJE=0.36 CJC=3p VJC=0.6 MJC=0.4 TF=0.3n)
+.op
+.dc VB1 0.4 1.0 0.01
+.ac dec 10 1k 10g
+.noise v(c5) VS5 dec 10 10 1g
+.end

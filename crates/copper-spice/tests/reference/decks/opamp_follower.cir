@@ -1,0 +1,36 @@
+Discrete two-stage op-amp (BJT) as a unity-gain follower
+* NPN differential pair with a PNP mirror load (the inverting input on the
+* mirror's diode side), a PNP common-emitter second
+* stage with Miller compensation and an NPN emitter-follower output, inside
+* a subcircuit; the follower takes a 1 V step.
+*@ probe v(out) v(xu.vas) i(vcc)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+.subckt OPAMP inp inn out vcc vee
+Q1 c1 inn e QN
+Q2 c2 inp e QN
+Q3 c1 c1 vcc QP
+Q4 c2 c1 vcc QP
+IT e vee DC 100u
+Q5 vas c2 vcc QP
+RE5 vee vas2 1k
+R5 vas vas2 30k
+CC c2 vas 10p
+Q6 vcc vas out QN
+RO out vee 5k
+.ends
+VCC vcc 0 DC 5
+VEE vee 0 DC -5
+VIN in 0 DC 0 AC 1 PULSE(0 1 1u 20n 20n 10u 20u)
+XU in out out vcc vee OPAMP
+RL out 0 10k
+.model QN NPN(IS=1e-15 BF=180 BR=4 NF=1.01 NR=1.02 VAF=60 VAR=15 IKF=20m IKR=5m
++ ISE=5e-14 NE=1.6 ISC=1e-13 NC=1.8 RB=120 RE=1.5 RC=8 CJE=12p VJE=0.75 MJE=0.36
++ CJC=5p VJC=0.6 MJC=0.4 XCJC=0.8 CJS=3p VJS=0.7 MJS=0.45 FC=0.5 TF=0.4n XTF=3 VTF=4
++ ITF=50m TR=30n KF=2e-15 AF=1.1)
+.model QP PNP(IS=2e-15 BF=120 BR=3 NF=1.01 VAF=40 VAR=10 IKF=20m RB=150 RE=2 RC=10
++ CJE=10p VJE=0.75 MJE=0.36 CJC=6p VJC=0.6 MJC=0.4 TF=0.8n TR=40n)
+.op
+.ac dec 10 10 100meg
+.noise v(out) VIN dec 10 10 10meg
+.tran 2n 12u
+.end

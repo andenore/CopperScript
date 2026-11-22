@@ -132,6 +132,20 @@ fn mosfet_levels_and_options_still_rejected() {
         assert_eq!(e.kind, ErrorKind::Unsupported, "{e}");
         assert!(e.to_string().contains(construct), "{e} should name {construct}");
     }
+    // ngspice normalises a MOSFET's flicker noise by default as KF g_m^2 / (f C_ox W L)
+    // (NLEV = 2, TOX = 100 nm when not given): refused in its dialect even without TOX.
+    let lib = library(
+        ".SUBCKT A X
+M1 X X 0 0 K
+.MODEL K NMOS(KF=1E-25)
+.ENDS
+",
+        Dialect::Spice3,
+    );
+    let mut c = Circuit::new();
+    let x = c.node("x");
+    let e = lib.instantiate(&mut c, "U1", "A", &[x], &[]).unwrap_err();
+    assert!(e.kind == ErrorKind::Unsupported && e.to_string().contains("NLEV"), "{e}");
 }
 
 /// PSpice's diode: `I = IS (e^(v/N V_T) - 1) sqrt(IKF / (IKF + I_nrm)) +
@@ -204,9 +218,11 @@ Q1 C B 0 QX
         let op = copper_sim::operating_point(&c).unwrap();
         let ib_sim = -op.current("VB").unwrap();
         // Solve (vb - v) / R(i_b(v)) = i_b(v) for the internal base voltage v.
-        // The base-emitter junction (G_MIN included) over BF, the base-collector one over BR = 1.
+        // The base-emitter junction over BF, the base-collector one over BR = 1, and
+        // the G_MIN leak of each (SPICE3 puts them in the base current).
         let ib = |v: f64| {
-            (1e-15 * ((v / vt).exp() - 1.0) + 1e-12 * v) / 100.0
+            1e-15 * ((v / vt).exp() - 1.0) / 100.0
+                + 1e-12 * v
                 + 1e-15 * (((v - 3.0) / vt).exp() - 1.0)
                 + 1e-12 * (v - 3.0)
         };

@@ -1,0 +1,17 @@
+CMOS inverter: level-1 NMOS and PMOS with gate charge, driving a load capacitor
+*@ probe v(out) i(vdd)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VDD vdd 0 DC 3.3
+VIN in 0 DC 1.2 PULSE(0 3.3 2n 0.5n 0.5n 10n 25n)
+MP out in vdd vdd PM L=1u W=6u AD=12p AS=12p PD=16u PS=16u
+MN out in 0 0 NM L=1u W=2u AD=4p AS=4p PD=8u PS=8u
+CL out 0 20f
+.model NM NMOS(LEVEL=1 VTO=0.7 KP=110u GAMMA=0.45 PHI=0.7 LAMBDA=0.04 TOX=9n
++ CGSO=0.25n CGDO=0.25n CGBO=0.1n CJ=0.9m MJ=0.45 CJSW=0.3n MJSW=0.3 PB=0.85)
+.model PM PMOS(LEVEL=1 VTO=-0.75 KP=40u GAMMA=0.5 PHI=0.7 LAMBDA=0.05 TOX=9n
++ CGSO=0.25n CGDO=0.25n CGBO=0.1n CJ=1m MJ=0.45 CJSW=0.35n MJSW=0.3 PB=0.9)
+.op
+.dc VIN 0 3.3 0.02
+.tran 0.05n 25n
+.end

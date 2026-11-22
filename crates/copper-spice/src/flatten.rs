@@ -369,6 +369,8 @@ impl<'a> Flattener<'a> {
                 }
                 let lowered: Vec<Expr> =
                     args.iter().map(|a| self.lower(l, a, locals, depth + 1)).collect::<Result<_, _>>()?;
+                // ngspice's PWR keeps the sign of its base (PSpice's and LTspice's PWRS).
+                let name = if name == "PWR" && self.lib.dialect == crate::Dialect::Spice3 { "PWRS" } else { name };
                 builtin(name, lowered)?
             }
         };
@@ -1176,7 +1178,7 @@ impl<'a> Flattener<'a> {
             "BEX",
             "BEXV",
         ];
-        const INERT: &[&str] = &["T_REL_LOCAL", "CN", "D", "MJS", "NKF"];
+        const INERT: &[&str] = &["T_REL_LOCAL", "CN", "D", "NKF"];
         let p = self.model_params(frame, m, KNOWN, INERT, element)?;
         Self::check_level(m, &p, element, "bipolar")?;
         self.reject_off_nominal(m, &p, &["BEX", "BEXV"], element)?;
@@ -1189,14 +1191,22 @@ impl<'a> Flattener<'a> {
                 format!("model {}: NK other than 0.5 is not supported", m.name),
             ));
         }
-        if p.get("SUBS").is_some_and(|v| *v != 1.0) {
-            return Err(at(
-                &m.loc,
-                ErrorKind::Unsupported,
-                element,
-                format!("model {}: lateral substrate (SUBS = -1) is not supported", m.name),
-            ));
-        }
+        // SPICE3's substrate connection: 1 vertical (the substrate junction at the
+        // collector), -1 lateral (at the base); ngspice makes a PNP lateral unless
+        // SUBS says otherwise. PSpice and LTspice have no SUBS: their PNP is vertical.
+        let lateral = match p.get("SUBS") {
+            Some(v) if *v == 1.0 => false,
+            Some(v) if *v == -1.0 => true,
+            Some(v) => {
+                return Err(at(
+                    &m.loc,
+                    ErrorKind::Unsupported,
+                    element,
+                    format!("model {}: SUBS = {v} is neither 1 (vertical) nor -1 (lateral)", m.name),
+                ));
+            }
+            None => m.kind == "PNP" && self.lib.dialect == crate::Dialect::Spice3,
+        };
         let get = |names: &[&str]| names.iter().find_map(|n| p.get(*n)).copied();
         let d = BjtParams::default();
         let positive = |x: Option<f64>| x.filter(|v| *v > 0.0 && v.is_finite());
@@ -1241,6 +1251,7 @@ impl<'a> Flattener<'a> {
             cjs: get(&["CJS", "CCS"]).unwrap_or(0.0) * area,
             vjs: get(&["VJS", "PS"]).unwrap_or(d.vjs),
             mjs: get(&["MJS", "MS"]).unwrap_or(d.mjs),
+            lateral,
             fc: get(&["FC"]).unwrap_or(d.fc),
             tf: get(&["TF"]).unwrap_or(0.0),
             xtf: get(&["XTF"]).unwrap_or(0.0),
@@ -1305,13 +1316,19 @@ impl<'a> Flattener<'a> {
         }
         let d = JfetParams::default();
         let get = |n: &str| p.get(n).copied();
-        // PSpice divides the saturation current's exponents by N and has XTI = 3; SPICE3 has neither.
+        // PSpice divides both of the saturation current's exponents by N and
+        // has XTI = 3; ngspice divides the band-gap term by N but not XTI's
+        // power (T / T_nom)^XTI, with XTI = 0; LTspice is read as SPICE3, with
+        // neither. `xti` is divided by N in the scaling, so ngspice's is given times N.
         let pspice = self.lib.dialect == crate::Dialect::Pspice;
+        let spice3 = self.lib.dialect == crate::Dialect::Spice3;
+        let per_emission = pspice || spice3;
+        let xti = get("XTI").unwrap_or(if pspice { 3.0 } else { 0.0 });
         let temp = copper_sim::JfetTemperature {
             nominal: kelvin(self.nominal_celsius(&p)),
             eg: get("EG").unwrap_or(1.11),
-            xti: get("XTI").unwrap_or(if pspice { 3.0 } else { 0.0 }),
-            per_emission: pspice,
+            xti: if spice3 { xti * get("N").unwrap_or(1.0) } else { xti },
+            per_emission,
             vtotc: get("VTOTC").unwrap_or(0.0),
             tcv: get("TCV").unwrap_or(0.0),
             betatce: get("BETATCE").unwrap_or(0.0),
@@ -1329,7 +1346,9 @@ impl<'a> Flattener<'a> {
             cgs: get("CGS").unwrap_or(0.0) * area,
             cgd: get("CGD").unwrap_or(0.0) * area,
             pb: get("PB").unwrap_or(1.0),
-            m: get("M").unwrap_or(0.5),
+            // ngspice's JFET has no grading coefficient (M is ignored there; the
+            // junctions are abrupt): PSpice's and LTspice's M only in those dialects.
+            m: if self.lib.dialect == crate::Dialect::Spice3 { 0.5 } else { get("M").unwrap_or(0.5) },
             fc: get("FC").unwrap_or(0.5),
             kf: get("KF").unwrap_or(0.0),
             af: get("AF").unwrap_or(1.0),
@@ -1459,6 +1478,17 @@ impl<'a> Flattener<'a> {
                 ),
             ));
         }
+        if get("KF").is_some_and(|kf| kf != 0.0) && self.lib.dialect == crate::Dialect::Spice3 {
+            return Err(at(
+                &m.loc,
+                ErrorKind::Unsupported,
+                element,
+                format!(
+                    "model {}: flicker noise (KF) of a MOSFET is not supported in the spice3 dialect: ngspice's default (NLEV = 2) is KF g_m^2 / (f C_ox W L_eff), with TOX = 100 nm when it is not given",
+                    m.name
+                ),
+            ));
+        }
         let u0 = get("U0").or(get("UO")).unwrap_or(600.0);
         let kp = match (get("KP"), cox_area) {
             (Some(kp), _) => kp,
@@ -1481,7 +1511,19 @@ impl<'a> Flattener<'a> {
             }
             let vt = copper_sim::thermal_voltage(nominal_kelvin);
             let charge = copper_sim::noise::ELEMENTARY_CHARGE;
-            let phi_v = *phi.get_or_insert_with(|| (2.0 * vt * (nsub / 1.45e10).ln()).max(0.1));
+            // ngspice's level 3 takes the intrinsic density at the nominal
+            // temperature, 1.45e10 /cm³ (T/300 K)^1.5 exp(E_g(T) / 2 V_T(1 K) (1/300 K - 1/T));
+            // SPICE3f5, level 1 and the other dialects the constant 1.45e10 /cm³.
+            let ni = if level3 && self.lib.dialect == crate::Dialect::Spice3 {
+                let t = nominal_kelvin;
+                let eg = copper_sim::temperature::energy_gap(t);
+                1.45e10
+                    * (t / 300.0).powf(1.5)
+                    * (eg / (2.0 * copper_sim::thermal_voltage(1.0)) * (1.0 / 300.0 - 1.0 / t)).exp()
+            } else {
+                1.45e10
+            };
+            let phi_v = *phi.get_or_insert_with(|| (2.0 * vt * (nsub / ni).ln()).max(0.1));
             let gamma_v = *gamma.get_or_insert_with(|| {
                 (2.0 * copper_sim::semiconductors::EPS_SILICON * charge * nsub * 1e6).sqrt() / cox
             });

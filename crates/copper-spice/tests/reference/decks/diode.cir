@@ -1,0 +1,18 @@
+Diode: forward, reverse, breakdown, series resistance, charge and noise
+* Forward bias through 10 ohm at 0.75 V; the sweep runs into breakdown at -6.2 V.
+* The transient switches from 1 V forward to -5 V reverse through 100 ohm
+* (reverse recovery of the stored charge TT * I).
+*@ probe v(a) i(vd)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15 chgtol=1e-18
+VD in 0 DC 0.75 AC 1 PULSE(1 -5 20n 1n 1n 60n 200n)
+R1 in a 100
+D1 a 0 DX
+.model DX D(IS=2e-14 N=1.05 RS=0.8 CJO=4p VJ=0.7 M=0.4 TT=5n BV=6.2 IBV=1m
++ FC=0.5 EG=1.11 XTI=3 KF=1e-16 AF=1.2)
+.op
+.dc VD -7.2 1.2 0.05
+.ac dec 10 1k 10g
+.noise v(a) VD dec 10 1 100meg
+.tran 0.5n 150n
+.end

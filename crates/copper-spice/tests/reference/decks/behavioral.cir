@@ -1,0 +1,28 @@
+Behavioural B sources: nonlinear functions of voltages and currents
+* PWR keeps its base's sign in ngspice (PSpice's PWRS). Functions of TIME
+* are in behavioral_time.cir: ngspice sets TIME to the swept value in a DC sweep.
+*@ probe v(o1) v(o2) v(o3) v(o4) v(o5) v(o7) v(o8)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VA a 0 DC 0.3 AC 1 SIN(0 1.5 1meg)
+RA a 0 1k
+VSENSE a s 0
+RS s 0 3k
+B1 o1 0 V = 2*tanh(V(a)) + 0.1*V(a)^2
+R1 o1 0 1k
+B2 0 o2 I = 1m*exp(V(a)/2) - 0.2m*V(a)
+R2 o2 0 1k
+B3 o3 0 V = V(a) > 0.5 ? sqrt(abs(V(a))) : -0.5*V(a)*V(a)
+R3 o3 0 1k
+B4 o4 0 V = min(max(V(a), -0.5), 0.8) + atan(V(a))
+R4 o4 0 1k
+B5 o5 0 V = pwr(V(a), 1.5)
+R5 o5 0 1k
+B7 o7 0 V = I(VSENSE)*1.5k + 0.2*V(o1)
+R7 o7 0 1k
+B8 o8 0 V = exp(V(a)) / (1 + V(a)*V(a)) - u(V(a)) * 0.3
+R8 o8 0 1k
+.op
+.dc VA -2 2 0.02
+.ac dec 5 1 1meg
+.tran 5n 2u
+.end

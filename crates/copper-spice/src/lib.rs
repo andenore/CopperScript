@@ -10,9 +10,13 @@
 //! # Dialects
 //!
 //! [`Dialect::Spice3`] (ngspice), [`Dialect::Pspice`] and [`Dialect::Ltspice`]
-//! differ here in three places: `$` starts a comment in SPICE3 only, `^` is
-//! a power except in LTspice (an exclusive or there), and a diode's default
-//! `IBV` is PSpice's 1e-10 A or SPICE3's 1e-3 A. Everything else is read
+//! differ here in these places: `$` starts a comment in SPICE3 only, `^` is
+//! a power except in LTspice (an exclusive or there), a diode's default
+//! `IBV` is PSpice's 1e-10 A or SPICE3's 1e-3 A, and in the spice3 dialect
+//! (as ngspice, checked against it in `tests/reference/`) `PWR` keeps its
+//! base's sign, a PNP is lateral unless `SUBS=1`, a JFET ignores `M` and
+//! scales `IS` with `exp(... / N)` and `(T / T_nom)^XTI`, and a level-3
+//! MOSFET derives `PHI` from `NSUB` with the intrinsic density at `TNOM`. Everything else is read
 //! the same: case-insensitive, `*` comment lines, `;` comments, `+`
 //! continuations, engineering suffixes (`T G MEG K M MIL U N P F`, trailing
 //! unit letters ignored), `{...}` and `'...'` expressions, bare parameter
@@ -57,7 +61,8 @@
 //! and `CHEBYSHEV` sources; `LAPLACE` beyond a rational function and one
 //! delay; `SDT`, `IDT`, `ABSDELAY` and random functions; `SFFM`, `AM` and
 //! damped `SIN`; element `IC=`; MOSFET levels other than 1 and 3 (BSIM by
-//! name), LTspice's `VDMOS`, `KF` with `TOX`; temperature coefficients the
+//! name), LTspice's `VDMOS`, a MOSFET's `KF` with `TOX` (and in the spice3
+//! dialect at all: ngspice's default is `NLEV = 2`); temperature coefficients the
 //! reader does not model (`TM1`, `TM2`, `BEX`, `BEXV`, a MOSFET's `TCV`) away
 //! from the model's `TNOM`; diode `ISR`, `IKF` outside the PSpice dialect; BJT
 //! `PTF`, quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; `.OPTIONS` that

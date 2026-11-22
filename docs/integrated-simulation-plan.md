@@ -66,14 +66,18 @@ Known weak spots of what is built:
 - Transient results at the default tolerances carry about 0.2 % integration
   error on the analyzer's start-up bench: a change of rounding in the solver
   moves its measures by that much. Harmonics below the integration floor
-  (F9) are not meaningful.
+  (F9) are not meaningful; the floor rule is an upper bound on four linear
+  circuits now, not an estimate (I1).
 - The TL431 vendor model loads but does not regulate at its operating point
   (100 V at 10 mA; a current ramp in transient settles at 2.0 V against
   2.495 V). The cause is not established.
-- Nothing has been compared against a PSpice or LTspice run of the same
-  netlist beyond the OPA810 bias point. Vendor-model transients are slow in
-  the debug build (an OPA2277 slew test did not finish in 40 minutes), so the
-  slew checks are opt-in and were not rerun.
+- Every device and a few small circuits are compared with ngspice-46 on
+  self-written decks (I1, `crates/copper-spice/tests/reference/`), with the
+  remaining differences listed by cause; nothing has been compared with
+  PSpice or LTspice beyond the OPA810 bias point, and no vendor model with
+  ngspice. Vendor-model transients are slow in the debug build (an OPA2277
+  slew test did not finish in 40 minutes), so the slew checks are opt-in and
+  were not rerun.
 - No Analog Devices model has been loaded: analog.com refuses automated
   downloads.
 - The HTML reports have been looked at page kind by page kind (F10) but not
@@ -468,7 +472,8 @@ Built on 20 November 2026. Diagnostic SIM105.
 Open: `VDMOS`, `SDT`, `FREQ` tables, BJT quasi-saturation and `PTF`, lossy
 lines, saturating and hysteretic inductors, BSIM (the TI CSD MOSFET models
 are BSIM3 and do not load), the level-3 `KAPPA` difference between SPICE3 and
-PSpice, and the TL431 result above.
+PSpice (settled in I1: SPICE3f5 omits it, ngspice and now copper-sim have it),
+and the TL431 result above.
 
 ### F8. Temperature
 
@@ -501,9 +506,9 @@ Built on 21 November 2026. Diagnostics SIM110 and SIM111.
   references.
 - Example: `preamp` bench `TemperatureSweep` at -40, 27 and 85 degC.
 
-Open: no result compared with PSpice or ngspice at a temperature; no real
-vendor model run over temperature; the BJT substrate junction scaling follows
-ngspice from memory, not from its source; `TM1`, `TM2`, `BEX`, `BEXV` and
+Open: no result compared with PSpice at a temperature (ngspice: I1, which
+also confirmed the BJT substrate junction scaling); no real
+vendor model run over temperature; `TM1`, `TM2`, `BEX`, `BEXV` and
 MOSFET `TCV` are rejected away from `TNOM`; macro-model bias current, gain,
 bandwidth and slew rate do not change with temperature; no part-level default
 tempco.
@@ -546,8 +551,9 @@ Built on 21 November 2026. Diagnostics SIM112 to SIM115.
   now 339.2 mV, which a 400 ms run confirms).
 
 Open: the 1 MHz, 0.65 V `Distortion` step does not converge by shooting and
-falls back; the floor rule comes from one circuit; flicker noise in transient
-is checked only analytically; windowed spectra are amplitudes per bin, with
+falls back; the floor rule came from one circuit (I1 finds it an upper
+bound on three more); flicker noise in transient was checked only
+analytically (I1 compares it with ngspice's noise analysis: within 6 %); windowed spectra are amplitudes per bin, with
 no density view; a time plot of steps with different periods squeezes the
 short ones against the left edge (seen on `Distortion`).
 

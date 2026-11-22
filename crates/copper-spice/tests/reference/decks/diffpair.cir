@@ -1,0 +1,28 @@
+Differential pair: tail current source, resistor loads, differential output
+* The DC sweep runs one input through the limiting range; the noise output is
+* the differential collector voltage.
+*@ probe v(c1,c2) v(c1) v(e) i(vin1)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VCC vcc 0 DC 10
+VEE vee 0 DC -10
+VIN1 b1 0 DC 0 AC 1
+VIN2 b2 0 DC 0
+RB1 b1 x1 1k
+RB2 b2 x2 1k
+Q1 c1 x1 e QN
+Q2 c2 x2 e QN
+RC1 vcc c1 5k
+RC2 vcc c2 5k
+ITAIL e vee DC 1m
+CL1 c1 0 2p
+CL2 c2 0 2p
+.model QN NPN(IS=1e-15 BF=180 BR=4 NF=1.01 NR=1.02 VAF=60 VAR=15 IKF=20m IKR=5m
++ ISE=5e-14 NE=1.6 ISC=1e-13 NC=1.8 RB=120 RE=1.5 RC=8 CJE=12p VJE=0.75 MJE=0.36
++ CJC=5p VJC=0.6 MJC=0.4 XCJC=0.8 CJS=3p VJS=0.7 MJS=0.45 FC=0.5 TF=0.4n XTF=3 VTF=4
++ ITF=50m TR=30n KF=2e-15 AF=1.1)
+.op
+.dc VIN1 -0.3 0.3 0.005
+.ac dec 10 1k 10g
+.noise v(c1,c2) VIN1 dec 10 10 1g
+.end

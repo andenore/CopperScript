@@ -3101,15 +3101,16 @@ end-of-file mark; a file that is not UTF-8 is read byte for byte as Latin-1
 | `DDT(x)`, `DELAY(x, T)` | in any behavioural expression: the exact time derivative (0 at the operating point, `j w x` in AC; `x` drives 1 F in series with a 0 V sense source whose current the expression reads) and `x` delayed by a constant `T > 0` (an ideal delay) |
 | `T a1 b1 a2 b2 Z0= TD=` (or `F=` with `NL=`, default 0.25) | the lossless transmission line (Branin's method: at each port `Z0`, noiseless, behind the other port's `v + Z0 i` one delay earlier) |
 | `D` | `IS N RS CJO VJ M TT BV IBV FC KF AF`, area; in the `pspice` dialect also PSpice's `ISR NR` (recombination current `ISR (exp(v / NR V_T) - 1) ((1 - v/VJ)^2 + 0.005)^(M/2)`) and `IKF` (high injection: the normal current times `sqrt(IKF / (IKF + I_nrm))`); temperature: `TNOM` (`T_MEASURED`), `EG`, `XTI`, `TBV1`, `TBV2`, `TCV`, `TRS1` (`TRS`), `TRS2`, `TIKF`, `TTT1`, `TTT2`, `T_ABS`, `T_REL_GLOBAL`; `TM1`, `TM2` only at the model's `TNOM` |
-| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM IRB RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node; with `IRB` the base resistance is SPICE's current-crowding form; temperature: `TNOM`, `EG`, `XTI`, `XTB`, `TRE1`, `TRE2`, `TRB1`, `TRB2`, `TRM1`, `TRM2`, `TRC1`, `TRC2`, `T_ABS`, `T_REL_GLOBAL`; `BEX`, `BEXV` only at `TNOM` |
-| `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area; temperature: `TNOM`, `EG`, `XTI`, `VTOTC`, `BETATCE`, `TCV`, `BEX`, `T_ABS`, `T_REL_GLOBAL` |
-| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`, and level 3 with `XJ ETA THETA KAPPA DELTA VMAX NFS WD` as well (SPICE3's `mos3load`; level 3 has no `LAMBDA`); `TOX` gives the intrinsic gate charge (below), `U0` the default `KP`, `NSUB` (with `TPG`, `NSS`) the defaults of `PHI`, `GAMMA` and `VTO` as SPICE3 derives them and, at level 3, the depletion width; a level-3 model without `TOX` takes SPICE's 100 nm; `L W AD AS PD PS M` on the element; temperature: `TNOM`, `T_ABS`, `T_REL_GLOBAL` (SPICE3's level 1 and 3 have no `XTI` or `EG`, which are accepted and have no effect); `BEX`, `TCV` only at `TNOM` |
+| `Q` | Gummel–Poon NPN/PNP: `IS BF BR NF NR VAF VAR IKF IKR ISE NE ISC NC RB RBM IRB RE RC CJE VJE MJE CJC VJC MJC XCJC CJS VJS MJS FC TF XTF VTF ITF TR KF AF`, area, substrate node; with `IRB` the base resistance is SPICE's current-crowding form; `SUBS` (1 vertical, -1 lateral: the substrate junction at the base), a PNP lateral by default in the `spice3` dialect as in ngspice; temperature: `TNOM`, `EG`, `XTI`, `XTB`, `TRE1`, `TRE2`, `TRB1`, `TRB2`, `TRM1`, `TRM2`, `TRC1`, `TRC2`, `T_ABS`, `T_REL_GLOBAL`; `BEX`, `BEXV` only at `TNOM` |
+| `J` | NJF/PJF: `VTO BETA LAMBDA IS N RD RS CGS CGD PB M FC KF AF`, area (`M` is ignored in the `spice3` dialect, as ngspice has none); temperature: `TNOM`, `EG`, `XTI`, `VTOTC`, `BETATCE`, `TCV`, `BEX`, `T_ABS`, `T_REL_GLOBAL` |
+| `M` | NMOS/PMOS level 1: `VTO KP GAMMA PHI LAMBDA RD RS IS JS CBD CBS CJ MJ CJSW MJSW PB FC CGSO CGDO CGBO LD KF AF`, and level 3 with `XJ ETA THETA KAPPA DELTA VMAX NFS WD` as well (SPICE3's `mos3load` with `KAPPA` in the saturation field, as ngspice has it; level 3 has no `LAMBDA`; in the `spice3` dialect `PHI` from `NSUB` uses ngspice's intrinsic density at `TNOM`); `TOX` gives the intrinsic gate charge (below), `U0` the default `KP`, `NSUB` (with `TPG`, `NSS`) the defaults of `PHI`, `GAMMA` and `VTO` as SPICE3 derives them and, at level 3, the depletion width; a level-3 model without `TOX` takes SPICE's 100 nm; `L W AD AS PD PS M` on the element; temperature: `TNOM`, `T_ABS`, `T_REL_GLOBAL` (SPICE3's level 1 and 3 have no `XTI` or `EG`, which are accepted and have no effect); `BEX`, `TCV` only at `TNOM` |
 | `S W` | `SW`/`CSW` (hysteresis), PSpice `VSWITCH`/`ISWITCH` (the smooth switch); `ON` / `OFF` after the model set the state the operating point starts from, which decides a hysteresis switch whose control sits inside its band (a smooth switch has no state, so the flag has no effect) |
 | `X` | with `PARAMS:` or bare `name=value` |
 
 Expression functions: `abs sgn sqrt exp ln log log10 sin cos tan asin acos
 atan atan2 sinh cosh tanh min max limit pwr pwrs pow u stp uramp floor ceil
-round int hypot if table`, the operators `+ - * / ** ^ == != < <= > >= && ||
+round int hypot if table` (`pwr` keeps its base's sign in the `spice3`
+dialect, as ngspice's does), the operators `+ - * / ** ^ == != < <= > >= && ||
 & | ! ?:`, `PI`, `TEMP` (the bench temperature, degC) and `TNOM`. Device
 equations and their noise are those of SPICE3 at the bench temperature,
 scaled from each model's `TNOM` ([Temperature](#temperature),
@@ -3137,7 +3138,9 @@ model (which does not conserve charge) lacks, and the depletion-edge part of
 `C_gs` sits between gate and bulk. At level 3, `a` is `V_dsat` less its value
 at turn-on, so the charge is continuous where Meyer's capacitances jump.
 `KF` together with `TOX` is rejected: the simulators normalise flicker noise
-by the oxide capacitance differently.
+by the oxide capacitance differently. In the `spice3` dialect a MOSFET's `KF`
+is rejected also without `TOX`: ngspice's default (`NLEV = 2`) is
+`KF g_m^2 / (f C_ox W L_eff)` with `TOX` = 100 nm when it is not given.
 
 **Ideal delays.** A transmission line, a `LAPLACE` delay and `DELAY()` are
 ideal delays: a VCVS at the operating point, `exp(-j w T)` in AC and noise;
@@ -3166,6 +3169,23 @@ saturating and hysteretic inductors and cores; unknown model parameters;
 `.OPTIONS` that may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`.
 Analysis cards of a test deck at the top level (`.TRAN`, `.AC`,
 ...) have no effect.
+
+**Compared with ngspice.** Self-written decks of every device and a few
+circuits, run by ngspice-46 (the library KiCad 10 ships) and committed as
+CSV, are compared on every test run (`crates/copper-spice/tests/reference/`,
+21 November 2026; copper never runs ngspice): op, dc, ac, noise and tran at
+-40, 27 and 85 degC, 168 932 values. Within the comparison's bounds (DC
+1e-5, AC and noise 2e-4, transients 2e-3 of the swing) except where listed:
+
+| Device or construct | Listed difference (cause in the reference README) |
+| --- | --- |
+| Diode | near `-BV` at 85 degC, at most `IS` (breakdown branch) |
+| Gummel-Poon BJT | AC with `RBM` or `IRB`, up to 6 % (ngspice linearises `r_bb` without its derivative); pA substrate leak (ngspice's `G_MIN` there) |
+| JFET | reverse gate current, up to 0.4 % of `IS` (SPICE's cubic below `-3 N V_T`) |
+| MOSFET level 1 | gate admittance above 1 GHz with `RS`, `RD` (transcapacitance of the charge model); CMOS inverter supply-current peak 7 % |
+| MOSFET level 3 | AC `g_m` 7 %, `g_ds` 3 % (ngspice's derivatives are not those of its own DC current); without `VMAX` up to 10 % (ngspice's change of SPICE3f5, `.options badmos3`) |
+| Switches, `E F G H`, `POLY`, `B`, lossless `T` | none |
+| Common-emitter stage, differential pair, bridge rectifier, RLC, two-stage BJT op amp | none |
 
 **Real models checked.** Texas Instruments' own model archives, fetched by
 URL and SHA-256 with `copper models fetch` (never committed), run by the

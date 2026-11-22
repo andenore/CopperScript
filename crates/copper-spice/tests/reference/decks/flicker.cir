@@ -1,0 +1,27 @@
+Flicker noise of a diode, a BJT and a JFET
+* Three separate stages, one noise analysis each: the 1/f corners are near
+* 1 kHz to 100 kHz so the flicker part and the white part both show. (A
+* MOSFET's KF is refused in the spice3 dialect: ngspice's default NLEV = 2
+* form is not modelled.)
+*@ probe v(a) v(c) v(d)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VD sd 0 DC 2 AC 1
+RD sd a 2k
+D1 a 0 DF
+.model DF D(IS=1e-14 RS=5 KF=1e-14 AF=1)
+VB sb 0 DC 1.8 AC 1
+RB sb b 100k
+RC vcc c 5k
+Q1 c b 0 QF
+VCC vcc 0 DC 10
+.model QF NPN(IS=1e-15 BF=150 VAF=50 RB=100 KF=3e-14 AF=1.2)
+VG g 0 DC 0 AC 1
+RJ vcc d 3k
+RJS sj 0 400
+J1 d g sj JF
+.model JF NJF(VTO=-2 BETA=1m LAMBDA=0.01 KF=1e-16 AF=1)
+.noise v(a) VD dec 10 0.1 10meg
+.noise v(c) VB dec 10 0.1 10meg
+.noise v(d) VG dec 10 0.1 10meg
+.end

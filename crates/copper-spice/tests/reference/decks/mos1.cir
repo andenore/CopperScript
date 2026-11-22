@@ -1,0 +1,38 @@
+MOSFET level 1: N and P channel with body effect, Meyer gate charge, overlaps, junctions
+* M1 and M2 are the same biased NMOS with body bias, the AC drive on the gate
+* of M1 and on the drain of M2. M3 is a common-source stage with a resistor
+* load for the noise analysis (channel thermal noise), M4 a PMOS in saturation,
+* M5 an NMOS switch driving a capacitor for the transient.
+*@ probe v(d3) v(d5) i(vg1) i(vd1) i(vg2) i(vd2) i(vbb) i(vg4) i(vd4)
+*@ tran-probe v(d3) v(d5) i(vd1)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VBB bb 0 DC -1
+VG1 g1 0 DC 1.6 AC 1
+VD1 d1 0 DC 2.5
+M1 d1 g1 0 bb NM L=2u W=20u AD=40p AS=40p PD=24u PS=24u
+VG2 g2 0 DC 1.6
+VD2 d2 0 DC 2.5 AC 1
+M2 d2 g2 0 bb NM L=2u W=20u AD=40p AS=40p PD=24u PS=24u
+VS3 s3 0 DC 1.5 AC 1
+RD3 dd d3 10k
+M3 d3 s3 0 0 NM L=2u W=10u
+VDD dd 0 DC 5
+VG4 g4 0 DC -1.8 AC 1
+VD4 d4 0 DC -3
+M4 d4 g4 0 0 PM L=3u W=30u AD=60p AS=60p PD=34u PS=34u
+VG5 g5 0 DC 0 PULSE(0 5 10n 2n 2n 60n 150n)
+RD5 dd d5 5k
+C5 d5 0 0.5p
+M5 d5 g5 0 0 NM L=2u W=10u AD=20p AS=20p PD=14u PS=14u
+.model NM NMOS(LEVEL=1 VTO=0.8 KP=60u GAMMA=0.5 PHI=0.7 LAMBDA=0.03 TOX=25n RD=5 RS=5
++ CGSO=0.3n CGDO=0.3n CGBO=0.2n CJ=0.2m MJ=0.5 CJSW=0.5n MJSW=0.33 PB=0.8 JS=1e-4 FC=0.5)
+.model PM PMOS(LEVEL=1 VTO=-0.9 KP=25u GAMMA=0.6 PHI=0.75 LAMBDA=0.04 TOX=25n RD=8 RS=8
++ CGSO=0.3n CGDO=0.3n CGBO=0.2n CJ=0.3m MJ=0.5 CJSW=0.4n MJSW=0.33 PB=0.85 JS=1e-4)
+.op
+.dc VG1 0 3 0.02
+.dc VD1 -0.5 4 0.05
+.ac dec 10 1k 10g
+.noise v(d3) VS3 dec 10 10 1g
+.tran 0.5n 150n
+.end

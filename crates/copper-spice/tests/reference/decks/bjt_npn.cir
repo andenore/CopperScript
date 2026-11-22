@@ -1,0 +1,37 @@
+Gummel-Poon NPN: Gummel plot, output curves, y-parameters, noise, switching
+* Q1 and Q2 are the same biased transistor, the AC drive on the base of Q1
+* and on the collector of Q2 (so i(vb1), i(vc1), i(vb2), i(vc2) give the
+* four y-parameters). Q3 is a common-emitter stage with emitter degeneration
+* (about 1 mA at every temperature) for the noise analysis,
+* Q4 a saturating switch for the transient (storage time from TR and TF).
+*@ probe v(c3) v(c4) v(b4) i(vb1) i(vc1) i(vb2) i(vc2)
+*@ tran-probe v(c3) v(c4) v(b4) i(vc1)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15 chgtol=1e-18
+VB1 b1 0 DC 0.72 AC 1
+VC1 c1 0 DC 3
+Q1 c1 b1 0 QN
+VB2 b2 0 DC 0.72
+VC2 c2 0 DC 3 AC 1
+Q2 c2 b2 0 QN
+VS3 s3 0 DC 1.75 AC 1
+RS3 s3 b3 1k
+RL3 cc c3 2k
+RE3 e3 0 1k
+Q3 c3 b3 e3 QN
+VCC cc 0 DC 5
+VB4 s4 0 DC 0 PULSE(0 3 20n 2n 2n 150n 400n)
+RB4 s4 b4 2k
+RL4 cc c4 1k
+Q4 c4 b4 0 QN
+.model QN NPN(IS=1e-15 BF=180 BR=4 NF=1.01 NR=1.02 VAF=60 VAR=15 IKF=20m IKR=5m
++ ISE=5e-14 NE=1.6 ISC=1e-13 NC=1.8 RB=120 RE=1.5 RC=8
++ CJE=12p VJE=0.75 MJE=0.36 CJC=5p VJC=0.6 MJC=0.4 XCJC=0.8 CJS=3p VJS=0.7 MJS=0.45
++ FC=0.5 TF=0.4n XTF=3 VTF=4 ITF=50m TR=30n KF=2e-15 AF=1.1 EG=1.11 XTI=3 XTB=1.6)
+.op
+.dc VB1 0.3 1.0 0.01
+.dc VC1 0 6 0.05
+.ac dec 10 1k 10g
+.noise v(c3) VS3 dec 10 1 1g
+.tran 1n 400n
+.end

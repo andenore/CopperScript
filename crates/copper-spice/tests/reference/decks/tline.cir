@@ -1,0 +1,16 @@
+Lossless transmission line: mismatched source and load, reflections
+* A 75 ohm line of 3 ns between a 50 ohm source and a 150 ohm load; a second
+* line of 1.2 ns, shorted at its far end through 10 ohm.
+*@ probe v(a) v(b) v(c) v(d)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VS in 0 DC 0 AC 1 PULSE(0 1 1n 0.5n 0.5n 10n 50n)
+RS in a 50
+T1 a 0 b 0 Z0=75 TD=3n
+RL b 0 150
+RS2 in c 25
+T2 c 0 d 0 Z0=50 TD=1.2n
+RL2 d 0 10
+.op
+.ac lin 201 1meg 500meg
+.tran 0.05n 40n
+.end

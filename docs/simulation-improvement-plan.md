@@ -1,6 +1,6 @@
 # Simulation improvement plan
 
-Status, 21 November 2026: proposal, nothing here is built. It follows the
+Status, 21 November 2026: I0 and I1 built (below), the rest a proposal. It follows the
 [integrated simulation plan](integrated-simulation-plan.md), whose phases F1
 to F11 are built on branch `integrated-simulation-plan` except F5 (layout
 parasitics) and the CopperReview view of F10.
@@ -49,6 +49,20 @@ Acceptance: main builds and tests in release; every example's measure values
 equal the branch's; `make EXAMPLE=rc-filter sim` runs with the installed
 binary.
 
+Done on 21 November 2026, except the pin. Main was an ancestor of the
+branch, so CopperScript main was fast-forwarded to `06465ef7`. The workspace
+tests pass in release (2692 passed, 43 ignored); the seven simulation
+examples give the branch's values with the release binary (analyzer 8 s).
+CopperLib main is `960fe6d` (main merged into `sim-models`, CI building this
+compiler; 211 tests and the model checks pass). The installed `copper` runs
+`make EXAMPLE=rc-filter sim`.
+
+Open: the root `copper.mod` pin is still CopperLib `50655eff`. Moving it to
+`960fe6d` crosses 54 CopperLib commits and 345 files, and the same pin is in
+`examples/nrf52_coin_cell` and `examples/nrf_antenna_macro`; that needs the
+routing benchmark ladder, not a simulation check. The EMI examples were not
+rerun with the release binary beyond the workspace tests.
+
 ### I1. Reference comparison
 
 The largest gap. Results are checked against closed forms and against
@@ -82,6 +96,61 @@ repository.
 
 Acceptance: every reference deck within tolerance or with a written cause;
 the compatibility table gains a column for the comparison.
+
+Built on 21 November 2026; the owner accepted committed ngspice reference
+data. Details in
+`crates/copper-spice/tests/reference/README.md`.
+
+- 27 self-written decks: diode, Gummel-Poon NPN and PNP (with a base
+  resistance and a substrate deck), JFET, MOSFET levels 1 and 3, switches,
+  controlled and behavioural sources, lossless lines, flicker noise, devices
+  measured at other `TNOM`s, six small circuits (common-emitter stage,
+  differential pair, CMOS inverter, bridge rectifier, RLC, a two-stage BJT
+  op amp as a follower) and three linear circuits for the integration floor;
+  op, dc (including `.dc TEMP`), ac, noise and tran, devices at -40, 27 and
+  85 degC.
+- `generate.py` drives the ngspice-46 library KiCad 10 ships through
+  `ctypes` and writes `results/*.csv` (8.7 MB). `copper` and its tests
+  never run ngspice.
+- `reference_comparison.rs`: 1072 series, 168 932 values, each against a
+  bound per kind of quantity derived in its module docs (DC 1e-5, DC
+  currents 3e-5 for ngspice's CODATA 2014 `k/q`, AC and noise 2e-4,
+  transients 2e-3 of the swing within one output step). Four more tests
+  establish listed causes or check statistics.
+- Fixed in the reader and solver (no example result moved: every measure,
+  `sim-results.json` and CSV of the seven examples is identical): BJT `MJS`
+  was ignored; ngspice's lateral PNP default (`SUBS`); BJT `G_MIN` in the
+  base currents as SPICE3; level-3 `KAPPA` in the saturation field; level-3
+  `PHI` from `NSUB` with ngspice's intrinsic density at `TNOM` (spice3
+  dialect); ngspice's JFET `IS(T)` and its missing `M`; ngspice's sign of
+  `pwr`; a MOSFET's `KF` refused in the spice3 dialect (ngspice's default
+  `NLEV = 2` form is not modelled).
+- Listed, 128 series under ten causes, eight established by a test, a
+  variant deck or a reproduced number: `r_bb` linearisation (up to 6 % AC),
+  substrate `G_MIN` (pA), breakdown onset (`IS`), SPICE's reverse cubic
+  (0.4 % of `IS`), the gate charge's transcapacitances (body effect, `ETA`),
+  ngspice's level-3 derivatives (`g_m` 7 %), ngspice's level 3 without
+  `VMAX` (`badmos3`, 10 %); the linear-region partition is probable and
+  the CMOS inverter's 7 % supply-current peak is traced to the intrinsic
+  gate charge only.
+- Settled from the first plan: the BJT substrate junction's temperature
+  scaling agrees with ngspice (vertical and lateral, -40 to 85 degC,
+  `TNOM` 50); the `KAPPA` difference is SPICE3f5's omission, which ngspice
+  corrects; flicker noise agrees in `.noise` (diode, BJT, JFET) and in
+  transient noise (within 6 % over octave bands from 20 Hz to 640 Hz, bound
+  7 to 29 %); the integration-floor rule holds as an upper bound on three
+  more circuits (0.01 to 1.02 of `0.02 sqrt(reltol)`), but it is not within
+  a factor of 2 on all of them (an RLC is 20 to 100 times below).
+
+Open: no vendor model compared (the opt-in `#[ignore]` test and the
+gitignored `tests/reference/vendor/` are in place, with no deck); release
+timings of the vendor transients and the slew checks not rerun; the listed
+ngspice behaviours not adopted (reverse cubic, breakdown branch, substrate
+`G_MIN`, `r_bb` without its derivative, the non-`badmos3` level 3, `NLEV`
+noise); the sub-cause of the inverter's transient difference; JFET and
+MOSFET noise outside saturation; the PSpice and LTspice dialects (no
+simulator to compare with); the compatibility table's TI parts have no
+ngspice column.
 
 ### I2. Vendor model failures
 

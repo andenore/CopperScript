@@ -1,0 +1,20 @@
+Switches: voltage- and current-controlled with hysteresis
+* S1 follows the control voltage (on above 1.3 V, off below 0.7 V); W1 the
+* current through VSENSE (on above 1.2 mA, off below 0.8 mA). Both ramp up
+* and down in the transient; the DC sweep runs upward only.
+*@ probe v(o1) v(o2) i(vsense)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VDD vdd 0 DC 5
+VC c1 0 DC 0 PWL(0 0 1u 2 2u 0)
+R1 vdd o1 1k
+S1 o1 0 c1 0 SWV
+.model SWV SW(VT=1 VH=0.3 RON=10 ROFF=1meg)
+IC 0 n2 DC 0 PWL(0 0 1u 2m 2u 0)
+VSENSE n2 0 DC 0
+R2 vdd o2 2k
+W1 o2 0 VSENSE CSW
+.model CSW CSW(IT=1m IH=0.2m RON=5 ROFF=10meg)
+.op
+.dc VC 0 2 0.02
+.tran 5n 2u
+.end

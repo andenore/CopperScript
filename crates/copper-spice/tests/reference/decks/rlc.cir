@@ -1,0 +1,17 @@
+Series RLC: resonance and a ringing step response, plus a coupled-inductor transformer
+*@ probe v(c) v(l) v(sec) i(vs)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-16
+VS in 0 DC 0 AC 1 PULSE(0 1 1u 10n 10n 40u 80u)
+R1 in l 20
+L1 l c 100u
+C1 c 0 10n
+VP p 0 DC 0 AC 1 PULSE(0 1 1u 10n 10n 40u 80u)
+RP p p1 10
+LP p1 0 50u
+LS sec 0 200u
+K1 LP LS 0.95
+RL sec 0 1k
+.op
+.ac dec 20 1k 10meg
+.tran 0.1u 60u
+.end

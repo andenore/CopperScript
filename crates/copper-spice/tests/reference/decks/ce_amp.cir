@@ -1,0 +1,27 @@
+Common-emitter amplifier: divider bias, bypassed emitter, coupling capacitors
+* A 2 mV, 10 kHz sine drives it through 600 ohm; the gain is about 100, so
+* the output shows the transistor's second harmonic.
+*@ probe v(out) v(c) v(b) i(vcc)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+VCC vcc 0 DC 12
+VS s 0 DC 0 AC 1 SIN(0 2m 10k)
+RS s in 600
+C1 in b 10u
+R1 vcc b 47k
+R2 b 0 10k
+RC vcc c 4.7k
+Q1 c b e QN
+RE e 0 1k
+CE e 0 100u
+C2 c out 10u
+RL out 0 47k
+.model QN NPN(IS=1e-15 BF=180 BR=4 NF=1.01 NR=1.02 VAF=60 VAR=15 IKF=20m IKR=5m
++ ISE=5e-14 NE=1.6 ISC=1e-13 NC=1.8 RB=120 RE=1.5 RC=8 CJE=12p VJE=0.75 MJE=0.36
++ CJC=5p VJC=0.6 MJC=0.4 XCJC=0.8 CJS=3p VJS=0.7 MJS=0.45 FC=0.5 TF=0.4n XTF=3 VTF=4
++ ITF=50m TR=30n KF=2e-15 AF=1.1)
+.op
+.ac dec 10 1 1g
+.noise v(out) VS dec 10 1 100meg
+.tran 1u 300u 200u
+.end

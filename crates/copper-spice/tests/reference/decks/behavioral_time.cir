@@ -1,0 +1,13 @@
+Behavioural B sources of time: a mixer and a time-dependent limiter
+* No DC sweep: ngspice sets TIME to the swept value during one.
+*@ probe v(o6) v(o9)
+.options reltol=1e-6 vntol=1e-9 abstol=1e-15
+VA a 0 DC 0.3 SIN(0 1.5 1meg)
+RA a 0 1k
+B6 o6 0 V = sin(2*3.14159265*2meg*time) * V(a)
+R6 o6 0 1k
+B9 o9 0 V = min(V(a), 0.5 + 1e6*time)
+R9 o9 0 1k
+.op
+.tran 5n 2u
+.end

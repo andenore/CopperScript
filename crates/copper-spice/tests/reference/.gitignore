@@ -1,0 +1,3 @@
+# Decks that include vendor models from the cache, and their ngspice results (README, vendor models).
+/vendor/
+__pycache__/

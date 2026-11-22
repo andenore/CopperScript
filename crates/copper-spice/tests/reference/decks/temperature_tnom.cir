@@ -1,0 +1,33 @@
+Devices measured away from 27 degC (TNOM), over temperature
+* Each device is fed or biased on its own: a Schottky-like diode measured at
+* 50 degC fed 100 uA (AC 1, so v(a1) is also its small-signal impedance), a
+* diode-connected NPN measured at 0 degC, an N-channel JFET at 60 degC, a
+* level-1 NMOS at 60 degC and a level-3 NMOS whose surface potential comes
+* from NSUB at 50 degC. The DC sweep is of the temperature itself.
+*@ probe v(a1) v(aq) i(vdj) i(vgj) i(vdm) i(vd3)
+*@ temps -40 27 85
+.options reltol=1e-6 vntol=1e-9 abstol=1e-12 chgtol=1e-14
+I1 0 a1 DC 100u AC 1
+D1 a1 0 DS
+.model DS D(IS=1e-9 N=1.02 RS=2 EG=0.69 XTI=2 CJO=20p VJ=0.5 M=0.4 TT=0.1n TNOM=50)
+I2 0 aq DC 100u AC 1
+Q1 aq aq 0 QT
+.model QT NPN(IS=5e-16 BF=150 BR=2 VAF=80 ISE=2e-14 NE=1.7 XTB=1.7 XTI=3.5 EG=1.12
++ CJE=3p VJE=0.8 MJE=0.35 CJC=2p VJC=0.7 MJC=0.4 TNOM=0)
+VGJ gj 0 DC -0.5
+VDJ dj 0 DC 5
+J1 dj gj 0 JT
+.model JT NJF(VTO=-1.6 BETA=2m LAMBDA=0.01 IS=5e-14 N=1.2 XTI=3 EG=1.2 TCV=2m BEX=-1.5
++ CGS=3p CGD=1p TNOM=60)
+VGM gm 0 DC 2
+VDM dm 0 DC 4
+M1 dm gm 0 0 NT L=4u W=40u
+.model NT NMOS(LEVEL=1 VTO=0.9 KP=50u GAMMA=0.4 PHI=0.65 LAMBDA=0.02 TOX=30n TNOM=60)
+VG3 g3 0 DC 1.4
+VD3 d3 0 DC 2.5
+M3 d3 g3 0 0 N3T L=2u W=20u
+.model N3T NMOS(LEVEL=3 TOX=25n NSUB=3e16 U0=500 VMAX=1e5 XJ=0.2u KAPPA=0.6 ETA=0.05 TNOM=50)
+.op
+.dc TEMP -40 125 5
+.ac dec 10 1k 1g
+.end
