@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use copper_lang::compiler::load_design;
-use copper_simulate::check_model::{CheckOptions, Figure, ModelState, Tolerance, check_part, find_part, text};
+use copper_simulate::check_model::{CheckOptions, Figure, Limits, ModelState, Tolerance, check_part, find_part, text};
 use copper_simulate::{ModelChoice, Status, simulate_with};
 
 /// A single-pole op amp, 100 dB and 1 MHz, that draws 1 mA from a 10 V span through RQ.
@@ -169,6 +169,57 @@ fn check_model_runs_the_bench_set_on_both_models() {
 }
 
 #[test]
+fn check_model_judges_both_models_against_the_data_sheet() {
+    // The macro block adds a common-mode and a supply rejection with corners, and data-sheet
+    // entries: the self-written model draws 1 mA, the macro 2 mA.
+    let rejection = "cmrr = 80dB; cmrr_corner = 1kHz; psrr = 70dB; psrr_corner = 100Hz;";
+    let sheet =
+        |entries: &str| MACRO.replace("slew_rate = 1V/us;", &format!("slew_rate = 1V/us; {rejection} {entries}"));
+    let check = |name: &str, entries: &str| {
+        let directory = project(name, &format!("{}\n{SPICE}", sheet(entries)));
+        let design = load_design(&directory.join("board.copper"), false, true).unwrap();
+        let part = find_part(&design.electrical.library, "Amp").unwrap();
+        check_part(part, &CheckOptions { supply: Some(10.0), ..CheckOptions::default() }).unwrap()
+    };
+    let checks = check(
+        "sheet-pass",
+        "datasheet quiescent_current { max = 2.5mA; } datasheet cmrr { min = 75dB; } \
+         datasheet unity_gain_frequency { typ = 900kHz; } datasheet slew_rate { min = 0.8V/us; }",
+    );
+    let report = text(&checks);
+    println!("{report}");
+    let unit = &checks[0];
+    assert!(unit.passed(), "{report}");
+    let figure =
+        |name: &str| unit.figures.iter().find(|f| f.name.starts_with(name)).unwrap_or_else(|| panic!("{name}"));
+    // The rejections at DC (1 mHz, below a hundredth of either corner) and at the corners, 3 dB down.
+    let cm = figure("common-mode rejection at 1 mHz");
+    assert!((cm.macro_value.unwrap() - 80.0).abs() < 0.01 && cm.verdict() == Some(true), "{report}");
+    let cm_corner = figure("common-mode rejection at 1 kHz");
+    assert!((cm_corner.macro_value.unwrap() - 76.99).abs() < 0.01, "{report}");
+    let ps_corner = figure("supply rejection at 100 Hz");
+    assert!((ps_corner.macro_value.unwrap() - 66.99).abs() < 0.01, "{report}");
+    let supply = figure("supply current");
+    assert_eq!((supply.verdict(), supply.vendor_verdict()), (Some(true), Some(true)));
+    // A typical is shown, not judged.
+    assert_eq!(figure("unity-gain frequency").verdict(), None);
+    assert!(
+        report.contains("data sheet") && report.contains("2.5 mA max") && report.contains("typ 900 kHz"),
+        "{report}"
+    );
+    // A maximum the macro model exceeds fails the unit; a minimum only the vendor model misses is printed.
+    let checks = check("sheet-macro", "datasheet quiescent_current { max = 1.5mA; }");
+    assert!(!checks[0].passed(), "{}", text(&checks));
+    let checks = check("sheet-vendor", "datasheet quiescent_current { min = 1.5mA; }");
+    let report = text(&checks);
+    assert!(checks[0].passed(), "{report}");
+    assert!(
+        report.contains("note: the vendor model is outside the data sheet: supply current 1 mA (1.5 mA min)"),
+        "{report}"
+    );
+}
+
+#[test]
 fn check_model_checks_a_rail_model() {
     let pins = "    pin VIN { number = \"1\"; domains = \"power\"; directions = \"input\"; }
     pin GND { number = \"2\"; domains = \"ground\"; directions = \"input\"; }
@@ -226,6 +277,7 @@ fn figures_are_judged_against_their_tolerance() {
         tolerance: Some(tolerance),
         macro_value: Some(value),
         vendor_value: None,
+        datasheet: None,
     };
     assert_eq!(figure(1e6, Tolerance::Relative(0.05), 1.04e6).verdict(), Some(true));
     assert_eq!(figure(1e6, Tolerance::Relative(0.05), 1.06e6).verdict(), Some(false));
@@ -241,4 +293,24 @@ fn figures_are_judged_against_their_tolerance() {
     assert!(shown.differs());
     shown.vendor_value = Some(1.2);
     assert!(!shown.differs());
+    // Data-sheet limits judge both models; a typical alone judges neither.
+    let limits = |min: Option<f64>, typ: Option<f64>, max: Option<f64>| Limits { min, typ, max, magnitude: false };
+    let mut sheet = figure(1e6, Tolerance::Relative(0.05), 1.04e6);
+    sheet.datasheet = Some(limits(Some(1.05e6), None, None));
+    assert_eq!(sheet.verdict(), Some(false), "within the block's tolerance, below the data sheet's minimum");
+    sheet.vendor_value = Some(1.2e6);
+    assert_eq!(sheet.vendor_verdict(), Some(true));
+    sheet.datasheet = Some(limits(None, None, Some(1.1e6)));
+    assert_eq!((sheet.verdict(), sheet.vendor_verdict()), (Some(true), Some(false)));
+    sheet.declared = None;
+    sheet.datasheet = Some(limits(None, Some(2e6), None));
+    assert_eq!((sheet.verdict(), sheet.vendor_verdict()), (None, None));
+    sheet.vendor_value = None;
+    sheet.datasheet = Some(limits(Some(1.0), None, None));
+    assert_eq!(sheet.vendor_verdict(), None, "a figure the vendor model did not produce is not judged");
+    // An offset stated as +/-: its magnitude.
+    let offset = Limits { magnitude: true, ..limits(None, None, Some(5e-6)) };
+    assert_eq!(offset.verdict(Some(-4e-6)), Some(true));
+    assert_eq!(offset.verdict(Some(-6e-6)), Some(false));
+    assert_eq!(offset.verdict(Some(f64::NAN)), Some(false));
 }

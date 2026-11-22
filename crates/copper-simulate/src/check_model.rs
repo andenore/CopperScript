@@ -15,6 +15,17 @@
 //! | follower bandwidth | the follower's small-signal -3 dB frequency and its peaking | - |
 //! | voltage noise | the follower's input-referred density at `f_n = max(1 kHz, 100 voltage_noise_corner)`, and at 10 Hz | `voltage_noise * sqrt(1 + corner / f)` |
 //! | slew rate | follower step of eight times `slew_rate / (2 pi gbw)` (at least 0.5 V, at most `0.4 S`), 20 to 80 %, within the transient budget (`--tran-budget`, 120 s) | `slew_rate` |
+//! | common-mode rejection | open loop with both inputs driven (the inverting one by a 0 V source with 1 V AC above the held node; a diffamp's `inn` from ground), `A_OL / A_cm` at 1 mHz (or a hundredth of the lower corner) and at `cmrr_corner` | the block's `CMRR(f)` there (`copper_sim::OpampParams::cmrr_at`, its second pole included) |
+//! | supply rejection | open loop, inputs at AC ground, 1 V AC on `vp` and then on `vn`: `A_OL / A_s`, the worse rail's, at the same frequencies and `psrr_corner` | `PSRR(f)` likewise |
+//!
+//! **Data-sheet figures.** A block's `datasheet FIGURE { min; typ; max; }`
+//! entries ([`copper_lang::simulation::DatasheetFigure`]) attach to the figure
+//! they name ([`Figure::datasheet`]): the macro and the vendor model are each
+//! judged against `min` and `max` ([`Figure::verdict`],
+//! [`Figure::vendor_verdict`]), `typ` is shown only. A macro figure outside a
+//! limit fails the unit; a vendor figure outside one is listed in a note and
+//! the verdict stays the macro model's (the vendor file cannot be corrected in
+//! the part).
 //!
 //! A rail model (`sim regulator`, `sim reference`) is checked at the input
 //! `|output_voltage| + dropout + 1 V` (`--supply` sets it), `en` tied to `in`:
@@ -37,7 +48,7 @@
 //! tolerance listed in the table the check prints (5 % for currents,
 //! resistances, the gain-bandwidth and noise, 1 dB for gains and rejections,
 //! 1 % for voltages, 10 % for time and slew). The vendor model's figures are
-//! not judged against the block: they are printed beside the macro model's,
+//! not judged against the block (only against data-sheet limits, above): they are printed beside the macro model's,
 //! with the difference, and flagged when they differ by more than 25 % or 3
 //! dB. A vendor file that is not in the cache is reported and leaves the
 //! verdict to the macro model; a vendor model's transient run that fails or
@@ -138,6 +149,32 @@ impl Tolerance {
     }
 }
 
+/// A figure's data-sheet entry (`datasheet FIGURE { ... }` in the block), in
+/// the figure's SI value (dB and degrees as such).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Limits {
+    pub min: Option<f64>,
+    pub typ: Option<f64>,
+    pub max: Option<f64>,
+    /// The limits bound the magnitude (an offset stated as `+/-`).
+    pub magnitude: bool,
+}
+
+impl Limits {
+    /// `Some(true)` within `min` and `max`, `Some(false)` outside them or failed, `None` without limits or a value.
+    pub fn verdict(&self, value: Option<f64>) -> Option<bool> {
+        if self.min.is_none() && self.max.is_none() {
+            return None;
+        }
+        let value = value?;
+        if !value.is_finite() {
+            return Some(false);
+        }
+        let x = if self.magnitude { value.abs() } else { value };
+        Some(self.min.is_none_or(|min| x >= min) && self.max.is_none_or(|max| x <= max))
+    }
+}
+
 /// One measured figure of a unit.
 #[derive(Clone, Debug)]
 pub struct Figure {
@@ -149,13 +186,31 @@ pub struct Figure {
     pub tolerance: Option<Tolerance>,
     pub macro_value: Option<f64>,
     pub vendor_value: Option<f64>,
+    /// The part's data-sheet entry for this figure, where the block has one.
+    pub datasheet: Option<Limits>,
 }
 
 impl Figure {
-    /// `Some(true)` within tolerance, `Some(false)` outside it or not measured, `None` when not judged.
+    /// The macro model: `Some(true)` within the block's tolerance and the
+    /// data sheet's limits, `Some(false)` outside either or not measured,
+    /// `None` when neither judges it.
     pub fn verdict(&self) -> Option<bool> {
-        let (declared, tolerance) = (self.declared?, self.tolerance?);
-        Some(self.macro_value.is_some_and(|value| value.is_finite() && tolerance.holds(declared, value)))
+        let block = match (self.declared, self.tolerance) {
+            (Some(declared), Some(tolerance)) => {
+                Some(self.macro_value.is_some_and(|value| value.is_finite() && tolerance.holds(declared, value)))
+            }
+            _ => None,
+        };
+        let limits = self.datasheet.as_ref().and_then(|limits| limits.verdict(self.macro_value));
+        match (block, limits) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(true) && b.unwrap_or(true)),
+        }
+    }
+
+    /// The vendor model against the data sheet's limits (it is not judged against the block).
+    pub fn vendor_verdict(&self) -> Option<bool> {
+        self.datasheet.as_ref().and_then(|limits| limits.verdict(self.vendor_value))
     }
 
     /// True when the vendor model's value differs from the macro model's by more than 25 % (3 dB, 30 degrees).
@@ -215,6 +270,54 @@ impl UnitCheck {
             && ran(&self.vendor_state)
             && self.figures.iter().all(|figure| figure.verdict() != Some(false))
     }
+
+    /// The figures where the vendor model is outside the data sheet's limits
+    /// (printed; the verdict is the macro model's).
+    pub fn vendor_outside(&self) -> Vec<&Figure> {
+        self.figures.iter().filter(|figure| figure.vendor_verdict() == Some(false)).collect()
+    }
+}
+
+/// The check's figure (its key in the measured figures) a data-sheet figure of a block of `kind` is judged on.
+fn datasheet_row(kind: SimKind, figure: &str) -> Option<&'static str> {
+    Some(match (kind, figure) {
+        (SimKind::Opamp | SimKind::Diffamp, figure) => match figure {
+            "quiescent_current" => "supply current",
+            "input_offset_voltage" => "output offset",
+            "open_loop_gain" => "open-loop gain",
+            "gbw" => "gain-bandwidth",
+            "unity_gain_frequency" => "unity-gain frequency",
+            "phase_margin" => "phase margin",
+            "follower_bandwidth" => "follower bandwidth",
+            "voltage_noise" => "voltage noise",
+            "slew_rate" => "slew rate",
+            "cmrr" => "common-mode rejection",
+            "psrr" => "supply rejection",
+            _ => return None,
+        },
+        (_, figure) => match figure {
+            "quiescent_current" => "quiescent current",
+            "output_voltage" => "output voltage",
+            "output_resistance" => "output resistance",
+            "psrr" => "line rejection",
+            "dropout" => "dropout",
+            "efficiency" => "efficiency",
+            "voltage_noise" => "output noise",
+            "startup_time" => "start-up to 90 %",
+            _ => return None,
+        },
+    })
+}
+
+/// The block's data-sheet entry for the check's figure `key`.
+fn limits_for(block: &PartSimModel, key: &str) -> Option<Limits> {
+    let entry = block.datasheet.iter().find(|entry| datasheet_row(block.spec.kind, &entry.figure) == Some(key))?;
+    Some(Limits {
+        min: entry.min.as_ref().map(base),
+        typ: entry.typ.as_ref().map(base),
+        max: entry.max.as_ref().map(base),
+        magnitude: entry.figure == "input_offset_voltage",
+    })
 }
 
 /// Why a part cannot be checked at all (`SIM109`).
@@ -336,6 +439,10 @@ fn same_model(a: &PartSimModel, b: &PartSimModel, _part: &PartDefinition) -> boo
             .map(|set| (&set.span, &set.parameters))
             .eq(b.supply_sets.iter().map(|set| (&set.span, &set.parameters)))
         && a.pins.keys().eq(b.pins.keys())
+        && a.datasheet
+            .iter()
+            .map(|d| (&d.figure, &d.min, &d.typ, &d.max))
+            .eq(b.datasheet.iter().map(|d| (&d.figure, &d.min, &d.typ, &d.max)))
 }
 
 fn unit_label(unit: &Option<String>) -> String {
@@ -442,14 +549,16 @@ fn place(
     }
 }
 
-fn amplifier_wiring(c: &mut Circuit, kind: SimKind) -> Wiring {
+/// The role nodes of an amplifier circuit; with `common_mode` a differential
+/// amplifier's `inn` is a node of its own (to be driven), else ground.
+fn amplifier_wiring(c: &mut Circuit, kind: SimKind, common_mode: bool) -> Wiring {
     let mut nodes = IndexMap::new();
     for role in ["inp", "out", "vp", "vn"] {
         nodes.insert(role.to_owned(), c.node(role));
     }
     if kind == SimKind::Diffamp {
         // The input pair's inverting input and the output reference at ground; the loop closes on fb.
-        nodes.insert("inn".to_owned(), NodeId::GROUND);
+        nodes.insert("inn".to_owned(), if common_mode { c.node("inn") } else { NodeId::GROUND });
         nodes.insert("ref".to_owned(), NodeId::GROUND);
         nodes.insert("fb".to_owned(), c.node("fb"));
     } else {
@@ -464,21 +573,34 @@ fn feedback(kind: SimKind) -> &'static str {
     if kind == SimKind::Diffamp { "fb" } else { "inn" }
 }
 
-/// The supplies of an amplifier circuit, `+span/2` and `-span/2`.
-fn supplies(c: &mut Circuit, wiring: &Wiring, span: f64) -> Result<(), String> {
-    c.voltage_source("VP", wiring.node("vp"), NodeId::GROUND, SourceValue::dc(span / 2.0))
+/// The supplies of an amplifier circuit, `+span/2` and `-span/2`; the rail
+/// `ac` names (`vp` or `vn`) carries 1 V AC.
+fn supplies(c: &mut Circuit, wiring: &Wiring, span: f64, ac: Option<&str>) -> Result<(), String> {
+    let on = |rail: &str| if ac == Some(rail) { 1.0 } else { 0.0 };
+    c.voltage_source("VP", wiring.node("vp"), NodeId::GROUND, SourceValue::new(span / 2.0, on("vp"), 0.0))
         .map_err(|e| e.to_string())?;
-    c.voltage_source("VN", wiring.node("vn"), NodeId::GROUND, SourceValue::dc(-span / 2.0))
+    c.voltage_source("VN", wiring.node("vn"), NodeId::GROUND, SourceValue::new(-span / 2.0, on("vn"), 0.0))
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// What the open-loop circuit drives with 1 V AC.
+#[derive(Clone, Copy, PartialEq)]
+enum Drive {
+    /// The non-inverting input: `V_out = A_OL`.
+    Differential,
+    /// Both inputs: `V_out = A_OL / CMRR`.
+    CommonMode,
+    /// One rail (`vp` or `vn`), the inputs at AC ground: `V_out = A_OL / PSRR`.
+    Rail(&'static str),
 }
 
 /// The amplifier as a follower driven by `VIN` (0 V DC, 1 V AC) with a 10 kohm load.
 fn follower(model: Model, macro_block: &PartSimModel, options: &CheckOptions, span: f64) -> Result<Circuit, String> {
     let kind = macro_block.spec.kind;
     let mut c = Circuit::with_ground("0");
-    let wiring = amplifier_wiring(&mut c, kind);
-    supplies(&mut c, &wiring, span)?;
+    let wiring = amplifier_wiring(&mut c, kind, false);
+    supplies(&mut c, &wiring, span, None)?;
     place(&mut c, model, macro_block, &wiring, options, span)?;
     let (inp, out, fb) = (wiring.node("inp"), wiring.node("out"), wiring.node(feedback(kind)));
     c.voltage_source("VIN", inp, NodeId::GROUND, SourceValue::new(0.0, 1.0, 0.0)).map_err(|e| e.to_string())?;
@@ -487,18 +609,45 @@ fn follower(model: Model, macro_block: &PartSimModel, options: &CheckOptions, sp
     Ok(c)
 }
 
-/// The amplifier in open loop: DC feedback through 1 GH, the inverting input held at AC by 1 GF.
-fn open_loop(model: Model, macro_block: &PartSimModel, options: &CheckOptions, span: f64) -> Result<Circuit, String> {
+/// The amplifier in open loop: DC feedback through 1 GH, the inverting input
+/// held at AC by 1 GF; `drive` says what carries 1 V AC. For the common mode
+/// a 0 V source with 1 V AC lifts the inverting input above the held node
+/// (a differential amplifier's grounded `inn` is driven from ground instead).
+fn open_loop(
+    model: Model,
+    macro_block: &PartSimModel,
+    options: &CheckOptions,
+    span: f64,
+    drive: Drive,
+) -> Result<Circuit, String> {
     let kind = macro_block.spec.kind;
+    let common = drive == Drive::CommonMode;
+    let rail = match drive {
+        Drive::Rail(rail) => Some(rail),
+        _ => None,
+    };
+    let fail = |e: copper_sim::SimError| e.to_string();
     let mut c = Circuit::with_ground("0");
-    let wiring = amplifier_wiring(&mut c, kind);
-    supplies(&mut c, &wiring, span)?;
+    let wiring = amplifier_wiring(&mut c, kind, common);
+    supplies(&mut c, &wiring, span, rail)?;
     place(&mut c, model, macro_block, &wiring, options, span)?;
     let (inp, out, fb) = (wiring.node("inp"), wiring.node("out"), wiring.node(feedback(kind)));
-    c.voltage_source("VIN", inp, NodeId::GROUND, SourceValue::new(0.0, 1.0, 0.0)).map_err(|e| e.to_string())?;
-    c.inductor("LFB", out, fb, 1e9).map_err(|e| e.to_string())?;
-    c.capacitor("CFB", fb, NodeId::GROUND, 1e9).map_err(|e| e.to_string())?;
-    c.resistor("RL", out, NodeId::GROUND, 10e3).map_err(|e| e.to_string())?;
+    let ac_in = if rail.is_some() { 0.0 } else { 1.0 };
+    c.voltage_source("VIN", inp, NodeId::GROUND, SourceValue::new(0.0, ac_in, 0.0)).map_err(fail)?;
+    let unit = SourceValue::new(0.0, 1.0, 0.0);
+    if common && kind != SimKind::Diffamp {
+        let held = c.node("held");
+        c.inductor("LFB", out, held, 1e9).map_err(fail)?;
+        c.capacitor("CFB", held, NodeId::GROUND, 1e9).map_err(fail)?;
+        c.voltage_source("VCM", fb, held, unit).map_err(fail)?;
+    } else {
+        c.inductor("LFB", out, fb, 1e9).map_err(fail)?;
+        c.capacitor("CFB", fb, NodeId::GROUND, 1e9).map_err(fail)?;
+        if common {
+            c.voltage_source("VCM", wiring.node("inn"), NodeId::GROUND, unit).map_err(fail)?;
+        }
+    }
+    c.resistor("RL", out, NodeId::GROUND, 10e3).map_err(fail)?;
     Ok(c)
 }
 
@@ -569,7 +718,7 @@ fn amplifier_figures(
     log.time(label, "op", start);
     // Open loop.
     let start = Instant::now();
-    let c = match open_loop(model, macro_block, options, span) {
+    let c = match open_loop(model, macro_block, options, span, Drive::Differential) {
         Ok(c) => c,
         Err(message) => return (out, state_of(message)),
     };
@@ -598,6 +747,39 @@ fn amplifier_figures(
         }
     }
     log.time(label, "open loop ac", start);
+    // Common-mode and supply rejection: A_OL over the output each drive gives, the worse rail's.
+    let start = Instant::now();
+    let frequencies = &expected.rejection_frequencies;
+    let run = |drive: Drive| -> Option<Vec<Complex>> {
+        let c = open_loop(model, macro_block, options, span, drive).ok()?;
+        let ac = copper_sim::ac(&c, &Sweep::List(frequencies.clone())).ok()?;
+        ac.voltage("out").ok().map(<[Complex]>::to_vec)
+    };
+    if let Some(gain) = run(Drive::Differential) {
+        let rejection = |output: &[Complex], k: usize| {
+            let (a, x) = (gain[k].abs(), output[k].abs());
+            (a > 0.0 && x > 0.0 && (a / x).is_finite()).then(|| db(a / x))
+        };
+        let keys = [("common-mode rejection", expected.cmrr_corner), ("supply rejection", expected.psrr_corner)];
+        let common = run(Drive::CommonMode);
+        let rails: Vec<Vec<Complex>> = [run(Drive::Rail("vp")), run(Drive::Rail("vn"))].into_iter().flatten().collect();
+        for (index, (key, corner)) in keys.into_iter().enumerate() {
+            let at = |k: usize| -> Option<f64> {
+                if index == 0 {
+                    rejection(common.as_deref()?, k)
+                } else {
+                    rails.iter().filter_map(|rail| rejection(rail, k)).reduce(f64::min)
+                }
+            };
+            if let Some(value) = at(0) {
+                out.insert(key, value);
+            }
+            if let Some(value) = corner.and_then(at) {
+                out.insert(if index == 0 { CM_CORNER } else { PS_CORNER }, value);
+            }
+        }
+    }
+    log.time(label, "rejection ac", start);
     // Follower bandwidth and noise.
     let start = Instant::now();
     let c = match follower(model, macro_block, options, span) {
@@ -700,7 +882,16 @@ struct AmplifierPlan {
     noise_frequency: f64,
     step: f64,
     stop: f64,
+    /// The rejection runs' frequencies: the low one, then the declared corners.
+    rejection_frequencies: Vec<f64>,
+    /// The indices of `cmrr_corner` and `psrr_corner` in it.
+    cmrr_corner: Option<usize>,
+    psrr_corner: Option<usize>,
 }
+
+/// The keys of the rejections at the declared corners in [`Measured`].
+const CM_CORNER: &str = "common-mode rejection at the corner";
+const PS_CORNER: &str = "supply rejection at the corner";
 
 fn check_amplifier(
     part: &PartDefinition,
@@ -722,7 +913,25 @@ fn check_amplifier(
     let step = linear.max(0.5).min(0.4 * span);
     // Long enough to slew the step three times over and settle, at least 20 time constants.
     let stop = 3.0 * step / slew + 20.0 / (2.0 * std::f64::consts::PI * gbw);
-    let plan = AmplifierPlan { noise_frequency, step, stop: stop / 0.95 };
+    // The rejections at DC: 1 mHz, or a hundredth of a lower corner; then at each corner.
+    let (cmrr_corner, psrr_corner) = (values("cmrr_corner"), values("psrr_corner"));
+    let low = [cmrr_corner, psrr_corner].into_iter().flatten().fold(1e-3_f64, |low, corner| low.min(corner / 100.0));
+    let mut rejection_frequencies = vec![low];
+    let mut index_of = |corner: Option<f64>| {
+        corner.map(|f| {
+            rejection_frequencies.push(f);
+            rejection_frequencies.len() - 1
+        })
+    };
+    let (cm_index, ps_index) = (index_of(cmrr_corner), index_of(psrr_corner));
+    let plan = AmplifierPlan {
+        noise_frequency,
+        step,
+        stop: stop / 0.95,
+        rejection_frequencies,
+        cmrr_corner: cm_index,
+        psrr_corner: ps_index,
+    };
     let mut log = Log::default();
     let (macro_measured, macro_state) =
         amplifier_figures(Model::Macro(&spec), macro_block, options, span, &plan, "macro", &mut log);
@@ -738,38 +947,86 @@ fn check_amplifier(
     let declared = |key: &str| values(key);
     let noise_declared = values("voltage_noise").map(|e| e * (1.0 + corner / noise_frequency).sqrt());
     let noise_declared_10 = values("voltage_noise").map(|e| e * (1.0 + corner / 10.0).sqrt());
-    let rows: Vec<(&'static str, &'static str, Option<f64>, Option<Tolerance>)> = vec![
-        ("supply current", "A", declared("quiescent_current"), Some(Tolerance::Relative(0.05))),
-        ("output offset", "V", None, None),
-        ("open-loop gain", "dB", declared("open_loop_gain"), Some(Tolerance::Absolute(1.0))),
-        ("gain-bandwidth", "Hz", declared("gbw"), Some(Tolerance::Relative(0.05))),
-        ("unity-gain frequency", "Hz", None, None),
-        ("phase margin", "deg", None, None),
-        ("follower bandwidth", "Hz", None, None),
-        ("follower peaking", "dB", None, None),
-        ("voltage noise", "V/rtHz", noise_declared, Some(Tolerance::Relative(0.05))),
-        ("voltage noise at 10 Hz", "V/rtHz", noise_declared_10, None),
-        ("slew rate", "V/s", declared("slew_rate"), Some(Tolerance::Relative(0.10))),
+    // The block's rejection curves at the check's frequencies (corner and second pole included).
+    let params = crate::lower::opamp_params(&spec, &values, "U1").ok();
+    let curve = |at: fn(&copper_sim::OpampParams, f64) -> Option<Complex>, f: f64| {
+        params.as_ref().and_then(|p| at(p, f)).map(|r| db(r.abs()))
+    };
+    let low = plan.rejection_frequencies[0];
+    let rows: Vec<RailRow> = vec![
+        (
+            "supply current".into(),
+            "supply current",
+            "A",
+            declared("quiescent_current"),
+            Some(Tolerance::Relative(0.05)),
+        ),
+        ("output offset".into(), "output offset", "V", None, None),
+        ("open-loop gain".into(), "open-loop gain", "dB", declared("open_loop_gain"), Some(Tolerance::Absolute(1.0))),
+        ("gain-bandwidth".into(), "gain-bandwidth", "Hz", declared("gbw"), Some(Tolerance::Relative(0.05))),
+        ("unity-gain frequency".into(), "unity-gain frequency", "Hz", None, None),
+        ("phase margin".into(), "phase margin", "deg", None, None),
+        ("follower bandwidth".into(), "follower bandwidth", "Hz", None, None),
+        ("follower peaking".into(), "follower peaking", "dB", None, None),
+        (
+            format!("voltage noise at {}", hz(noise_frequency)),
+            "voltage noise",
+            "V/rtHz",
+            noise_declared,
+            Some(Tolerance::Relative(0.05)),
+        ),
+        ("voltage noise at 10 Hz".into(), "voltage noise at 10 Hz", "V/rtHz", noise_declared_10, None),
+        ("slew rate".into(), "slew rate", "V/s", declared("slew_rate"), Some(Tolerance::Relative(0.10))),
+        (
+            format!("common-mode rejection at {}", hz(low)),
+            "common-mode rejection",
+            "dB",
+            values("cmrr").and(curve(copper_sim::OpampParams::cmrr_at, low)),
+            Some(Tolerance::Absolute(1.0)),
+        ),
+        (
+            format!("common-mode rejection at {}", cmrr_corner.map(hz).unwrap_or_default()),
+            CM_CORNER,
+            "dB",
+            cmrr_corner.and_then(|f| curve(copper_sim::OpampParams::cmrr_at, f)),
+            Some(Tolerance::Absolute(1.0)),
+        ),
+        (
+            format!("supply rejection at {}", hz(low)),
+            "supply rejection",
+            "dB",
+            values("psrr").and(curve(copper_sim::OpampParams::psrr_at, low)),
+            Some(Tolerance::Absolute(1.0)),
+        ),
+        (
+            format!("supply rejection at {}", psrr_corner.map(hz).unwrap_or_default()),
+            PS_CORNER,
+            "dB",
+            psrr_corner.and_then(|f| curve(copper_sim::OpampParams::psrr_at, f)),
+            Some(Tolerance::Absolute(1.0)),
+        ),
     ];
     let mut figures = Vec::new();
-    for (name, unit_name, declared, tolerance) in rows {
+    for (shown, name, unit_name, declared, tolerance) in rows {
         if options.skip_transient && name == "slew rate" {
             continue;
         }
-        let shown =
-            if name == "voltage noise" { format!("voltage noise at {}", hz(noise_frequency)) } else { name.to_owned() };
+        let datasheet = limits_for(macro_block, name);
+        let vendor_value = vendor_measured.get(name).copied();
         // A figure the block does not declare is shown, not judged; the supply current of a block
-        // without one is zero by construction and left out.
-        if name == "supply current" && declared.is_none() && vendor_measured.get(name).is_none() {
+        // without one is zero by construction and left out, and so are a rejection the block does
+        // not declare (infinite) and the rejection at a corner it does not declare.
+        let ideal = matches!(name, "supply current" | "common-mode rejection" | "supply rejection");
+        if ideal && declared.is_none() && vendor_value.is_none() && datasheet.is_none() {
+            continue;
+        }
+        if matches!(name, CM_CORNER | PS_CORNER) && declared.is_none() {
             continue;
         }
         // A macro model without a quiescent_current draws nothing: no figure to show.
         let noiseless = name.starts_with("voltage noise") && values("voltage_noise").is_none();
-        let macro_value = if (name == "supply current" && declared.is_none()) || noiseless {
-            None
-        } else {
-            macro_measured.get(name).copied()
-        };
+        let macro_value =
+            if (ideal && declared.is_none()) || noiseless { None } else { macro_measured.get(name).copied() };
         figures.push(Figure {
             name: shown,
             unit: unit_name,
@@ -780,7 +1037,8 @@ fn check_amplifier(
                 declared.and(tolerance)
             },
             macro_value,
-            vendor_value: vendor_measured.get(name).copied(),
+            vendor_value,
+            datasheet,
         });
     }
     let mut notes = Vec::new();
@@ -1135,17 +1393,19 @@ fn check_rail(
             continue;
         }
         let (m, v) = (macro_measured.get(key).copied(), vendor_measured.get(key).copied());
-        // Figures that need a declared corner, a dropout or an efficiency appear only with it.
+        let datasheet = limits_for(macro_block, key);
+        // Figures that need a declared corner, a dropout or an efficiency appear only with it
+        // (or, for the dropout and the efficiency, a data-sheet entry for the vendor model).
         let conditional =
             matches!(key, "output impedance at the corner" | "line rejection at the corner" | "dropout" | "efficiency");
-        if conditional && declared.is_none() {
+        if conditional && declared.is_none() && datasheet.is_none() {
             continue;
         }
         // A parameter the block leaves out is ideal in the macro model (no
         // quiescent current, a zero output resistance, an infinite rejection, no
         // noise): its figure says nothing, and the row stays only for the vendor model.
         let m = if declared.is_none() { None } else { m };
-        if m.is_none() && v.is_none() && declared.is_none() {
+        if m.is_none() && v.is_none() && declared.is_none() && datasheet.is_none() {
             continue;
         }
         figures.push(Figure {
@@ -1159,6 +1419,7 @@ fn check_rail(
             },
             macro_value: m,
             vendor_value: v,
+            datasheet,
         });
     }
     let mut notes = Vec::new();
@@ -1270,6 +1531,25 @@ fn difference(figure: &Figure) -> String {
     }
 }
 
+/// A data-sheet entry as the table shows it: `10 V/us min`, `20 mA max`, `1 V to 2 V`, with `, typ X`.
+fn describe_limits(limits: &Limits, unit: &str) -> String {
+    let at = |x: f64| show(Some(x), unit);
+    let bar = if limits.magnitude { "|x| " } else { "" };
+    let mut text = match (limits.min, limits.max) {
+        (Some(min), Some(max)) => format!("{bar}{} to {}", at(min), at(max)),
+        (Some(min), None) => format!("{bar}{} min", at(min)),
+        (None, Some(max)) => format!("{bar}{} max", at(max)),
+        (None, None) => String::new(),
+    };
+    if let Some(typ) = limits.typ {
+        if !text.is_empty() {
+            text.push_str(", ");
+        }
+        text.push_str(&format!("typ {}", at(typ)));
+    }
+    text
+}
+
 fn describe_state(state: &ModelState) -> String {
     match state {
         ModelState::Absent => "none".to_owned(),
@@ -1295,26 +1575,48 @@ pub fn text(checks: &[UnitCheck]) -> String {
             Some(vendor) => out.push_str(&format!("  vendor: {vendor}: {}\n", describe_state(&check.vendor_state))),
             None => out.push_str("  vendor: none declared\n"),
         }
-        let header = ["figure", "declared", "tolerance", "macro", "verdict", "vendor", "vendor - macro"];
-        let mut rows: Vec<[String; 7]> = vec![header.map(str::to_owned)];
+        // The data-sheet columns appear only for a unit whose block has data-sheet figures.
+        let sheet = check.figures.iter().any(|figure| figure.datasheet.is_some());
+        let header = [
+            "figure",
+            "declared",
+            "data sheet",
+            "tolerance",
+            "macro",
+            "verdict",
+            "vendor",
+            "vendor verdict",
+            "vendor - macro",
+        ];
+        let keep = |k: usize| sheet || !matches!(k, 2 | 7);
+        let pick = |row: [String; 9]| -> Vec<String> {
+            row.into_iter().enumerate().filter(|(k, _)| keep(*k)).map(|(_, cell)| cell).collect()
+        };
+        let mut rows: Vec<Vec<String>> = vec![pick(header.map(str::to_owned))];
+        let word = |verdict: Option<bool>| match verdict {
+            Some(true) => "pass",
+            Some(false) => "FAIL",
+            None => "-",
+        };
         for figure in &check.figures {
-            let verdict = match figure.verdict() {
-                Some(true) => "pass",
-                Some(false) => "FAIL",
-                None => "-",
-            };
             let differs = if figure.differs() { " DIFFERS" } else { "" };
-            rows.push([
+            rows.push(pick([
                 figure.name.clone(),
                 show(figure.declared, figure.unit),
+                figure
+                    .datasheet
+                    .as_ref()
+                    .map(|limits| describe_limits(limits, figure.unit))
+                    .unwrap_or_else(|| "-".into()),
                 figure.tolerance.map(|t| t.describe(figure.unit)).unwrap_or_else(|| "-".to_owned()),
                 show(figure.macro_value, figure.unit),
-                verdict.to_owned(),
+                word(figure.verdict()).to_owned(),
                 show(figure.vendor_value, figure.unit),
+                word(figure.vendor_verdict()).to_owned(),
                 format!("{}{differs}", difference(figure)),
-            ]);
+            ]));
         }
-        let mut widths = [0usize; 7];
+        let mut widths = vec![0usize; rows[0].len()];
         for row in &rows {
             for (k, cell) in row.iter().enumerate() {
                 widths[k] = widths[k].max(cell.chars().count());
@@ -1327,6 +1629,20 @@ pub fn text(checks: &[UnitCheck]) -> String {
         }
         for note in &check.notes {
             out.push_str(&format!("  note: {note}\n"));
+        }
+        let outside = check.vendor_outside();
+        if !outside.is_empty() {
+            let list: Vec<String> = outside
+                .iter()
+                .map(|figure| {
+                    let limits = figure.datasheet.as_ref().map(|l| describe_limits(l, figure.unit)).unwrap_or_default();
+                    format!("{} {} ({limits})", figure.name, show(figure.vendor_value, figure.unit))
+                })
+                .collect();
+            out.push_str(&format!(
+                "  note: the vendor model is outside the data sheet: {}; the verdict is the macro model's\n",
+                list.join("; ")
+            ));
         }
         if !check.timings.is_empty() {
             let timing: Vec<String> =

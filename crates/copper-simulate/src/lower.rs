@@ -37,9 +37,12 @@
 //! it, [`celsius`]): passives with `tempco`/`tempco2` are valued at it from
 //! 27 degC, `sim diode` and `sim spice` devices are scaled to it
 //! (`copper_sim::temperature`), built-in voltage noise is a thermal noise
-//! (`sqrt(T / 300.15 K)`), `input_offset_drift` and a reference's
+//! (`sqrt(T / 300.15 K)`), `input_offset_drift`, an amplifier's
+//! `input_bias_current_tempco` (compounding; the offset current follows it),
+//! `gbw_tempco` and `slew_rate_tempco` (linear) and a reference's
 //! `temperature_coefficient` act from 27 degC, and noise analyses without a
-//! temperature of their own run at it.
+//! temperature of their own run at it. A two-terminal part's `tempco` and
+//! `tempco2` are the default of its components that declare none.
 //!
 //! Values come from the bench's params at the step being run: a passive
 //! whose value names a param, a model parameter that names one and the
@@ -212,6 +215,43 @@ fn noise_factor(celsius: f64) -> f64 {
     } else {
         (kelvin(celsius) / copper_sim::temperature::NOMINAL_TEMPERATURE).sqrt()
     }
+}
+
+/// An amplifier's temperature coefficients at `celsius`, from 27 degC
+/// (`dT = T - 27 degC`): the bias current `I_b exp(tc dT)`
+/// (`input_bias_current_tempco`, compounding, so a bias current that doubles
+/// every 10 degC is `ln 2 / 10 degC`), and `gbw (1 + tc dT)`, `slew_rate (1 +
+/// tc dT)`. Returns the factor on the offset current, which follows the bias
+/// current. `SIM116` when a linear coefficient leaves its parameter at or
+/// below zero.
+fn amplifier_at_temperature(
+    params: &mut OpampParams,
+    get: &dyn Fn(&str) -> Option<f64>,
+    celsius: f64,
+    owner: &str,
+) -> Result<f64, String> {
+    let dt = celsius - NOMINAL_CELSIUS;
+    if dt == 0.0 {
+        return Ok(1.0);
+    }
+    let bias = get("input_bias_current_tempco").map_or(1.0, |tc| (tc * dt).exp());
+    params.input_bias_current *= bias;
+    let linear = |key: &str, what: &str, value: f64| -> Result<f64, String> {
+        let Some(tc) = get(key) else { return Ok(value) };
+        let factor = 1.0 + tc * dt;
+        if factor > 0.0 {
+            Ok(value * factor)
+        } else {
+            Err(format!(
+                "SIM116: {owner}: {key} {} ppm/degC at {celsius} degC leaves {what} at {} of its 27 degC value; a linear coefficient holds only while 1 + tc (T - 27 degC) is above zero",
+                crate::format::significant(tc * 1e6, 4),
+                crate::format::significant(factor, 4)
+            ))
+        }
+    };
+    params.gbw = linear("gbw_tempco", "the gain-bandwidth", params.gbw)?;
+    params.slew_rate = params.slew_rate.map(|sr| linear("slew_rate_tempco", "the slew rate", sr)).transpose()?;
+    Ok(bias)
 }
 
 fn part_of<'a>(bench: &'a Bench, design: &'a Design, component: &SimComponent) -> Result<&'a PartDefinition, String> {
@@ -501,6 +541,7 @@ impl Builder<'_> {
                 if let Some(drift) = get("input_offset_drift").filter(|_| self.celsius != NOMINAL_CELSIUS) {
                     params.input_offset_voltage += drift * (self.celsius - NOMINAL_CELSIUS);
                 }
+                let offset_current_factor = amplifier_at_temperature(&mut params, &get, self.celsius, owner)?;
                 for key in [
                     "slew_rate",
                     "voltage_noise",
@@ -524,7 +565,8 @@ impl Builder<'_> {
                     }
                 }
                 let common = get("input_resistance_common");
-                let offset = get("input_offset_current").filter(|ios| *ios != 0.0);
+                let offset =
+                    get("input_offset_current").filter(|ios| *ios != 0.0).map(|ios| ios * offset_current_factor);
                 let (inp, inn, out) = (node("inp")?, node("inn")?, node("out")?);
                 let mut pins = OpampPins::new(inp, inn, out);
                 if let (Ok(vp), Ok(vn)) = (node("vp"), node("vn")) {

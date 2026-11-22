@@ -87,8 +87,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              that is not in the cache is SIM108, naming what to download and copper models add. \
              A bench runs at 27 degC unless it declares param TEMP (in degC; steppable like any param, SIM110): \
              resistor and device noise, every junction's thermal voltage and SPICE models (scaled from their TNOM or \
-             .OPTIONS TNOM; TC1/TC2 of R, C and L) follow it, as do a passive component's tempco and tempco2 (SIM111), \
-             an op-amp's input_offset_drift and voltage noise and a reference's temperature_coefficient. A \
+             .OPTIONS TNOM; TC1/TC2 of R, C and L) follow it, as do a passive component's tempco and tempco2 (or its two-terminal part's; SIM111), \
+             an op-amp's input_offset_drift, voltage noise, input_bias_current_tempco, gbw_tempco and \
+             slew_rate_tempco (SIM116) and a reference's temperature_coefficient. A \
              capacitor part's esr and esl (or self_resonance) and an inductor part's esr (its DC resistance) are in \
              series with the element. \
              In analysis tran, steady = PERIOD (or steady = F0) starts the run at start in the periodic steady state \
@@ -102,10 +103,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              step P from a to b by s; (or points n;) steps a range (SIM115). \
              --check-model PART runs a standard bench set on a part of the board's library instead of the benches \
              (amplifiers: supply current, open-loop gain, gain-bandwidth, phase margin, follower bandwidth, voltage \
-             noise and slew rate; regulators and references: quiescent current, output voltage, output resistance, \
-             line rejection, dropout, efficiency, output noise and start-up), the macro model beside the vendor model \
-             with their difference, and passes when the models load, the operating points converge and the macro \
-             figures meet the values the block declares within the printed tolerances. \
+             noise, slew rate, common-mode and supply rejection; regulators and references: quiescent current, output \
+             voltage, output resistance, line rejection, dropout, efficiency, output noise and start-up), the macro \
+             model beside the vendor model with their difference, both judged against the block's datasheet FIGURE \
+             {{ min; typ; max; }} entries (SIM117), and passes when the models load, the operating points converge and \
+             the macro figures meet the values the block declares within the printed tolerances and its data-sheet \
+             limits (a vendor figure outside them is noted). \
              Exit status 1 when a measure is outside its limits, a bench cannot be solved or a model check fails, 2 for \
              usage and compile errors"
         );

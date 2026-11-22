@@ -195,7 +195,9 @@ fn supply_rejection_at_dc_and_its_roll_off() {
         }
         if corner.is_some() {
             // 3 dB down at the corner, 20 dB per decade above it.
-            assert!((p.psrr_at(fc).unwrap().abs() / psrr0 - 0.5f64.sqrt()).abs() < 1e-12);
+            let fp = p.psrr_pole().unwrap();
+            let at_corner = (0.5 * (1.0 + (fc / fp).powi(2))).sqrt();
+            assert!((p.psrr_at(fc).unwrap().abs() / psrr0 - at_corner).abs() < 1e-12);
             let r = res.voltage("out").unwrap();
             let (f4, f5) = (res.frequencies()[15], res.frequencies()[20]);
             assert!((f4 - 1e4).abs() < 1e-6 && (f5 - 1e5).abs() < 1e-5);

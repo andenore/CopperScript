@@ -290,7 +290,9 @@ pub fn key_meaning(kind: SimKind, key: &str) -> Option<&'static str> {
         (_, "open_loop_gain") => "DC open-loop gain",
         (_, "second_pole") => "the second pole of the open-loop response",
         (_, "cmrr") => "common-mode rejection at low frequency",
-        (_, "cmrr_corner") => "the frequency where common-mode rejection starts to fall",
+        (_, "cmrr_corner") => {
+            "the frequency where common-mode rejection starts to fall (it stops falling at min(gbw, corner x cmrr))"
+        }
         (_, "input_capacitance_common") => "input capacitance of each input to ground",
         (_, "input_capacitance_differential") => "capacitance between the inputs",
         (_, "input_resistance_common") => "input resistance of each input to ground",
@@ -310,8 +312,15 @@ pub fn key_meaning(kind: SimKind, key: &str) -> Option<&'static str> {
         (_, "output_current_limit") => "output current limit",
         (_, "quiescent_current") => "supply current drawn through the supply pins",
         (_, "psrr") => "power-supply rejection at low frequency, one figure for both rails",
-        (_, "psrr_corner") => "the frequency where power-supply rejection starts to fall",
+        (_, "psrr_corner") => {
+            "the frequency where power-supply rejection starts to fall (it stops falling at min(gbw, corner x psrr))"
+        }
         (_, "input_offset_drift") => "offset voltage change per degree from 27 degC",
+        (_, "input_bias_current_tempco") => {
+            "bias and offset current change per degree from 27 degC, compounding: I_b exp(tc dT) (doubling every 10 degC is 69315ppm/degC)"
+        }
+        (_, "gbw_tempco") => "gain-bandwidth change per degree from 27 degC: gbw (1 + tc dT)",
+        (_, "slew_rate_tempco") => "slew-rate change per degree from 27 degC: slew_rate (1 + tc dT)",
         (_, "ac_phase") => "phase of the ac stimulus",
         (_, "output_capacitance") => "capacitance across the output",
         (_, "output") => "voltage or current: what the source drives",
@@ -353,6 +362,53 @@ pub fn key_meaning(kind: SimKind, key: &str) -> Option<&'static str> {
         (_, "note") => {
             "what is established where the vendor model differs from the data sheet (--check-model prints it)"
         }
+        _ => return None,
+    })
+}
+
+/// `datasheet FIGURE { ... }` in a part's built-in block: what it is.
+pub const DATASHEET: Item = item(
+    "datasheet",
+    "FIGURE { min = q; typ = q; max = q; }",
+    "a data-sheet figure of the part: copper sim --check-model judges the macro and the vendor model against its min and max and shows its typ",
+    "datasheet slew_rate { min = 15V/us; }",
+);
+
+/// The keys of a `datasheet FIGURE { ... }` entry.
+pub const DATASHEET_KEYS: [Item; 3] = [
+    item("min", "the figure's dimension", "the data sheet's minimum: a limit for both models", "15V/us"),
+    item(
+        "typ",
+        "the figure's dimension",
+        "the data sheet's typical, shown beside the models (refused where the block declares the figure: its value is the typical)",
+        "20V/us",
+    ),
+    item("max", "the figure's dimension", "the data sheet's maximum: a limit for both models", "25V/us"),
+];
+
+/// The meaning of a data-sheet figure of a block of `kind`: the check figure it is judged on.
+pub fn datasheet_meaning(kind: SimKind, figure: &str) -> Option<&'static str> {
+    let amplifier = matches!(kind, SimKind::Opamp | SimKind::Diffamp);
+    Some(match figure {
+        "quiescent_current" if amplifier => "the supply current at the follower's operating point",
+        "quiescent_current" => "the input current at no load",
+        "input_offset_voltage" => "the follower's output offset (its magnitude)",
+        "open_loop_gain" => "the open-loop gain at 1 mHz",
+        "gbw" => "100 times the frequency where the open-loop gain falls through 40 dB",
+        "unity_gain_frequency" => "where the open-loop gain falls through 0 dB",
+        "phase_margin" => "180 degrees plus the open-loop phase at the unity-gain frequency",
+        "follower_bandwidth" => "the follower's -3 dB bandwidth (a data sheet's bandwidth at G = +1)",
+        "voltage_noise" if amplifier => "the input-referred noise at max(1 kHz, 100 voltage_noise_corner)",
+        "voltage_noise" => "the output noise at max(1 kHz, 100 voltage_noise_corner)",
+        "slew_rate" => "the follower step's 20 to 80 % slew rate",
+        "cmrr" => "the common-mode rejection at DC",
+        "psrr" if amplifier => "the supply rejection at DC, the worse rail's",
+        "psrr" => "the line rejection at 1 Hz",
+        "output_voltage" => "the output at 1 mA",
+        "output_resistance" => "the output resistance at 1 Hz",
+        "dropout" => "the dropout at 1 mA",
+        "efficiency" => "the efficiency at 100 mA or half the current limit",
+        "startup_time" => "the time to 90 % of the set point after the input ramps up",
         _ => return None,
     })
 }
@@ -500,6 +556,17 @@ mod tests {
                 assert!(key_meaning(kind, key).is_some(), "sim {} {key}", kind.name());
             }
         }
+    }
+
+    #[test]
+    fn every_datasheet_figure_has_a_meaning() {
+        for kind in SimKind::ALL {
+            for (figure, _, _) in crate::simulation::datasheet_figures(kind) {
+                assert!(datasheet_meaning(kind, figure).is_some(), "sim {} datasheet {figure}", kind.name());
+            }
+        }
+        let keys: Vec<&str> = DATASHEET_KEYS.iter().map(|item| item.name).collect();
+        assert_eq!(keys, ["min", "typ", "max"]);
     }
 
     #[test]

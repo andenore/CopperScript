@@ -91,6 +91,7 @@ pub use devices::{DiodeParams, SwitchParams};
 pub use error::{AnalysisPoint, SimError, SingularCause};
 pub use models::{
     DiffampPins, LoadParams, MacroInstance, MacroModel, OpampParams, OpampPins, SourceOutput, SourceParams,
+    rejection_pole,
 };
 pub use noise::{
     NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,

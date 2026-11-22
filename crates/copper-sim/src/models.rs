@@ -31,12 +31,40 @@
 //! `V_cm / CMRR(f)` with `V_cm = (V(inp) + V(inn)) / 2` against ground: two
 //! VCCS `cmp`, `cmn` of `1 / (2 CMRR)` each. Without a corner they inject into
 //! `U#p1` directly. With `cmrr_corner` `f_c` they inject into internal node
-//! `U#cm`, which carries 1 ohm (`rcm`) in series with `1 / (2 pi f_c)` henry
-//! (`lcm`, through `U#cml`) to ground, and `cmg` copies `V(U#cm)` into
-//! `U#p1`: `CMRR(f) = CMRR / (1 + j f / f_c)`, falling 20 dB per decade above
-//! the corner. The error has the sign of the common-mode signal; in a real
-//! part it may have either sign. The second input pair of a differential
-//! amplifier has no common-mode term.
+//! `U#cm`, which carries 1 ohm (`rcm`) in series with a network to ground
+//! (through `U#cml`), and `cmg` copies `V(U#cm)` into `U#p1`:
+//! `CMRR(f) = CMRR (1 + j f / f_p) / (1 + j f / f_c)`, falling 20 dB per
+//! decade above the corner and flat again above the second pole `f_p`. The
+//! network is `R2 = f_p / f_c - 1` ohm (`rcp`) in parallel with
+//! `R2 / (2 pi f_p)` henry (`lcm`); without a second pole (below) it is
+//! `1 / (2 pi f_c)` henry alone and the CMRR keeps falling. The error has the
+//! sign of the common-mode signal; in a real part it may have either sign. The
+//! second input pair of a differential amplifier has no common-mode term.
+//!
+//! **Where the rejection stops falling.** `f_p = min(GBW, f_c CMRR)` (or
+//! `f_c CMRR` when the corner is at or above `GBW`; none when `CMRR <= 1`),
+//! [`rejection_pole`], the same rule for the supply rejection with `f_c PSRR`.
+//! The error is input-referred and injected at the dominant pole node, so to
+//! the output it is `A(f) / CMRR(f)`. A corner alone makes that
+//! `GBW / (f_c CMRR)` at every frequency above `GBW`, a feedthrough that never
+//! falls, and lets the input-referred error grow past the common-mode signal
+//! itself above `f_c CMRR`. Neither happens in an amplifier: the conversion of
+//! a common-mode (or supply) signal into a differential error is at most that
+//! signal (the input pair's mismatch bounds it, the tail node's own pole at
+//! about `2 g_m / C_tail` ends its rise), and what reaches the output falls
+//! above the amplifier's bandwidth. TI's models of the CopperLib amplifiers,
+//! measured (`I7` of `docs/simulation-improvement-plan.md`), have an
+//! output-referred common-mode gain flat to at most `GBW` and falling above it
+//! (OPA2277: flat at -37.5 dB to 1 MHz; OPA2182: input-referred floor 30 dB
+//! from about 3 MHz; OPA2189: 35 dB from about 355 kHz). With `f_p` the
+//! output-referred term is flat to `GBW` and falls 20 dB per decade above it,
+//! and the input-referred error never exceeds the signal. Below `f_p / 10`
+//! the declared curve is unchanged to 0.5 %.
+//!
+//! In transient runs with a `slew_rate` the common-mode error of a corner
+//! (`cmg`) is part of the limited input stage ([`crate::devices`]): it is
+//! input-referred, the input stage carries it, and its current is limited with
+//! the differential signal's.
 //!
 //! The open-loop gain is therefore exactly
 //! `A(s) = A0 / ((1 + s/w1)(1 + s/w2))` with `w1 = 2 pi GBW / A0` and
@@ -79,9 +107,10 @@
 //! `(V(vp) - V(vn) - psrr_span) / PSRR(f)`: `U.psr`, a VCCS of `1 / PSRR`
 //! controlled by `V(vp) - V(vn)`, and `U.pso`, a DC current of
 //! `-psrr_span / PSRR`, both into `U#p1` (or, with `psrr_corner` `f_c`, into
-//! `U#ps`, which carries `rps` of 1 ohm in series with `lps` of
-//! `1 / (2 pi f_c)` henry to ground, copied into `U#p1` by `psg`, as for the
-//! CMRR): `PSRR(f) = PSRR / (1 + j f / f_c)`. At `V(vp) - V(vn) = psrr_span`
+//! `U#ps`, which carries `rps` of 1 ohm in series with the network of `lps`
+//! (and `rpp`) to ground, copied into `U#p1` by `psg`, as for the CMRR):
+//! `PSRR(f) = PSRR (1 + j f / f_p) / (1 + j f / f_c)` with
+//! `f_p = min(GBW, f_c PSRR)`. At `V(vp) - V(vn) = psrr_span`
 //! the error is zero, so the operating point at the nominal supply is the
 //! one without a PSRR. Both rails count alike; the sign is the model's (a
 //! rising span adds a positive offset at `inp`).
@@ -175,6 +204,27 @@ pub struct OpampParams {
     pub psrr_span: f64,
 }
 
+/// The second pole of a rejection term with low-frequency ratio `ratio`
+/// (V/V) and corner `corner` (Hz) on an amplifier of gain-bandwidth `gbw`:
+/// `min(GBW, f_c R)`, or `f_c R` when the corner is at or above the
+/// gain-bandwidth; `None` when that is not above the corner (`R <= 1`), and
+/// the term then keeps its corner alone (module docs).
+pub fn rejection_pole(gbw: f64, ratio: f64, corner: f64) -> Option<f64> {
+    let floor = corner * ratio;
+    let pole = if gbw > corner { gbw.min(floor) } else { floor };
+    (pole > corner * (1.0 + 1e-9) && pole.is_finite()).then_some(pole)
+}
+
+/// `R (1 + j f / f_p) / (1 + j f / f_c)`: a rejection ratio with its corner and second pole.
+fn rejection_at(ratio: f64, corner: Option<f64>, pole: Option<f64>, frequency: f64) -> Complex {
+    let Some(fc) = corner else { return Complex::real(ratio) };
+    let rise = Complex::new(1.0, frequency / fc);
+    match pole {
+        Some(fp) => Complex::real(ratio) * Complex::new(1.0, frequency / fp) / rise,
+        None => Complex::real(ratio) / rise,
+    }
+}
+
 impl OpampParams {
     /// A model with the given DC gain (V/V) and gain-bandwidth product (Hz);
     /// every other parameter zero or absent.
@@ -210,10 +260,20 @@ impl OpampParams {
     /// The power-supply rejection ratio at `frequency` (V/V), `None` when infinite.
     pub fn psrr_at(&self, frequency: f64) -> Option<Complex> {
         let r = self.psrr?;
-        Some(match self.psrr_corner {
-            Some(fc) => Complex::real(r) / Complex::new(1.0, frequency / fc),
-            None => Complex::real(r),
-        })
+        Some(rejection_at(r, self.psrr_corner, self.psrr_pole(), frequency))
+    }
+
+    /// The frequency above which the supply-rejection error stops rising, Hz
+    /// (module docs, "Where the rejection stops falling"); `None` without a
+    /// `psrr_corner`.
+    pub fn psrr_pole(&self) -> Option<f64> {
+        rejection_pole(self.gbw, self.psrr?, self.psrr_corner?)
+    }
+
+    /// The frequency above which the common-mode error stops rising, Hz
+    /// (module docs); `None` without a `cmrr_corner`.
+    pub fn cmrr_pole(&self) -> Option<f64> {
+        rejection_pole(self.gbw, self.cmrr?, self.cmrr_corner?)
     }
 
     /// Whether the supply pins carry current (a quiescent current is declared).
@@ -229,10 +289,7 @@ impl OpampParams {
     /// The common-mode rejection ratio at `frequency` (V/V), `None` when infinite.
     pub fn cmrr_at(&self, frequency: f64) -> Option<Complex> {
         let c = self.cmrr?;
-        Some(match self.cmrr_corner {
-            Some(fc) => Complex::real(c) / Complex::new(1.0, frequency / fc),
-            None => Complex::real(c),
-        })
+        Some(rejection_at(c, self.cmrr_corner, self.cmrr_pole(), frequency))
     }
 
     /// The model's open-loop gain `A(j 2 pi f)`.
@@ -573,6 +630,35 @@ impl Drop for Expansion<'_> {
     }
 }
 
+/// The part of a rejection network from `node` to ground, behind its 1 ohm:
+/// an inductor of `1 / (2 pi f_c)` henry, so the network is `1 + j f / f_c`;
+/// with a second pole `f_p`, `R2 = f_p / f_c - 1` ohm in parallel with
+/// `R2 / (2 pi f_p)` henry, so it is `(1 + j f / f_c) / (1 + j f / f_p)`.
+fn rejection_network(
+    x: &mut Expansion,
+    node: NodeId,
+    corner: f64,
+    pole: Option<f64>,
+    inductor: &str,
+    resistor: &str,
+) -> Result<(), SimError> {
+    let g = NodeId::GROUND;
+    let henries = match pole {
+        Some(fp) => {
+            let r2 = fp / corner - 1.0;
+            let n = x.part(resistor);
+            let id = x.c.resistor(&n, node, g, r2);
+            x.keep(id)?;
+            r2 / (2.0 * PI * fp)
+        }
+        None => 1.0 / (2.0 * PI * corner),
+    };
+    let n = x.part(inductor);
+    let id = x.c.inductor(&n, node, g, henries);
+    x.keep(id)?;
+    Ok(())
+}
+
 impl Circuit {
     /// Add an op-amp macro model (see the module docs for the expansion).
     /// Returns the index into [`Circuit::macros`].
@@ -641,6 +727,9 @@ impl Circuit {
             if p.cmrr_corner.is_some() {
                 parts.extend(["rcm", "lcm", "cmg"]);
                 nodes.extend(["cm", "cml"]);
+                if p.cmrr_pole().is_some() {
+                    parts.push("rcp");
+                }
             }
         }
         if p.output_resistance > 0.0 {
@@ -655,6 +744,9 @@ impl Circuit {
             if p.psrr_corner.is_some() {
                 parts.extend(["rps", "lps", "psg"]);
                 nodes.extend(["ps", "psl"]);
+                if p.psrr_pole().is_some() {
+                    parts.push("rpp");
+                }
             }
         }
         let rails = supplies.filter(|_| p.draws_supply_current());
@@ -721,9 +813,7 @@ impl Circuit {
                     let n = x.part("rcm");
                     let id = x.c.resistor(&n, cm, cml, 1.0);
                     x.keep(id)?;
-                    let n = x.part("lcm");
-                    let id = x.c.inductor(&n, cml, g, 1.0 / (2.0 * PI * fc));
-                    x.keep(id)?;
+                    rejection_network(&mut x, cml, fc, p.cmrr_pole(), "lcm", "rcp")?;
                     let n = x.part("cmg");
                     let id = x.c.vccs(&n, g, p1, cm, g, 1.0);
                     x.keep(id)?;
@@ -748,9 +838,7 @@ impl Circuit {
                     let n = x.part("rps");
                     let id = x.c.resistor(&n, ps, psl, 1.0);
                     x.keep(id)?;
-                    let n = x.part("lps");
-                    let id = x.c.inductor(&n, psl, g, 1.0 / (2.0 * PI * fc));
-                    x.keep(id)?;
+                    rejection_network(&mut x, psl, fc, p.psrr_pole(), "lps", "rpp")?;
                     let n = x.part("psg");
                     let id = x.c.vccs(&n, g, p1, ps, g, 1.0);
                     x.keep(id)?;

@@ -2913,7 +2913,7 @@ remains an ordinary part property.
 
 | Kind | Roles | Typed parameters (all optional) |
 | --- | --- | --- |
-| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`), `quiescent_current` (A), `psrr` (dB), `psrr_corner` (Hz), `input_offset_drift` (V/degC, from 27 degC; [Temperature](#temperature)) |
+| `opamp` | `inp`, `inn`, `out`, `vp`, `vn` | `gbw` (Hz), `open_loop_gain` (dB), `second_pole` (Hz), `cmrr` (dB), `cmrr_corner` (Hz), `input_capacitance_common`, `input_capacitance_differential` (F), `input_resistance_common`, `input_resistance_differential` (ohm), `input_bias_current`, `input_offset_current` (A), `input_offset_voltage` (V), `voltage_noise` (V/rtHz), `current_noise` (A/rtHz), `voltage_noise_corner`, `current_noise_corner` (Hz, the 1/f corners), `slew_rate` (V/s), `output_resistance` (ohm), `output_swing_from_rail`, `output_swing_from_positive_rail`, `output_swing_from_negative_rail` (V), `output_current_limit` (A; needs `output_resistance`), `quiescent_current` (A), `psrr` (dB), `psrr_corner` (Hz), `input_offset_drift` (V/degC), `input_bias_current_tempco`, `gbw_tempco`, `slew_rate_tempco` (ppm/degC; all from 27 degC, [Temperature](#temperature)); `datasheet FIGURE { ... }` entries ([Data-sheet figures](#data-sheet-figures)) |
 | `diffamp` | `inp`, `inn`, `ref`, `fb`, `out`, `vp`, `vn` | as `opamp` |
 | `source` | `out`, `ref` | `output = voltage` (default) or `current`; `dc`, `ac` (V or A, following `output`), `ac_phase` (deg), `output_resistance` (ohm), `output_capacitance` (F), `waveform = sine { ... };`, `pulse`, `pwl` or `step` ([Transient analysis](#transient-analysis)) |
 | `regulator` | `in`, `out`, `gnd`; `en` optional | `output_voltage` (V, required; negative for a negative rail), `dropout` (V), `output_resistance` (ohm), `output_impedance_corner` (Hz), `psrr` (dB), `psrr_corner` (Hz), `output_current_limit` (A), `soft_start` (s), `enable_threshold` (V), `quiescent_current` (A), `efficiency` (%), `voltage_noise` (V/rtHz), `voltage_noise_corner` (Hz) ([Rail models](#rail-models-regulator-and-reference)) |
@@ -2927,8 +2927,17 @@ and `ref` to the output reference is gain 1, and a divider from `out` to `ref`
 with its tap on `fb` sets `1 + RF/RG`. The input parameters apply to the
 `inp`/`inn` pair only. `cmrr` adds the input-referred error `V_cm / CMRR` with
 `V_cm` the mean of `inp` and `inn` against ground; `cmrr_corner` makes the CMRR
-fall 20 dB per decade above that frequency (and needs `cmrr`). `second_pole`
-adds a second open-loop pole.
+fall 20 dB per decade above that frequency (and needs `cmrr`), down to a floor
+it reaches at `f_p = min(gbw, cmrr_corner x CMRR)` (in V/V; `cmrr_corner x
+CMRR` alone when the corner is at or above `gbw`): `CMRR(f) = CMRR (1 + j f /
+f_p) / (1 + j f / f_c)`. The error never exceeds the common-mode signal, and
+what reaches the output falls 20 dB per decade above the gain-bandwidth, as in
+an amplifier, where the conversion is bounded by the input pair's mismatch and
+the feedthrough falls beyond the bandwidth; a corner alone used to pass a
+constant common-mode feedthrough to any frequency. In transient runs with a
+`slew_rate` the common-mode error is part of the slew-limited input stage.
+`copper_sim::models` derives the pole and lists the vendor models it was
+compared with. `second_pole` adds a second open-loop pole.
 
 **Supply current and rejection.** Without these parameters an amplifier's
 `vp` and `vn` pins carry no current and its output does not see its rails
@@ -2971,7 +2980,8 @@ sim opamp {
   `ac` value) reaches the output through it. Both rails count alike and the
   sign is the model's (a rising span is a positive offset at `inp`).
   `psrr_corner` makes the PSRR fall 20 dB per decade above that frequency
-  and needs `psrr` (`SIM102`).
+  and needs `psrr` (`SIM102`); it stops falling at `min(gbw, psrr_corner x
+  PSRR)`, as the CMRR does.
 
 **Rails with impedance.** The bench decides how ideal the rails are. A
 supply simulated as its DC source is an AC short, so supply current changes
@@ -3069,8 +3079,9 @@ come up to its input from below). The parameters, each optional:
   corner, which needs a resistance. The board's output capacitors are then in
   the circuit with it.
 - `psrr` and `psrr_corner`: line rejection, `V(out)` moves by
-  `(V(in) - V_in0) / PSRR(f)` with `PSRR(f) = PSRR / (1 + j f / f_c)`, the
-  same form as an amplifier's. `V_in0` is the input the bench sets (the DC
+  `(V(in) - V_in0) / PSRR(f)` with `PSRR(f) = PSRR / (1 + j f / f_c)`, an
+  amplifier's form without its second pole (a rail model has no
+  gain-bandwidth). `V_in0` is the input the bench sets (the DC
   values of the supplies, DC sources and rail models on the `in` net, as for
   an amplifier's span; `SIM104` when nothing sets it), so at the nominal
   input the operating point is the one without a PSRR and a dc sweep of the
@@ -3434,7 +3445,7 @@ same models as an earlier one is not run again):
 
 | Kind | Circuit | Figures (declared value they are judged against) |
 | --- | --- | --- |
-| `opamp`, `diffamp` | supplies `+S/2` and `-S/2` (`--supply S`, default 10 V), 10 kohm load; a follower, and the open loop through 1 GH from the output to the inverting input (`fb` for a diffamp, whose `inn` and `ref` are grounded) with 1 GF from there to ground | supply current at the follower's operating point (`quiescent_current`, 5 %), output offset, open-loop gain at 1 mHz (`open_loop_gain`, 1 dB), gain-bandwidth as 100 times the frequency where the open-loop gain falls through 40 dB (`gbw`, 5 %), unity-gain frequency and phase margin, the follower's -3 dB bandwidth and peaking, the input-referred voltage noise at `max(1 kHz, 100 voltage_noise_corner)` (`voltage_noise sqrt(1 + corner / f)`, 5 %) and at 10 Hz, and the 20 to 80 % slew rate of a follower step of eight times `slew_rate / (2 pi gbw)`, at least 0.5 V and at most `0.4 S`, so that it slews over that span (`slew_rate`, 10 %) |
+| `opamp`, `diffamp` | supplies `+S/2` and `-S/2` (`--supply S`, default 10 V), 10 kohm load; a follower, and the open loop through 1 GH from the output to the inverting input (`fb` for a diffamp, whose `inn` and `ref` are grounded) with 1 GF from there to ground | supply current at the follower's operating point (`quiescent_current`, 5 %), output offset, open-loop gain at 1 mHz (`open_loop_gain`, 1 dB), gain-bandwidth as 100 times the frequency where the open-loop gain falls through 40 dB (`gbw`, 5 %), unity-gain frequency and phase margin, the follower's -3 dB bandwidth and peaking, the input-referred voltage noise at `max(1 kHz, 100 voltage_noise_corner)` (`voltage_noise sqrt(1 + corner / f)`, 5 %) and at 10 Hz, and the 20 to 80 % slew rate of a follower step of eight times `slew_rate / (2 pi gbw)`, at least 0.5 V and at most `0.4 S`, so that it slews over that span (`slew_rate`, 10 %); the common-mode rejection `A_OL / A_cm` (both inputs driven, the inverting one by a 0 V source with 1 V AC above the held node) and the supply rejection `A_OL / A_s` (1 V AC on one rail, the worse rail's) at 1 mHz or a hundredth of the lower corner, and at `cmrr_corner` and `psrr_corner` (the block's curve there, with its second pole, 1 dB) |
 | `regulator`, `reference` | input `|output_voltage| + dropout + 1 V` (`--supply` sets its magnitude), `en` tied to `in` | input current at no load (`quiescent_current`, 5 %), output at 1 mA (`output_voltage` less the drop across `output_resistance`, 1 %), output resistance at 1 Hz and the impedance at `output_impedance_corner` (`sqrt(2)` times it), line rejection at 1 Hz and at `psrr_corner` (3 dB less), dropout at 1 mA, efficiency at 100 mA or half the current limit (`efficiency` with the `quiescent_current` drawn on top, as the model draws it, 2 points), output noise at `max(1 kHz, 100 corner)`, and the time after which the output stays above 90 % of its set point once the input ramps up from 0 V over 5 % of the run (`0.9 soft_start` or `startup_time`, 10 %) |
 
 A figure the block does not declare is printed, not judged; for a rail model
@@ -3458,6 +3469,48 @@ leaves them out. The exit status is 1 when a unit fails, 2 when the part
 cannot be checked (`SIM109`: no such part, no sim block, only a `sim spice`
 block, a kind other than these four, a `--tie` of a pin the part does not
 have).
+
+#### Data-sheet figures
+
+```copper
+sim opamp A {
+    inp = INA_P; inn = INA_N; out = OUTA; vp = VP; vn = VM;
+    gbw = 14MHz; cmrr = 168dB; quiescent_current = 1.3mA; input_offset_voltage = 1.5uV; ...
+    datasheet cmrr { min = 146dB; }                   // 7.7 EC p. 10
+    datasheet input_offset_voltage { max = 5uV; }     // +/-: the magnitude is judged
+    datasheet quiescent_current { max = 1.7mA; }
+    datasheet follower_bandwidth { typ = 8MHz; }      // UGB at AV = 1
+}
+```
+
+The block's parameters are the data sheet's typicals, and the macro model is
+judged against them. `datasheet FIGURE { min = q; typ = q; max = q; }` (at
+least one) states what the data sheet guarantees, so that `--check-model`
+judges the part, not only the macro model against its own block: both models
+are judged against `min` and `max` (columns `data sheet` and `vendor
+verdict`); `typ` is shown, not judged. A `typ` for a figure the block declares
+as a parameter is refused (the block's value is the typical); a figure without
+a parameter (`unity_gain_frequency`, `phase_margin`, `follower_bandwidth`, a
+regulator's `startup_time`) may have one. The figures, each judged on the
+check's figure of the table above at the check's conditions (`--supply`, 10
+kohm, 1 mA): amplifiers `quiescent_current`, `input_offset_voltage` (the
+follower's output offset, by magnitude), `open_loop_gain`, `gbw`,
+`unity_gain_frequency`, `phase_margin` (deg), `follower_bandwidth`,
+`voltage_noise`, `slew_rate`, `cmrr`, `psrr` (DC); rail models
+`quiescent_current`, `output_voltage`, `output_resistance`, `psrr`, `dropout`,
+`efficiency`, `voltage_noise`, `startup_time`. A limit belongs to the
+conditions the data sheet states it at; enter it only where the check
+measures there.
+
+**Verdict.** A macro figure outside a limit fails the unit. A vendor figure
+outside one is marked `FAIL` in its column and listed in a note (`the vendor
+model is outside the data sheet: ...`), and the unit's verdict stays the
+macro model's: the vendor file is the manufacturer's and cannot be corrected
+in the part, and the default run uses the macro model. Diagnostics, all
+`SIM117`: an unknown figure (with a hint), a key other than `min`, `typ`,
+`max`, a value of the wrong dimension (`SIM018`), `min`, `typ`, `max` that
+decrease, a figure entered twice, an entry in a `sim spice` block or a kind
+`--check-model` has no bench set for.
 
 ### Benches
 
@@ -3832,17 +3885,20 @@ What follows the temperature `T`:
 | thermal noise | every resistor (a passive, a `load`, a source's output resistance, an ESR), a switch and the FET channels: `4 k T / R`; a noise analysis without a `temperature` of its own runs at `T`, and its header shows the temperatures of the steps |
 | a resistor, capacitor or inductor component with `tempco` (and `tempco2`) | `value (1 + tempco dT + tempco2 dT^2)`, `dT = T - 27 degC` |
 | `sim diode` | SPICE's diode at `T` from 27 degC with SPICE's defaults `EG = 1.11 eV`, `XTI = 3`: its saturation current, junction potential and capacitance, and `V_T = k T / q` in its junction |
-| `sim opamp`, `diffamp` | the voltage noise as a thermal noise, `voltage_noise sqrt(T / 300.15 K)`; the offset `input_offset_voltage + input_offset_drift dT` |
+| `sim opamp`, `diffamp` | the voltage noise as a thermal noise, `voltage_noise sqrt(T / 300.15 K)`; the offset `input_offset_voltage + input_offset_drift dT`; the bias and offset currents `I exp(input_bias_current_tempco dT)` (compounding: a bias current that doubles every 10 degC, as a FET or CMOS input's leakage does, is `ln 2 / 10 degC` = `69315ppm/degC`; for a bipolar input's few thousand ppm/degC it is the linear coefficient to `(tc dT)^2 / 2`); `gbw (1 + gbw_tempco dT)` and `slew_rate (1 + slew_rate_tempco dT)` (`SIM116` where `1 + tc dT` is not above zero) |
 | `sim regulator`, `reference` | the output noise as `voltage_noise sqrt(T / 300.15 K)`; a reference's `output_voltage (1 + temperature_coefficient dT)` |
 | `sim spice` | `TEMP` in its expressions; every diode, BJT, JFET and MOSFET with SPICE3's temperature equations from its model's `TNOM` (or `.OPTIONS TNOM`, else 27 degC), `V_T` at its temperature in every junction; `TC1`, `TC2` of `R`, `C` and `L` from `TNOM`; a model's `T_ABS` (its own temperature) and `T_REL_GLOBAL` (degrees above `T`) |
 
 Nothing else depends on the temperature: an amplifier's current noise (the
-shot noise of a bias current), bias currents, gain, bandwidth and slew rate,
-a regulator's set point, sources and supplies stay as declared. A model
-parameter that is not data-sheet shaped is not invented: drift exists only
-as `input_offset_drift` (V/degC) and a reference's `temperature_coefficient`
-(ppm/degC), both from 27 degC, the temperature the built-in models'
-figures are taken at.
+shot noise of a bias current), its open-loop gain and quiescent current,
+and, without their coefficients, its bias current, gain-bandwidth and slew
+rate; a regulator's set point, sources and supplies stay as declared. A
+model parameter that is not data-sheet shaped is not invented: drift exists
+only as `input_offset_drift` (V/degC), the three amplifier coefficients and a
+reference's `temperature_coefficient` (ppm/degC), all from 27 degC, the
+temperature the built-in models' figures are taken at. A data sheet that
+states only a maximum over temperature (most bias-current rows) gives no
+typical coefficient.
 
 **Passives.** A resistor, capacitor or inductor component takes its
 temperature coefficients like its tolerance, as attributes, in `ppm/degC`
@@ -3855,6 +3911,22 @@ component C_REF: CAPACITOR { value = 10nF; tempco = -30ppm/degC; tempco2 = 0.2pp
 
 They change nothing at 27 degC; a tempco on a component that simulates
 with its part's sim blocks, or in another unit, is `SIM111`.
+
+A two-terminal part may declare them once for every component of it:
+
+```copper
+part RES_0603_TC50 {
+    category = "passive.resistor";
+    tempco = 50ppm/degC;
+    pin 1 { ... } pin 2 { ... }
+}
+component R_B: RES_0603_TC50 { value = 100kohm; }                         // 50 ppm/degC
+component R_C: RES_0603_TC50 { value = 100kohm; tempco = 25ppm/degC; }    // its own
+```
+
+Each coefficient a component does not declare is its part's. A part tempco on
+a part with other than two pins, or with `sim` blocks, or in another unit is
+`SIM111`; the part JSON carries it in `metadata`.
 
 **Parasitics from the part.** A capacitor part's `esr` and `esl` (the EMI
 facts of [EMI roles and switching metadata](#emi-roles-and-switching-metadata)),
@@ -4636,11 +4708,13 @@ components that form a loop of voltage sources.
 | `SIM108` | when a bench runs: a vendor file registered by hand (`sha256` with `download`) that is not in the cache, naming its download note and `copper models add` |
 | `SIM109` | `copper sim --check-model`: no such part (or several), no sim block, a unit with only a `sim spice` block, a kind without a bench set, a `--tie` of a pin the part does not have |
 | `SIM110` | `param TEMP`: not a temperature in degC, a value (nominal or stepped, or derived at a step when run) not above absolute zero, or beside a noise analysis's own `temperature` |
-| `SIM111` | component `tempco`, `tempco2`: not in `ppm/degC` (`ppm/degC2`), or on a component that simulates with its part's sim blocks |
+| `SIM111` | component or part `tempco`, `tempco2`: not in `ppm/degC` (`ppm/degC2`), on a component that simulates with its part's sim blocks, or on a part with other than two pins or with sim blocks |
 | `SIM112` | `analysis tran steady`: not a time or frequency, not positive, with `uic`, `ic` or `noise`; when a bench runs, a source that does not repeat with the period, an ideal delay or transmission line, no steady state found |
 | `SIM113` | spectra: `spectrum(...)` in a let, a measure or inside another expression, `spectrum`, `spur`, `sfdr`, `sinad`, `snr` outside `analysis tran` or with arguments that are not a waveform and frequencies, an unknown `window` |
 | `SIM114` | transient noise: `noise` not true or false, `noise` without `max_step`, a `seed` that is not a whole number from 0 or without `noise` |
 | `SIM115` | stepped ranges: no `by` or `points`, equal ends, a spacing that is not positive, more than 1000 values, `points` outside 2 to 1000 |
+| `SIM116` | an amplifier's `gbw_tempco` or `slew_rate_tempco` that leaves its parameter at or below zero at the bench temperature (when the bench runs) |
+| `SIM117` | `datasheet FIGURE { ... }`: an unknown figure, a key other than `min`, `typ`, `max`, none of them, values that decrease, a figure twice, a `typ` for a figure the block declares, an entry in a `sim spice` block or a kind without data-sheet figures |
 
 ## KiCad schematic export
 

@@ -1029,3 +1029,65 @@ fn fixtures_and_initial_conditions_parse() {
     let failure = error_of(copper_lang::parse("bench B for RC { ic V(A, B) = 1V; }", "b.copper"));
     assert!(failure.contains("SIM075"), "{failure}");
 }
+
+#[test]
+fn datasheet_figures_of_a_part_block() {
+    let roles = "inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;";
+    let design = opamp_part(
+        "datasheet",
+        &format!(
+            "sim opamp {{ {roles} gbw = 14MHz; slew_rate = 20V/us; cmrr = 168dB;
+                datasheet slew_rate {{ min = 15V/us; }}
+                datasheet unity_gain_frequency {{ typ = 8MHz; }}
+                datasheet cmrr {{ min = 146dB; }}
+                datasheet input_offset_voltage {{ typ = 1.5uV; max = 5uV; }}
+                gbw_tempco = -500ppm/degC; input_bias_current_tempco = 69315ppm/degC; slew_rate_tempco = 0ppm/degC; }}"
+        ),
+    )
+    .unwrap();
+    let part = design.electrical.library.values().find(|part| part.name.ends_with("Amp")).unwrap();
+    let figures: Vec<&str> = part.sim[0].datasheet.iter().map(|figure| figure.figure.as_str()).collect();
+    assert_eq!(figures, ["slew_rate", "unity_gain_frequency", "cmrr", "input_offset_voltage"]);
+    let offset = &part.sim[0].datasheet[3];
+    assert_eq!(
+        (offset.typ.as_ref().map(ToString::to_string), offset.max.as_ref().map(ToString::to_string)),
+        (Some("1.5 uV".to_owned()), Some("5 uV".to_owned()))
+    );
+    assert_eq!(part.sim[0].spec.parameters["gbw_tempco"].value.to_string(), "-500 ppm/degC");
+    // The entries are no parameters of the model, and the JSON lists them.
+    assert!(!part.sim[0].spec.parameters.contains_key("datasheet"));
+    let json = design_json(&design).to_string();
+    assert!(json.contains("\"datasheet\"") && json.contains("\"unity_gain_frequency\""), "{json}");
+    for (bad, says) in [
+        ("datasheet slew { min = 1V/us; }", "SIM117: sim opamp has no data-sheet figure 'slew'"),
+        ("datasheet slew_rate { min = 1MHz; }", "SIM018: datasheet slew_rate min must be a SlewRate"),
+        ("datasheet slew_rate { typ = 20V/us; }", "the block's slew_rate is the data sheet's typical"),
+        ("datasheet slew_rate { min = 30V/us; max = 25V/us; }", "min, typ and max must not decrease"),
+        ("datasheet slew_rate { }", "needs a min, a typ or a max"),
+        ("datasheet slew_rate { mean = 1V/us; }", "takes min, typ and max, not 'mean'"),
+        ("datasheet gbw { min = 1MHz; } datasheet gbw { max = 20MHz; }", "two datasheet entries for 'gbw'"),
+    ] {
+        let failure = error_of(opamp_part(
+            "datasheet-bad",
+            &format!("sim opamp {{ {roles} gbw = 1MHz; slew_rate = 1V/us; {bad} }}"),
+        ));
+        assert!(failure.contains(says), "{bad}: {failure}");
+    }
+    let hinted = error_of(opamp_part(
+        "datasheet-hint",
+        &format!("sim opamp {{ {roles} gbw = 1MHz; datasheet slew_rat {{ min = 1V/us; }} }}"),
+    ));
+    assert!(hinted.contains("did you mean 'slew_rate'"), "{hinted}");
+    // A typical is allowed for a figure the block leaves out, and a regulator's start-up time is a figure.
+    assert!(
+        opamp_part(
+            "datasheet-typ",
+            &format!("sim opamp {{ {roles} gbw = 1MHz; datasheet slew_rate {{ typ = 1V/us; }} }}")
+        )
+        .is_ok()
+    );
+    // Data-sheet figures belong to the built-in block, not to a sim spice block.
+    let spice = "sim spice { file = \"amp.lib\"; subckt = \"AMP\"; terminals = INP, INN, VP, VN, OUT; datasheet gbw { min = 1MHz; } }";
+    let failure = error_of(opamp_part("datasheet-spice", spice));
+    assert!(failure.contains("SIM117") && failure.contains("built-in block"), "{failure}");
+}

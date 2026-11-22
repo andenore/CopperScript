@@ -150,7 +150,7 @@ impl Treatment {
 }
 
 /// What a passive carries beyond its value: the component's temperature
-/// coefficients (`tempco`, `tempco2`) and, from its part's EMI facts, a
+/// coefficients (`tempco`, `tempco2`; its part's where it declares none) and, from its part's EMI facts, a
 /// capacitor's `esr`, `esl` (or `self_resonance`) and an inductor's `esr`
 /// (its DC resistance).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -170,8 +170,9 @@ pub struct PassiveExtras {
 impl PassiveExtras {
     /// The extras of `component` (a `kind`) on `part`: the parasitics a kind does not have are left out.
     pub fn of(kind: PassiveKind, component: &ComponentInstance, part: &PartDefinition) -> PassiveExtras {
+        // The component's own coefficients, else its part's (`tempco` on the part).
         let stored = |key: &str| {
-            component.properties.get(key).and_then(|text| {
+            component.properties.get(key).or_else(|| part.metadata.get(key)).and_then(|text| {
                 let (number, unit) = text.rsplit_once(' ')?;
                 expression::sim_quantity(number, unit)
             })

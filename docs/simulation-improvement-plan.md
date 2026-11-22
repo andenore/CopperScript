@@ -636,6 +636,115 @@ Scope:
 Acceptance: every CopperLib part with a block passes `--check-model` with
 both corners declared.
 
+Built on 22 November 2026.
+
+- Corners, established first. A corner's term was `(1 + j f / f_c) / R` with
+  no pole (`R` the rejection in V/V): the error current into the dominant
+  pole node rose with `f` while that node's impedance fell, so to the output
+  the common-mode gain `A(f) / CMRR(f)` was flat at `GBW / (f_c CMRR)` for
+  every `f` above `GBW`. In a follower `H = A (1 + e/2) / (1 + A (1 - e/2))`
+  with `e = 1 / CMRR(f)` tends to `k / (1 - k)`, `k = GBW / (2 f_c CMRR)`,
+  instead of falling. The OPA2189 block with the corner its own comment
+  derives (168 dB, 0.08 Hz, `k = 0.35`) reproduced the note: follower
+  33 MHz (closed form 32.9 MHz), phase margin 110 degrees, and a 64 V/us
+  follower step against 20 V/us, because the common-mode current bypassed
+  the slew-limited input stage. TI's models of the CopperLib amplifiers,
+  run open loop with both inputs and then each rail driven (measured, a
+  scratch harness): OPA2189 CMRR 130 dB falling from about 5 Hz to a 35 dB
+  floor above about 355 kHz; OPA2182 168 dB, a 30 dB floor from about 3 MHz;
+  OPA2277 140 dB, its output-referred common-mode gain flat at -37.5 dB from
+  30 Hz to 1 MHz (its GBW) and falling above; OPA547 and OPA548 have no
+  corner at all (143 and 161 dB to 10 kHz). Physically (inferred, a
+  differential pair with tail impedance `R_t || C_t`) the conversion is
+  `D (1 + s R_t C_t) / (1 + 2 g_m R_t + s R_t C_t)`: the zero is the corner,
+  a pole at about `2 g_m / C_t` ends the rise, and the floor is the pair's
+  mismatch `D`, at most the common-mode signal; the feedthrough to the
+  output falls beyond the bandwidth. Neither `D` nor `C_t` is a data-sheet
+  figure.
+- The second pole (`copper_sim::models`, `rejection_pole`): `f_p = min(GBW,
+  f_c R)`, `f_c R` with a corner at or above `GBW`, none for `R <= 1`, for
+  the CMRR and the PSRR alike; the network is `R2 = f_p / f_c - 1` ohm in
+  parallel with `R2 / (2 pi f_p)` henry behind the 1 ohm, exactly
+  `(1 + j f / f_c) / (1 + j f / f_p)`. `f_c R` is where the declared curve
+  reaches 0 dB (the error never exceeds the signal); `GBW` makes the
+  output-referred term flat to the bandwidth and falling 20 dB per decade
+  above it, the shape of TI's OPA2277 model and an upper bound on the other
+  two (whose floors start lower: a data-sheet figure the block cannot
+  carry). Below `f_p / 10` the declared curve moves by at most 0.5 %. In
+  transient runs with a `slew_rate` the common-mode error of a corner is
+  one of the limited input stage's pairs (`newton.rs`). The OPA2189 block
+  with its corner now gives follower 25.1 MHz (closed form 25.1 MHz),
+  phase margin 98 degrees and 19.7 V/us. Tests (`tests/rejection_poles.rs`,
+  closed forms): the pole rule's cases; open-loop common-mode and supply
+  responses equal to `A(f) / R(f)` from 1 Hz to 100 GHz (1e-9; 1e-7 where
+  the network spans 1 ohm to 2e8 ohm); the output-referred term flat
+  between corner and `GBW` and falling tenfold per decade above; the
+  OPA2189-like step slewing within 3 % of 20 V/us. The regulator's
+  `psrr_corner` is unchanged (no gain-bandwidth to place a pole at).
+- Temperature (as F8 did, from 27 degC): `input_bias_current_tempco`
+  (ppm/degC, compounding, `I_b exp(tc dT)`, so a FET or CMOS input that
+  doubles every 10 degC is `69315ppm/degC`; the offset current follows),
+  `gbw_tempco` and `slew_rate_tempco` (linear, `SIM116` where `1 + tc dT` is
+  not above zero at the bench's `TEMP`). A two-terminal part's `tempco` and
+  `tempco2` are the default of its components (each coefficient a component
+  leaves out; `SIM111` on a part with other than two pins or with `sim`
+  blocks; part JSON `metadata`). Tests (`copper-simulate/tests/temperature_coefficients.rs`):
+  dividers of a part-tempco resistor and one overriding it at -40, 27 and
+  125 degC to 1e-12; a bias current doubling in 10 degC through 1 Mohm to
+  1e-6; the open-loop gain at 100 kHz with `GBW(T)` to 1e-9; a follower
+  step's slew within 2 % at -40 and 125 degC; the diagnostics.
+- Data-sheet figures. The block's parameters already are the data sheet's
+  typicals and the macro model is judged against them, so a second typical
+  would duplicate them; what was missing is the data sheet's guarantees and
+  any judgement of the vendor model. `datasheet FIGURE { min; typ; max; }`
+  in a built-in block (language reference, "Data-sheet figures"; `SIM117`;
+  completion and hover from `sim_reference`): both models are judged
+  against `min` and `max`, `typ` is shown and refused where the block
+  declares the figure. A macro figure outside a limit fails the unit; a
+  vendor figure outside one is marked and noted, the verdict staying the
+  macro model's (the vendor file cannot be corrected in the part, and runs
+  use the macro model by default). Figures: what `--check-model` measures,
+  now including the common-mode and supply rejection at DC and at each
+  corner (open loop, `A_OL / A_cm` and the worse rail's `A_OL / A_s`), so the
+  corners themselves are checked.
+- CopperLib (uncommitted, branch `sim-vendor-regulators`): OPA2189 data-sheet
+  limits from SBOS830I's text (its `cmrr_corner` was tried and taken out
+  again in review, see Open); OPA548 limits from SBOS070D; AP2112 limits
+  from DS39724. Every part with a block passes `--check-model` (table in
+  the I7 report): amplifiers at their data-sheet supplies, the rail models
+  at their defaults.
+- Decision 6: six examples identical (every measure). The analyzer moves
+  where its parts and benches declare a corner (AD8130 630 kHz, ADA4807
+  25 kHz, ADA4817 300 kHz, `SenseBufferTrade` 2 kHz, `SenseCommonMode`
+  300 kHz; their poles at the GBW, 70 to 410 MHz): loop phase margins up by
+  at most 0.58 degree and crossovers down by at most 0.56 %; the gain margins
+  of `LoopStability.pump` (50.7 dB) and `.feedback_buffer` (39.2 dB) become
+  `never`: their -180 degree crossings were at 1.9 and 2.2 GHz, 40 to 50 dB
+  below unity, made by the old constant feedthrough's phase, and the loop
+  phase now approaches -180 degrees without crossing it (-178.3 at 10 GHz);
+  `LoopPeaking.receiver` +1.3 %; errors near 1e-5 to 1e-11 (calibration,
+  contact, stray-capacitance, soil, matching) by up to 10 % of themselves;
+  `Startup` settling by up to 1.3 % (0.5 % of it from the slew-limited
+  common mode), `Distortion` harmonics below the integration floor. No
+  measure's status changed. Which set is closer to the parts is not
+  measured: their vendor models are I3's.
+
+Open: a `cmrr_corner = 0.08Hz` on the OPA2189 still extrapolates to 3 dB at
+the gain-bandwidth and makes its follower 25 MHz where TI's model gives
+14.9 MHz and the data sheet 8 MHz at `AV = 1`, so the block keeps its flat
+CMRR (follower 14 MHz) and the acceptance "both corners declared" is not met
+for this part; TI's model flattens at 35 dB from 355 kHz,
+which a block cannot say (a declared floor would be the next addition, once a
+data-sheet figure shows one). The data-sheet limits are judged at the
+check's conditions only (no supply or load per limit). The CopperLib parts'
+data sheets give over-temperature maxima, not typical coefficients, so no
+part declares the new tempcos. OPA2182, OPA2277, OPA547, TLV757, TPS7A20
+and R-78 limits were not entered (their data sheets were not at hand);
+the TLV757 and R-78 blocks have no `psrr_corner` (no single-pole figure, no
+figure). TI's OPA2189 model is below the data sheet's 146 dB CMRR and PSRR
+minimums (130.3 and 133.4 dB): noted, not compared with ngspice. The
+CopperLib parts that use `datasheet` need this compiler.
+
 ### I8. Views
 
 Scope:

@@ -429,10 +429,13 @@ Open:
 - LTC6268 has no block (its data sheet could not be fetched). Adjustable and
   isolated regulators, fully differential amplifiers, current-sense
   amplifiers and comparators have no model kind.
-- A single `cmrr_corner` far below the gain bandwidth lets the common-mode
-  term feed forward near the gain bandwidth (OPA2189 showed a 33 MHz follower
-  until the corner was removed); a regulator's `psrr_corner` passes a fast
-  input edge to the output.
+- Settled in I7: an amplifier's `cmrr_corner` and `psrr_corner` terms stop
+  rising at `min(GBW, corner x rejection)`, and the common-mode error is part
+  of the slew-limited input stage (the OPA2189 step slews at 19.7 V/us with
+  its corner). What remains: a corner that extrapolates to a few dB at the
+  gain-bandwidth still widens the follower (OPA2189: 25 MHz against 14 MHz
+  without the corner); a regulator's `psrr_corner` has no second pole and
+  passes a fast input edge to the output.
 - Vendor transients in the debug build: 100 s for the OPA2277 follower step.
   The OPA2182 step runs since I2 (a stalled Newton iteration on a
   mid-supply source's current), and the OPA2189 step at `reltol` 1e-5 since
@@ -527,9 +530,13 @@ Built on 21 November 2026. Diagnostics SIM110 and SIM111.
 Open: no result compared with PSpice at a temperature (ngspice: I1, which
 also confirmed the BJT substrate junction scaling); no real
 vendor model run over temperature; `TM1`, `TM2`, `BEX`, `BEXV` and
-MOSFET `TCV` are rejected away from `TNOM`; macro-model bias current, gain,
-bandwidth and slew rate do not change with temperature; no part-level default
-tempco.
+MOSFET `TCV` are rejected away from `TNOM`. Settled in I7: an amplifier's
+bias current, gain-bandwidth and slew rate change with temperature where its
+block declares `input_bias_current_tempco`, `gbw_tempco` and
+`slew_rate_tempco`, and a two-terminal part declares a default `tempco`; the
+open-loop gain and quiescent current still do not, and no CopperLib part
+declares the new coefficients (its data sheets give over-temperature maxima,
+not typical coefficients).
 
 ### F9. Spectrum and long-run analyses
 

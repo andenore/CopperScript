@@ -295,6 +295,22 @@ fn part_sim_value(model: &crate::simulation::PartSimModel) -> Value {
             .collect();
         entries.push(("supply_sets", Value::Array(sets)));
     }
+    if !model.datasheet.is_empty() {
+        let figures = model
+            .datasheet
+            .iter()
+            .map(|figure| {
+                let mut fields = vec![("figure", text(&figure.figure))];
+                for (key, value) in [("min", &figure.min), ("typ", &figure.typ), ("max", &figure.max)] {
+                    if let Some(value) = value {
+                        fields.push((key, quantity_value(value)));
+                    }
+                }
+                object(fields)
+            })
+            .collect();
+        entries.push(("datasheet", Value::Array(figures)));
+    }
     object(entries)
 }
 

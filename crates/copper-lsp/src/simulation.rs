@@ -40,6 +40,10 @@ pub enum Context {
     Montecarlo,
     /// Inside the limits block of a measure.
     Limits,
+    /// After `datasheet` in a part's built-in `sim` block: the figure names.
+    DatasheetFigure(SimKind),
+    /// Inside `datasheet FIGURE { ... }` of a block of this kind.
+    Datasheet(SimKind, &'static str),
 }
 
 fn after<'a>(words: &'a [String], word: &str) -> Option<&'a str> {
@@ -51,6 +55,24 @@ fn after<'a>(words: &'a [String], word: &str) -> Option<&'a str> {
 pub fn context(stack: &[Vec<String>], header: &[String]) -> Context {
     let Some(top) = stack.last() else { return Context::None };
     let first = top.first().map(String::as_str).unwrap_or("");
+    // `datasheet FIGURE { ... }` inside a part's `sim KIND` block.
+    if first == "datasheet"
+        && let Some(parent) = stack.len().checked_sub(2).and_then(|k| stack.get(k))
+        && parent.first().map(String::as_str) == Some("sim")
+        && let Some(kind) = parent.get(1).and_then(|kind| SimKind::parse(kind))
+    {
+        let figure = top.get(1).map(String::as_str).unwrap_or("");
+        return copper_lang::simulation::datasheet_figures(kind)
+            .iter()
+            .find(|(name, _, _)| *name == figure)
+            .map_or(Context::None, |(name, _, _)| Context::Datasheet(kind, name));
+    }
+    if first == "sim"
+        && header == ["datasheet"]
+        && let Some(kind) = top.get(1).and_then(|kind| SimKind::parse(kind))
+    {
+        return Context::DatasheetFigure(kind);
+    }
     match first {
         "analysis" => {
             let kind = after(top, ":").or_else(|| top.get(1).map(String::as_str)).unwrap_or("");
@@ -104,11 +126,29 @@ pub fn completions(context: Context) -> Vec<(String, u32, String)> {
             .map(|kind| (kind.name.to_owned(), ENUM, format!("{}: {}", kind.meaning, kind.example)))
             .collect(),
         Context::Analysis(kind) => items(kind.options, PROPERTY),
-        Context::Block(kind) => kind
-            .keys()
-            .into_iter()
-            .map(|key| (key.to_owned(), PROPERTY, detail(key_unit(kind, key), key_meaning(kind, key).unwrap_or(""))))
+        Context::Block(kind) => {
+            let mut out: Vec<(String, u32, String)> = kind
+                .keys()
+                .into_iter()
+                .map(|key| {
+                    (key.to_owned(), PROPERTY, detail(key_unit(kind, key), key_meaning(kind, key).unwrap_or("")))
+                })
+                .collect();
+            if !copper_lang::simulation::datasheet_figures(kind).is_empty() {
+                let d = sim_reference::DATASHEET;
+                out.push((d.name.to_owned(), KEYWORD, detail(d.unit, d.meaning)));
+            }
+            out
+        }
+        Context::DatasheetFigure(kind) => copper_lang::simulation::datasheet_figures(kind)
+            .iter()
+            .map(|(figure, dimension, _)| {
+                let unit = sim_reference::dimension_unit(*dimension);
+                let meaning = sim_reference::datasheet_meaning(kind, figure).unwrap_or("");
+                ((*figure).to_owned(), PROPERTY, detail(unit, meaning))
+            })
             .collect(),
+        Context::Datasheet(..) => items(&sim_reference::DATASHEET_KEYS, PROPERTY),
         Context::KindName { built_in } => {
             let kinds: Vec<SimKind> = if built_in { BUILT_IN_KINDS.to_vec() } else { SimKind::ALL.to_vec() };
             kinds.into_iter().map(|kind| (kind.name().to_owned(), ENUM, kind_meaning(kind).to_owned())).collect()
@@ -157,11 +197,21 @@ pub fn hover(word: &str, call: bool, context: Context, header: &[String]) -> Opt
             .iter()
             .find(|option| option.name == word && header.is_empty())
             .map(|option| format!("analysis {} {} ({})\n\n{}", kind.name, option.name, option.unit, option.meaning)),
-        Context::Block(kind) if header.is_empty() => key_meaning(kind, word).map(|meaning| {
+        Context::Block(kind) if header.is_empty() && word != "datasheet" => key_meaning(kind, word).map(|meaning| {
             let unit = key_unit(kind, word);
             let unit = if unit.is_empty() { String::new() } else { format!(" ({unit})") };
             format!("sim {} {word}{unit}\n\n{meaning}", kind.name())
         }),
+        Context::Block(_) if word == "datasheet" => {
+            let d = sim_reference::DATASHEET;
+            Some(format!("datasheet {}\n\n{}\n\n{}", d.unit, d.meaning, d.example))
+        }
+        Context::DatasheetFigure(kind) => sim_reference::datasheet_meaning(kind, word)
+            .map(|meaning| format!("datasheet {word}\n\n--check-model judges it on {meaning}")),
+        Context::Datasheet(kind, figure) => sim_reference::DATASHEET_KEYS
+            .iter()
+            .find(|k| k.name == word)
+            .map(|k| format!("sim {} datasheet {figure} {}\n\n{}", kind.name(), k.name, k.meaning)),
         Context::KindName { .. } => {
             SimKind::parse(word).map(|kind| format!("sim {}\n\n{}", kind.name(), kind_meaning(kind)))
         }
@@ -282,7 +332,30 @@ mod tests {
     #[test]
     fn completion_and_hover_come_from_the_checkers_table() {
         let names: Vec<String> = completions(Context::Block(SimKind::Opamp)).into_iter().map(|c| c.0).collect();
-        assert_eq!(names, SimKind::Opamp.keys());
+        let mut keys = SimKind::Opamp.keys();
+        keys.push("datasheet");
+        assert_eq!(names, keys);
+        // A source has no data-sheet figures, so no datasheet entry is offered.
+        let names: Vec<String> = completions(Context::Block(SimKind::Source)).into_iter().map(|c| c.0).collect();
+        assert_eq!(names, SimKind::Source.keys());
+        // `datasheet` then a figure, and inside `datasheet FIGURE { ... }` min, typ, max.
+        let part = vec![words("part OPA"), words("sim opamp")];
+        assert_eq!(context(&part, &words("datasheet")), Context::DatasheetFigure(SimKind::Opamp));
+        let figures: Vec<String> =
+            completions(Context::DatasheetFigure(SimKind::Opamp)).into_iter().map(|c| c.0).collect();
+        let expected: Vec<&str> =
+            copper_lang::simulation::datasheet_figures(SimKind::Opamp).iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(figures, expected);
+        let mut inside = part.clone();
+        inside.push(words("datasheet slew_rate"));
+        assert_eq!(context(&inside, &[]), Context::Datasheet(SimKind::Opamp, "slew_rate"));
+        let keys: Vec<String> =
+            completions(Context::Datasheet(SimKind::Opamp, "slew_rate")).into_iter().map(|c| c.0).collect();
+        assert_eq!(keys, ["min", "typ", "max"]);
+        let text = hover("min", false, Context::Datasheet(SimKind::Opamp, "slew_rate"), &[]).unwrap();
+        assert!(text.starts_with("sim opamp datasheet slew_rate min"), "{text}");
+        let text = hover("datasheet", false, Context::Block(SimKind::Opamp), &[]).unwrap();
+        assert!(text.starts_with("datasheet FIGURE"), "{text}");
         let gbw = completions(Context::Block(SimKind::Opamp)).into_iter().find(|c| c.0 == "gbw").unwrap();
         assert_eq!(gbw.2, "Hz: gain-bandwidth product");
         let tran = sim_reference::analysis("tran").unwrap();

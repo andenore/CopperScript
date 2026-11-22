@@ -216,7 +216,8 @@ impl Model {
                 if let Some(sr) = p.slew_rate {
                     let limit = sr / (2.0 * PI * p.gbw);
                     let mut pairs = Vec::new();
-                    for part in ["gain", "gain_fb"] {
+                    // The common-mode error of a corner is input-referred: the input stage carries it.
+                    for part in ["gain", "gain_fb", "cmg"] {
                         if let Some(k) = find(part)
                             && let Some((cp, cn)) = c.elements()[k].kind().control_nodes()
                         {

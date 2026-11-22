@@ -743,10 +743,14 @@ fn opamp_finite_cmrr_in_a_follower() {
             let v = res.voltage("out").unwrap()[k];
             assert!(rel(v, exact) < 1e-9, "{corner:?} {f}: {v:?} vs {exact:?}");
         }
-        // The corner: CMRR falls 3 dB at f_c and 20 dB per decade above it.
+        // The corner: CMRR falls 3 dB at f_c and 20 dB per decade above it, up to
+        // its second pole at min(GBW, f_c CMRR) = 100 MHz (to (f_c / f_p)^2 at the corner).
         if corner.is_some() {
-            assert!((p.cmrr_at(fc).unwrap().abs() / cmrr0 - 0.5f64.sqrt()).abs() < 1e-12);
-            assert!((p.cmrr_at(100.0 * fc).unwrap().abs() * 100.0 / cmrr0 - 1.0).abs() < 1e-3);
+            assert_eq!(p.cmrr_pole(), Some(gbw));
+            let at_corner = (0.5 * (1.0 + (fc / gbw).powi(2))).sqrt();
+            assert!((p.cmrr_at(fc).unwrap().abs() / cmrr0 - at_corner).abs() < 1e-12);
+            let above = (1.0 + 0.3f64.powi(2)).sqrt();
+            assert!((p.cmrr_at(100.0 * fc).unwrap().abs() * 100.0 / cmrr0 - above).abs() < 1e-3);
         }
     }
     // Validation: cmrr must be positive, a corner needs a cmrr.

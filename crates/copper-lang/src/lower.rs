@@ -1615,6 +1615,8 @@ pub fn compile_part(
             "common_mode_impedance_frequency",
             PART_RATED_POWER,
             PART_RATED_VOLTAGE,
+            crate::tolerance::TEMPCO,
+            crate::tolerance::TEMPCO2,
         ],
         location,
     )?;
@@ -1767,6 +1769,28 @@ pub fn compile_part(
             ));
         }
         part.metadata.insert(key.to_owned(), rating.to_string());
+    }
+    // The temperature coefficients every component of a resistor, capacitor or inductor part takes
+    // unless it declares its own (SIM111).
+    let tempcos = crate::tolerance::part_tempcos(&properties, location)?;
+    if !tempcos.is_empty() {
+        let refuse = |reason: String| {
+            error("SIM111", format!("part {} declares a tempco, but {reason}", repr(qualified_name)), location)
+        };
+        if part.pins.len() != 2 {
+            return Err(refuse(format!(
+                "it has {} pins; a part tempco belongs to a two-terminal resistor, capacitor or inductor",
+                part.pins.len()
+            )));
+        }
+        if !part.sim.is_empty() {
+            return Err(refuse(
+                "it simulates with its sim blocks; tempco applies to resistors, capacitors and inductors".to_owned(),
+            ));
+        }
+        for (key, value) in tempcos {
+            part.metadata.insert(key, value);
+        }
     }
     Ok(part)
 }

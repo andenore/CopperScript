@@ -175,6 +175,9 @@ impl SimKind {
                 ("psrr", Dimension::Gain),
                 ("psrr_corner", Dimension::Frequency),
                 ("input_offset_drift", Dimension::VoltageDrift),
+                ("input_bias_current_tempco", Dimension::TemperatureCoefficient),
+                ("gbw_tempco", Dimension::TemperatureCoefficient),
+                ("slew_rate_tempco", Dimension::TemperatureCoefficient),
             ],
             SimKind::Source => &[
                 ("ac_phase", Dimension::Angle),
@@ -509,6 +512,131 @@ pub struct PartSimModel {
     /// Parameter sets per supply span (`supply 3.3V { ... }`), in source order;
     /// the set nearest the span the part runs at overrides the block's parameters.
     pub supply_sets: Vec<SupplySet>,
+    /// Data-sheet figures (`datasheet FIGURE { ... }`), in source order: what
+    /// `copper sim --check-model` judges both of the unit's models against.
+    pub datasheet: Vec<DatasheetFigure>,
+}
+
+/// `datasheet FIGURE { min = q; typ = q; max = q; }` in a built-in part block:
+/// a figure of the part's data sheet, at least one of the three. `min` and
+/// `max` are limits `copper sim --check-model` judges the macro and the vendor
+/// model against; `typ` is shown beside them, and is refused for a figure the
+/// block declares as a parameter (the block's value is the typical).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DatasheetFigure {
+    /// The figure (`slew_rate`, `unity_gain_frequency`, ...: [`datasheet_figures`]).
+    pub figure: String,
+    pub min: Option<Quantity>,
+    pub typ: Option<Quantity>,
+    pub max: Option<Quantity>,
+    pub location: Location,
+}
+
+/// The figures a `datasheet` entry of a block of `kind` may name: the figure,
+/// its dimension, and whether the block has a parameter of the same name
+/// (whose value is then the typical). These are the figures `copper sim
+/// --check-model` measures; empty for kinds it has no bench set for.
+pub fn datasheet_figures(kind: SimKind) -> &'static [(&'static str, Dimension, bool)] {
+    match kind {
+        SimKind::Opamp | SimKind::Diffamp => &[
+            ("quiescent_current", Dimension::Current, true),
+            ("input_offset_voltage", Dimension::Voltage, true),
+            ("open_loop_gain", Dimension::Gain, true),
+            ("gbw", Dimension::Frequency, true),
+            ("unity_gain_frequency", Dimension::Frequency, false),
+            ("phase_margin", Dimension::Angle, false),
+            ("follower_bandwidth", Dimension::Frequency, false),
+            ("voltage_noise", Dimension::VoltageNoiseDensity, true),
+            ("slew_rate", Dimension::SlewRate, true),
+            ("cmrr", Dimension::Gain, true),
+            ("psrr", Dimension::Gain, true),
+        ],
+        SimKind::Regulator | SimKind::Reference => &[
+            ("quiescent_current", Dimension::Current, true),
+            ("output_voltage", Dimension::Voltage, true),
+            ("output_resistance", Dimension::Resistance, true),
+            ("psrr", Dimension::Gain, true),
+            ("dropout", Dimension::Voltage, true),
+            ("efficiency", Dimension::Ratio, true),
+            ("voltage_noise", Dimension::VoltageNoiseDensity, true),
+            ("startup_time", Dimension::Time, false),
+        ],
+        _ => &[],
+    }
+}
+
+/// The `datasheet` entries of a part block (`SIM117`).
+fn datasheet(
+    kind: SimKind,
+    entries: &[SimEntry],
+    parameters: &IndexMap<String, SimQuantity>,
+) -> Result<Vec<DatasheetFigure>> {
+    let mut out: Vec<DatasheetFigure> = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.key == "datasheet") {
+        let SimValue::Block { kind: figure, entries: items } = &entry.value else { continue };
+        let fail = |message: String| error("SIM117", message, &entry.location);
+        let figures = datasheet_figures(kind);
+        if figures.is_empty() {
+            return Err(fail(format!(
+                "sim {} has no data-sheet figures; datasheet entries belong to opamp, diffamp, regulator and reference blocks (the kinds copper sim --check-model measures)",
+                kind.name()
+            )));
+        }
+        let Some((_, dimension, parameter)) = figures.iter().find(|(name, _, _)| *name == figure) else {
+            let names: Vec<&str> = figures.iter().map(|(name, _, _)| *name).collect();
+            return Err(suggesting(
+                fail(format!(
+                    "sim {} has no data-sheet figure {}; the figures are {}",
+                    kind.name(),
+                    repr(figure),
+                    names.join(", ")
+                )),
+                figure,
+                &names,
+            ));
+        };
+        // A reference's start-up figure is its own `startup_time` parameter.
+        let parameter = *parameter || (kind == SimKind::Reference && figure == "startup_time");
+        if out.iter().any(|done| done.figure == *figure) {
+            return Err(fail(format!("two datasheet entries for {}", repr(figure))));
+        }
+        let mut values: [Option<Quantity>; 3] = [None, None, None];
+        for item in items {
+            let Some(slot) = ["min", "typ", "max"].iter().position(|key| *key == item.key) else {
+                return Err(suggesting(
+                    error(
+                        "SIM117",
+                        format!("datasheet {figure} takes min, typ and max, not {}", repr(&item.key)),
+                        &item.location,
+                    ),
+                    &item.key,
+                    &["min", "typ", "max"],
+                ));
+            };
+            let label = format!("datasheet {figure} {}", item.key);
+            let scalar = single(item, &label)?;
+            let value = match plain_number(scalar, *dimension) {
+                Some(value) => value,
+                None => typed_value(scalar, *dimension, &label, &ValueScope::Part, &item.location)?,
+            };
+            values[slot] = Some(value.value);
+        }
+        let [min, typ, max] = values;
+        if min.is_none() && typ.is_none() && max.is_none() {
+            return Err(fail(format!("datasheet {figure} needs a min, a typ or a max")));
+        }
+        if typ.is_some() && parameter && parameters.contains_key(figure.as_str()) {
+            return Err(fail(format!(
+                "datasheet {figure} typ: the block's {figure} is the data sheet's typical; a datasheet entry adds its min and max"
+            )));
+        }
+        let ordered = [&min, &typ, &max].into_iter().flatten().collect::<Vec<&Quantity>>();
+        if ordered.windows(2).any(|pair| pair[0].base_value() > pair[1].base_value()) {
+            return Err(fail(format!("datasheet {figure}: min, typ and max must not decrease")));
+        }
+        out.push(DatasheetFigure { figure: figure.clone(), min, typ, max, location: entry.location.clone() });
+    }
+    Ok(out)
 }
 
 /// `supply SPAN { PARAMETER = q; ... }` in an `opamp` or `diffamp` part block:
@@ -1222,6 +1350,9 @@ fn check_range(kind: SimKind, key: &str, value: &Quantity, location: &Location) 
             | "threshold"
             | "input_offset_drift"
             | "temperature_coefficient"
+            | "input_bias_current_tempco"
+            | "gbw_tempco"
+            | "slew_rate_tempco"
     ) || (matches!(kind, SimKind::Regulator | SimKind::Reference) && key == "output_voltage");
     let zero = value.base_value().is_zero();
     if (positive && (zero || value.base_value().is_negative())) || (!signed && value.base_value().is_negative()) {
@@ -1475,13 +1606,22 @@ pub(crate) fn part_models(
             ));
         }
         let sets = supply_sets(kind, &block.entries)?;
-        let plain: Vec<SimEntry> = block.entries.iter().filter(|entry| entry.key != "supply").cloned().collect();
+        let plain: Vec<SimEntry> =
+            block.entries.iter().filter(|entry| entry.key != "supply" && entry.key != "datasheet").cloned().collect();
         let block_lowered = if spice {
+            if let Some(entry) = block.entries.iter().find(|entry| entry.key == "datasheet") {
+                return Err(error(
+                    "SIM117",
+                    "data-sheet figures belong to the unit's built-in block (sim opamp, sim regulator, ...), which --check-model reads for both models",
+                    &entry.location,
+                ));
+            }
             lower_spice_block(&plain, &block.location)?
         } else {
             lower_block(kind, &plain, &ValueScope::Part, true, &block.location)?
         };
         check_supply_rejection(kind, &block_lowered.spec.parameters, &sets, &block.location)?;
+        let figures = datasheet(kind, &block.entries, &block_lowered.spec.parameters)?;
         lowered.push(LoweredPartBlock {
             model: PartSimModel {
                 location: block.location.clone(),
@@ -1490,6 +1630,7 @@ pub(crate) fn part_models(
                 unmodelled: Vec::new(),
                 spec: block_lowered.spec,
                 supply_sets: sets,
+                datasheet: figures,
             },
             roles: block_lowered.roles,
             unmodelled: block_lowered.unmodelled,

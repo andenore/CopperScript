@@ -1903,7 +1903,7 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let analysis = analyse_path(&path, Sources::new([]), IndexMap::new()).unwrap();
         let keys = labels(&analysis.completion(&position(text, "inp = 1; gb")).unwrap());
-        assert_eq!(keys, ["gbw"]);
+        assert_eq!(keys, ["gbw", "gbw_tempco"]);
         let hover = analysis.hover(&position(text, "sim opamp { g")).unwrap();
         let value = hover.get("contents").and_then(|c| c.get("value")).and_then(Value::as_str).unwrap().to_owned();
         assert_eq!(value, "sim opamp gbw (Hz)\n\ngain-bandwidth product");

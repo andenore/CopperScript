@@ -87,7 +87,8 @@ impl Parser {
     }
 
     /// `sim KIND [UNIT] { entries }` (the keyword is read). A part block may
-    /// hold parameter sets per supply: `supply 3.3V { slew_rate = ...; }`.
+    /// hold parameter sets per supply, `supply 3.3V { slew_rate = ...; }`, and
+    /// data-sheet figures, `datasheet slew_rate { min = 15V/us; }`.
     pub(super) fn sim_block(&mut self, location: Location) -> Result<SimDecl> {
         let kind = self.name("sim model kind")?;
         let unit = if self.at_symbol("{") { None } else { Some(self.name("sim unit name")?) };
@@ -121,6 +122,14 @@ impl Parser {
                     }
                 };
                 let value = SimValue::Block { kind: span, entries: self.sim_entries()? };
+                self.accept_symbol(";");
+                entries.push(SimEntry { location: token.location, key, value });
+                continue;
+            }
+            // `datasheet FIGURE { min = ...; typ = ...; max = ...; }`: a data-sheet figure of the part.
+            if sets && key == "datasheet" && !self.at_symbol("=") {
+                let figure = self.name("data-sheet figure name (datasheet slew_rate { min = 15V/us; })")?;
+                let value = SimValue::Block { kind: figure, entries: self.sim_entries()? };
                 self.accept_symbol(";");
                 entries.push(SimEntry { location: token.location, key, value });
                 continue;

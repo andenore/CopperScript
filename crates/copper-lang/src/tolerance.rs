@@ -140,6 +140,18 @@ pub(crate) fn component_properties(attributes: &Attributes, location: &Location)
         properties.push((MATCH.to_owned(), group));
         properties.push((MATCH_TOLERANCE.to_owned(), m.to_string()));
     }
+    properties.extend(tempcos(attributes, "component", location)?);
+    Ok(properties)
+}
+
+/// A part's `tempco` and `tempco2` (`SIM111`): the default of every component
+/// of the part that declares none, as stored properties.
+pub(crate) fn part_tempcos(attributes: &Attributes, location: &Location) -> Result<Vec<(String, String)>> {
+    tempcos(attributes, "part", location)
+}
+
+fn tempcos(attributes: &Attributes, owner: &str, location: &Location) -> Result<Vec<(String, String)>> {
+    let mut properties = Vec::new();
     for (key, dimension, example) in [
         (TEMPCO, Dimension::TemperatureCoefficient, "tempco = 100ppm/degC;"),
         (TEMPCO2, Dimension::QuadraticTemperatureCoefficient, "tempco2 = -0.04ppm/degC2;"),
@@ -152,7 +164,7 @@ pub(crate) fn component_properties(attributes: &Attributes, location: &Location)
         let Some(quantity) = quantity else {
             return Err(error(
                 "SIM111",
-                format!("component {key} must be a {}, such as {example}", dimension.name()),
+                format!("{owner} {key} must be a {}, such as {example}", dimension.name()),
                 location,
             ));
         };

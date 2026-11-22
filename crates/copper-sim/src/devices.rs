@@ -58,7 +58,10 @@
 //! - **Slew rate.** The input stage current into the dominant pole capacitor
 //!   `C1 = 1 / (2 pi GBW)` is limited to `I_max = SR C1` by the smooth limiter
 //!   `f(u) = u / (1 + (u / I_max)^4)^(1/4)`, so the output slews at `SR`.
-//!   For a differential amplifier the limit applies to the sum of both input pairs.
+//!   For a differential amplifier the limit applies to the sum of both input
+//!   pairs, and with a `cmrr_corner` it includes the common-mode error
+//!   `V(U#cm)` (the input stage carries it, so a common-mode step cannot
+//!   move the output faster than the slew rate).
 //! - **Output current.** The output resistor `U.out` carries at most
 //!   `output_current_limit` (the same limiter on `V / R_out`); this needs
 //!   `output_resistance > 0`.
