@@ -19,6 +19,14 @@
 //! junctions, the other branch currents) is solved at `t = 0` from those
 //! states and the sources; node conditions are not used with `uic`.
 //!
+//! A circuit can carry initial conditions of its own
+//! ([`Circuit::set_initial_voltage`], [`Circuit::set_initial_capacitor_voltage`],
+//! [`Circuit::set_initial_inductor_current`]: a vendor model's `.IC` and
+//! element `IC=`). Every run adds them to its options' conditions, which win
+//! for the same node or element; a periodic steady state does not start from
+//! an initial point and ignores them. The operating point of the other
+//! analyses does not hold them.
+//!
 //! # Integration and step control
 //!
 //! Trapezoidal integration, with backward Euler for the first two steps
@@ -76,7 +84,7 @@
 //! work. Every value is finite.
 
 use crate::analysis::Probes;
-use crate::circuit::{Circuit, ElementKind, NodeId, SourceValue};
+use crate::circuit::{Circuit, ElementId, ElementKind, NodeId, SourceValue};
 use crate::diagnose::diagnose;
 use crate::error::{AnalysisPoint, SimError};
 use crate::lu::LuError;
@@ -102,6 +110,83 @@ impl InitialConditions {
     /// True when the run starts from the plain operating point.
     pub fn is_empty(&self) -> bool {
         !self.uic && self.nodes.is_empty() && self.capacitors.is_empty() && self.inductors.is_empty()
+    }
+
+    /// These conditions with `carried` (the circuit's own) added where these
+    /// name no value for the same node or element.
+    fn over(&self, carried: &InitialConditions) -> InitialConditions {
+        let mut out = self.clone();
+        let add = |list: &mut Vec<(String, f64)>, from: &[(String, f64)]| {
+            for (name, value) in from {
+                if !list.iter().any(|(n, _)| n == name) {
+                    list.push((name.clone(), *value));
+                }
+            }
+        };
+        add(&mut out.nodes, &carried.nodes);
+        add(&mut out.capacitors, &carried.capacitors);
+        add(&mut out.inductors, &carried.inductors);
+        out
+    }
+}
+
+impl Circuit {
+    /// The initial conditions the circuit carries ([`Circuit::set_initial_voltage`] and the others).
+    pub fn initial_conditions(&self) -> &InitialConditions {
+        &self.initial
+    }
+
+    /// Hold `node` at `volts` against ground at the start of every transient
+    /// run, as [`InitialConditions::nodes`] (a model's `.IC V(node)`); a run's
+    /// own condition for the node wins.
+    pub fn set_initial_voltage(&mut self, node: NodeId, volts: f64) -> Result<(), SimError> {
+        let name = self.node_name(node).to_string();
+        if node.is_ground() {
+            return Err(SimError::BadReference {
+                element: name,
+                detail: "an initial node voltage names the ground node".to_string(),
+            });
+        }
+        if !volts.is_finite() {
+            return Err(SimError::InvalidValue { element: name, detail: format!("initial voltage {volts} V") });
+        }
+        self.initial.nodes.retain(|(n, _)| *n != name);
+        self.initial.nodes.push((name, volts));
+        Ok(())
+    }
+
+    /// Start capacitor `id` at `volts` (`V(a) - V(b)`) in every transient
+    /// run, as [`InitialConditions::capacitors`] (element `IC=`); a run's own
+    /// condition for it wins.
+    pub fn set_initial_capacitor_voltage(&mut self, id: ElementId, volts: f64) -> Result<(), SimError> {
+        let element = self.element(id);
+        let name = element.name().to_string();
+        if !matches!(element.kind(), ElementKind::Capacitor { .. }) {
+            return Err(SimError::BadReference { element: name, detail: "not a capacitor".to_string() });
+        }
+        if !volts.is_finite() {
+            return Err(SimError::InvalidValue { element: name, detail: format!("initial voltage {volts} V") });
+        }
+        self.initial.capacitors.retain(|(n, _)| *n != name);
+        self.initial.capacitors.push((name, volts));
+        Ok(())
+    }
+
+    /// Start inductor `id` at `amperes` (`a` to `b`) in every transient run,
+    /// as [`InitialConditions::inductors`] (element `IC=`); a run's own
+    /// condition for it wins.
+    pub fn set_initial_inductor_current(&mut self, id: ElementId, amperes: f64) -> Result<(), SimError> {
+        let element = self.element(id);
+        let name = element.name().to_string();
+        if !matches!(element.kind(), ElementKind::Inductor { .. }) {
+            return Err(SimError::BadReference { element: name, detail: "not an inductor".to_string() });
+        }
+        if !amperes.is_finite() {
+            return Err(SimError::InvalidValue { element: name, detail: format!("initial current {amperes} A") });
+        }
+        self.initial.inductors.retain(|(n, _)| *n != name);
+        self.initial.inductors.push((name, amperes));
+        Ok(())
     }
 }
 
@@ -1158,7 +1243,7 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
 
     let mut run = match options.steady {
         None => {
-            let (dc, dynamic) = initial_point(m, c, &mut solver, &options.initial)?;
+            let (dc, dynamic) = initial_point(m, c, &mut solver, &options.initial.over(&c.initial))?;
             let mut charge = vec![0.0; elements];
             for &d in &m.diodes {
                 if let ElementKind::Diode { params, .. } = c.elements()[d].kind() {

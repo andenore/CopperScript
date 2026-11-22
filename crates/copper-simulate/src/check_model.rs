@@ -798,6 +798,7 @@ fn check_amplifier(
         let ties: Vec<String> = options.ties.iter().map(|(pin, role)| format!("{pin} to {role}")).collect();
         notes.push(format!("vendor model pins tied: {}", ties.join(", ")));
     }
+    notes.extend(vendor_note(spice_block));
     UnitCheck {
         part: part.name.clone(),
         unit: unit.clone(),
@@ -1018,6 +1019,14 @@ fn rail_figures(
     (out, ModelState::Ran)
 }
 
+/// The `sim spice` block's `note`: what is established where the vendor
+/// model differs from the data sheet (that the model, not the reader, gives
+/// a figure).
+fn vendor_note(spice_block: Option<&PartSimModel>) -> Option<String> {
+    let note = spice_block?.spec.spice.as_ref()?.note.as_ref()?;
+    Some(format!("vendor model: {note}"))
+}
+
 fn check_rail(
     part: &PartDefinition,
     unit: &Option<String>,
@@ -1167,6 +1176,7 @@ fn check_rail(
         let ties: Vec<String> = options.ties.iter().map(|(pin, role)| format!("{pin} to {role}")).collect();
         notes.push(format!("vendor model pins tied: {}", ties.join(", ")));
     }
+    notes.extend(vendor_note(spice_block));
     UnitCheck {
         part: part.name.clone(),
         unit: unit.clone(),

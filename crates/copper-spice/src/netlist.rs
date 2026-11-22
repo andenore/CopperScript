@@ -60,6 +60,8 @@ pub enum Card {
         value: Value,
         /// `TC = TC1, TC2` on the element.
         tc: Vec<Value>,
+        /// `IC=`: the voltage `V(a) - V(b)` at the start of a transient run (PSpice dialect).
+        ic: Option<Value>,
     },
     Inductor {
         a: String,
@@ -68,6 +70,8 @@ pub enum Card {
         value: Value,
         /// `TC = TC1, TC2` on the element.
         tc: Vec<Value>,
+        /// `IC=`: the current from `a` to `b` at the start of a transient run (PSpice dialect).
+        ic: Option<Value>,
     },
     Coupling {
         inductors: Vec<String>,
@@ -240,6 +244,15 @@ pub struct Scope {
     pub subckts: BTreeMap<String, usize>,
 }
 
+/// What one entry of a `.IC` card sets at the start of a transient run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InitialTarget {
+    /// `V(node)`: the node's voltage against ground.
+    Node(String),
+    /// `I(inductor)`: the inductor's current.
+    Inductor(String),
+}
+
 /// A `.SUBCKT` definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Subckt {
@@ -250,7 +263,66 @@ pub struct Subckt {
     /// The scope the definition opens.
     pub scope: usize,
     pub elements: Vec<Element>,
+    /// `.IC` entries inside the definition, in order.
+    pub initial: Vec<(InitialTarget, Value, Loc)>,
     pub loc: Loc,
+}
+
+impl Card {
+    /// Every value of the card (expressions of parameters).
+    pub fn values(&self) -> Vec<&Value> {
+        let mut out: Vec<&Value> = Vec::new();
+        match self {
+            Card::Resistor { value, tc, .. } => {
+                out.push(value);
+                out.extend(tc);
+            }
+            Card::Capacitor { value, tc, ic, .. } | Card::Inductor { value, tc, ic, .. } => {
+                out.push(value);
+                out.extend(tc);
+                out.extend(ic);
+            }
+            Card::Coupling { k, .. } => out.push(k),
+            Card::Source { dc, ac, tran, .. } => {
+                out.extend(dc);
+                if let Some((m, p)) = ac {
+                    out.push(m);
+                    out.extend(p);
+                }
+                if let Some(TranSpec::Sin(v) | TranSpec::Pulse(v) | TranSpec::Pwl(v) | TranSpec::Exp(v)) = tran {
+                    out.extend(v);
+                }
+            }
+            Card::Linear { gain, .. } | Card::CurrentControlled { gain, .. } => out.push(gain),
+            Card::Poly { coefficients, .. } => out.extend(coefficients),
+            Card::Behavioral { value, .. } => out.push(value),
+            Card::Table { input, points, .. } => {
+                out.push(input);
+                for (x, y) in points {
+                    out.push(x);
+                    out.push(y);
+                }
+            }
+            Card::Laplace { input, transfer, .. } => {
+                out.push(input);
+                out.push(transfer);
+            }
+            Card::Diode { area, .. } | Card::Bjt { area, .. } | Card::Jfet { area, .. } => out.extend(area),
+            Card::Mosfet { params, .. } | Card::Instance { params, .. } => out.extend(params.iter().map(|(_, v)| v)),
+            Card::Line { z0, delay, .. } => {
+                out.push(z0);
+                match delay {
+                    LineDelay::Time(t) => out.push(t),
+                    LineDelay::Frequency(f, n) => {
+                        out.push(f);
+                        out.extend(n);
+                    }
+                }
+            }
+            Card::Switch { .. } | Card::Unsupported(_) => {}
+        }
+        out
+    }
 }
 
 /// A read netlist.
@@ -268,6 +340,24 @@ pub struct Netlist {
     /// `.OPTIONS TNOM=`: the temperature, degrees Celsius, that models without
     /// their own `TNOM` were measured at (27 degC without it).
     pub tnom: Option<f64>,
+}
+
+impl Netlist {
+    /// Whether any value of the file reads `name` (a parameter it may leave
+    /// to the calling netlist: a global parameter).
+    pub fn reads_name(&self, name: &str) -> bool {
+        let reads = |v: &Value| v.reads_name(name);
+        let mut elements = self.subckts.iter().flat_map(|s| s.elements.iter()).chain(&self.top);
+        self.scopes.iter().any(|scope| {
+            scope.params.iter().any(|(_, v, _)| reads(v))
+                || scope.funcs.values().any(|f| reads(&f.body))
+                || scope.models.values().any(|m| m.params.iter().any(|(_, v)| reads(v)))
+        }) || self
+            .subckts
+            .iter()
+            .any(|s| s.defaults.iter().any(|(_, v)| reads(v)) || s.initial.iter().any(|(_, v, _)| reads(v)))
+            || elements.any(|e| e.card.values().into_iter().any(reads))
+    }
 }
 
 fn err(loc: &Loc, kind: ErrorKind, message: impl Into<String>) -> SpiceError {
@@ -345,6 +435,9 @@ struct Reader {
     tnom: Option<f64>,
     /// The files and library sections read (a file may be read once per section).
     read: Vec<(PathBuf, Option<String>)>,
+    /// Subcircuits defined again under a name already defined in the same
+    /// scope, with the first definition: compared at their `.ENDS`.
+    duplicates: Vec<(usize, usize)>,
 }
 
 /// Read `path` and the files it includes (`.INCLUDE`, `.INC`, `.LIB file`).
@@ -361,6 +454,7 @@ pub fn read_file(path: &Path, dialect: Dialect, allow_includes: bool) -> Result<
         notes: Vec::new(),
         tnom: None,
         read: Vec::new(),
+        duplicates: Vec::new(),
     };
     reader.file(path, allow_includes, None, &Loc::new(&path.display().to_string(), 0))?;
     reader.finish()
@@ -378,6 +472,7 @@ pub fn read_str(text: &str, file: &str, dialect: Dialect) -> Result<Netlist, Spi
         notes: Vec::new(),
         tnom: None,
         read: Vec::new(),
+        duplicates: Vec::new(),
     };
     reader.text(text, file, None, None)?;
     reader.finish()
@@ -538,9 +633,10 @@ impl Reader {
                 }
                 let defaults = assignments(&rest[i.min(rest.len())..], d, loc)?;
                 let parent = self.scope();
-                if self.scopes[parent].subckts.contains_key(name) {
-                    return Err(err(loc, ErrorKind::Syntax, format!(".SUBCKT {name} is defined twice")));
-                }
+                // A second definition of the same name is read and compared at its
+                // .ENDS: TI's TLV75718P model defines two subcircuits twice, once in
+                // lower case as "legacy wrappers", with the same content.
+                let earlier = self.scopes[parent].subckts.get(name).copied();
                 let scope = self.scopes.len();
                 self.scopes.push(Scope { parent: Some(parent), ..Scope::default() });
                 let index = self.subckts.len();
@@ -550,9 +646,15 @@ impl Reader {
                     defaults,
                     scope,
                     elements: Vec::new(),
+                    initial: Vec::new(),
                     loc: loc.clone(),
                 });
-                self.scopes[parent].subckts.insert(name.to_string(), index);
+                match earlier {
+                    Some(first) => self.duplicates.push((index, first)),
+                    None => {
+                        self.scopes[parent].subckts.insert(name.to_string(), index);
+                    }
+                }
                 self.open.push(index);
             }
             ".ENDS" => {
@@ -566,6 +668,21 @@ impl Reader {
                         loc,
                         ErrorKind::Syntax,
                         format!(".ENDS {name} closes .SUBCKT {}", self.subckts[open].name),
+                    ));
+                }
+                if let Some(k) = self.duplicates.iter().position(|(again, _)| *again == open) {
+                    let (_, first) = self.duplicates.remove(k);
+                    let (a, b) = (&self.subckts[first], &self.subckts[open]);
+                    if !self.same_definition(first, open) {
+                        return Err(err(
+                            &b.loc,
+                            ErrorKind::Syntax,
+                            format!(".SUBCKT {} is defined twice, differently (first at line {})", b.name, a.loc.line),
+                        ));
+                    }
+                    self.notes.push(format!(
+                        "{}:{}: .SUBCKT {} defined again with the same content as at line {}; the first is used",
+                        b.loc.file, b.loc.line, b.name, a.loc.line
                     ));
                 }
             }
@@ -731,6 +848,16 @@ impl Reader {
                     ));
                 }
             }
+            ".IC" => {
+                let entries = initial_entries(rest, d, loc)?;
+                match self.open.last() {
+                    Some(&s) => self.subckts[s].initial.extend(entries.into_iter().map(|(t, v)| (t, v, loc.clone()))),
+                    None => self.notes.push(format!(
+                        "{}:{}: .IC outside a subcircuit ignored (it names nodes of the file's own circuit, which a model instance does not use)",
+                        loc.file, loc.line
+                    )),
+                }
+            }
             ".TEMP" => {
                 // The bench decides the temperature of a run.
                 self.notes.push(format!(
@@ -750,6 +877,29 @@ impl Reader {
             }
         }
         Ok(())
+    }
+
+    /// Whether subcircuits `a` and `b` are the same definition: ports,
+    /// defaults, elements, `.IC` entries and the parameters, functions,
+    /// models and nested subcircuits of their scopes (locations aside).
+    fn same_definition(&self, a: usize, b: usize) -> bool {
+        let (x, y) = (&self.subckts[a], &self.subckts[b]);
+        let elements = |s: &Subckt| s.elements.iter().map(|e| (e.name.clone(), e.card.clone())).collect::<Vec<_>>();
+        let initial = |s: &Subckt| s.initial.iter().map(|(t, v, _)| (t.clone(), v.clone())).collect::<Vec<_>>();
+        if x.ports != y.ports || x.defaults != y.defaults || elements(x) != elements(y) || initial(x) != initial(y) {
+            return false;
+        }
+        let (p, q) = (&self.scopes[x.scope], &self.scopes[y.scope]);
+        let params = |s: &Scope| s.params.iter().map(|(n, v, _)| (n.clone(), v.clone())).collect::<Vec<_>>();
+        let funcs =
+            |s: &Scope| s.funcs.iter().map(|(n, f)| (n.clone(), f.args.clone(), f.body.clone())).collect::<Vec<_>>();
+        let models =
+            |s: &Scope| s.models.iter().map(|(n, m)| (n.clone(), m.kind.clone(), m.params.clone())).collect::<Vec<_>>();
+        params(p) == params(q)
+            && funcs(p) == funcs(q)
+            && models(p) == models(q)
+            && p.subckts.len() == q.subckts.len()
+            && p.subckts.iter().all(|(n, &i)| q.subckts.get(n).is_some_and(|&j| self.same_definition(i, j)))
     }
 
     fn find_model(&self, name: &str) -> Option<&Model> {
@@ -880,6 +1030,59 @@ fn options(rest: &[Token], d: Dialect, loc: &Loc) -> Result<(Vec<String>, Option
     Ok((names, tnom))
 }
 
+/// The entries of a `.IC` card: `V(node) = value` or `I(inductor) = value`,
+/// the equals sign optional (PSpice writes `.IC V(node) value`).
+fn initial_entries(rest: &[Token], d: Dialect, loc: &Loc) -> Result<Vec<(InitialTarget, Value)>, SpiceError> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let kind = match rest.get(i).and_then(Token::word) {
+            Some("V") => 'V',
+            Some("I") => 'I',
+            _ => {
+                return Err(err(
+                    loc,
+                    ErrorKind::Syntax,
+                    format!(".IC: expected V(node) or I(inductor), found {}", rest[i].text()),
+                ));
+            }
+        };
+        let (Some(Token::LParen), Some(Token::Word(name))) = (rest.get(i + 1), rest.get(i + 2)) else {
+            return Err(err(loc, ErrorKind::Syntax, format!(".IC: {kind} needs (name)")));
+        };
+        match rest.get(i + 3) {
+            Some(Token::RParen) => {}
+            Some(Token::Comma) => {
+                return Err(err(
+                    loc,
+                    ErrorKind::Unsupported,
+                    format!(".IC V({name}, ...): a voltage between two nodes is not supported"),
+                ));
+            }
+            _ => return Err(err(loc, ErrorKind::Syntax, format!(".IC: {kind}({name} needs )"))),
+        }
+        i += 4;
+        if rest.get(i) == Some(&Token::Equals) {
+            i += 1;
+        }
+        let value = match rest.get(i) {
+            Some(t @ (Token::Word(_) | Token::Expr(_))) => value_of(t, d, loc)?,
+            _ => return Err(err(loc, ErrorKind::Syntax, format!(".IC {kind}({name}) needs a value"))),
+        };
+        i += 1;
+        if rest.get(i) == Some(&Token::Comma) {
+            i += 1;
+        }
+        let target =
+            if kind == 'V' { InitialTarget::Node(name.clone()) } else { InitialTarget::Inductor(name.clone()) };
+        out.push((target, value));
+    }
+    if out.is_empty() {
+        return Err(err(loc, ErrorKind::Syntax, ".IC needs at least one V(node) = value"));
+    }
+    Ok(out)
+}
+
 fn words(toks: &[Token]) -> Vec<String> {
     toks.iter().filter_map(|t| t.word().map(str::to_string)).collect()
 }
@@ -961,6 +1164,7 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
                 };
             let mut tc = Vec::new();
             let mut noiseless = false;
+            let mut ic = None;
             let rest = &toks[i.min(toks.len())..];
             let mut j = 0;
             while j < rest.len() {
@@ -988,12 +1192,25 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
                         continue;
                     }
                     Token::Word(w) if w == "IC" && letter != 'R' => {
-                        return Err(unsupported(
-                            loc,
-                            format!(
-                                "{name}: initial conditions (IC=) on elements are not supported; use a bench ic statement"
-                            ),
-                        ));
+                        // PSpice holds the element at IC= in the bias point of a transient
+                        // run; ngspice and LTspice use it only with UIC, which no bench of
+                        // a vendor model sets, so there it is refused rather than ignored.
+                        let given = match (rest.get(j + 1), rest.get(j + 2)) {
+                            (Some(Token::Equals), Some(t @ (Token::Word(_) | Token::Expr(_)))) => t,
+                            _ => return Err(err(loc, ErrorKind::Syntax, format!("{name}: IC needs = value"))),
+                        };
+                        if d != Dialect::Pspice {
+                            return Err(unsupported(
+                                loc,
+                                format!(
+                                    "{name}: IC= on an element is used only with UIC in the {} dialect; not supported (use a bench ic statement)",
+                                    d.name()
+                                ),
+                            ));
+                        }
+                        ic = Some(value_of(given, d, loc)?);
+                        j += 3;
+                        continue;
                     }
                     Token::Word(w) if rest.get(j + 1) == Some(&Token::Equals) => {
                         return Err(unsupported(loc, format!("{name}: the {w}= option is not supported")));
@@ -1006,8 +1223,8 @@ fn parse_card(name: &str, toks: &[Token], line: &Line, d: Dialect) -> Result<Car
             }
             Ok(match letter {
                 'R' => Card::Resistor { a, b, model, value, tc, noiseless },
-                'C' => Card::Capacitor { a, b, model, value, tc },
-                _ => Card::Inductor { a, b, model, value, tc },
+                'C' => Card::Capacitor { a, b, model, value, tc, ic },
+                _ => Card::Inductor { a, b, model, value, tc, ic },
             })
         }
         'K' => {

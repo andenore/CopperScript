@@ -3067,7 +3067,8 @@ external tool is involved. Its properties:
 | `terminals = PIN, ...;` | part pins on the subcircuit's nodes in its `.SUBCKT` order; their count must be the subcircuit's (`SIM078` when run); a pin may be on several nodes |
 | `dialect = ...;` | `spice3` (the default, ngspice), `pspice` or `ltspice`: `$` comments (SPICE3 only), `^` (a power, an exclusive or in LTspice) and a diode's default `IBV` (PSpice 1e-10 A, otherwise 1e-3 A) differ |
 | `unmodelled = PIN, ...;` | pins on no node, as for built-in blocks |
-| `params = values { NAME = value; ... };` | values for the subcircuit's `PARAMS:` defaults (names ignore case): plain numbers, or quantities in a simulation unit taken at their SI value (`10kohm` is 10000); decibels, text and repeated names are `SIM105`, a name the subcircuit does not declare is `SIM078` when run. The model list shows them (`spice AMP (..., GAIN = 7)`) |
+| `params = values { NAME = value; ... };` | values for the subcircuit's `PARAMS:` defaults (names ignore case): plain numbers, or quantities in a simulation unit taken at their SI value (`10kohm` is 10000); decibels, text and repeated names are `SIM105`. A name the subcircuit does not declare is a global parameter, as a `.PARAM` of the calling netlist is in PSpice (TI's TPS7A20 model reads its output voltage `V_out` without defining it): it is set before the file's own top-level `.PARAM`s, which it overrides, and must be a name the file reads (`SIM078` when run otherwise). The model list shows them (`spice AMP (..., GAIN = 7)`) |
+| `note = "...";` | what is established where the vendor model differs from the data sheet (that the model, not the reader, gives a figure, and how that was shown); `copper sim --check-model` prints it as `note: vendor model: ...` |
 
 Exactly one of `file`, `source` (with `sha256`) and `download` (with
 `sha256`) is given. A multi-unit
@@ -3089,12 +3090,13 @@ end-of-file mark; a file that is not UTF-8 is read byte for byte as Latin-1
 
 | Construct | Notes |
 | --- | --- |
-| `.SUBCKT NAME nodes [PARAMS:] p=v ...` / `.ENDS` | nested definitions are local; instance values override the defaults |
+| `.SUBCKT NAME nodes [PARAMS:] p=v ...` / `.ENDS` | nested definitions are local; instance values override the defaults; a name defined again in the same scope with the same content (TI's TLV75718P model repeats two subcircuits in lower case) is noted in the model list and the first definition used, with other content it is an error naming both lines |
 | `.PARAM`, `.FUNC f(a, b) {expr}`, `.MODEL` (with `AKO:`), `.INCLUDE`, `.INC`, `.LIB file`, `.LIB name` / `.ENDL` | parameters are evaluated per instance (global, the caller's, the defaults, then local ones in order); functions are inlined |
 | `.LIB file SECTION` | only the cards between `.LIB SECTION` and its `.ENDL` in that (local) file; a missing section is an error naming it |
 | `.OPTIONS` | solver and output controls (`RELTOL`, `ITL4`, `NOPAGE`, ...; `GMIN=1e-12`) are read and ignored, and the model list names them (`.OPTIONS RELTOL ITL4 ignored`); `TNOM=` sets the temperature the file's models without their own `TNOM` were measured at (noted in the model list); any other option (`SCALE`, `DEFL`, another `GMIN`, ...) is rejected, as it could change the circuit |
 | `.TEMP` | ignored with a note in the model list: the bench sets the temperature ([Temperature](#temperature)) |
-| `R C L K` | values may be expressions of parameters; `TC1`, `TC2` (`TC = a, b` on the element, or on a `RES`, `CAP` or `IND` model) scale the value by `1 + TC1 dT + TC2 dT^2` from the model's `TNOM`; `T_ABS` (the element's own temperature; a resistor's noise temperature too: `T_ABS = -273.15` is noiseless) and `T_REL_GLOBAL` (degrees above the bench's); LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
+| `.IC V(node) = value`, `.IC I(inductor) = value` (the `=` optional, as PSpice writes it) | inside a subcircuit, per instance: every transient run starts with the node held at the value in its operating point (a bench `ic` for the same node wins); the operating point of the other analyses does not hold it (PSpice holds it in every bias point). Outside a subcircuit it names the file's own circuit and is ignored with a note |
+| `R C L K` | values may be expressions of parameters; `TC1`, `TC2` (`TC = a, b` on the element, or on a `RES`, `CAP` or `IND` model) scale the value by `1 + TC1 dT + TC2 dT^2` from the model's `TNOM`; `T_ABS` (the element's own temperature; a resistor's noise temperature too: `T_ABS = -273.15` is noiseless) and `T_REL_GLOBAL` (degrees above the bench's); LTspice `noiseless`; a negative resistance; a zero capacitor is dropped. `C` and `L` take `IC=` in the `pspice` dialect: the transient run starts with the capacitor voltage (inductor current) held at it, as PSpice's bias point does; ngspice and LTspice use it only with `UIC`, so the other dialects reject it |
 | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC`, the waveform's value at 0 |
 | `E G F H` | linear, `POLY(n)` (SPICE2 coefficient order), `VALUE = {expr}`, `TABLE {x} = (x, y) ...`, `LAPLACE {x} = {H(s)}` (and LTspice `E a b c d LAPLACE = H(s)`): a rational `H(s)` times at most one delay `exp(-s T)` (`exp(a - s T)` is the gain `exp(a)` and the delay `T`; terms added together must share their delay), realised exactly as a state-space network and an ideal delay |
 | `B V= / I=` | an expression of node voltages, of currents of elements of the same subcircuit and of `TIME` |
@@ -3120,7 +3122,13 @@ automatic differentiation), junction and FET voltage limiting, and for a
 circuit with such elements pseudo-transient continuation besides gmin and
 source stepping; in a transient run, a node that jumps (a behavioural source
 switching) is accepted as a discontinuity once the step reaches a
-billionth of the run, and integration restarts there.
+billionth of the run, and integration restarts there. A junction converges
+on its current as well as its voltage (SPICE's current test: a diode with
+`N = 0.001`, as in TI's TL431 model, has `n V_T` = 26 uV, below the voltage
+tolerance at 100 V), and a Newton iteration that reaches its limit with only
+branch currents unconverged, each within `1e-6` of the currents it is the
+sum of at its node, is accepted rather than failed (TI's OPA2182 model: its
+mid-supply source's current alternates by 6 pA between iterations).
 
 **MOSFET gate charge.** With `TOX`, a MOSFET carries the intrinsic gate
 charge of SPICE's Meyer model as charges on three branches (gate to source,
@@ -3159,14 +3167,14 @@ them: encrypted models; lossy transmission lines (`T` with `R L G C LEN`,
 and `O`), `U A Z` elements; `FREQ` and `CHEBYSHEV` sources; `LAPLACE` of a
 non-rational `H(s)` other than one delay (`sqrt(s)`, a sum of differently
 delayed terms, `exp(+s T)`); `SDT`, `IDT`, `ABSDELAY` and random functions;
-`SFFM`, `AM` and damped `SIN`; element `IC=`; MOSFET levels other than 1
+`SFFM`, `AM` and damped `SIN`; element `IC=` outside the `pspice` dialect; `.IC V(a, b)`; MOSFET levels other than 1
 and 3 (BSIM by name), LTspice's `VDMOS` (the three-terminal `M` card and the
 model type), `RSH`, and `KF` with `TOX`; temperature coefficients the
 reader does not model (`TM1`, `TM2`, `BEX`, `BEXV`, a MOSFET's `TCV`) at a
 temperature other than the model's `TNOM`; diode `ISR`, `IKF` outside the `pspice` dialect; BJT `PTF`,
 quasi-saturation (`QUASIMOD`, `RCO`, `QCO`); JFET `ALPHA`, `VK`, `ISR`, `B`;
 saturating and hysteretic inductors and cores; unknown model parameters;
-`.OPTIONS` that may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`.
+`.OPTIONS` that may change the circuit, `.GLOBAL`, `.NODESET`.
 Analysis cards of a test deck at the top level (`.TRAN`, `.AC`,
 ...) have no effect.
 
@@ -3190,7 +3198,7 @@ CSV, are compared on every test run (`crates/copper-spice/tests/reference/`,
 **Real models checked.** Texas Instruments' own model archives, fetched by
 URL and SHA-256 with `copper models fetch` (never committed), run by the
 `#[ignore]`d harness `crates/copper-spice/tests/vendor_models.rs`
-(20 November 2026). An op amp runs on its data sheet supplies in open loop
+(20 November 2026, rerun 22 November 2026). An op amp runs on its data sheet supplies in open loop
 (an inductor from the output to the inverting input, a capacitor from that
 input to ground); the gain-bandwidth product is 100 times the frequency
 where `|A_OL|` falls through 100, as data sheets state it at `G = 100`;
@@ -3209,8 +3217,23 @@ the follower is the small-signal `-3 dB` bandwidth at unity gain.
 | OPA828 (SBOMAJ0) | yes | converges | GBW 45.2 MHz | 45 MHz |
 | OPA1656 (SBOMAW6) | yes | converges | GBW 53.1 MHz | 53 MHz |
 | TLV9002 (SBOMAL2) | yes | converges | GBW 1.13 MHz | 1 MHz |
-| TL431 (SLVM071) | yes (needs `VALUE {expr}` without `=`) | converges, but to 100.45 V at 10 mA, not regulating; a current ramp in a transient run settles at 2.000 V | - | 2.495 V; not resolved |
+| TL431 (SLVM071) | yes (needs `VALUE {expr}` without `=`) | converges: 2.4982 V at 10 mA from a current source (was a false 100.45 V, which ngspice-46 also gives); 2.4980 V fed from 12 V through 1 kOhm, as ngspice | `z_KA` 0.318 ohm at 1 kHz; fed through 1 kOhm the transient settles at 2.4980 V. Fed by an ideal current source the model's loop oscillates between 2.00 V and 2.57 V in a transient run, in ngspice too (trapezoidal and Gear) | 2.495 V (2.440 to 2.550 V); 0.2 ohm |
 | CSD18563Q5A (SLPM082) | no: BSIM3 (`LEVEL=7`) channel (its `TNOM=25` alone would now load) | - | - | V_GS(th) 2 V |
+| TLV75718P (SBVM780) | yes (needs `.IC` in a subcircuit, `IC=` on a capacitor, a subcircuit defined twice) | converges: 1.8085 V at 1 mA from 3.45 V, as ngspice | `--check-model` passes: quiescent current 5.3 uA, output resistance 64 mohm, rejection 65 dB at 1 Hz, dropout 660 mV at 1 mA, start-up 385 us | 1.8 V; 25 uA; 44 mohm; 52 dB |
+| TPS7A20 (SBVM961, `TPS7A20_ADJ_TRANS`) | yes (needs the global parameter `V_out`: `params = values { V_out = 1.8; }`) | converges: 1.8 V and 2.5 V for `V_out` 1.8 and 2.5 | `--check-model` passes: quiescent current 5.1 and 6.7 uA, output resistance 72 mohm, rejection 75 dB at 1 Hz and 1 kHz, dropout 71 mV at 1 mA, start-up 627 and 621 us | 6.5 uA; 63.5 mohm; 95 dB |
+| OPA2182 (SBOMB13) | yes | converges | slew rate 5.33 V/us on the check's 2.5 V follower step (the step used to stop with a collapsing time step; ngspice 5.32 V/us), 5.6 V/us on a 10 V step in ngspice | 10 V/us |
+| OPA2189 (SBOMAE9) | yes | converges | slew rate 11.6 V/us on the check's 1.8 V step (ngspice 11.6 V/us), 14.0 V/us on a 10 V step in ngspice | 20 V/us |
+| OPA548 (SBOM088) | yes | converges: supply current 4.295 mA at +/-30 V (ngspice 4.295 mA) | slew rate 5.8 V/us on the check's 12.7 V step (ngspice 5.9 V/us) | 17 mA; 10 V/us |
+
+Where these models differ from their data sheets (OPA548 supply current
+and slew, OPA2182 and OPA2189 slew), ngspice-46 in PSpice mode gives the
+same figure from the same file within 2 %: the figure is the model's, not
+the reader's. The TL431, TLV75718P, OPA548, OPA2182 and OPA2189 rows are
+compared node by node with ngspice in the gitignored vendor decks of the
+reference comparison (19 series, every one within its bound). The TPS7A20
+model is not: ngspice's PSpice mode turns its load switch, a `VSWITCH` with
+`ROFF` below `RON`, into an open one (a self-written deck shows it), where
+PSpice's switch has `ROFF` at `VOFF`.
 
 The OPA1612's 40 MHz is the data sheet's closed-loop bandwidth at unity
 gain, not its open-loop crossover; its gain-bandwidth product is specified

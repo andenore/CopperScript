@@ -151,6 +151,20 @@ fn a_vendor_file_registered_by_hand_needs_its_hash_and_a_download_note() {
 }
 
 #[test]
+fn a_vendor_model_carries_a_note_on_where_it_differs() {
+    let hash = "d".repeat(64);
+    let sim = format!(
+        "sim spice {{ sha256 = \"{hash}\"; download = \"x\"; subckt = \"AMP\"; terminals = INP, INN, VP, VN, OUT; unmodelled = NC; note = \"its slew rate is the model's own\"; }}"
+    );
+    let design = compile("note", &sim).unwrap();
+    let spice = design.electrical.library["p.Amp"].sim[0].spec.spice.clone().unwrap();
+    assert_eq!(spice.note.as_deref(), Some("its slew rate is the model's own"));
+    assert!(design_json(&design).contains("\"note\": \"its slew rate is the model's own\""));
+    let message = error_of(compile("note-number", &sim.replace("\"its slew rate is the model's own\"", "3")));
+    assert!(message.contains("SIM076") && message.contains("note"), "{message}");
+}
+
+#[test]
 fn a_loaded_board_binds_vendor_models_to_its_project_cache() {
     let hash = "c".repeat(64);
     let directory = directory("bind");

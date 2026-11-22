@@ -3351,6 +3351,9 @@ pub fn spec_fields(spec: &SimSpec) -> Vec<(&'static str, Value)> {
         if let simulation::SpiceSource::Registered { download, .. } = &model.source {
             fields.push(("download", text(download)));
         }
+        if let Some(note) = &model.note {
+            fields.push(("note", text(note)));
+        }
         entries.push(("spice", object(fields)));
     }
     if let Some(output) = spec.output {

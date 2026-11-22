@@ -179,3 +179,24 @@ cargo test -p copper-spice --test reference_comparison vendor -- --ignored --noc
 ```
 
 Nothing from the vendor file or its results enters the repository.
+
+Two directives serve these decks: `*@ dialect pspice` reads the deck in
+copper-sim's PSpice dialect (spice3 without it), and `*@ ngbehavior psa`
+runs it in ngspice's PSpice compatibility mode (`set ngbehavior=psa` before
+the circuit is loaded; `unset` for every other deck, so the committed
+results are unchanged). For a deck under `vendor/` the script also loads
+the code models that mode translates PSpice constructs into (`analog.cm`
+for `LAPLACE`, `xtradev.cm` with `digital.cm` for `VSWITCH`).
+
+Plan phase I2 used five such decks (22 November 2026): TL431 fed through
+1 kOhm (op and a dc sweep of the supply), TLV75718P at 3.45 V and 1 mA (op,
+dc), OPA548 as a follower at +/-30 V (op, supply currents) and the OPA2182
+and OPA2189 follower steps of `copper sim --check-model` (`*@ tran-reltol
+1e-4`, the check's own tolerance): 19 series, 9229 values, all within their
+bounds. What they and the variant decks behind them established is in
+`docs/simulation-improvement-plan.md`, I2. Two cases are not comparable:
+ngspice-46 in PSpice mode gives a false 100.45 V operating point for the
+TL431 fed by a current source (the junction-current test copper-sim has,
+see `newton.rs`), and it opens TI's TPS7A20 load switch, a `VSWITCH` whose
+`ROFF` (1 uohm) is below its `RON` (1 Mohm), at the control voltage `VOFF`,
+where PSpice's switch is `ROFF`.

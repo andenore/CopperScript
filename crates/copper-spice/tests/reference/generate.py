@@ -28,6 +28,8 @@ DEFAULT_DLL = r"C:\Program Files\KiCad\10.0\bin\ngspice.dll"
 DEFAULT_CODE_MODELS = r"C:\Program Files\KiCad\10.0\lib\ngspice"
 
 ANALYSES = (".op", ".dc", ".ac", ".noise", ".tran")
+# The gitignored directory of decks that include vendor models (README, vendor models).
+VENDOR = os.path.join(HERE, "vendor")
 
 
 class NgComplex(Structure):
@@ -141,9 +143,11 @@ class Ngspice:
 
 def directives(text):
     """`*@ probe`, `*@ tran-probe` (the probes of a transient, when they
-    differ), `*@ temps` and `*@ ngspice-options` (options for ngspice only,
-    such as `badmos3`, which copper-sim's reader rejects)."""
+    differ), `*@ temps`, `*@ ngspice-options` (options for ngspice only,
+    such as `badmos3`, which copper-sim's reader rejects) and `*@ ngbehavior`
+    (ngspice's compatibility mode for the deck, `psa` for a PSpice model)."""
     probes, tran_probes, temps, options = [], [], [27.0], []
+    behavior = None
     for line in text.splitlines():
         m = re.match(r"\*@\s*([\w-]+)\s*(.*)", line.strip())
         if not m:
@@ -157,7 +161,9 @@ def directives(text):
             temps = [float(t) for t in rest.split()]
         elif key == "ngspice-options":
             options.append(".options " + rest)
-    return probes, tran_probes or probes, temps, options
+        elif key == "ngbehavior":
+            behavior = rest.strip()
+    return probes, tran_probes or probes, temps, options, behavior
 
 
 def split_deck(text):
@@ -219,7 +225,9 @@ def num(x):
 
 def generate(ng, deck_path):
     text = open(deck_path, encoding="utf-8").read()
-    probes, tran_probes, temps, options = directives(text)
+    probes, tran_probes, temps, options, behavior = directives(text)
+    # The compatibility mode is read when a circuit is loaded.
+    ng.command(f"set ngbehavior={behavior}" if behavior else "unset ngbehavior")
     title, body, cards = split_deck(text)
     rows = []
     for index, card in enumerate(cards):
@@ -253,9 +261,15 @@ def short_path(path):
 def main():
     dll = os.environ.get("NGSPICE_DLL", DEFAULT_DLL)
     ng = Ngspice(dll)
-    # The library finds no spinit, so the code model POLY needs is loaded here.
+    # The library finds no spinit, so the code model POLY needs is loaded here,
+    # and for the vendor decks the ones ngspice's PSpice mode translates
+    # LAPLACE and VSWITCH into (s_xfer in analog.cm, aswitch in xtradev.cm,
+    # which needs digital.cm).
     code_models = os.environ.get("NGSPICE_CODE_MODELS", DEFAULT_CODE_MODELS)
     ng.command(f"codemodel {short_path(os.path.join(code_models, 'spice2poly.cm'))}")
+    if VENDOR in os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ""):
+        for cm in ("analog.cm", "digital.cm", "xtradev.cm"):
+            ng.command(f"codemodel {short_path(os.path.join(code_models, cm))}")
     version = ng.version()
     decks = sys.argv[1:] or sorted(
         os.path.join(DECKS, f) for f in os.listdir(DECKS) if f.endswith(".cir")

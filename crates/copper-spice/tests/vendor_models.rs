@@ -358,6 +358,22 @@ fn check(part: &Part) {
     }
 }
 
+/// Within the TL431's data-sheet reference voltage, 2.440 V to 2.550 V
+/// (2.495 V typical, the non-A grade at 25 degC).
+fn within_reference(v: f64) -> bool {
+    (2.440..=2.550).contains(&v)
+}
+
+/// The lowest and highest value of node `node` from `after` on.
+fn range_after(t: &copper_sim::TranResult, node: &str, after: f64) -> (f64, f64) {
+    let v = t.voltage(node).unwrap();
+    t.times()
+        .iter()
+        .zip(&v)
+        .filter(|(tt, _)| **tt >= after)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, x)| (lo.min(*x), hi.max(*x)))
+}
+
 /// The TL431 shunt reference (reference and cathode tied, 10 mA in; data
 /// sheet 2.495 V, dynamic impedance 0.2 ohm typical) and the CSD18563Q5A
 /// threshold (gate on drain, 250 uA; data sheet 2 V typical).
@@ -382,20 +398,54 @@ fn vendor_references_and_transistors() {
                                 let z = copper_sim::ac(&c, &Sweep::List(vec![1e3]))
                                     .map(|ac| ac.voltage("k").unwrap()[0].abs())
                                     .unwrap_or(f64::NAN);
-                                println!(
-                                    "TL431: op: V(KA) = {:.4} V at 10 mA, |z_KA(1 kHz)| = {z:.4} ohm",
-                                    op.voltage("k").unwrap()
-                                );
+                                let v = op.voltage("k").unwrap();
+                                println!("TL431: op: V(KA) = {v:.4} V at 10 mA, |z_KA(1 kHz)| = {z:.4} ohm");
+                                assert!(within_reference(v), "TL431 at 10 mA: {v} V");
                             }
                             Err(e) => println!("TL431: OP FAILED: {e}"),
                         }
-                        // The same current ramped up from zero in a transient run.
+                        // The same current ramped up from zero in a transient run. Fed by
+                        // an ideal current source the model's loop has no load at the
+                        // cathode and oscillates between about 2.0 V and 2.57 V (ngspice-46
+                        // gives the same, with trapezoidal and with Gear integration), so
+                        // the range of the last millisecond is printed.
                         c.set_waveform(ik, Waveform::Pwl(vec![(0.0, 0.0), (1e-3, 10e-3), (2e-3, 10e-3)])).unwrap();
                         match copper_sim::transient(&c, &TranOptions { max_step: Some(5e-6), ..TranOptions::new(2e-3) })
                         {
                             Ok(t) => {
-                                let v = t.voltage("k").unwrap();
-                                println!("TL431: tran: V(KA) = {:.4} V after a ramp to 10 mA", v.last().unwrap());
+                                let (lo, hi) = range_after(&t, "k", 1e-3);
+                                println!(
+                                    "TL431: tran: V(KA) from {lo:.4} V to {hi:.4} V at 10 mA from a current source"
+                                );
+                            }
+                            Err(e) => println!("TL431: TRAN FAILED: {e}"),
+                        }
+                    }
+                }
+                // TI's own test designs in the archive feed the cathode through a
+                // resistor: 12 V ramped up in 1 ms through 1 kOhm (9.5 mA).
+                let mut c = Circuit::with_ground("0");
+                let (s, k) = (c.node("s"), c.node("k"));
+                let vs = c.voltage_source("VS", s, NodeId::GROUND, SourceValue::dc(12.0)).unwrap();
+                c.resistor("RS", s, k, 1e3).unwrap();
+                match lib.instantiate(&mut c, "U1", "TL431", &[k, NodeId::GROUND, k], &[]) {
+                    Err(e) => println!("TL431: INSTANTIATE FAILED: {e}"),
+                    Ok(_) => {
+                        match copper_sim::operating_point(&c) {
+                            Ok(op) => {
+                                let v = op.voltage("k").unwrap();
+                                println!("TL431: op: V(KA) = {v:.4} V fed from 12 V through 1 kOhm");
+                                assert!(within_reference(v), "TL431 fed through 1 kOhm: {v} V");
+                            }
+                            Err(e) => println!("TL431: OP FAILED: {e}"),
+                        }
+                        c.set_waveform(vs, Waveform::Pwl(vec![(0.0, 0.0), (1e-3, 12.0), (2e-3, 12.0)])).unwrap();
+                        match copper_sim::transient(&c, &TranOptions { max_step: Some(5e-6), ..TranOptions::new(2e-3) })
+                        {
+                            Ok(t) => {
+                                let (lo, hi) = range_after(&t, "k", 1.5e-3);
+                                println!("TL431: tran: V(KA) from {lo:.4} V to {hi:.4} V fed through 1 kOhm");
+                                assert!(within_reference(lo) && within_reference(hi), "TL431 ramp: {lo} to {hi} V");
                             }
                             Err(e) => println!("TL431: TRAN FAILED: {e}"),
                         }

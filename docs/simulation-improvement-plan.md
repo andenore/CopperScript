@@ -169,6 +169,94 @@ Acceptance: all three regulators and the TL431 pass `--check-model` with
 their vendor model; the compatibility table has no load failure without a
 named unsupported construct.
 
+Built on 22 November 2026. Every cause below was shown by a node-by-node
+comparison with ngspice-46 (the gitignored vendor decks of the reference
+comparison, README "Vendor models": 5 decks, 19 series, all within their
+bounds), a variant deck or a self-written deck.
+
+- TL431: the reader runs the model as ngspice does. Fed from 12 V through
+  1 kOhm (TI's own designs in the archive are resistor-fed) both give
+  2.4980 V at the operating point, in a dc sweep and after a supply ramp.
+  The two failures were the bench. At 10 mA from a current source the
+  100.45 V operating point was false convergence, in ngspice too (100.454 V):
+  the clamp diode `D_D11` has `N = 0.001`, so `n V_T` = 26 uV is below the
+  Newton voltage tolerance at 100 V (100 uV), and its junction carried
+  -3.7e4 A against 309 A in its series resistance. Junctions now also
+  converge on their current (SPICE's `DIOconvTest`, relative 1e-3,
+  `newton.rs`); the operating point is 2.4982 V. The transient "2.0 V" was
+  one sample of a relaxation oscillation between 2.00 V and 2.57 V: fed by an
+  ideal current source the model's loop has no load at the cathode, and
+  ngspice oscillates the same way with trapezoidal and with Gear
+  integration at 20 ns steps. What PSpice does with that bench is not
+  known (no PSpice). `vendor_models.rs` now runs the resistor-fed bench too
+  and asserts the data-sheet range (2.440 V to 2.550 V).
+- Reader: `.IC V(node)` and `.IC I(inductor)` inside a subcircuit, per
+  instance; `C`/`L` `IC=` in the pspice dialect (ngspice and LTspice use it
+  only with `UIC`, so the other dialects refuse it). Both start every
+  transient run held there, as PSpice's bias point does
+  (`Circuit::set_initial_voltage` and siblings; a run's own conditions win;
+  the operating point of the other analyses does not hold them). A value of
+  the `sim spice` block's `params` that is not a `PARAMS:` of the
+  subcircuit is a global parameter (PSpice's `.PARAM` of the calling
+  netlist), set before the file's top-level `.PARAM`s, and must be a name
+  the file reads. A subcircuit defined twice with the same content (the
+  TLV75718P file repeats two in lower case; ngspice warns and keeps the
+  first) is noted and the first used. Self-written tests:
+  `tests/vendor_constructs.rs`.
+- TLV75718P and TPS7A20 load; with the CopperLib blocks plus a `sim spice`
+  block (in a scratch project; CopperLib unchanged) `--check-model` passes
+  for TLV75718PDRVR, TPS7A2018PDBVR and TPS7A2025PDBVR with their vendor
+  models. TLV75718P agrees with ngspice (1.8085 V at 1 mA). The TPS7A20 model
+  was not compared: ngspice's PSpice mode opens its load switch, a
+  `VSWITCH` with `ROFF` = 1 uohm below `RON` = 1 Mohm, at `VOFF` (shown by a
+  self-written deck), where PSpice's switch is at `ROFF`.
+- OPA2182 follower step: Newton never converged after about 83 ns because
+  one unknown, the branch current of the model's mid-supply source `E_E1`,
+  alternated between two values 6 pA apart (5e-6 of itself, against a
+  1e-6 + 1 pA test) while every node voltage had converged; the switch
+  `S_S2` in its transition carries 126 mA through that node and its control
+  voltage changed by 4e-16 V, below one rounding step of the node voltages
+  it is the difference of. A Newton iteration that reaches its limit is now
+  accepted when for its last four iterations only branch currents remain,
+  each within 1e-6 of the currents it is the sum of at its node (the
+  precision Kirchhoff's law fixes it to). Accepting this earlier than the
+  limit, or loosening the branch test in general, moved the analyzer's
+  transients at the 0.5 % integration-error level, so it applies only
+  where the iteration would otherwise fail. The step runs (0.85 s) and its
+  slew rate is 5.33 V/us; ngspice gives 5.32 V/us.
+- OPA548 supply current (4.295 mA) and slew (5.8 V/us), OPA2189 slew
+  (11.6 V/us) and OPA2182 slew: ngspice gives the same from the same files
+  within 2 % (4.295 mA, 5.9, 11.6 and 5.3 V/us; on a 10 V step 14.0 V/us for
+  the OPA2189 and 5.6 V/us for the OPA2182). The figures are the models'.
+  A `sim spice` block can now say so: `note = "..."`, which `--check-model`
+  prints as `note: vendor model: ...`.
+- Reference harness: `*@ dialect pspice` and `*@ ngbehavior psa`; the
+  committed results regenerate unchanged.
+- Decision 6: no measure of six examples moved. The impedance analyzer's
+  `Distortion` step 7 (1 MHz, 0.65 V) moved in 11 measures, all without
+  limits, because Newton solves that used to fail at the iteration limit
+  (and were retried with a shorter step) are now accepted: `current_h2`
+  6.40e-7 to 2.53e-7 (below the integration floor), `current_h3` -1.5 %,
+  `current_thd` -1.1 %, `gain1_thd` +0.5 %, `gain10_thd` +0.2 %,
+  `current_sfdr` +0.13 dB, `current_channel_thd` -0.09 %, and
+  `current_fundamental`, `pump_output_peak`, `pump_headroom` and
+  `slew_needed` within 4e-6. The junction-current test alone moves nothing.
+
+Open: the CopperLib blocks of TLV75718PDRVR, TPS7A2018PDBVR and
+TPS7A2025PDBVR still carry no `sim spice` block, and the amplifier blocks no
+`note` (CopperLib was not changed; the edits are listed in the I2 report).
+The OPA2189 follower step at the reference comparison's tolerance
+(`reltol` 1e-5) still collapses at 26.85 ns, and whether it does depends on
+the last bit of `max_step`: the control node of the model's
+output-impedance source (`N3828449`, a 1.6 ps lead network) jumps by 1 to
+5 % between steps of 1e-17 s, every step is accepted as a discontinuity and
+the restart at a tenth of it shrinks the step below the floor; restarting
+at the same step instead only crawls on, so the jumping itself is not yet
+explained. The TL431 under a current source and PSpice's behaviour there
+are not settled. TLV75718P's quiescent current (5.3 uA against 25 uA) and
+the TPS7A20's line rejection (75 dB against 95 dB) were not compared with
+ngspice. No release timings were taken.
+
 ### I3. Analyzer on real models
 
 Scope:

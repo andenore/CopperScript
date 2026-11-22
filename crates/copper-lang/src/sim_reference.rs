@@ -343,7 +343,10 @@ pub fn key_meaning(kind: SimKind, key: &str) -> Option<&'static str> {
         (_, "subckt") => "the subcircuit name",
         (_, "terminals") => "the part pins on the subcircuit's nodes, in node order",
         (_, "dialect") => "spice3, pspice or ltspice",
-        (_, "params") => "values { NAME = q; ... } for the subcircuit's PARAMS:",
+        (_, "params") => "values { NAME = q; ... } for the subcircuit's PARAMS: or the global parameters it reads",
+        (_, "note") => {
+            "what is established where the vendor model differs from the data sheet (--check-model prints it)"
+        }
         _ => return None,
     })
 }

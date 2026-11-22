@@ -322,7 +322,6 @@ fn unsupported_constructs_name_file_line_element_and_construct() {
         (".SUBCKT A X\nM1 X X 0 0 TX\n.MODEL TX NMOS(TOX=10N KF=1E-25)\n.ENDS\n", "KF"),
         (".SUBCKT A X\nD1 X 0 DX\n.MODEL DX D(IBVL=1N)\n.ENDS\n", "IBVL"),
         (".SUBCKT A X\nQ1 X X 0 QX\n.MODEL QX NPN(QCO=1E-12)\n.ENDS\n", "QCO"),
-        (".SUBCKT A X\nC1 X 0 1P IC=1\n.ENDS\n", "IC="),
         (".SUBCKT A X\nV1 X 0 SFFM(0 1 1K 5 100)\n.ENDS\n", "SFFM"),
         // A model measured at 50 degC runs scaled at 27 degC, but not with a coefficient the reader lacks.
         (".SUBCKT A X\nD1 X 0 DX\n.MODEL DX D(TNOM=50 TM1=1E-3)\n.ENDS\n", "TM1"),

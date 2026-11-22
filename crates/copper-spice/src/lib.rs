@@ -26,14 +26,15 @@
 //!
 //! | Construct | Notes |
 //! | --- | --- |
-//! | `.SUBCKT name nodes [PARAMS:] a=1 ...` / `.ENDS` | nested definitions are local to their parent; instance values override the defaults, evaluated in the caller |
-//! | `.PARAM`, `.FUNC f(x, y) {expr}` | evaluated per instance: global params, then the calling instance's, then the defaults, then local `.PARAM`s in order; functions are inlined |
+//! | `.SUBCKT name nodes [PARAMS:] a=1 ...` / `.ENDS` | nested definitions are local to their parent; instance values override the defaults, evaluated in the caller; a second definition of a name with the same content is noted and the first used (a different one is an error) |
+//! | `.PARAM`, `.FUNC f(x, y) {expr}` | evaluated per instance: global params, then the calling instance's, then the defaults, then local `.PARAM`s in order; functions are inlined. A value [`Library::instantiate`] gives that is not a `PARAMS:` of the subcircuit is a global parameter (PSpice's `.PARAM` of the calling netlist), before the file's own top-level `.PARAM`s; it must be a name the file reads |
+//! | `.IC V(node) = value`, `.IC I(inductor) = value` | inside a subcircuit, per instance: the transient run starts there ([`copper_sim::Circuit::set_initial_voltage`]); the operating point of the other analyses does not hold it. At the top level noted and ignored |
 //! | `.MODEL name TYPE (...)`, `AKO:` | `D`, `NPN`/`PNP` (Gummel–Poon), `NJF`/`PJF`, `NMOS`/`PMOS` levels 1 and 3 (with `TOX`, Meyer's gate charge), `SW`, `CSW`, `VSWITCH`, `ISWITCH`, `RES`, `CAP`, `IND`; parameters are checked by name |
 //! | `.INCLUDE`, `.INC`, `.LIB file`, `.LIB file SECTION` | local files only, relative to the including file; a fetched model is one file |
 //! | `.LIB name` / `.ENDL` sections | their cards belong to the file (all of them, unless an including `.LIB file SECTION` picks one) |
 //! | `.OPTIONS` | solver and output controls are ignored and listed in [`Library::notes`]; `TNOM=` sets the nominal temperature of models without their own; others are rejected |
 //! | `.TEMP` | ignored and noted: the bench sets the temperature ([`Library::instantiate_at`]) |
-//! | `R C L K` | values may be expressions of parameters; `TC1`, `TC2` (element `TC =` or a `RES`/`CAP`/`IND` model) from the model's `TNOM`; `T_ABS` (the element's temperature; a resistor's noise temperature), `T_REL_GLOBAL`; LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
+//! | `R C L K` | values may be expressions of parameters; `C` and `L` `IC=` in the PSpice dialect (the transient run starts there, as PSpice's bias point does); `TC1`, `TC2` (element `TC =` or a `RES`/`CAP`/`IND` model) from the model's `TNOM`; `T_ABS` (the element's temperature; a resistor's noise temperature), `T_REL_GLOBAL`; LTspice `noiseless`; a negative resistance; a zero capacitor is dropped |
 //! | `V I` | `DC`, `AC mag [phase]`, `SIN`, `PULSE`, `PWL`, `EXP`; without `DC` the waveform's value at 0 |
 //! | `E G` linear, `F H` | |
 //! | `E G POLY(n)`, `F H POLY(n)` | SPICE2 coefficient order |
@@ -60,13 +61,14 @@
 //! particular: encrypted models; lossy `T` lines, `O U A Z` elements; `FREQ`
 //! and `CHEBYSHEV` sources; `LAPLACE` beyond a rational function and one
 //! delay; `SDT`, `IDT`, `ABSDELAY` and random functions; `SFFM`, `AM` and
-//! damped `SIN`; element `IC=`; MOSFET levels other than 1 and 3 (BSIM by
+//! damped `SIN`; element `IC=` outside the PSpice dialect (ngspice and LTspice use
+//! it only with `UIC`); `.IC V(a, b)`; MOSFET levels other than 1 and 3 (BSIM by
 //! name), LTspice's `VDMOS`, a MOSFET's `KF` with `TOX` (and in the spice3
 //! dialect at all: ngspice's default is `NLEV = 2`); temperature coefficients the
 //! reader does not model (`TM1`, `TM2`, `BEX`, `BEXV`, a MOSFET's `TCV`) away
 //! from the model's `TNOM`; diode `ISR`, `IKF` outside the PSpice dialect; BJT
 //! `PTF`, quasi-saturation; JFET `ALPHA`, `VK`, `ISR`, `B`; `.OPTIONS` that
-//! may change the circuit, `.GLOBAL`, `.IC`, `.NODESET`. Unsupported
+//! may change the circuit, `.GLOBAL`, `.NODESET`. Unsupported
 //! elements and models inside a subcircuit are reported when that
 //! subcircuit is instantiated, so a library stays usable for its other parts.
 
@@ -307,9 +309,32 @@ impl Library {
         };
         let sub = &self.netlist.subckts[index];
         let first = circuit.elements().len();
-        let params: Vec<(String, f64)> = params.iter().map(|(k, v)| (k.to_ascii_uppercase(), *v)).collect();
+        // A value that is not one of the subcircuit's PARAMS: is a global
+        // parameter, as a `.PARAM` of the calling netlist is in PSpice (TI's
+        // TPS7A20 model reads its output voltage V_out without defining it);
+        // it must be a name the file reads.
+        type Values = Vec<(String, f64)>;
+        let (params, given_globals): (Values, Values) = params
+            .iter()
+            .map(|(k, v)| (k.to_ascii_uppercase(), *v))
+            .partition(|(k, _)| sub.defaults.iter().any(|(n, _)| n == k));
+        for (k, _) in &given_globals {
+            if !self.netlist.reads_name(k) {
+                let file = self.netlist.files.first().map(|f| f.display().to_string()).unwrap_or_default();
+                return Err(SpiceError {
+                    file,
+                    line: sub.loc.line,
+                    element: Some(name.to_string()),
+                    kind: ErrorKind::Undefined,
+                    message: format!(
+                        "{k} is neither a parameter of .SUBCKT {} nor a name the file reads (a global parameter)",
+                        sub.name
+                    ),
+                });
+            }
+        }
         let mut f = flatten::Flattener { lib: &self.netlist, c: circuit, aux: 0, celsius };
-        let globals = f.global_params()?;
+        let globals = f.global_params(&given_globals)?;
         f.subckt(sub, name, nodes, &params, &globals, 0)?;
         let mut ports: Vec<(String, Vec<(String, f64)>)> = sub.ports.iter().map(|p| (p.clone(), Vec::new())).collect();
         let mut kinds: BTreeMap<String, usize> = BTreeMap::new();

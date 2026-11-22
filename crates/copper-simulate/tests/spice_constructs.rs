@@ -107,10 +107,15 @@ fn params_from_the_sim_spice_block_override_the_defaults() {
     assert!(model(&run).contains("GAIN = 7, ROUT = 1000"), "{}", model(&run));
     let run = p.run(&[("dut.lib", lib)], "", OP);
     assert!(rel(measure(&run, "out"), 1e6 / (1e6 + 1.0)) < 1e-12);
-    // A name the subcircuit does not declare is the reader's error.
+    // A name the subcircuit does not declare, and the file does not read as a
+    // global parameter, is the reader's error.
     let run = p.run(&[("dut.lib", lib)], "params = values { GAINS = 7; };", OP);
     let error = run.error.unwrap_or_default();
-    assert!(error.contains("SIM078") && error.contains("GAINS is not a parameter of .SUBCKT DUT"), "{error}");
+    assert!(
+        error.contains("SIM078")
+            && error.contains("GAINS is neither a parameter of .SUBCKT DUT nor a name the file reads"),
+        "{error}"
+    );
 }
 
 #[test]

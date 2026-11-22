@@ -38,6 +38,18 @@ impl SExpr {
         }
     }
 
+    /// Whether the expression reads the parameter (or bare name) `name`.
+    pub fn reads_name(&self, name: &str) -> bool {
+        match self {
+            SExpr::Name(n) => n == name,
+            SExpr::Num(_) | SExpr::Voltage(..) | SExpr::Current(_) => false,
+            SExpr::Call(_, args) => args.iter().any(|a| a.reads_name(name)),
+            SExpr::Unary(_, x) => x.reads_name(name),
+            SExpr::Binary(_, a, b) => a.reads_name(name) || b.reads_name(name),
+            SExpr::Ternary(c, a, b) => c.reads_name(name) || a.reads_name(name) || b.reads_name(name),
+        }
+    }
+
     /// Whether the expression reads a current (`I(...)`).
     pub fn reads_current(&self) -> bool {
         match self {

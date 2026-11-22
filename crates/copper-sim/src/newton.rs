@@ -27,8 +27,15 @@
 //!
 //! Each iteration linearises at the iterate, solves, and stops when every
 //! unknown changed by less than `1e-6` relative plus 1 nV (node voltages)
-//! or 1 pA (branch currents), and every junction's voltage equals the one it
-//! was linearised at. Junction voltages are limited per iteration
+//! or 1 pA (branch currents), every junction's voltage equals the one it
+//! was linearised at, and every junction's current agrees with its
+//! linearisation within `1e-3` (SPICE's current test, which a junction whose
+//! `n V_T` is below the voltage tolerance needs). An iteration that reaches
+//! its limit is accepted instead of failing when it has stopped improving: in
+//! its last four iterations only branch currents changed by more, each by
+//! less than `1e-6` of the currents it is the sum of at its node (as
+//! precisely as Kirchhoff's law fixes it), with every node voltage and
+//! junction converged. Junction voltages are limited per iteration
 //! ([`crate::devices::DiodeParams::limit`]), and so is every limited control
 //! of a law element ([`crate::behavioral::Limit`]); the values a diode or a
 //! law was linearised at are kept per control in one vector ("slots", in
@@ -68,6 +75,17 @@ const HOLD_OHMS: f64 = 1.0;
 const RELTOL: f64 = 1e-6;
 const VNTOL: f64 = 1e-9;
 const ABSTOL: f64 = 1e-12;
+/// Iterations in a row, up to the iteration limit, in which only branch
+/// currents have not converged, and they within the precision Kirchhoff's
+/// law fixes them to: an iterate that has stopped improving, accepted at the
+/// limit instead of failing ([`Solver::newton`]). An iteration that meets the
+/// full test earlier is unaffected.
+const STALLED_ITERATIONS: usize = 4;
+/// The relative tolerance of a junction's current against its linearisation
+/// at convergence: SPICE's default `RELTOL`. A junction whose voltage meets
+/// the voltage tolerance meets it too, unless its `n V_T` is far below that
+/// tolerance.
+const CURRENT_RELTOL: f64 = 1e-3;
 
 /// The smooth limiter `f(u) = u / (1 + (u/L)^4)^(1/4)` and its derivative.
 pub fn soft_limit(u: f64, limit: f64) -> (f64, f64) {
@@ -1002,6 +1020,40 @@ impl Solver {
         solved.ok_or(LuError::NonFinite)
     }
 
+    /// Per unknown, the size of the currents a branch current is determined
+    /// from (0 for node voltages): the smallest, over the node rows the branch
+    /// current appears in, of `sum_j |a_rj x_j| + |b_r|` of the stamped system.
+    /// Kirchhoff's law fixes a branch current only to the precision of the
+    /// other currents at its node: the current of an internal reference source
+    /// that carries the difference of large currents (TI's OPA2182 model: its
+    /// mid-supply source `E_E1` between a 126 mA clamp switch in its
+    /// transition and 1 F capacitors) alternates between two values 6 pA
+    /// apart, 5e-6 of itself, from one iteration to the next while the switch's
+    /// control voltage changes by 4e-16 V, less than one rounding step of the
+    /// node voltages it is the difference of.
+    fn branch_scales(&self, m: &Model, rhs: &[f64], x: &[f64]) -> Vec<f64> {
+        let n = m.layout.size();
+        let mut scale = vec![f64::INFINITY; n];
+        let Some(a) = self.matrix.as_ref() else { return vec![0.0; n] };
+        for (r, b) in rhs.iter().enumerate() {
+            if !matches!(m.layout.unknowns[r], Unknown::Node(_)) {
+                continue;
+            }
+            let row: f64 = a.row(r).map(|(j, v)| (v * x[j]).abs()).sum::<f64>() + b.abs();
+            for (j, v) in a.row(r) {
+                if v != 0.0 && matches!(m.layout.unknowns[j], Unknown::Branch(_)) {
+                    scale[j] = scale[j].min(row);
+                }
+            }
+        }
+        for (k, s) in scale.iter_mut().enumerate() {
+            if !s.is_finite() || matches!(m.layout.unknowns[k], Unknown::Node(_)) {
+                *s = 0.0;
+            }
+        }
+        scale
+    }
+
     /// Newton iteration from `x0` with junction voltages `junction0`.
     pub fn newton(
         &mut self,
@@ -1017,6 +1069,7 @@ impl Solver {
         let mut junction = junction0.to_vec();
         let mut last_change: Vec<f64> = vec![0.0; n];
         let fixed_rhs = self.fixed_part(m, c, ctx, &x, &junction);
+        let mut stalled = 0;
         for iteration in 1..=max_iterations {
             let limiting = timing::span(Phase::Devices);
             for &d in &m.diodes {
@@ -1051,20 +1104,36 @@ impl Solver {
                 return Ok(Converged { x: x_new, junction });
             }
             let mut converged = true;
+            // Whether only branch currents are left, each within the precision
+            // Kirchhoff's law fixes it to (judged only when the full test fails).
+            let mut unconverged_branches = Vec::new();
+            let mut settled = true;
             for k in 0..n {
-                let tol = RELTOL * x_new[k].abs().max(x[k].abs())
-                    + if matches!(m.layout.unknowns[k], Unknown::Node(_)) { VNTOL } else { ABSTOL };
+                let node = matches!(m.layout.unknowns[k], Unknown::Node(_));
+                let tol = RELTOL * x_new[k].abs().max(x[k].abs()) + if node { VNTOL } else { ABSTOL };
                 last_change[k] = (x_new[k] - x[k]).abs() / tol;
                 if last_change[k] > 1.0 {
                     converged = false;
+                    if node {
+                        settled = false;
+                    } else {
+                        unconverged_branches.push(k);
+                    }
                 }
+            }
+            if settled && !unconverged_branches.is_empty() {
+                let currents = self.branch_scales(m, &rhs, &x_new);
+                settled =
+                    unconverged_branches.iter().all(|&k| (x_new[k] - x[k]).abs() <= RELTOL * currents[k] + ABSTOL);
             }
             let mut junction_off = Vec::new();
             for &d in &m.diodes {
-                let ElementKind::Diode { anode, cathode, .. } = c.elements()[d].kind() else { continue };
+                let ElementKind::Diode { anode, cathode, params } = c.elements()[d].kind() else { continue };
                 let v = m.v(&x_new, *anode) - m.v(&x_new, *cathode);
                 let lin = junction[m.slot[d]];
-                if (v - lin).abs() > RELTOL * v.abs().max(lin.abs()) + VNTOL {
+                if (v - lin).abs() > RELTOL * v.abs().max(lin.abs()) + VNTOL
+                    || !junction_current_converged(params, v, lin)
+                {
                     converged = false;
                     junction_off.push(((v - lin).abs(), d));
                 }
@@ -1082,6 +1151,11 @@ impl Solver {
             }
             x = x_new;
             if converged && iteration > 1 {
+                return Ok(Converged { x, junction });
+            }
+            settled &= junction_off.is_empty();
+            stalled = if settled { stalled + 1 } else { 0 };
+            if iteration == max_iterations && stalled >= STALLED_ITERATIONS {
                 return Ok(Converged { x, junction });
             }
             if iteration == max_iterations {
@@ -1103,6 +1177,18 @@ impl Solver {
         }
         unreachable!("the loop returns at the last iteration")
     }
+}
+
+/// Whether a junction's current at `v` agrees with its linearisation at `lin`
+/// within [`CURRENT_RELTOL`] (plus [`ABSTOL`]): SPICE's `DIOconvTest`. The
+/// voltage test alone passes a junction whose `n V_T` is far below the
+/// voltage tolerance (a diode with `N = 0.001` at 100 V, whose current
+/// changes by a factor of `e^4` within it).
+fn junction_current_converged(params: &crate::devices::DiodeParams, v: f64, lin: f64) -> bool {
+    let (i_lin, g_lin) = params.current(lin);
+    let predicted = i_lin + g_lin * (v - lin);
+    let (actual, _) = params.current(v);
+    (actual - predicted).abs() <= CURRENT_RELTOL * actual.abs().max(predicted.abs()) + ABSTOL
 }
 
 /// A converged operating point with its switch states.

@@ -254,8 +254,8 @@ impl SimKind {
 }
 
 /// The properties of a `sim spice` block.
-pub const SPICE_KEYS: [&str; 9] =
-    ["source", "sha256", "member", "file", "download", "subckt", "terminals", "dialect", "params"];
+pub const SPICE_KEYS: [&str; 10] =
+    ["source", "sha256", "member", "file", "download", "subckt", "terminals", "dialect", "params", "note"];
 
 /// The SPICE dialects a `sim spice` block may name.
 pub const SPICE_DIALECTS: [&str; 3] = ["spice3", "pspice", "ltspice"];
@@ -379,8 +379,13 @@ pub struct SpiceModel {
     /// The directory of the declaring source file, for a relative `file`.
     pub directory: String,
     /// `params = values { NAME = value; ... };`: values (SI) for the
-    /// subcircuit's `PARAMS:` defaults, names in upper case, in source order.
+    /// subcircuit's `PARAMS:` defaults, or global parameters the file reads
+    /// (PSpice's `.PARAM` of the calling netlist), names in upper case, in
+    /// source order.
     pub params: Vec<(String, f64)>,
+    /// `note = "..."`: what is established about the vendor model where it
+    /// differs from the data sheet, printed by `copper sim --check-model`.
+    pub note: Option<String>,
     /// The directory of the board being built, whose project's
     /// `.copper-cache/spice/` holds vendor files ([`bind_spice_project`]);
     /// `None` until a board binds it, and then the declaring directory's
@@ -887,6 +892,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
     let mut member = None;
     let mut file = None;
     let mut download = None;
+    let mut note = None;
     let mut subckt = None;
     let mut dialect = None;
     let mut terminals: Vec<(String, Location)> = Vec::new();
@@ -924,6 +930,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
             "member" => member = Some(spice_text(entry, "member")?.to_owned()),
             "file" => file = Some(spice_text(entry, "file")?.to_owned()),
             "download" => download = Some(spice_text(entry, "download")?.to_owned()),
+            "note" => note = Some(spice_text(entry, "note")?.to_owned()),
             "subckt" => subckt = Some(spice_text(entry, "subckt")?.to_owned()),
             "dialect" => {
                 let text = match &entry.value {
@@ -1055,6 +1062,7 @@ fn lower_spice_block(entries: &[SimEntry], location: &Location) -> Result<Lowere
         dialect: dialect.unwrap_or_else(|| "spice3".to_owned()),
         directory,
         params,
+        note,
         project: None,
     };
     Ok(LoweredBlock {

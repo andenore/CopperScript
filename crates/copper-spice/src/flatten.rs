@@ -10,7 +10,7 @@ use copper_sim::{
 
 use crate::expr::SExpr;
 use crate::netlist::{
-    Card, Element, LineDelay, Model, Netlist, Out, PolyInputs, Subckt, SwitchControl, TranSpec, Value,
+    Card, Element, InitialTarget, LineDelay, Model, Netlist, Out, PolyInputs, Subckt, SwitchControl, TranSpec, Value,
 };
 use crate::{ErrorKind, Loc, SpiceError};
 
@@ -115,11 +115,17 @@ impl<'a> Flattener<'a> {
         }
     }
 
-    /// The top-level `.PARAM`s, in order.
-    pub fn global_params(&mut self) -> Res<BTreeMap<String, f64>> {
-        let mut frame = Frame { path: String::new(), scope: 0, nodes: BTreeMap::new(), params: BTreeMap::new() };
+    /// The global parameters: `given` (set by the caller, PSpice's `.PARAM`
+    /// in the calling netlist), then the top-level `.PARAM`s in order, each
+    /// one `given` names left at its given value.
+    pub fn global_params(&mut self, given: &[(String, f64)]) -> Res<BTreeMap<String, f64>> {
+        let params: BTreeMap<String, f64> = given.iter().cloned().collect();
+        let mut frame = Frame { path: String::new(), scope: 0, nodes: BTreeMap::new(), params };
         let lib: &'a Netlist = self.lib;
         for (name, value, loc) in &lib.scopes[0].params {
+            if given.iter().any(|(n, _)| n == name) {
+                continue;
+            }
             let v = self
                 .constant(&mut frame, value)
                 .map_err(|m| at(loc, ErrorKind::Undefined, ".PARAM", format!("{name}: {m}")))?;
@@ -205,7 +211,46 @@ impl<'a> Flattener<'a> {
                 .map_err(|m| at(loc, ErrorKind::Undefined, path, format!(".PARAM {name}: {m}")))?;
             frame.params.insert(name.clone(), v);
         }
-        self.elements(&sub.elements, &mut frame, depth)
+        self.elements(&sub.elements, &mut frame, depth)?;
+        self.initial_conditions(sub, &mut frame)
+    }
+
+    /// The `.IC` entries of `sub` on the instance `frame`, after its elements.
+    fn initial_conditions(&mut self, sub: &Subckt, frame: &mut Frame) -> Res<()> {
+        for (target, value, loc) in &sub.initial {
+            let v = self
+                .constant(frame, value)
+                .map_err(|m| at(loc, ErrorKind::Undefined, &frame.path, format!(".IC: {m}")))?;
+            let set = match target {
+                InitialTarget::Node(n) => {
+                    let Some(&node) = frame.nodes.get(n) else {
+                        return Err(at(
+                            loc,
+                            ErrorKind::Undefined,
+                            &frame.path,
+                            format!(".IC V({n}): no element of .SUBCKT {} connects node {n}", sub.name),
+                        ));
+                    };
+                    if node.is_ground() {
+                        return Err(at(loc, ErrorKind::Circuit, &frame.path, format!(".IC V({n}): {n} is ground")));
+                    }
+                    self.c.set_initial_voltage(node, v)
+                }
+                InitialTarget::Inductor(l) => {
+                    let Some(id) = self.c.find_element(&frame.name(l)) else {
+                        return Err(at(
+                            loc,
+                            ErrorKind::Undefined,
+                            &frame.path,
+                            format!(".IC I({l}): {l} is not an inductor of .SUBCKT {}", sub.name),
+                        ));
+                    };
+                    self.c.set_initial_inductor_current(id, v)
+                }
+            };
+            set.map_err(|e| at(loc, ErrorKind::Circuit, &frame.path, e.to_string()))?;
+        }
+        Ok(())
     }
 
     fn elements(&mut self, elements: &[Element], frame: &mut Frame, depth: usize) -> Res<()> {
@@ -524,7 +569,7 @@ impl<'a> Flattener<'a> {
                     sim(self.c.vccs(&format!("{name}.neg"), na, nb, na, nb, 2.0 / r))?;
                 }
             }
-            Card::Capacitor { a, b, model, value, tc } | Card::Inductor { a, b, model, value, tc } => {
+            Card::Capacitor { a, b, model, value, tc, ic } | Card::Inductor { a, b, model, value, tc, ic } => {
                 let capacitor = matches!(e.card, Card::Capacitor { .. });
                 let mut v = constant!(value);
                 let mut tc1 = match tc.first() {
@@ -581,7 +626,12 @@ impl<'a> Flattener<'a> {
                         ));
                     }
                     if v > 0.0 {
-                        sim(self.c.capacitor(&name, na, nb, v))?;
+                        let id =
+                            self.c.capacitor(&name, na, nb, v).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
+                        if let Some(ic) = ic {
+                            let volts = constant!(ic);
+                            sim(self.c.set_initial_capacitor_voltage(id, volts).map(|_| id))?;
+                        }
                     }
                 } else {
                     if v <= 0.0 || !v.is_finite() {
@@ -590,7 +640,11 @@ impl<'a> Flattener<'a> {
                             format!("inductance {v} H: an inductor needs a positive value"),
                         ));
                     }
-                    sim(self.c.inductor(&name, na, nb, v))?;
+                    let id = self.c.inductor(&name, na, nb, v).map_err(|x| fail(ErrorKind::Circuit, x.to_string()))?;
+                    if let Some(ic) = ic {
+                        let amperes = constant!(ic);
+                        sim(self.c.set_initial_inductor_current(id, amperes).map(|_| id))?;
+                    }
                 }
             }
             Card::Coupling { inductors, k } => {

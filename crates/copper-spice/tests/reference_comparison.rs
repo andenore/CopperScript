@@ -152,6 +152,8 @@ struct Deck {
     tran_probes: Vec<String>,
     /// `*@ tran-reltol`: copper-sim's transient tolerance for this deck.
     tran_reltol: f64,
+    /// `*@ dialect pspice`: the reader's dialect (a vendor deck's model; spice3 without it).
+    dialect: Dialect,
 }
 
 fn number(text: &str) -> f64 {
@@ -174,6 +176,7 @@ fn read_deck(path: &Path) -> Deck {
     let (mut options, mut body, mut cards, mut probes) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut tran_probes = Vec::new();
     let mut tran_reltol = TRAN_RELTOL;
+    let mut dialect = Dialect::Spice3;
     let mut last_card = false;
     let mut joined: Vec<String> = Vec::new();
     for line in lines {
@@ -205,6 +208,10 @@ fn read_deck(path: &Path) -> Deck {
                     }
                 }
                 Some("tran-reltol") => tran_reltol = number(words.next().unwrap()),
+                Some("dialect") => {
+                    let name = words.next().unwrap_or("");
+                    dialect = Dialect::parse(name).unwrap_or_else(|| panic!("{}: dialect {name}", path.display()));
+                }
                 _ => {}
             }
             continue;
@@ -252,7 +259,7 @@ fn read_deck(path: &Path) -> Deck {
     if tran_probes.is_empty() {
         tran_probes = probes.clone();
     }
-    Deck { name, options, body, cards, probes, tran_probes, tran_reltol }
+    Deck { name, options, body, cards, probes, tran_probes, tran_reltol, dialect }
 }
 
 /// The library text of `deck`, with source `swept` (if any) set to the sweep parameter.
@@ -618,11 +625,11 @@ fn deck_library(deck: &Deck, swept: Option<&str>) -> Library {
     let lib = if includes {
         let path = std::env::temp_dir().join(format!("copper-reference-{}-{}.cir", deck.name, std::process::id()));
         std::fs::write(&path, &text).unwrap();
-        let lib = Library::load(&path, Dialect::Spice3, true);
+        let lib = Library::load(&path, deck.dialect, true);
         let _ = std::fs::remove_file(&path);
         lib
     } else {
-        Library::parse(&text, &format!("{}.cir", deck.name), Dialect::Spice3)
+        Library::parse(&text, &format!("{}.cir", deck.name), deck.dialect)
     };
     lib.unwrap_or_else(|e| panic!("{}: {e}", deck.name))
 }

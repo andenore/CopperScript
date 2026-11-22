@@ -386,6 +386,10 @@ pub struct Circuit {
     /// run itself (the generators of transient noise, [`crate::transient`]),
     /// by element index; zero at the operating point.
     pub(crate) injected: std::collections::BTreeSet<usize>,
+    /// Initial conditions the circuit itself carries (a vendor model's `.IC`
+    /// and element `IC=`), applied by every transient run
+    /// ([`crate::transient`], "Initial conditions").
+    pub(crate) initial: crate::transient::InitialConditions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,6 +426,7 @@ impl Circuit {
             linearized_law: BTreeMap::new(),
             noise_temperature: BTreeMap::new(),
             injected: std::collections::BTreeSet::new(),
+            initial: crate::transient::InitialConditions::default(),
         }
     }
 

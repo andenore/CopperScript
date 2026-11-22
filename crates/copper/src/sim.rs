@@ -78,8 +78,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              their outputs. Rail models (sim regulator and sim reference: set point, dropout, output impedance, line \
              rejection, current limit, enable and soft-start, quiescent current; a regulator with an efficiency is an \
              averaged DC-DC converter, without switching ripple) drive rails in every analysis. A part's sim spice \
-             block runs a SPICE subcircuit read natively (params = values {{ ... }} sets its PARAMS:; the model list \
-             names ignored .OPTIONS); an unsupported construct fails the bench with its file and line (SIM078). \
+             block runs a SPICE subcircuit read natively (params = values {{ ... }} sets its PARAMS: or the \
+             global parameters it reads; note = \"...\" says where the vendor model differs from the data \
+             sheet, printed by --check-model; the model list names ignored .OPTIONS); an unsupported construct fails the bench with its file and line (SIM078). \
              A part may declare a built-in block and a sim spice block for one unit, its macro and vendor models: \
              a run uses the macro model unless --models vendor is given (--models macro refuses a part with only a \
              sim spice model, SIM107). A vendor file registered by hand (sim spice sha256 with a download note) \
