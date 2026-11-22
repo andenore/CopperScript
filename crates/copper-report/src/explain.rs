@@ -126,8 +126,48 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "SIM_PIN_NOT_SIMULATED",
-        "Pins that declare an absolute rating but whose voltage no bench in the results solved with an op, dc or tran analysis.",
-        "Add a bench that covers them (a module bench covers every instance of its module), or accept that only the declared supplies check them.",
+        "Pins that declare an absolute rating but whose voltage no bench in the results solved: with an op, dc or tran analysis, or at the bias point of an ac, noise, loop or pz bench.",
+        "Add a bench that covers them (a module bench covers every instance of its module; a board bench covers the power and digital side), or accept that only the declared supplies check them.",
+    ),
+    (
+        "SIM_STRESS_POWER_HIGH",
+        "The simulated power into a two-terminal part (copper check --sim-results: V(a, b) x I(a), its steady value) exceeds the part's rated_power; the message names the bench, step and value.",
+        "Lower the dissipation (a larger resistor, a part with a higher rating) or check that the bench drives the part as the board does.",
+    ),
+    (
+        "SIM_STRESS_VOLTAGE_HIGH",
+        "The simulated voltage across a two-terminal part (its peak, either polarity) exceeds the part's rated_voltage; the message names the bench, step, value and where it was reached.",
+        "Use a part with a higher voltage rating or limit the voltage; read the bench's plots first.",
+    ),
+    (
+        "SIM_STRESS_CURRENT_HIGH",
+        "The simulated current into a pin (its steady value, either direction) exceeds the pin's current_max; the message names the bench, step and value.",
+        "Lower the load or use a part with a higher current rating; a stand-in model's result is the stand-in's.",
+    ),
+    (
+        "SIM_STRESS_NOT_CHECKED",
+        "Simulated resistors, capacitors, diodes and transistors whose parts declare no stress rating (rated_power, rated_voltage, a pin's current_max), counted per kind, and rated components no bench simulated with their own model; with the ratings that were checked and the highest fractions of them.",
+        "Declare the rating on the part from its data sheet; an unknown rating stays unknown and is never assumed.",
+    ),
+    (
+        "SIM_RAIL_MEAN_HIGH",
+        "A rail's simulated mean current (copper power-check --sim-results: a board bench's figure, or the module instances' worst shares summed) exceeds a budget: the supply's current_max, its source pin's current_max, or its source part's output_current_limit; the message names the bench, step, value and budget.",
+        "Lower the load, or raise the budget only with a source for it (the regulator's or converter's rating, what the rail was sized for).",
+    ),
+    (
+        "SIM_RAIL_PEAK_HIGH",
+        "A rail's simulated peak current exceeds a budget that applies to the peak: the supply's current_peak_max, or its current_max without one, or its source part's output_current_limit.",
+        "Limit the transient load (inrush, a large output swing) or declare current_peak_max from what feeds the rail.",
+    ),
+    (
+        "SIM_RAIL_INCOMPLETE",
+        "A rail with a budget has loads (components with a pin on its net) that no bench simulated with their own model, so its simulated total is not the rail's whole current.",
+        "Add a bench that covers them; a board-level bench covers every load on the rail it drives.",
+    ),
+    (
+        "SIM_RAIL_NOT_CHECKED",
+        "Rail currents that were not compared: budgets no bench simulated, and simulated rails that declare no budget.",
+        "Declare current_max on the supply (or current_max on its source pin) from what feeds the rail; an unknown budget stays unknown.",
     ),
     (
         "VOLTAGE_LIMIT_UNRESOLVED",

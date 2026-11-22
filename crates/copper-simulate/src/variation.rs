@@ -404,7 +404,7 @@ fn evaluate(
 ) -> Result<Vec<MeasureValue>, String> {
     let varied = varied_params(context, params, variables, x)?;
     let (step, _) =
-        run_step(context.design, context.bench, context.wiring, &varied, context.marks, context.covered, &[])?;
+        run_step(context.design, context.bench, context.wiring, &varied, context.marks, context.covered, None)?;
     Ok(step.measures)
 }
 

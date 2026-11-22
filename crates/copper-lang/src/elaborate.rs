@@ -230,6 +230,8 @@ fn expand_one(parent: FlatElectricalView, instance: &str, template: &Template) -
             net: mapped_net(&supply.net),
             source,
             externally_driven,
+            current_max: supply.current_max.clone(),
+            current_peak_max: supply.current_peak_max.clone(),
         });
     }
 

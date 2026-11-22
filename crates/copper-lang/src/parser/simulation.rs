@@ -542,6 +542,10 @@ impl Parser {
     fn bench_net(&mut self) -> Result<NetDecl> {
         let location = self.current().location.clone();
         let mut name = self.name("net name")?;
+        // A board bench may join a net of a module instance by its path (`AFE/E_HC`).
+        while self.accept_symbol("/") {
+            name = format!("{name}/{}", self.name("instance net name")?);
+        }
         if self.accept_symbol(".") {
             name = format!("{name}.{}", self.qualified_name("pin name")?);
         }

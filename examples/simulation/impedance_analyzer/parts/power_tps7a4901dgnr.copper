@@ -9,7 +9,8 @@
 //   feedback resistor <= 237 kohm. Section 6.5 p. 6: VEN(high) 2.1 V, VEN(low) 0.4 V;
 //   VFB 1.185 V; dropout 260 mV at 100 mA; ground current 49 uA typ / 100 uA max at no
 //   load; noise 15.4 uVRMS (10 Hz-100 kHz, CNR = 10 nF); feedback network current >= 5 uA.
-//   Section 9.1.1: R1 = R2 (VOUT / VFB - 1).
+//   Section 9.1.1: R1 = R2 (VOUT / VFB - 1). OUT current_max is the 150 mA IOUT maximum of
+//   Section 6.3 (recommended operating conditions), a rating for copper power-check.
 // Footprint: KiCad Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm; the DGN0008G
 // land pattern (drawing 4225480/C) shows a 1.57 x 1.89 mm exposed pad. Pad 9 is the
 // PowerPAD.
@@ -23,7 +24,7 @@ part TPS7A4901DGNR {
     source_url = "https://www.ti.com/lit/ds/symlink/tps7a49.pdf";
     source_checksum = "sha256:f69e957b22bcc2db72149f57c96501aedeb4ed214f016c98f562d71411474182";
 
-    pin OUT { number = "1"; domains = "power"; directions = "output"; }
+    pin OUT { number = "1"; domains = "power"; directions = "output"; current_max = 150mA; }  // IOUT, Section 6.3
     pin FB { number = "2"; domains = "analog"; directions = "input"; }
     pin NC { number = "3"; connection = optional; }
     pin GND { number = "4"; domains = "ground"; directions = "input"; }

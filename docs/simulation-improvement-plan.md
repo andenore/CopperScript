@@ -296,6 +296,100 @@ Acceptance: a board whose simulated rail current exceeds the declared budget
 fails `power-check` with the bench named; the analyzer declares budgets for
 its four analog rails.
 
+Built on 22 November 2026. Nothing in the language declared a rail current
+or a component's stress, so three declarations were added (language
+reference, "Supplies" and "Stress ratings"); a regulator's existing `sim
+regulator` / `sim reference` `output_current_limit` is used as it is.
+
+- Budgets: `supply VP { ...; current_max = 70mA; }` bounds the rail's mean
+  (the operating point, a transient run's time mean, each point of a dc
+  sweep) and, without `current_peak_max`, its peak. A rail with a `source`
+  pin also takes the pin's `current_max` (mean) and the source part's
+  `output_current_limit` (mean and peak) as budgets. `copper power-check
+  --sim-results` fails with `SIM_RAIL_MEAN_HIGH` / `SIM_RAIL_PEAK_HIGH`
+  (bench, step, value, budget and its source); `SIM_RAIL_INCOMPLETE` and
+  `SIM_RAIL_NOT_CHECKED` say what a total or a budget leaves out. An `OK:`
+  line still prints with warnings only.
+- Totals: a board bench's figure is a total of what it simulated; module
+  benches' shares are summed over the instances, each instance at its worst
+  bench and step (peaks summed as if they coincided). Every total says how
+  many of the rail's loads (the components on its net, its source excepted)
+  it covers, and the rail lists the loads in no bench, capacitors apart. A
+  supply driven by a component the bench simulates is now recorded (the
+  current out of its `source` pin, `supplies[].driven_by`).
+- Bias points: an `ac`, `noise`, `loop` or `pz` bench records `pins`,
+  `supplies` and `stress` at the operating point of its circuit, solved once
+  more per step (nodes with no DC path held to ground through 1 ohm, as
+  copper-sim's small-signal analyses hold them, and nothing on them
+  recorded); a step whose bias point repeats an earlier one's refers to it
+  (`steps[].bias_step`), which keeps `ContactImbalance`'s 192 steps to one
+  record. `copper check` judges them like `op` results.
+- Stress: part `rated_power` and `rated_voltage` (two-terminal parts) and pin
+  `current_max`, recorded per step as `steps[].stress` for the components a
+  bench simulates with their own model; `copper check --sim-results` fails
+  with `SIM_STRESS_POWER_HIGH` / `_VOLTAGE_HIGH` / `_CURRENT_HIGH`; power and
+  current against the steady value, voltage against the peak.
+  `SIM_STRESS_NOT_CHECKED` counts the simulated resistors, capacitors, diodes
+  and transistors without a rating and names rated parts no bench simulated.
+  Schema v1 gained `stress`, `driven_by` and `bias_step` (additive; shape
+  test and `docs/sim-results-schema.md` updated). A board bench may name a
+  module instance's net by its path (`net AFE/E_HC { ... }`).
+- Tests: `crates/copper/tests/sim_evidence_cli.rs` gains a board whose rail
+  (1.6 mA) exceeds its budgets (1.5 mA, and the regulator's 1.2 mA limit) and
+  fails `power-check` naming `Overdrive`, and a 1 mW resistor carrying
+  3.6 mW that fails `check` likewise.
+- Analyzer: `current_max = 70mA` on VP and VN (the TPS65130 and the post
+  filters are sized for 70 mA per rail, board.copper and README "Current"),
+  and the parts' ratings from their cited data sheets: TPS7A4901 OUT 150 mA,
+  TPS7A3001 OUT 200 mA (both IOUT of Section 6.3), REF2033 VBIAS and VREF
+  20 mA (Section 6.5), TPS22918 VOUT 2 A (Section 6.1). V3V3_ANA has no
+  budget: FB_ANA, its only feed, declares no rated current, and the switch's
+  2 A is DDS_SW's. New board-level bench `PowerSide` (op, the `MEASURE`
+  state, DDS lines low and high; unmodelled parts ignored and their rails
+  ideal sources at their set points). Simulated against the budgets:
+
+  | Rail | Budgets | Board total (`PowerSide`, loads covered) | Front end's worst share, mean / peak |
+  | --- | --- | --- | --- |
+  | VP | 70 mA; 150 mA (U_LDOP.OUT) | 52.17 mA, 18 of 18 | 52.28 mA / 53.2 mA (`SupplyCurrent.driving`) |
+  | VN | 70 mA; 200 mA (U_LDON.OUT) | 51.82 mA, 16 of 16 | 52.28 mA / 53.21 mA (`SupplyCurrent.driving`) |
+  | V_MID | 20 mA (U_REF.VBIAS) | 4.652 uA, 6 of 6 | 4.652 uA / 49.2 uA (`Distortion`, 100 kHz) |
+  | V3V3_ANA | none | 3.66 mA, 9 of 10 (FB_ANA in no bench) | 6.086 mA / 23.96 mA (`Distortion`, 1 MHz) |
+
+  Both checks pass. Rated pins without a simulated voltage: 85 before, 29
+  now, all with no analog meaning at DC: U_MCU 25 (11 unconnected GPIOs, the
+  four oscillator pins and NRST on capacitor-only nets, UART and SWD on the
+  debug header, USB, and the three charger lines), U_PWR 3 (CP and CN, the
+  charge pump's capacitor-only nets, and the unconnected BSW), U_DDS 1
+  (CAP_2V5, capacitor only). Unrated simulated pins rose from 26 to 51 (the
+  newly simulated TPS63020, BQ24072, LDO, TPS65130 VREF and REF2033 output
+  pins declare no absolute rating). Stress: 2 ratings checked, the REF2033's
+  VBIAS (4.65 uA, 0.0233 % of 20 mA) and VREF (no DC load); 132 simulated
+  components not checked, 84 capacitors and 48 resistors (no part declares a
+  rating); the rated LDOs and switches are in no stress record (ignored
+  wherever they appear). `power-check` warns `SIM_RAIL_INCOMPLETE` on DDS_SW
+  (its two ferrites have no model) and lists the rails without a budget.
+- Decision 6: every measure of the seven examples is identical; the
+  analyzer gains `PowerSide`'s measures. Its `sim-results.json` grew from
+  16.3 MB to 18.8 MB (the other six by 0 to 25 %, 120 B to 71 kB); without
+  `bias_step` the bias points alone made it 42 MB. Debug runs took 78 s
+  before and 57 to 71 s after (single runs on a shared machine: no
+  measurable cost).
+
+Open: no part on the analyzer declares `rated_power` or `rated_voltage`
+(the feed resistor's 0.1 W is unverified), so component stress checks only the
+REF2033's outputs there; the ferrites' rated current (V3V3_ANA's budget) is
+not read; `PowerSide` is DC only, with the regulators, the MCU and the DDS
+ignored or stand-ins, so the rails' upstream currents (VSYS, BOOST_IN,
+DDS_SW) are not their loads' and the DDS supply current is not simulated; a
+load counts as covered when its own model is simulated, not what it feeds
+(L1 covers BOOST_IN although the boost behind it is ignored); a `SLEEP`
+bench (firmware rules 1 and 2) is not built; a `sim regulator` whose
+`output_current_limit` is below the load fails to solve its operating point
+(singular at the model's internal node), so an active limit can be checked
+only where a stand-in drives the rail; `copper-sim` exposes no held operating
+point, so the bias point repeats the hold of its small-signal analyses rather
+than reading theirs.
+
 ### I5. Layout parasitics
 
 F5 of the first plan, unchanged in scope. Proposed order inside it:

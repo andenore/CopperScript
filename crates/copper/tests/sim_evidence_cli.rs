@@ -1,7 +1,8 @@
-//! Simulation results as evidence for the other checks (plan F11): `copper
-//! check --sim-results` fails a pin whose simulated voltage exceeds its
-//! absolute rating and names the bench, `copper power-check --sim-results`
-//! lists the supplies' simulated currents with their source, and both refuse
+//! Simulation results as evidence for the other checks (plans F11 and I4):
+//! `copper check --sim-results` fails a pin whose simulated voltage exceeds its
+//! absolute rating and a component beyond its stress rating, naming the bench;
+//! `copper power-check --sim-results` lists the supplies' simulated currents
+//! with their source and fails a rail above its declared budget; both refuse
 //! results made from other sources.
 
 use std::path::{Path, PathBuf};
@@ -76,15 +77,22 @@ const SWING: &str = "bench Swing for Amp {
 ";
 
 fn project(name: &str) -> PathBuf {
+    project_with(
+        name,
+        &[
+            ("board.copper", BOARD),
+            ("parts/header.copper", HEADER),
+            ("parts/opamp.copper", OPAMP),
+            ("benches/overdrive.copper", OVERDRIVE),
+            ("benches/swing.copper", SWING),
+        ],
+    )
+}
+
+fn project_with(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let directory = std::env::temp_dir().join(format!("copper-sim-evidence-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
-    for (path, text) in [
-        ("board.copper", BOARD),
-        ("parts/header.copper", HEADER),
-        ("parts/opamp.copper", OPAMP),
-        ("benches/overdrive.copper", OVERDRIVE),
-        ("benches/swing.copper", SWING),
-    ] {
+    for &(path, text) in files {
         let target = directory.join(path);
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, text).unwrap();
@@ -199,7 +207,10 @@ fn the_power_check_lists_simulated_rail_currents_with_their_source() {
     let text = stdout(&output);
     assert_eq!(output.status.code(), Some(0), "{text}{}", stderr(&output));
     assert!(text.contains("OK: Amp passed power-state analysis"), "{text}");
-    assert!(text.contains("no part or supply declares a rail current, so none is compared"), "{text}");
+    // No supply declares a budget: the figures are listed, not compared, and that is said.
+    assert!(text.contains("WARNING SIM_RAIL_NOT_CHECKED [Amp]"), "{text}");
+    assert!(text.contains("simulated rails without a budget: POS, NEG"), "{text}");
+    assert!(text.contains("  budget: none declared"), "{text}");
     // The quiescent 1 mA plus the 0.6 mA the output (12 V) drives into RF + RG, from the positive rail;
     // the negative rail sinks the quiescent current alone.
     let rails: Vec<&str> = text.lines().collect();
@@ -222,5 +233,168 @@ fn the_power_check_lists_simulated_rail_currents_with_their_source() {
     // Without --sim-results the check is unchanged.
     let plain = stdout(&copper(&directory, &["power-check", "board.copper"]));
     assert!(!plain.contains("RAIL"), "{plain}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A resistor part with a power rating.
+const RATED_RESISTOR: &str = "part RES_0402 {
+    category = \"passive.resistor\";
+    rated_power = 1mW;
+    pin 1 { number = \"1\"; domains = \"analog\"; directions = \"passive\"; }
+    pin 2 { number = \"2\"; domains = \"analog\"; directions = \"passive\"; }
+}
+";
+
+/// A regulator with a rated output (2 mA) and a current limit (1.2 mA).
+const LDO: &str = "part LDO {
+    category = \"power.regulator.ldo\";
+    pin IN { number = \"1\"; domains = \"power\"; directions = \"input\"; }
+    pin GND { number = \"2\"; domains = \"ground\"; directions = \"input\"; }
+    pin OUT { number = \"3\"; domains = \"power\"; directions = \"output\"; current_max = 2mA; }
+    sim regulator { in = IN; out = OUT; gnd = GND; output_voltage = 5V; dropout = 0.2V;
+        output_resistance = 0.1ohm; output_current_limit = 1.2mA; }
+}
+";
+
+/// The amplifier with its positive rail from the regulator and budgets on both rails; RF is rated 1 mW.
+const RATED_BOARD: &str = "board Amp {
+    use library \"tiny\";
+    import p \"./parts\";
+    component J2: p.HEADER;
+    component U1: p.OPAMP;
+    component U2: p.LDO;
+    component RF: p.RES_0402 { value = 10kohm; }
+    component RG: RESISTOR { value = 10kohm; }
+    net IN { J2.1; U1.INP; }
+    net OUT { U1.OUT; RF.1; }
+    net FB { U1.INN; RF.2; RG.1; }
+    net VIN { U2.IN; }
+    net VP { U1.VP; U2.OUT; }
+    net VN { U1.VN; }
+    net GND { J2.2; RG.2; U2.GND; }
+    supply VIN { voltage = 7V; external = true; }
+    supply POS { voltage = 5V; net = VP; source = U2.OUT; current_max = 1.5mA; }
+    supply NEG { voltage = -5V; net = VN; external = true; current_max = 5mA; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}
+";
+
+/// 6 V in, with an ideal 5 V rail standing in for the regulator: 1.6 mA from POS.
+const RATED_OVERDRIVE: &str = "bench Overdrive for Amp {
+    replace J2 with source { out = J2.1; ref = GND; dc = 6V; }
+    ignore U2;
+    replace POS with source { out = VP; ref = GND; dc = 5V; }
+    analysis op;
+    measure out = V(OUT);
+}
+";
+
+/// The regulator itself drives POS; the bias point of this ac bench is recorded once for both steps
+/// (1 V in: 1.1 mA from the regulator).
+const RATED_GAIN: &str = "bench Gain for Amp {
+    replace J2 with source { out = J2.1; ref = GND; dc = 1V; ac = A_IN; }
+    param A_IN = 1V;
+    step A_IN in 1V, 2V;
+    analysis ac { from = 10Hz; to = 1MHz; points_per_decade = 2; }
+    measure gain = mag(at(V(OUT), 1kHz));
+}
+";
+
+fn rated_project(name: &str) -> PathBuf {
+    project_with(
+        name,
+        &[
+            ("board.copper", RATED_BOARD),
+            ("parts/header.copper", HEADER),
+            ("parts/opamp.copper", OPAMP),
+            ("parts/res.copper", RATED_RESISTOR),
+            ("parts/ldo.copper", LDO),
+            ("benches/overdrive.copper", RATED_OVERDRIVE),
+            ("benches/gain.copper", RATED_GAIN),
+        ],
+    )
+}
+
+fn error_line(text: &str, code: &str, subject: &str) -> String {
+    text.lines()
+        .find(|line| line.contains(&format!("ERROR {code} [{subject}]")))
+        .unwrap_or_else(|| panic!("no {code} for {subject} in:\n{text}"))
+        .to_owned()
+}
+
+#[test]
+fn a_rail_above_its_budget_fails_the_power_check_with_the_bench_named() {
+    let directory = rated_project("budget");
+    let results = simulate(&directory);
+    let output = copper(&directory, &["power-check", "board.copper", "--sim-results", results]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}{}", stderr(&output));
+    assert!(!text.contains("OK: Amp passed"), "{text}");
+    // 1.6 mA at the operating point of Overdrive: above the supply's 1.5 mA and the regulator's 1.2 mA
+    // limit; the larger excess is named.
+    let mean = error_line(&text, "SIM_RAIL_MEAN_HIGH", "POS");
+    assert!(
+        mean.contains("rail POS: the mean current 1.6 mA (board level, bench Overdrive: step 'nominal')"),
+        "{mean}"
+    );
+    assert!(
+        mean.contains("above its budget 1.2 mA (output_current_limit of U2's sim regulator block) by 400 uA"),
+        "{mean}"
+    );
+    // current_max bounds the peak too.
+    error_line(&text, "SIM_RAIL_PEAK_HIGH", "POS");
+    // The budgets and their sources are listed, the regulator's rated output among them.
+    assert!(
+        text.contains(
+            "  budget: 1.5 mA mean and peak (current_max of supply POS); 2 mA mean (current_max of U2.OUT, its \
+             source); 1.2 mA mean and peak (output_current_limit of U2's sim regulator block)"
+        ),
+        "{text}"
+    );
+    // Where the regulator drives the rail itself, its output current is the rail's: the bias point of the ac
+    // bench, the same at both steps.
+    assert!(
+        text.contains("1.1 mA (bias point of the ac analysis, 2 steps): bench Gain, supply POS (driven by U2.OUT)"),
+        "{text}"
+    );
+    // NEG stays inside its 5 mA; VIN has no budget, which is said.
+    assert!(!text.contains("[NEG]"), "{text}");
+    assert!(text.contains("simulated rails without a budget: VIN"), "{text}");
+    assert!(text.contains("covers 1 of 1 loads on VP"), "{text}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_component_beyond_its_rating_fails_erc_with_the_bench_named() {
+    let directory = rated_project("stress");
+    let results = simulate(&directory);
+    let output = copper(&directory, &["check", "board.copper", "--sim-results", results]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}{}", stderr(&output));
+    // RF carries 6 V and 0.6 mA at the operating point: 3.6 mW against 1 mW.
+    let power = error_line(&text, "SIM_STRESS_POWER_HIGH", "RF");
+    assert!(
+        power.contains("bench Overdrive, step 'nominal': the power into RF is 3.6 mW at the operating point"),
+        "{power}"
+    );
+    assert!(power.contains("above its rated_power 1 mW by 2.6 mW (1 of 3 simulated steps exceed it)"), "{power}");
+    // The regulator's output is within its rating; RG declares none and is counted, not assumed.
+    assert!(!text.contains("[U2.OUT]"), "{text}");
+    let summary = text.lines().find(|line| line.contains("WARNING SIM_STRESS_NOT_CHECKED")).expect("a summary");
+    assert!(
+        summary.contains(
+            "2 ratings of simulated components checked (highest: RF power at 360 % of 1 mW; U2.OUT current at 55 % \
+             of 2 mA)"
+        ),
+        "{summary}"
+    );
+    assert!(
+        summary
+            .contains("1 simulated component was not checked, their parts declare no rating: 1 resistor (rated_power)"),
+        "{summary}"
+    );
+    // The bias point of the ac bench is judged like an operating point: 1 V on INP is inside VP + 0.3 V.
+    let high = error_line(&text, "SIM_PIN_ABSOLUTE_HIGH", "U1.INP");
+    assert!(high.contains("(1 of 3 simulated steps exceed it)"), "{high}");
     let _ = std::fs::remove_dir_all(&directory);
 }

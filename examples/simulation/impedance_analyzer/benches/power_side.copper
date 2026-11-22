@@ -1,0 +1,82 @@
+// PowerSide: the whole board at the MEASURE power state (board.copper), at DC, so that
+// the rails' totals and the power and digital side's pins are simulated: every rail
+// with all its loads on it (the front end included, through its module instance), the
+// pins of the regulators, load switches, DDS and MCU on the nets the bench drives.
+//
+// What stands in for what:
+//  - parts without a simulation model are ignored (their pins open): connectors, the
+//    ESD array, the charger, the TPS63020, the TPS65130, the LDOs, the load switches,
+//    the Schottky diodes, the ferrites, the MCU, the crystals and the electrode pads;
+//  - the rails they make are ideal sources at their set points (board.copper): VSYS
+//    3.7 V, V3V3 3.3 V, BOOST_IN 3.7 V and DDS_SW 3.3 V (switches on, ANA_EN high), VP
+//    4.50 V and VN -4.48 V (the LDOs' dividers). VPOS_RAW and VNEG_RAW stay the declared
+//    5.34 V and -5.24 V; VPOS_F and VNEG_F are not driven (they are declared at a 70 mA
+//    drop the ignored LDOs do not draw here), so the LDO inputs sit at the raw rails;
+//  - the REF2033 runs on its part's sim reference blocks from VP: V_MID and REF_3V3 are
+//    its outputs, with every load on them;
+//  - the TPS65130's VREF output, which its inverter's feedback divider hangs from, is a
+//    1.213 V source (board.copper, R_FBN), else FBN would sit at VNEG_RAW;
+//  - the AD9833 output is a 0.34 V source behind 200 ohm (the estimate of Startup); its
+//    digital inputs and the MCU's lines to it (SCLK, SDATA, FSYNC, MCLK) are driven at
+//    LOGIC, low and high: the two static levels an idle or clocking line sits at
+//    (edges, ringing and the 25 MHz clock's dynamics are not simulated). ANA_EN and
+//    PS/SYNC (PB10, PB11) are driven high as when measuring; the other MCU lines are
+//    open or held by their board resistors;
+//  - capacitors that are a net's only DC element (the DDS COMP and CAP pins, NRST, the
+//    crystal load capacitors, the TPS65130 charge pump and both LDOs' NR/SS) and the
+//    TPS63020's inductor between two open pins are removed: at DC they carry nothing,
+//    and the nets they alone hold are not simulated;
+//  - the electrodes are in air: the probe header is open and each capacitor-coupled
+//    electrode net leaks 1 Gohm to ground (as Startup's air), which its DC level needs.
+// So the pins this bench records are the DC levels of the MEASURE state, not switching
+// waveforms; the rails' totals are the DC loads (the transient shares come from the
+// front end's own benches).
+bench PowerSide for ImpedanceAnalyzer {
+    param LOGIC = 0V;
+    step LOGIC in 0V, 3.3V;
+
+    ignore J_USB, U_ESD, J_BAT, U_CHG, U_SW_VB, U_BB, FB_A, U_SW_BST, U_PWR, FB_PWR, D1, D2;
+    ignore U_LDOP, U_LDON, U_MCU, Y1, Y2, U_SW_DDS, FB_DDS, FB_ANA, J_DEBUG;
+    ignore AFE/E_HC1, AFE/E_HP1, AFE/E_LP1, AFE/E_LC1, AFE/J_PROBE;
+    ignore C_DDS_COMP, C_DDS_CAP, C_NRST, C_Y1, C_Y2, C_LSE1, C_LSE2, C_PWR_CP, C_PWR_CN;
+    ignore C_LDOP_NR, C_LDON_NR, L3;
+    ignore VPOS_F, VNEG_F;
+
+    replace VSYS with source { out = VSYS; ref = GND; dc = 3.7V; }
+    replace V3V3 with source { out = V3V3; ref = GND; dc = 3.3V; }
+    replace BOOST_IN with source { out = BOOST_IN; ref = GND; dc = 3.7V; }
+    replace DDS_SW with source { out = DDS_SW; ref = GND; dc = 3.3V; }
+    replace VP with source { out = VP; ref = GND; dc = 4.5V; }
+    replace VN with source { out = VN; ref = GND; dc = -4.48V; }
+    replace U_DDS with source { out = U_DDS.VOUT; ref = GND; dc = 0.34V; output_resistance = 200ohm; }
+
+    model PWR_VREF_OUT: source { out = PWR_VREF; ref = GND; dc = 1.213V; }
+    model MCU_ANA_EN: source { out = ANA_EN; ref = GND; dc = 3.3V; }
+    model MCU_PS_SYNC: source { out = BB_PS; ref = GND; dc = 3.3V; }
+    model MCU_SCLK: source { out = DDS_SCLK; ref = GND; dc = LOGIC; }
+    model MCU_SDATA: source { out = DDS_SDATA; ref = GND; dc = LOGIC; }
+    model MCU_FSYNC: source { out = DDS_FSYNC; ref = GND; dc = LOGIC; }
+    model MCU_MCLK: source { out = MCLK_SRC; ref = GND; dc = LOGIC; }
+
+    component R_AIR_HC: RESISTOR { value = 1000Mohm; }
+    component R_AIR_HP: RESISTOR { value = 1000Mohm; }
+    component R_AIR_LP: RESISTOR { value = 1000Mohm; }
+    net AFE/E_HC { R_AIR_HC.1; }
+    net AFE/E_HP { R_AIR_HP.1; }
+    net AFE/E_LP { R_AIR_LP.1; }
+    net GND { R_AIR_HC.2; R_AIR_HP.2; R_AIR_LP.2; }
+
+    analysis op;
+
+    // The rails, each with every load on it.
+    measure positive_rail = I(VP);
+    measure negative_rail = -I(VN);
+    measure analog_3v3 = I(V3V3_ANA);
+    measure mid_reference = -I(U_REF.VBIAS);
+    measure positive_raw_divider = I(VPOS_RAW);
+    // The reference and the feedback inputs at their DC levels.
+    measure v_mid = V(V_MID) { min = 1.649V; max = 1.651V; }
+    measure ref_3v3 = V(REF_3V3) { min = 3.298V; max = 3.302V; }
+    measure boost_feedback = V(FBP);
+    measure inverter_feedback = V(FBN);
+}

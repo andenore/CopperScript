@@ -7,7 +7,8 @@
 //   +0.3 V; EN to GND -36 to +36 V. Section 6.3 p. 6: VIN -35 to -3 V, IOUT 0-200 mA.
 //   Section 6.5: VFB -1.176 V; dropout 325 mV at 200 mA; VEN(+HI) 1.8 V min; noise
 //   17.5 uVRMS at -5 V out (CNR = CFF = 10 nF); COUT >= 2.2 uF.
-//   R1 = R2 (VOUT / VFB - 1), divider >= 5 uA.
+//   R1 = R2 (VOUT / VFB - 1), divider >= 5 uA. OUT current_max is the 200 mA IOUT maximum of
+//   Section 6.3 (the current OUT sinks from its load), a rating for copper power-check.
 // Footprint: KiCad Package_SO:HVSSOP-8-1EP_3x3mm_P0.65mm_EP1.57x1.89mm; the DGN0008D
 // land pattern in this data sheet shows a 1.57 x 1.89 mm exposed pad. Pad 9 is the
 // PowerPAD; with a negative regulator it must still go to GND, never to IN.
@@ -21,7 +22,7 @@ part TPS7A3001DGNR {
     source_url = "https://www.ti.com/lit/ds/symlink/tps7a30.pdf";
     source_checksum = "sha256:b60d6fd8d7220e9f8a4dcfeaa7438a5e5e419ef589e1ea85e9d04781f2203ae5";
 
-    pin OUT { number = "1"; domains = "power"; directions = "output"; }
+    pin OUT { number = "1"; domains = "power"; directions = "output"; current_max = 200mA; }  // |IOUT|, Section 6.3
     pin FB { number = "2"; domains = "analog"; directions = "input"; }
     pin NC { number = "3"; connection = optional; }
     pin GND { number = "4"; domains = "ground"; directions = "input"; }

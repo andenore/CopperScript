@@ -32,6 +32,8 @@ target/debug/copper check --pins error examples/simulation/impedance_analyzer/bo
 target/debug/copper power-check examples/simulation/impedance_analyzer/board.copper
 target/debug/copper sim examples/simulation/impedance_analyzer/board.copper --out build/sim
 target/debug/copper sim examples/simulation/impedance_analyzer/board.copper --bench SoilSweep
+target/debug/copper check examples/simulation/impedance_analyzer/board.copper --sim-results build/sim/sim-results.json
+target/debug/copper power-check examples/simulation/impedance_analyzer/board.copper --sim-results build/sim/sim-results.json
 ```
 
 ```text
@@ -211,12 +213,19 @@ What the simulation confirms and corrects:
   thousandth at 1 kHz (not simulated). The battery budget below keeps 3.7 mA:
   a continuous 1 MHz measurement would add about 2 mA at 3.3 V, about 2 mA
   from the cell (under 1 % of the measuring current; estimate).
-- **`copper power-check`** passes the board (`MEASURE` and `SLEEP`), but it
-  checks power states and back-powering only; it carries no current. The
-  board's current assumptions are its declarations: VPOS_F and VNEG_F are
-  declared at a 70 mA drop across the 1 ohm post-filters (5.27 V, -5.17 V),
-  where the simulated 52.3 mA gives 5.29 V and -5.19 V, so the declared
-  values are conservative by 18 mV.
+- **`copper power-check`** passes the board (`MEASURE` and `SLEEP`). On its
+  own it checks power states and back-powering only; with `--sim-results` it
+  compares the simulated rail currents with the budgets the board declares:
+  `current_max = 70mA` on VP and VN (what the TPS65130 and the post-filters
+  are sized for), and the parts' ratings on the rails' sources (TPS7A4901 OUT
+  150 mA, TPS7A3001 OUT 200 mA, REF2033 VBIAS 20 mA). VP's total, every load
+  on it in `PowerSide`, is 52.17 mA at DC (the front end's 51.8 mA, the
+  REF2033's 0.36 mA, the LDO's divider); the front end's worst share is a
+  mean of 52.28 mA and a peak of 53.2 mA (`SupplyCurrent`), inside 70 mA.
+  V3V3_ANA has no budget: its only feed, FB_ANA, declares no rated current.
+  VPOS_F and VNEG_F are declared at a 70 mA drop across the 1 ohm
+  post-filters (5.27 V, -5.17 V), where the simulated 52.3 mA gives 5.29 V
+  and -5.19 V, so the declared values are conservative by 18 mV.
 
 The first version used eight
 ADA4817s and drew 165 mA per rail. 51.8 mA misses the battery target of about
@@ -357,6 +366,7 @@ frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
 | `Startup` | transient | Rails coming up from models of the regulators, coupling networks charging, input ranges, settling |
 | `Distortion` | transient, periodic steady state | Drive-current harmonics and spectrum, clipping and slew headroom |
 | `SupplyCurrent` | operating point, transient | The current per rail, idle and driving 1 MHz ([Supply current](#supply-current)) |
+| `PowerSide` | operating point | The whole board at the `MEASURE` state, DC: every rail with all its loads (the REF2033 on VP and V_MID included), and the regulators', switches', DDS's and MCU's pins at their DC levels, with the DDS lines low and high ([Supply current](#supply-current)) |
 
 `StrayCapacitance` adds its mask capacitor to `SoilModel`'s soil node `S_LP`
 by declaring the net again with the capacitor's pin (nets of one name are one

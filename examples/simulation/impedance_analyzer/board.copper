@@ -377,8 +377,13 @@ board ImpedanceAnalyzer {
     supply VNEG_RAW { voltage = -5.24V; external = true; }
     supply VPOS_F { voltage = 5.27V; net = VPOS_F; }  // VPOS_RAW through R_PF_P at 70 mA
     supply VNEG_F { voltage = -5.17V; net = VNEG_F; }  // VNEG_RAW through R_PF_N at 70 mA
-    supply VP { voltage = 4.5V; source = U_LDOP.OUT; }
-    supply VN { voltage = -4.48V; source = U_LDON.OUT; }
+    // Current budgets for copper power-check --sim-results: 70 mA per +/-4.5 V rail, what the
+    // TPS65130 and the 1 ohm post-filters are sized for (U_PWR and VPOS_F / VNEG_F above;
+    // README.md, "Current"). The parts' own ratings are on their pins: TPS7A4901 OUT 150 mA,
+    // TPS7A3001 OUT 200 mA, REF2033 VBIAS (V_MID) 20 mA. V3V3_ANA has no budget: its only
+    // feed, FB_ANA, declares no rated current (not read), and the TPS22918's 2 A is DDS_SW's.
+    supply VP { voltage = 4.5V; source = U_LDOP.OUT; current_max = 70mA; }
+    supply VN { voltage = -4.48V; source = U_LDON.OUT; current_max = 70mA; }
     supply V_MID { voltage = 1.65V; source = U_REF.VBIAS; }
     supply REF_3V3 { voltage = 3.3V; source = U_REF.VREF; }
     supply GND { voltage = 0V; external = true; }

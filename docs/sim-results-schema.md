@@ -165,14 +165,14 @@ steps has one step labelled `nominal`.
 | `benches[].steps[].transient.steady_residual` | float or null | Its final residual, `null` without a steady state. |
 | `benches[].steps[].transient.steady_fallback` | string or null | Why shooting gave up and the run settled period by period instead, `null` when shooting converged or without a steady state. |
 | `benches[].steps[].transient.noise_generators` | int | Noise generators injected (transient noise; 0 without). |
-| `benches[].steps[].pins` | array | Added within v1. `op`, `dc` and `tran` benches (empty for the others): every pin of the target's components that has an electrical profile and whose node the bench solved, for the checks of `copper check --sim-results`. |
+| `benches[].steps[].pins` | array | Added within v1. Every pin of the target's components that has an electrical profile and whose node the bench solved, for the checks of `copper check --sim-results`: over the step of an `op`, `dc` or `tran` bench, and at the bias point of an `ac`, `noise`, `loop` or `pz` bench (the operating point of its circuit; a node with no DC path is held to ground for it, as the small-signal analyses hold it, and nothing on such a node is recorded). Empty at a step whose `bias_step` names another. |
 | `benches[].steps[].pins[]` | object | One pin. |
 | `benches[].steps[].pins[].pin` | string | `COMPONENT.PIN` (the package pin) in the bench's names: a module bench's are the module's own. |
 | `benches[].steps[].pins[].net` | string | The node it is on. |
 | `benches[].steps[].pins[].fidelity` | string | The component's fidelity in this bench (as in `models[]`). |
-| `benches[].steps[].pins[].min_v` | float | The lowest voltage against the bench's ground over the step: the operating point, the swept values or the recorded span of a transient run. |
+| `benches[].steps[].pins[].min_v` | float | The lowest voltage against the bench's ground over the step: the operating point (a bias point included), the swept values or the recorded span of a transient run. |
 | `benches[].steps[].pins[].max_v` | float | The highest. |
-| `benches[].steps[].pins[].min_at` | float or null | The axis value where the lowest was reached (time, swept value); `null` for `op`. |
+| `benches[].steps[].pins[].min_at` | float or null | The axis value where the lowest was reached (time, swept value); `null` for `op` and a bias point. |
 | `benches[].steps[].pins[].max_at` | float or null | Where the highest was reached. |
 | `benches[].steps[].pins[].relative` | array | For each pin an absolute rating of this pin is relative to (`absolute_max = "VP+0.2V"`): the extremes of `V(pin) - V(that pin)`, taken at the same instants. Empty without relative ratings. |
 | `benches[].steps[].pins[].relative[]` | object | One reference pin. |
@@ -181,7 +181,7 @@ steps has one step labelled `nominal`.
 | `benches[].steps[].pins[].relative[].max_v` | float | The highest difference. |
 | `benches[].steps[].pins[].relative[].min_at` | float or null | Where the lowest was reached. |
 | `benches[].steps[].pins[].relative[].max_at` | float or null | Where the highest was reached. |
-| `benches[].steps[].supplies` | array | Added within v1. `op`, `dc` and `tran` benches (empty for the others): every supply the bench drives with a source or a replacement model (not the ground, an ignored supply or one driven by a component). |
+| `benches[].steps[].supplies` | array | Added within v1. For the steps and bias points `pins` covers: every supply the bench drives with a source or a replacement model, and every supply driven by a component the bench simulates with its own model (the current out of the supply's `source` pin); not the ground or an ignored supply. |
 | `benches[].steps[].supplies[]` | object | One supply. |
 | `benches[].steps[].supplies[].supply` | string | Its name. |
 | `benches[].steps[].supplies[].net` | string | Its net, in the bench's names. |
@@ -190,7 +190,20 @@ steps has one step labelled `nominal`.
 | `benches[].steps[].supplies[].max_a` | float | The highest. |
 | `benches[].steps[].supplies[].min_at` | float or null | Where the lowest was reached; `null` for `op`. |
 | `benches[].steps[].supplies[].max_at` | float or null | Where the highest was reached. |
-| `benches[].steps[].supplies[].mean_a` | float or null | The operating point's current, or the time-weighted mean over the recorded span of a transient run; `null` for `dc`. |
+| `benches[].steps[].supplies[].mean_a` | float or null | The operating point's current (a bias point's included), or the time-weighted mean over the recorded span of a transient run; `null` for `dc`. |
+| `benches[].steps[].supplies[].driven_by` | string | Added within v1 (I4). What drives the supply: `source` (an ideal DC source), `replacement` (the bench's model in its place) or `COMPONENT.PIN`, the source pin of the component that drives it. A document without the field recorded only the first two. |
+| `benches[].steps[].stress` | array | Added within v1 (I4). For the steps and bias points `pins` covers: for each component the bench simulates with its own model whose part declares a stress rating, the quantity the rating limits, for the checks of `copper check --sim-results`. Components without a rating are not recorded (the design digest covers the ratings). |
+| `benches[].steps[].stress[]` | object | One quantity of one component. |
+| `benches[].steps[].stress[].component` | string | The component, in the bench's names. |
+| `benches[].steps[].stress[].quantity` | string | `power`: `V(a, b) x I(a)` of a two-terminal part with `rated_power` (a and b its first and second pin, `I(a)` the current into a); `voltage`: `V(a, b)` of one with `rated_voltage`; `current`: the current into a pin with `current_max`. |
+| `benches[].steps[].stress[].pin` | string or null | The package pin of a `current`; `null` for `power` and `voltage`. |
+| `benches[].steps[].stress[].units` | string | `W`, `V` or `A`. |
+| `benches[].steps[].stress[].min` | float | The lowest value over the step (as `pins[].min_v`). |
+| `benches[].steps[].stress[].max` | float | The highest. |
+| `benches[].steps[].stress[].min_at` | float or null | Where the lowest was reached; `null` for `op` and a bias point. |
+| `benches[].steps[].stress[].max_at` | float or null | Where the highest was reached. |
+| `benches[].steps[].stress[].mean` | float or null | The operating point's value, or the time-weighted mean of a transient run; `null` for `dc`. |
+| `benches[].steps[].bias_step` | int or null | Added within v1 (I4). At a step of an `ac`, `noise`, `loop` or `pz` bench whose bias point is the same as an earlier step's (every recorded value within `1e-9` relative), that step's index: its `pins`, `supplies` and `stress` apply, and this step's are empty. `null` otherwise. |
 
 ### Measures
 
@@ -395,9 +408,23 @@ evidence (plan F11; code: `crates/copper-simulate/src/evidence.rs`):
   board supplies on the same nets (a module bench's through the instance's
   port connections).
 
-The bias point of an `ac`, `noise`, `loop` or `pz` bench is not recorded: an
-operating point the bench did not report is not evidence. Nothing else in the
-document changed; the measure values of the examples are identical.
+Added in plan I4 (simulation improvement plan), still under v1:
+
+- The bias point of an `ac`, `noise`, `loop` or `pz` bench is recorded in
+  `pins` and `supplies` (and `stress`) like an operating point, and a step
+  whose bias point repeats an earlier one's refers to it (`bias_step`). The
+  operating point is solved from the bench's own circuit at each step; nodes
+  with no DC path are held to ground for it and nothing on them is recorded.
+- `supplies[]` also covers a supply driven by a component the bench simulates
+  (`driven_by` names its source pin), so a board bench that runs a regulator's
+  model records the rail it makes.
+- `steps[].stress`: the quantities the parts' stress ratings limit, which
+  `copper check --sim-results` judges (`SIM_STRESS_*`); `copper power-check
+  --sim-results` compares the supplies' currents with the rails' budgets
+  (`SIM_RAIL_*`; [language reference](language-reference.md#supplies)).
+
+Nothing else in the document changed; the measure values of the examples are
+identical.
 
 ## Changes from `copperscript-sim/v0.1`
 

@@ -248,6 +248,8 @@ pub fn bench_value(run: &BenchRun) -> Value {
                 ("transient", step.transient.as_ref().map(transient_value).unwrap_or(Value::Null)),
                 ("pins", crate::evidence::pins_value(&step.pins)),
                 ("supplies", crate::evidence::supplies_value(&step.supplies)),
+                ("stress", crate::evidence::stress_value(&step.stress)),
+                ("bias_step", step.bias_step.map(|index| Value::from(index as i64)).unwrap_or(Value::Null)),
             ])
         })
         .collect();

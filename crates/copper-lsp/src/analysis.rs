@@ -54,7 +54,7 @@ fn properties(kind: &str) -> &'static [&'static str] {
         "component" => {
             &["value", "footprint", "role", "decouples", "switching_frequency", "load_current", "capacitance_at_bias"]
         }
-        "supply" => &["voltage", "net", "source", "external"],
+        "supply" => &["voltage", "net", "source", "external", "current_max", "current_peak_max"],
         "no_connect" => &["reason"],
         "pin" => &[
             "number",
@@ -72,6 +72,7 @@ fn properties(kind: &str) -> &'static [&'static str] {
             "current_fall_time",
             "absolute_min",
             "absolute_max",
+            "current_max",
             "io_supply",
             "vih",
             "vil",

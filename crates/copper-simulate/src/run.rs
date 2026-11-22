@@ -106,8 +106,13 @@ pub struct StepRun {
     pub pole_zero: Option<crate::stability::PoleZeroStep>,
     /// The simulated voltages of the target's profiled pins (`op`, `dc`, `tran`; see [`crate::evidence`]).
     pub pins: Vec<crate::evidence::PinVoltages>,
-    /// The currents the bench's supplies deliver (`op`, `dc`, `tran`).
+    /// The currents the bench's supplies deliver (`op`, `dc`, `tran`, and the bias point of the others).
     pub supplies: Vec<crate::evidence::SupplyCurrent>,
+    /// The stress quantities of the components with declared ratings (as `pins`).
+    pub stress: Vec<crate::evidence::StressRecord>,
+    /// A small-signal bench's step whose bias point is the same as this step's, earlier in the run: this
+    /// step's `pins`, `supplies` and `stress` are then empty and that step's apply.
+    pub bias_step: Option<usize>,
 }
 
 /// A measure at one step.
@@ -648,8 +653,8 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
             return run;
         }
     };
-    // The pins whose simulated voltages the results record for the checks (`crate::evidence`).
-    let probes = crate::evidence::pin_probes(&view);
+    // What the results record for the checks (`crate::evidence`).
+    let probes = crate::evidence::probes(&view);
     let wiring: Wiring = match lower::wiring(&view, bench) {
         Ok(wiring) => wiring,
         Err(message) => {
@@ -678,7 +683,7 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                 .collect::<Result<Vec<bool>, String>>()
         });
         let solved = covered.and_then(|covered| {
-            let step = run_step(design, bench, &wiring, &params, &marks, &covered, &probes)?;
+            let step = run_step(design, bench, &wiring, &params, &marks, &covered, Some(&probes))?;
             Ok((step, covered))
         });
         (params, solved, step_clock.map_or(0.0, |start| start.elapsed().as_secs_f64()))
@@ -717,6 +722,27 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                 let at = if bench.steps.is_empty() { String::new() } else { format!(" at step {label}") };
                 run.error = Some(format!("bench {}{at}: {message}", bench.name));
                 break;
+            }
+        }
+    }
+    // The bias point of a small-signal bench usually does not change with its steps (an AC drive, a
+    // capacitor-coupled load): such a step refers to the first step with the same bias instead of repeating it.
+    if matches!(bench.analysis, Analysis::Ac { .. } | Analysis::Noise(_) | Analysis::Loop(_) | Analysis::Pz(_)) {
+        for k in 1..run.steps.len() {
+            let (earlier, later) = run.steps.split_at_mut(k);
+            let step = &mut later[0];
+            let same = earlier.iter().position(|other| {
+                other.bias_step.is_none()
+                    && crate::evidence::same_records(
+                        (&other.pins, &other.supplies, &other.stress),
+                        (&step.pins, &step.supplies, &step.stress),
+                    )
+            });
+            if let Some(index) = same {
+                step.bias_step = Some(index);
+                step.pins.clear();
+                step.supplies.clear();
+                step.stress.clear();
             }
         }
     }
@@ -910,7 +936,7 @@ pub(crate) fn run_step(
     params: &Params,
     marks: &Marks,
     covered: &[bool],
-    probes: &[crate::evidence::PinProbe],
+    probes: Option<&crate::evidence::Probes>,
 ) -> Result<(StepRun, Vec<ModelUse>), String> {
     let (lowered, solution) = solve(design, bench, wiring, params)?;
     // Reference runs: the same bench with each reference's params.
@@ -989,7 +1015,21 @@ pub(crate) fn run_step(
             plots.push(result.reals());
         }
     }
-    let (pins, supplies) = crate::evidence::record(probes, bench, &lowered, &solution);
+    // The evidence for the checks: of a small-signal analysis, its bias point.
+    let recorded = match probes {
+        None => crate::evidence::Recorded::default(),
+        Some(probes) => match &bench.analysis {
+            Analysis::Ac { .. } | Analysis::Noise(_) | Analysis::Loop(_) | Analysis::Pz(_) => {
+                match crate::evidence::bias_point(&lowered) {
+                    Some((bias, floating)) => {
+                        crate::evidence::record(probes, bench, &lowered, &Solution::Op(bias), &floating)
+                    }
+                    None => crate::evidence::Recorded::default(),
+                }
+            }
+            _ => crate::evidence::record(probes, bench, &lowered, &solution, &Default::default()),
+        },
+    };
     let step = StepRun {
         label: String::new(),
         stepped: Vec::new(),
@@ -1008,8 +1048,10 @@ pub(crate) fn run_step(
             Solution::Pz(result) => Some(crate::stability::PoleZeroStep::new(result, &lowered)),
             _ => None,
         },
-        pins,
-        supplies,
+        pins: recorded.pins,
+        supplies: recorded.supplies,
+        stress: recorded.stress,
+        bias_step: None,
     };
     let mut models = lowered.models;
     if matches!(bench.analysis, Analysis::Noise(_)) {

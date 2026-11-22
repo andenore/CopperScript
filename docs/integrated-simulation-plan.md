@@ -313,9 +313,10 @@ cited), so its rails are stiff; rail noise in the noise benches; converter
 ripple and loop dynamics; the boost's inductor and diode path before it
 switches; quiescent current that falls with the rail (no datasheet figure
 to base it on); small-signal output current at exactly 0 A bias reaches
-neither rail; loop and pz analyses with rail models are untested;
-`copper power-check` models no current, so it neither confirms nor
-contradicts the simulated figures.
+neither rail; loop and pz analyses with rail models are untested.
+`copper power-check --sim-results` now compares the simulated rail currents
+with declared budgets (settled in plan I4 of the
+[improvement plan](simulation-improvement-plan.md)).
 
 Scope as planned:
 
@@ -647,11 +648,12 @@ Built on 21 November 2026.
 - `copper power-check BOARD --sim-results FILE` lists the simulated current
   of each rail with the bench it comes from.
 
-Open: nothing declares a rail current, so the simulated figures are shown
-and not compared; on the analyzer 26 simulated pins have no rating (the
-AD8130's and every amplifier's output and disable pins) and 85 rated pins
-are in no bench; the bias points of ac, noise, loop and pz benches are not
-used; a module bench gives the module's share of a rail, not the rail total.
+Open: on the analyzer 26 simulated pins have no rating (the AD8130's and
+every amplifier's output and disable pins; 51 since I4 simulates the power
+side). Settled in plan I4 of the [improvement plan](simulation-improvement-plan.md):
+rail budgets compared, rail totals with the loads in no bench, the bias
+points of ac, noise, loop and pz benches recorded and checked, and the rated
+pins in no bench down from 85 to 29 (digital only).
 
 ## Not planned
 

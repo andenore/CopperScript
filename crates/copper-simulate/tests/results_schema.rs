@@ -49,7 +49,7 @@ const BOARD: &str = "board Amp {
     component U1: p.OPAMP;
     component RF: RESISTOR { value = R_F; tolerance = 1%; }
     component RG: RESISTOR { value = 10kohm; tolerance = 1%; }
-    component CL: CAPACITOR { value = 100pF; }
+    component CL: p.CAP_RATED { value = 100pF; }
     net IN { J2.1; U1.INP; }
     net OUT { U1.OUT; RF.1; CL.1; }
     net FB { U1.INN; RF.2; RG.1; }
@@ -59,6 +59,14 @@ const BOARD: &str = "board Amp {
     supply POS { voltage = 5V; net = VP; external = true; }
     supply NEG { voltage = -5V; net = VN; external = true; }
     supply GROUND { voltage = 0V; net = GND; external = true; }
+}";
+
+/// A capacitor part with a voltage rating: its stress is recorded (`steps[].stress`).
+const CAP_RATED: &str = "part CAP_RATED {
+    category = \"passive.capacitor\";
+    rated_voltage = 50V;
+    pin 1 { number = \"1\"; domains = \"analog\"; directions = \"passive\"; }
+    pin 2 { number = \"2\"; domains = \"analog\"; directions = \"passive\"; }
 }";
 
 const AC: &str = "bench Gain for Amp {
@@ -176,6 +184,7 @@ fn the_results_document_has_the_frozen_v1_shape() {
         ("board.copper", BOARD),
         ("parts/header.copper", HEADER),
         ("parts/opamp.copper", OPAMP),
+        ("parts/cap.copper", CAP_RATED),
         ("benches/ac.copper", AC),
         ("benches/sweep.copper", SWEEP),
         ("benches/tran.copper", TRAN),

@@ -782,6 +782,11 @@ pub struct Supply {
     pub net: String,
     pub source: Option<Endpoint>,
     pub externally_driven: bool,
+    /// The rail's current budget (`current_max`): the most current the supply may deliver on average, and at
+    /// any instant unless `current_peak_max` says otherwise. Judged only against simulation results.
+    pub current_max: Option<Quantity>,
+    /// The budget for the rail's peak current (`current_peak_max`); `current_max` without it.
+    pub current_peak_max: Option<Quantity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

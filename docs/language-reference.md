@@ -332,6 +332,9 @@ file path string) and `height` (a positive typed length); see
 `voltage_min` and `voltage_max` are optional typed voltage quantities (the
 operating range), and `absolute_min` and `absolute_max` are optional
 absolute-maximum ratings (see [Voltage limits](#voltage-limits)).
+`current_max` (a positive current) is the largest current the pin may carry
+continuously, either direction: a regulator's rated output, a diode's or
+transistor's rated current (see [Stress ratings](#stress-ratings)).
 Standalone parts declare `domains` and `directions`, with optional
 `drive_modes` and `traits`. Domains are `digital`, `analog`, `power`, `ground`,
 `clock`, and `rf`. Directions are `input`, `output`, `bidirectional`, and
@@ -358,6 +361,50 @@ Set `assembled = false` for bare-board targets such as Tag-Connect programming
 pads; the KiCad schematic then excludes them from its BOM while retaining them
 on the board. The selected footprint must separately carry KiCad's
 `exclude_from_bom` and `exclude_from_pos_files` attributes for PCB export.
+
+### Stress ratings
+
+Ratings that only simulation results check (`copper check --sim-results`,
+`copper power-check --sim-results`); ERC alone never assumes a current or a
+power:
+
+```copper
+part RC0603_1R {
+    category = "passive.resistor";
+    rated_power = 100mW;       // two-terminal parts only
+    pin 1 { number = "1"; domains = "power"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "power"; directions = "passive"; }
+}
+
+part TPS7A4901DGNR {
+    category = "power.regulator.ldo";
+    pin OUT { number = "1"; domains = "power"; directions = "output"; current_max = 150mA; }
+    ...
+}
+```
+
+| Declaration | Limits | Judged against |
+| --- | --- | --- |
+| part `rated_power = q;` (W, mW) | the power into a two-terminal part, `V(a, b) x I(a)` (a and b its first and second pin) | its steady value: the operating point, a transient run's mean, each point of a dc sweep |
+| part `rated_voltage = q;` (V) | the voltage across a two-terminal part, either polarity | its peak |
+| pin `current_max = q;` (A) | the current into that pin, either direction | its steady value, as power |
+
+A rating needs a positive quantity of its dimension, and `rated_power` and
+`rated_voltage` a part with exactly two pins (`CMP213`). They enter the
+compiled design (`rated_power` and `rated_voltage` in the part's metadata,
+`current_max` as the pin profile's `current`, `rating = "rated"`), so changing
+one makes earlier simulation results stale. With `copper check BOARD
+--sim-results FILE`, each component a bench simulated with its own model is
+judged against its part's ratings:
+
+| Finding | Diagnostic |
+| --- | --- |
+| a simulated power, voltage or current beyond the rating (more than `1e-9` of it) | error `SIM_STRESS_POWER_HIGH`, `SIM_STRESS_VOLTAGE_HIGH` or `SIM_STRESS_CURRENT_HIGH` on the component (or `COMPONENT.PIN`), naming the bench, the worst step, the value (with the peak beside a mean) and how many steps exceed it |
+| simulated resistors, capacitors, diodes and transistors whose parts declare no rating, and rated components no bench simulated with their own model | one warning `SIM_STRESS_NOT_CHECKED`: how many ratings were checked and the three highest fractions of their ratings, how many components of each kind were not checked, and which rated ones were in no record |
+
+A rating that a part does not declare stays unchecked; nothing is assumed
+from the part's category or value. A stand-in (a replaced component) and an
+ignored one are not judged: their quantities are the stand-in's.
 
 ### Voltage limits
 
@@ -422,7 +469,10 @@ checked against the pin voltages a `copper sim` run recorded in `FILE`
 per step of every `op`, `dc` and `tran` bench, the extremes of each pin's
 voltage and, for a relative rating, of its difference to the reference pin at
 the same instants, so `absolute_max = "VP+0.2V"` is judged against the rail as
-it ramps. A module bench's pins are those of every instance of the module. ERC
+it ramps; and at the bias point of every `ac`, `noise`, `loop` and `pz` bench,
+the operating point of its circuit (a node with no DC path is held to ground
+for it, as the small-signal analyses hold it, and pins on such a node are not
+judged). A module bench's pins are those of every instance of the module. ERC
 never runs a simulation, and it uses only results made from the board and
 benches as they are now:
 
@@ -431,10 +481,9 @@ benches as they are now:
 | a simulated voltage beyond the absolute range (more than `1e-9` of the limit, at least 1 nV) | error `SIM_PIN_ABSOLUTE_HIGH` / `SIM_PIN_ABSOLUTE_LOW`, naming the bench, the worst step, the value, where on the axis it was reached and how many steps exceed it |
 | results of another board, of another version of its sources (parts, packages and ratings included; not comments) or of other bench sources, or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
 | simulated pins that declare no absolute rating (ground and passive-only pins excepted), or whose relative rating refers to a pin no bench solved | one warning `SIM_PIN_NOT_CHECKED` listing them |
-| rated pins that no bench solved with an `op`, `dc` or `tran` analysis | one warning `SIM_PIN_NOT_SIMULATED` listing the components |
+| rated pins that no bench solved | one warning `SIM_PIN_NOT_SIMULATED` listing the components |
 
-The bias point of an `ac`, `noise`, `loop` or `pz` bench is not used. A fixed
-rating is judged against the bench's ground.
+A fixed rating is judged against the bench's ground.
 
 ### EMI roles and switching metadata
 
@@ -888,14 +937,34 @@ off device domain; it is not transient or firmware simulation. Power states are
 board-level declarations in v0.1.
 
 `copper power-check board.copper --sim-results build/sim/sim-results.json`
-adds each board supply's simulated current: for every `op`, `dc` and `tran`
-bench whose supply drives that supply's net (a module bench's through the
-instance's port connections), `I(SUPPLY)` per bench and supply with its source
-(the operating point's value, or a transient run's mean and peak with the step
-and time of the peak). A module bench gives the module's share of the rail,
-not the rail's total. No part or supply declares a rail current, so nothing is
-compared with a declared figure; supplies no bench drove are listed as not
-simulated. Results made from other sources are refused (`SIM_RESULTS_STALE`).
+adds each board supply's simulated current and compares it with the rail's
+budgets ([Supplies](#supplies)). Per bench and supply that drove the supply's
+net (a module bench's through the instance's port connections; a supply a
+simulated component drives through its `source` pin), it lists the current
+the supply delivers with its source: the operating point's (or a small-signal
+bench's bias point's) value, a transient run's mean and peak with the step
+and time of the peak, a dc sweep's largest. Then per rail:
+
+- `budget:` each declared budget, what it applies to (mean, peak) and where it
+  comes from;
+- `total (...)`: each board bench's figure, a total of what it simulated, and
+  the module instances' shares summed (each instance's worst bench and step;
+  peaks summed as if they coincided), with how many of the rail's loads (the
+  components with a pin on its net, its source excepted) each covers;
+- `in no bench:` the loads no bench simulated with their own model (ignored
+  or replaced everywhere), capacitors apart (no DC current; their charging
+  current is not in the peak).
+
+| Finding | Diagnostic |
+| --- | --- |
+| a total's mean (steady value) or peak above a budget that applies to it (more than `1e-9` of it) | error `SIM_RAIL_MEAN_HIGH` / `SIM_RAIL_PEAK_HIGH` on the supply: the value, which total, bench and step it comes from, the budget and its source, the excess; the largest excess of each kind |
+| a rail with a budget whose loads are not all in some bench | warning `SIM_RAIL_INCOMPLETE` listing them: its total is not the rail's whole current |
+| budgets that no bench simulated, simulated rails without a budget | one warning `SIM_RAIL_NOT_CHECKED` |
+
+Supplies no bench drove are listed as not simulated. The check never runs a
+simulation, and results made from other sources are refused
+(`SIM_RESULTS_STALE`); power-state findings and an `OK:` line are as without
+`--sim-results`, unless the rail check finds an error.
 
 ## Hierarchical modules
 
@@ -1166,6 +1235,29 @@ supply GND {
 
 The supply name is also its net name unless `net = OTHER_NET;` is specified.
 `external = true` marks a rail established outside the modeled board.
+
+A supply may declare its current budget, which only simulation results are
+compared with (`copper power-check --sim-results`, [Power states](#power-states)):
+
+```copper
+supply VP {
+    voltage = 4.5V;
+    source = U_LDOP.OUT;
+    current_max = 70mA;        // mean, and peak unless current_peak_max is given
+    current_peak_max = 100mA;  // optional: the peak alone
+}
+```
+
+`current_max` bounds the rail's mean current (the operating point, a
+transient run's time mean, each point of a dc sweep) and, without
+`current_peak_max`, its peak too; `current_peak_max` bounds the peak and may
+not be below `current_max` (`CMP213`). Both are positive currents and bound
+the magnitude, so a negative rail's budget is written positive. A rail with a
+`source` pin also takes its source's ratings as budgets: the pin's
+`current_max` ([Stress ratings](#stress-ratings), against the mean) and the
+`output_current_limit` of the source part's `sim regulator` or `sim reference`
+block whose `out` is that pin (against the mean and the peak). The budgets
+enter the compiled design only when declared.
 
 A standalone passive part can explicitly declare `dc_power_path = "P1,P2";`
 between two passive, power-only pins. ERC follows this path only from an existing
@@ -3391,7 +3483,7 @@ bench CurrentFlatness for HowlandPump {
 | `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
 | `param TEMP = 85degC;` | The temperature of the run (27 degC without it), steppable like any param ([Temperature](#temperature); `SIM110`). |
 | `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). A capacitor of 0 F (bench or board, also a stepped or param value) is absent: no element, its pins open, so a fixture can hold an optional stray that a bench sets to 0 F. |
-| `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it; a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. Nets of one name are one net with the pins of all of them: a bench adds a pin to a fixture's net by declaring the net again with that pin. |
+| `net NAME { REF.PIN; ... }` | Lists bench component pins. A net named by a board net joins it (a board bench names a net of a module instance by its path, `net AFE/E_HC { ... }`); a net named `COMPONENT.PIN` by a board pin joins the board net at that pin; any other name is a new net, which needs two or more pins (`SIM037`). Board pins are joined by naming them, never listed. Nets of one name are one net with the pins of all of them: a bench adds a pin to a fixture's net by declaring the net again with that pin. |
 | `replace X with KIND { ... }` | Swaps a board component or supply for a built-in model; roles name nodes: a board net, a bench net or `COMPONENT.PIN` (`SIM038`, `SIM039`). |
 | `supply NAME { voltage = q; net = NET; }` | A bench supply: an ideal DC voltage source from a net of the target to ground, an AC short; a 0 V one makes its net the ground. It takes `voltage` and `net` only (no `source`, no `external`); its name is new, its net is a net of the target (a module's port names its net) and no other supply drives it (`SIM048`). It cannot be replaced or ignored (`SIM038`). |
 | `model NAME: KIND { ... }` | A built-in model the bench adds, on nodes as for `replace`: a stimulus such as `model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }` on a module port, or a `load`. Its name is new (`SIM049`); `I(NAME)` and `I(NAME.ROLE)` read the current into its terminals ([Expressions](#expressions)). |

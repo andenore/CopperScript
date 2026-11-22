@@ -1,8 +1,9 @@
 //! `copper power-check BOARD [--locked] [--offline] [--sim-results FILE]`.
 //!
 //! `--sim-results` adds each board supply's simulated current from a `copper
-//! sim` run (`copper_simulate::evidence::rail_lines`); it never runs a
-//! simulation.
+//! sim` run and compares it with the rail's declared budgets
+//! (`copper_simulate::evidence::check_rails`): a mean or peak above a budget
+//! is an error. It never runs a simulation.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -56,7 +57,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     };
     let mut diagnostics = analyze_power_states(&view);
-    // `--sim-results`: the supplies' simulated currents, with the source of each number.
+    let power_state_findings = diagnostics.len();
+    // `--sim-results`: the supplies' simulated currents, with the source of each number, against their budgets.
     let mut rails = Vec::new();
     if let Some(file) = parsed.value("--sim-results") {
         let results = PathBuf::from(pypath::display(file));
@@ -69,14 +71,23 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         };
         match copper_simulate::evidence::validate_source(&evidence, Path::new(board), &design) {
             Err(reason) => diagnostics.push(copper_simulate::evidence::stale(&evidence, Path::new(board), &reason)),
-            Ok(()) => rails = copper_simulate::evidence::rail_lines(&view, &evidence),
+            Ok(()) => {
+                let (found, lines) = copper_simulate::evidence::check_rails(&view, &evidence);
+                diagnostics.extend(found);
+                rails = lines;
+            }
         }
     }
-    if diagnostics.is_empty() {
+    // The power states as before; findings on simulated currents do not hide an OK unless they are errors.
+    if power_state_findings == 0 && !has_errors(&diagnostics) {
         let _ = text::print(out, &format!("OK: {} passed power-state analysis", design.electrical.name));
     }
     for diagnostic in &diagnostics {
-        let _ = text::print(out, &diagnostic.to_string());
+        let line = match &diagnostic.hint {
+            Some(hint) if diagnostic.code.starts_with("SIM_") => format!("{diagnostic} ({hint})"),
+            _ => diagnostic.to_string(),
+        };
+        let _ = text::print(out, &line);
     }
     for line in &rails {
         let _ = text::print(out, line);

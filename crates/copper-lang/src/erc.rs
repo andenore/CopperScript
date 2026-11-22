@@ -196,6 +196,7 @@ impl Context {
             merged.traits.extend(profile.traits.iter().cloned());
         }
         merged.voltage = profiles.iter().find_map(|profile| profile.voltage.clone());
+        merged.current = profiles.iter().find_map(|profile| profile.current.clone());
         merged.absolute_voltage = profiles.iter().find_map(|profile| profile.absolute_voltage.clone());
         merged.emi = profiles.iter().find_map(|profile| profile.emi.clone());
         merged.io_supply = profiles.iter().find_map(|profile| profile.io_supply.clone());

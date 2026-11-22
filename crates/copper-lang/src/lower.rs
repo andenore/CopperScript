@@ -492,7 +492,11 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
         drive_modes: drive_modes.into_iter().collect(),
         traits: traits.into_iter().collect(),
         voltage: operating,
-        current: None,
+        current: attributes
+            .get("current_max")
+            .map(|value| positive_quantity("CMP213", value, Dimension::Current, "current_max", location))
+            .transpose()?
+            .map(|limit| QuantityRange::new(None, Some(Bound::Fixed(limit)), "rated")),
         absolute_voltage,
         emi,
         io_supply,
@@ -985,6 +989,7 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "current_max",
                         "emi_role",
                         "rise_time",
                         "fall_time",
@@ -1442,6 +1447,7 @@ pub fn compile_part(
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "current_max",
                         "emi_role",
                         "rise_time",
                         "fall_time",
@@ -1489,6 +1495,7 @@ pub fn compile_part(
                     "voltage_max",
                     "absolute_min",
                     "absolute_max",
+                    "current_max",
                     "emi_role",
                     "rise_time",
                     "fall_time",
@@ -1606,6 +1613,8 @@ pub fn compile_part(
             "cable_common_mode_impedance",
             "common_mode_impedance",
             "common_mode_impedance_frequency",
+            PART_RATED_POWER,
+            PART_RATED_VOLTAGE,
         ],
         location,
     )?;
@@ -1746,8 +1755,28 @@ pub fn compile_part(
         let nm = height_nm(height).map_err(|reason| error("CMP209", format!("part height {reason}"), location))?;
         part.metadata.insert(PART_HEIGHT_KEY.to_owned(), nm.to_string());
     }
+    // Stress ratings of a two-terminal part, judged only against simulation results.
+    for (key, dimension) in [(PART_RATED_POWER, Dimension::Power), (PART_RATED_VOLTAGE, Dimension::Voltage)] {
+        let Some(value) = properties.get(key) else { continue };
+        let rating = positive_quantity("CMP213", value, dimension, key, location)?;
+        if part.pins.len() != 2 {
+            return Err(error(
+                "CMP213",
+                format!("{key} rates a two-terminal part; {} has {} pins", repr(qualified_name), part.pins.len()),
+                location,
+            ));
+        }
+        part.metadata.insert(key.to_owned(), rating.to_string());
+    }
     Ok(part)
 }
+
+/// `PartDefinition.metadata` key of a two-terminal part's power rating (`rated_power`): the power it may
+/// dissipate continuously.
+pub const PART_RATED_POWER: &str = "rated_power";
+/// `PartDefinition.metadata` key of a two-terminal part's voltage rating (`rated_voltage`): the largest voltage
+/// across its terminals, either polarity.
+pub const PART_RATED_VOLTAGE: &str = "rated_voltage";
 
 /// `passes_to` (`CMP130`): the named pin exists, is another pin, the part has more than two pins, and both
 /// directions of a declared pair agree. A pin may be the target of one pin only.
@@ -2003,7 +2032,11 @@ pub fn no_connects(declaration: &NoConnectDecl) -> Result<Vec<NoConnect>> {
 pub fn supply(declaration: &NamedBlock) -> Result<Supply> {
     let location = &declaration.location;
     let attributes = &declaration.attributes;
-    reject_unknown(attributes.keys(), &["voltage", "net", "source", "external"], location)?;
+    reject_unknown(
+        attributes.keys(),
+        &["voltage", "net", "source", "external", "current_max", "current_peak_max"],
+        location,
+    )?;
     let voltage = quantity(required(attributes, "voltage", location)?, location)?;
     if !is_voltage(&voltage) {
         return Err(error("CMP006", "supply voltage must use V or mV", location));
@@ -2025,7 +2058,52 @@ pub fn supply(declaration: &NamedBlock) -> Result<Supply> {
     };
     let source =
         source.map(|text| Endpoint::parse(&text).map_err(|message| error("CMP008", message, location))).transpose()?;
-    Ok(Supply { name: declaration.name.clone(), voltage, net, source, externally_driven })
+    let budget = |key: &str| -> Result<Option<Quantity>> {
+        attributes
+            .get(key)
+            .map(|value| positive_quantity("CMP213", value, Dimension::Current, key, location))
+            .transpose()
+    };
+    let current_max = budget("current_max")?;
+    let current_peak_max = budget("current_peak_max")?;
+    if let (Some(mean), Some(peak)) = (&current_max, &current_peak_max)
+        && peak.base_value() < mean.base_value()
+    {
+        return Err(error("CMP213", format!("current_peak_max {peak} is below current_max {mean}"), location));
+    }
+    Ok(Supply {
+        name: declaration.name.clone(),
+        voltage,
+        net,
+        source,
+        externally_driven,
+        current_max,
+        current_peak_max,
+    })
+}
+
+/// A positive quantity of `dimension` (a rating or budget) under error `code`.
+fn positive_quantity(
+    code: &str,
+    value: &Scalar,
+    dimension: Dimension,
+    label: &str,
+    location: &Location,
+) -> Result<Quantity> {
+    let usage = || {
+        let units: Vec<&str> = dimension.units().iter().map(|(name, _)| *name).collect();
+        error(code, format!("{label} must be a positive {} in {}", dimension.name(), units.join(" or ")), location)
+    };
+    // The unit decides the dimension here (a power in W is no general board quantity).
+    let Scalar::Quantity { value, unit } = value else { return Err(usage()) };
+    if !dimension.units().iter().any(|(name, _)| name == unit) {
+        return Err(usage());
+    }
+    let compiled = quantity_of(dimension, value, unit);
+    if compiled.base_value().is_zero() || compiled.base_value().is_negative() {
+        return Err(usage());
+    }
+    Ok(compiled)
 }
 
 /// `_interface`.

@@ -34,10 +34,12 @@ misspelled endpoint or declaration keyword). Compile errors use the same
 document with exit code 2. `--pins warn|error|off` controls `UNMARKED_PIN`
 (see [no-connect pins](language-reference.md#no-connect-pins)).
 `--sim-results build/sim/sim-results.json` also checks the pin voltages a
-`copper sim` run recorded against the pins' absolute ratings, and `copper
-power-check --sim-results FILE` lists the supplies' simulated currents; both
-refuse results made from other sources and never simulate
-([voltage limits](language-reference.md#voltage-limits)).
+`copper sim` run recorded against the pins' absolute ratings and the
+simulated components against their parts' stress ratings, and `copper
+power-check --sim-results FILE` lists the supplies' simulated currents and
+rail totals and fails a rail above its budget; both refuse results made from
+other sources and never simulate ([voltage limits](language-reference.md#voltage-limits),
+[stress ratings](language-reference.md#stress-ratings), [supplies](language-reference.md#supplies)).
 
 ```console
 copper check examples/invalid_board/board.copper --json

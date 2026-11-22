@@ -548,7 +548,7 @@ fn unit_fields(
                 supplies
                     .iter()
                     .map(|supply| {
-                        object(vec![
+                        let mut fields = vec![
                             ("name", text(&supply.name)),
                             ("voltage", quantity_value(&supply.voltage)),
                             ("net", text(&supply.net)),
@@ -557,7 +557,15 @@ fn unit_fields(
                                 supply.source.as_ref().map(|source| text(&source.to_string())).unwrap_or(Value::Null),
                             ),
                             ("externally_driven", Value::Bool(supply.externally_driven)),
-                        ])
+                        ];
+                        // Current budgets only when declared, so a board without them compiles as before.
+                        if let Some(budget) = &supply.current_max {
+                            fields.push(("current_max", quantity_value(budget)));
+                        }
+                        if let Some(budget) = &supply.current_peak_max {
+                            fields.push(("current_peak_max", quantity_value(budget)));
+                        }
+                        object(fields)
                     })
                     .collect(),
             ),

@@ -133,7 +133,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         }
     }
-    // `--sim-results`: pin voltages a `copper sim` run recorded, against the absolute ratings.
+    // `--sim-results`: pin voltages a `copper sim` run recorded, against the absolute ratings, and component
+    // stress against the parts' ratings.
     if let Some(file) = parsed.value("--sim-results") {
         let results = PathBuf::from(pypath::display(file));
         let evidence = match copper_simulate::evidence::read_file(&results) {
@@ -146,7 +147,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         match copper_simulate::evidence::validate_source(&evidence, path, &design) {
             Err(reason) => diagnostics.push(copper_simulate::evidence::stale(&evidence, path, &reason)),
             Ok(()) => match elaborate(board) {
-                Ok(view) => diagnostics.extend(copper_simulate::evidence::check_pins(&view, &evidence)),
+                Ok(view) => {
+                    diagnostics.extend(copper_simulate::evidence::check_pins(&view, &evidence));
+                    diagnostics.extend(copper_simulate::evidence::check_stress(&view, &evidence));
+                }
                 Err(message) => {
                     print(err, &format!("COMPILE ERROR: {message}"));
                     return 2;

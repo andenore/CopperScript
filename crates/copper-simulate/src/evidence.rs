@@ -1,13 +1,13 @@
-//! Simulation results as evidence for the other checks (plan F11): what
-//! `copper sim` records for them in `sim-results.json`, how `copper check
+//! Simulation results as evidence for the other checks (plans F11 and I4):
+//! what `copper sim` records for them in `sim-results.json`, how `copper check
 //! --sim-results FILE` and `copper power-check --sim-results FILE` read it
 //! back, refuse results made from other sources, and judge them.
 //!
 //! # What a run records
 //!
 //! Per step of a bench whose analysis solves large-signal voltages (`op`,
-//! `dc`, `tran`; the bias point of an `ac`, `noise`, `loop` or `pz` bench is
-//! not recorded):
+//! `dc`, `tran`), and at the bias point of an `ac`, `noise`, `loop` or `pz`
+//! bench ([`bias_point`]):
 //!
 //! - `pins`: every component pin with an electrical profile whose node the
 //!   bench solved, with the extremes of its voltage against the bench's ground
@@ -17,9 +17,22 @@
 //!   the extremes of `V(pin) - V(reference)` taken at the same instants, so a
 //!   rating that moves with a rail is judged against the rail at that moment.
 //! - `supplies`: every supply the bench drives (an ideal source or a
-//!   replacement model): the extremes of `I(SUPPLY)`, the current it delivers
-//!   into its net, and for an operating point or a transient run its mean
-//!   (time-weighted over the recorded span).
+//!   replacement model), and every supply driven by a component the bench
+//!   simulates (the current out of its `source` pin): the extremes of the
+//!   current it delivers into its net, and for an operating point (a bias point
+//!   included) or a transient run its mean (time-weighted over the recorded
+//!   span).
+//! - `stress`: for each simulated component whose part declares a stress
+//!   rating, the quantity the rating limits: the power into a two-terminal part
+//!   with `rated_power` (`V(a, b) x I(a)`), the voltage across one with
+//!   `rated_voltage`, the current into each pin with `current_max`; extremes and
+//!   mean as for supplies. Components with no rating are not recorded: the
+//!   design digest covers the ratings, so results always match them.
+//!
+//! The bias point of a small-signal bench is the operating point of its
+//! circuit. A node with no DC path (a capacitor-coupled net) is held to ground
+//! for it, as the small-signal analyses hold it, and nothing on such a node is
+//! recorded: its voltage is the hold's, not the circuit's.
 //!
 //! # Identity
 //!
@@ -44,21 +57,41 @@
 //! `SIM_PIN_NOT_SIMULATED` (rated pins no bench solved). A value within
 //! `1e-9` of the limit (relative, at least 1 nV) counts as at the limit.
 //!
-//! [`rail_lines`] (power-state check): the simulated current of each board
-//! supply, per bench and supply that drove its net, with the source of every
-//! number. Parts and supplies declare no rail current, so nothing is compared
-//! with a declared figure; a board supply that no bench drove is listed as not
-//! simulated.
+//! [`check_stress`] (ERC): a stress record beyond its part's rating is an error
+//! (`SIM_STRESS_POWER_HIGH`, `SIM_STRESS_VOLTAGE_HIGH`,
+//! `SIM_STRESS_CURRENT_HIGH`). Power and current ratings are continuous
+//! ratings, judged against the steady value (the operating point, a transient
+//! run's mean, each point of a dc sweep); a voltage rating is judged against the
+//! peak. Simulated resistors, capacitors, diodes and transistors whose parts
+//! declare no rating are counted in `SIM_STRESS_NOT_CHECKED`, never assumed.
+//!
+//! [`check_rails`] (power-state check): the simulated current of each board
+//! supply, per bench and supply that drove its net, its total, and the
+//! comparison with its budgets: the supply's `current_max` (mean, and peak
+//! unless `current_peak_max` is declared), its `current_peak_max` (peak), the
+//! `current_max` of its `source` pin (mean) and the `output_current_limit` of
+//! the source part's `sim regulator` or `sim reference` block (mean and peak).
+//! A board bench's figure is a total of what it simulated; module benches give
+//! their instances' shares, summed over the instances (each instance's worst
+//! bench and step, peaks summed as if they coincided). Exceeding a budget is
+//! `SIM_RAIL_MEAN_HIGH` or `SIM_RAIL_PEAK_HIGH`; a budgeted rail whose loads
+//! are not all in some bench is `SIM_RAIL_INCOMPLETE`; budgets nothing
+//! simulated and simulated rails without a budget are `SIM_RAIL_NOT_CHECKED`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use copper_json::{Object, Value};
-use copper_lang::bench::{Bench, SUPPLY_NET};
+use copper_lang::bench::{Bench, PassiveKind, SUPPLY_NET, SupplyTreatment};
 use copper_lang::compiler::Design;
 use copper_lang::erc::{Context, Diagnostic, Severity, build_context};
 use copper_lang::expression::Units;
-use copper_lang::model::{Bound, ComponentInstance, Direction, Endpoint, FlatElectricalView, SignalDomain};
+use copper_lang::lower::{PART_RATED_POWER, PART_RATED_VOLTAGE, parse_quantity_text};
+use copper_lang::model::{
+    Bound, ComponentInstance, Direction, Endpoint, FlatElectricalView, PartDefinition, SignalDomain,
+};
+use copper_lang::simulation::SimKind;
+use copper_sim::{Circuit, ElementKind, NodeId, OpResult};
 use copper_units::Dimension;
 
 use crate::evaluate::Solution;
@@ -96,6 +129,11 @@ impl Extremes {
             max_at: axis.get(hi).copied(),
         })
     }
+
+    /// The extreme of the larger magnitude, signed, and where it was reached.
+    fn peak(&self) -> (f64, Option<f64>) {
+        if self.max.abs() >= self.min.abs() { (self.max, self.max_at) } else { (self.min, self.min_at) }
+    }
 }
 
 /// One pin's simulated voltage at one step.
@@ -119,10 +157,86 @@ pub struct SupplyCurrent {
     pub supply: String,
     pub net: String,
     pub voltage: f64,
-    /// `I(SUPPLY)`: the current it delivers into its net.
+    /// The current it delivers into its net.
     pub current: Extremes,
     /// The operating point's value or the time-weighted mean of a transient run; `None` for a dc sweep.
     pub mean: Option<f64>,
+    /// What drives it: `source` (an ideal source), `replacement` (a bench model), or the `COMPONENT.PIN` of
+    /// the simulated component it names as its source.
+    pub driven_by: String,
+}
+
+/// The quantity a stress rating limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StressQuantity {
+    /// `V(a, b) x I(a)` of a two-terminal part with `rated_power`.
+    Power,
+    /// `V(a, b)` of a two-terminal part with `rated_voltage`.
+    Voltage,
+    /// The current into a pin with `current_max`.
+    Current,
+}
+
+impl StressQuantity {
+    pub fn name(self) -> &'static str {
+        match self {
+            StressQuantity::Power => "power",
+            StressQuantity::Voltage => "voltage",
+            StressQuantity::Current => "current",
+        }
+    }
+
+    fn parse(text: &str) -> Option<StressQuantity> {
+        [StressQuantity::Power, StressQuantity::Voltage, StressQuantity::Current]
+            .into_iter()
+            .find(|quantity| quantity.name() == text)
+    }
+
+    fn dimension(self) -> Dimension {
+        match self {
+            StressQuantity::Power => Dimension::Power,
+            StressQuantity::Voltage => Dimension::Voltage,
+            StressQuantity::Current => Dimension::Current,
+        }
+    }
+
+    fn units(self) -> &'static str {
+        match self {
+            StressQuantity::Power => "W",
+            StressQuantity::Voltage => "V",
+            StressQuantity::Current => "A",
+        }
+    }
+
+    /// The declaration that rates it.
+    fn rating(self) -> &'static str {
+        match self {
+            StressQuantity::Power => PART_RATED_POWER,
+            StressQuantity::Voltage => PART_RATED_VOLTAGE,
+            StressQuantity::Current => "current_max",
+        }
+    }
+}
+
+/// One simulated stress quantity of one component at one step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StressRecord {
+    /// The component in the bench's names.
+    pub component: String,
+    pub quantity: StressQuantity,
+    /// The package pin of a current; `None` for power and voltage (first pin to second).
+    pub pin: Option<String>,
+    pub value: Extremes,
+    /// The operating point's value or the time-weighted mean of a transient run; `None` for a dc sweep.
+    pub mean: Option<f64>,
+}
+
+/// What one step records for the checks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recorded {
+    pub pins: Vec<PinVoltages>,
+    pub supplies: Vec<SupplyCurrent>,
+    pub stress: Vec<StressRecord>,
 }
 
 /// A pin to record: the bench's component and package pin, and the package
@@ -132,6 +246,25 @@ pub struct PinProbe {
     component: String,
     pin: String,
     references: Vec<String>,
+}
+
+/// A stress quantity to record: the component, the quantity and its pins
+/// (the two terminals, first to second, or the pin of a current).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StressProbe {
+    component: String,
+    quantity: StressQuantity,
+    first: String,
+    second: Option<String>,
+}
+
+/// What a bench's target records: pins, stress quantities, and the source pin of each supply that names one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Probes {
+    pins: Vec<PinProbe>,
+    stress: Vec<StressProbe>,
+    /// Supply name -> (component, package pin) of its `source`.
+    sources: BTreeMap<String, (String, String)>,
 }
 
 /// The package pins of `component` that a rating's reference names: the pin
@@ -161,10 +294,31 @@ fn relative_references(bounds: [Option<&Bound>; 2]) -> Vec<String> {
     names
 }
 
-/// The pins of a bench's target that the results record: every pin with an electrical profile.
-pub fn pin_probes(view: &FlatElectricalView) -> Vec<PinProbe> {
+/// A pin's `current_max` in amperes.
+fn pin_current_rating(
+    context: &Context,
+    component: &ComponentInstance,
+    part: &PartDefinition,
+    pin: &str,
+) -> Option<f64> {
+    let pin = part.pins.get(pin)?;
+    match context.pin_profile(component, part, pin)?.current?.maximum? {
+        Bound::Fixed(limit) => Some(base(&limit)),
+        Bound::Relative(_) => None,
+    }
+}
+
+/// A two-terminal part's `rated_power` or `rated_voltage` in base units.
+fn part_rating(part: &PartDefinition, quantity: StressQuantity) -> Option<f64> {
+    let text = part.metadata.get(quantity.rating())?;
+    parse_quantity_text(text, quantity.dimension()).map(|rating| base(&rating))
+}
+
+/// What a bench's target records: every pin with an electrical profile, every declared stress rating, and the
+/// source pins of its supplies.
+pub fn probes(view: &FlatElectricalView) -> Probes {
     let context = build_context(view.clone());
-    let mut probes = Vec::new();
+    let mut probes = Probes::default();
     for component in &view.components {
         let Some(part) = view.library.get(&component.part) else { continue };
         for pin in part.pins.values() {
@@ -182,30 +336,170 @@ pub fn pin_probes(view: &FlatElectricalView) -> Vec<PinProbe> {
                     }
                 }
             }
-            probes.push(PinProbe { component: component.reference.clone(), pin: pin.name.clone(), references });
+            probes.pins.push(PinProbe { component: component.reference.clone(), pin: pin.name.clone(), references });
+        }
+        let pins: Vec<&String> = part.pins.keys().collect();
+        if let [first, second] = pins.as_slice() {
+            for quantity in [StressQuantity::Power, StressQuantity::Voltage] {
+                if part_rating(part, quantity).is_some() {
+                    probes.stress.push(StressProbe {
+                        component: component.reference.clone(),
+                        quantity,
+                        first: (*first).clone(),
+                        second: Some((*second).clone()),
+                    });
+                }
+            }
+        }
+        for pin in part.pins.keys() {
+            if pin_current_rating(&context, component, part, pin).is_some() {
+                probes.stress.push(StressProbe {
+                    component: component.reference.clone(),
+                    quantity: StressQuantity::Current,
+                    first: pin.clone(),
+                    second: None,
+                });
+            }
+        }
+    }
+    for supply in &view.supplies {
+        let Some(source) = &supply.source else { continue };
+        if let Some(endpoint) = context.canonical_endpoint(source) {
+            probes.sources.insert(supply.name.clone(), (endpoint.component, endpoint.pin));
         }
     }
     probes
 }
 
-/// What a step records (empty for analyses that do not solve large-signal voltages).
+// ---------------------------------------------------------------- bias points
+
+/// The nodes of `circuit` with no DC path to ground: in a group that only capacitors, current sources and
+/// couplings join to the rest, and that no element touches which could conduct there (a VCCS, CCCS or
+/// behavioural current output). The small-signal analyses hold such nodes to ground while they solve the bias.
+pub fn floating_at_dc(circuit: &Circuit) -> BTreeSet<String> {
+    let n = circuit.node_count();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut uncertain_terminals: Vec<(NodeId, NodeId)> = Vec::new();
+    for element in circuit.elements() {
+        let kind = element.kind();
+        let joins = match kind {
+            ElementKind::Capacitor { .. } | ElementKind::CurrentSource { .. } | ElementKind::Coupling { .. } => false,
+            ElementKind::Vccs { .. } | ElementKind::Cccs { .. } => {
+                uncertain_terminals.extend(kind.terminals());
+                false
+            }
+            ElementKind::Law { law, .. } => match &law.function {
+                copper_sim::behavioral::Function::Device(_) => true,
+                copper_sim::behavioral::Function::Expr { .. } => {
+                    let voltage = law.output == copper_sim::behavioral::Output::Voltage;
+                    if !voltage {
+                        uncertain_terminals.extend(kind.terminals());
+                    }
+                    voltage
+                }
+            },
+            // Resistors, inductors, voltage sources, controlled voltage sources, delays, diodes, switches and
+            // anything newer: they conduct, so their nodes are not held.
+            _ => true,
+        };
+        if joins && let Some((a, b)) = kind.terminals() {
+            let (ra, rb) = (find(&mut parent, a.index()), find(&mut parent, b.index()));
+            parent[ra] = rb;
+        }
+    }
+    let ground = find(&mut parent, NodeId::GROUND.index());
+    let mut uncertain = vec![false; n];
+    for (a, b) in uncertain_terminals {
+        let (ra, rb) = (find(&mut parent, a.index()), find(&mut parent, b.index()));
+        uncertain[ra] = true;
+        uncertain[rb] = true;
+    }
+    (1..n)
+        .filter(|&i| {
+            let root = find(&mut parent, i);
+            root != ground && !uncertain[root]
+        })
+        .map(|i| circuit.node_names()[i].clone())
+        .collect()
+}
+
+/// The resistance that holds a node floating at DC while the bias point is solved, ohm (as copper-sim's
+/// small-signal analyses hold it).
+const HOLD_OHMS: f64 = 1.0;
+
+/// The bias point of a small-signal bench: the operating point of its circuit, with every node floating at
+/// DC held to ground ([`floating_at_dc`]); `None` when it cannot be solved. The held nodes are returned so that
+/// nothing on them is recorded.
+pub fn bias_point(lowered: &Lowered) -> Option<(OpResult, BTreeSet<String>)> {
+    let floating = floating_at_dc(&lowered.circuit);
+    if floating.is_empty() {
+        return copper_sim::operating_point(&lowered.circuit).ok().map(|op| (op, floating));
+    }
+    let mut held = lowered.circuit.clone();
+    for name in &floating {
+        let node = held.find_node(name)?;
+        held.resistor(&format!("hold {name} at DC"), node, NodeId::GROUND, HOLD_OHMS).ok()?;
+    }
+    copper_sim::operating_point(&held).ok().map(|op| (op, floating))
+}
+
+// ---------------------------------------------------------------- recording a step
+
+/// What a step records (empty for analyses that do not solve large-signal voltages: pass a small-signal
+/// bench's [`bias_point`] as an operating point instead). Nothing on a node of `floating` is recorded.
 pub fn record(
-    probes: &[PinProbe],
+    probes: &Probes,
     bench: &Bench,
     lowered: &Lowered,
     solution: &Solution,
-) -> (Vec<PinVoltages>, Vec<SupplyCurrent>) {
+    floating: &BTreeSet<String>,
+) -> Recorded {
     if !matches!(solution, Solution::Op(_) | Solution::Dc(_) | Solution::Tran(_)) {
-        return (Vec::new(), Vec::new());
+        return Recorded::default();
     }
     let axis = solution.axis();
+    let points = axis.len().max(1);
     let real = |samples: Vec<copper_sim::Complex>| samples.into_iter().map(|z| z.re).collect::<Vec<f64>>();
+    let node_voltage = |node: &str| -> Option<Vec<f64>> {
+        if floating.contains(node) {
+            return None;
+        }
+        solution.voltage(node).ok().map(real)
+    };
     let voltage = |component: &str, pin: &str| {
         let node = lowered.wiring.pin_node(component, pin);
-        solution.voltage(&node).ok().map(|samples| (node, real(samples)))
+        node_voltage(&node).map(|samples| (node, samples))
     };
-    let mut pins = Vec::new();
-    for probe in probes {
+    // The current into a pin, or a supply's current into its net, summed over the elements that carry it.
+    let summed = |terms: &[(String, f64)]| -> Option<Vec<f64>> {
+        let mut current = vec![0.0; points];
+        for (element, sign) in terms {
+            let samples = solution.current(element).ok()?;
+            current.iter_mut().zip(samples).for_each(|(sum, z)| *sum += sign * z.re);
+        }
+        Some(current)
+    };
+    let mean_of = |values: &[f64]| match solution {
+        Solution::Op(_) => values.first().copied(),
+        Solution::Tran(_) => copper_sim::time_measure::mean(axis, values).ok(),
+        _ => None,
+    };
+    let fidelity = |component: &str| {
+        lowered
+            .models
+            .iter()
+            .find(|model| model.kind == "component" && model.name == component)
+            .map_or("ignored", |model| model.fidelity)
+    };
+    let mut recorded = Recorded::default();
+    for probe in &probes.pins {
         let Some((net, values)) = voltage(&probe.component, &probe.pin) else { continue };
         let Some(extremes) = Extremes::of(&values, axis) else { continue };
         let mut relative = Vec::new();
@@ -216,47 +510,122 @@ pub fn record(
                 relative.push((format!("{}.{reference}", probe.component), extremes));
             }
         }
-        let fidelity = lowered
-            .models
-            .iter()
-            .find(|model| model.kind == "component" && model.name == probe.component)
-            .map_or("ignored", |model| model.fidelity);
-        pins.push(PinVoltages {
+        recorded.pins.push(PinVoltages {
             pin: format!("{}.{}", probe.component, probe.pin),
             net,
-            fidelity: fidelity.to_owned(),
+            fidelity: fidelity(&probe.component).to_owned(),
             voltage: extremes,
             relative,
         });
     }
-    let mut supplies = Vec::new();
     for supply in &bench.supplies {
-        let Some(terms) = lowered.pin_currents.get(&(format!("supply {}", supply.name), SUPPLY_NET.to_owned())) else {
-            continue;
-        };
-        let mut current = vec![0.0; solution.axis().len().max(1)];
-        let mut solved = true;
-        for (element, sign) in terms {
-            match solution.current(element) {
-                Ok(samples) => current.iter_mut().zip(samples).for_each(|(sum, z)| *sum += sign * z.re),
-                Err(_) => solved = false,
+        let (terms, driven_by) = match &supply.treatment {
+            SupplyTreatment::DcSource | SupplyTreatment::Replaced(_) => {
+                let key = (format!("supply {}", supply.name), SUPPLY_NET.to_owned());
+                let Some(terms) = lowered.pin_currents.get(&key) else { continue };
+                let driver =
+                    if matches!(supply.treatment, SupplyTreatment::Replaced(_)) { "replacement" } else { "source" };
+                (terms.clone(), driver.to_owned())
             }
-        }
-        let Some(extremes) = Extremes::of(&current, axis).filter(|_| solved) else { continue };
-        let mean = match solution {
-            Solution::Op(_) => Some(current[0]),
-            Solution::Tran(_) => copper_sim::time_measure::mean(axis, &current).ok(),
-            _ => None,
+            // The current out of the source pin of a component the bench simulates.
+            SupplyTreatment::Component(_) => {
+                let Some((component, pin)) = probes.sources.get(&supply.name) else { continue };
+                if !matches!(fidelity(component), "ideal" | "macro" | "vendor") {
+                    continue;
+                }
+                let Some(terms) = lowered.pin_currents.get(&(component.clone(), pin.clone())) else { continue };
+                (terms.iter().map(|(element, sign)| (element.clone(), -sign)).collect(), format!("{component}.{pin}"))
+            }
+            SupplyTreatment::Ground | SupplyTreatment::Ignored => continue,
         };
-        supplies.push(SupplyCurrent {
+        let Some(current) = summed(&terms) else { continue };
+        let Some(extremes) = Extremes::of(&current, axis) else { continue };
+        recorded.supplies.push(SupplyCurrent {
             supply: supply.name.clone(),
             net: supply.net.clone(),
             voltage: base(&supply.voltage),
             current: extremes,
-            mean,
+            mean: mean_of(&current),
+            driven_by,
         });
     }
-    (pins, supplies)
+    for probe in &probes.stress {
+        if !matches!(fidelity(&probe.component), "ideal" | "macro" | "vendor") {
+            continue;
+        }
+        let into_first = || {
+            let terms = lowered.pin_currents.get(&(probe.component.clone(), probe.first.clone()))?;
+            summed(terms)
+        };
+        let across = || {
+            let (_, a) = voltage(&probe.component, &probe.first)?;
+            let (_, b) = voltage(&probe.component, probe.second.as_deref()?)?;
+            Some(a.iter().zip(&b).map(|(a, b)| a - b).collect::<Vec<f64>>())
+        };
+        let values = match probe.quantity {
+            StressQuantity::Voltage => across(),
+            StressQuantity::Current => {
+                // Not on a held node either.
+                voltage(&probe.component, &probe.first).and_then(|_| into_first())
+            }
+            StressQuantity::Power => {
+                across().zip(into_first()).map(|(v, i)| v.iter().zip(&i).map(|(v, i)| v * i).collect())
+            }
+        };
+        let Some(values) = values else { continue };
+        let Some(extremes) = Extremes::of(&values, axis) else { continue };
+        recorded.stress.push(StressRecord {
+            component: probe.component.clone(),
+            quantity: probe.quantity,
+            pin: (probe.quantity == StressQuantity::Current).then(|| probe.first.clone()),
+            value: extremes,
+            mean: mean_of(&values),
+        });
+    }
+    recorded
+}
+
+/// Whether two steps recorded the same evidence: the same pins, supplies and stress quantities, every value
+/// equal within `1e-9` (relative, at least 1e-15 absolute) and found at the same axis values.
+pub fn same_records(
+    a: (&[PinVoltages], &[SupplyCurrent], &[StressRecord]),
+    b: (&[PinVoltages], &[SupplyCurrent], &[StressRecord]),
+) -> bool {
+    fn close(x: f64, y: f64) -> bool {
+        (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) + 1e-15
+    }
+    fn same(x: &Extremes, y: &Extremes) -> bool {
+        close(x.min, y.min) && close(x.max, y.max) && x.min_at == y.min_at && x.max_at == y.max_at
+    }
+    let optional = |x: Option<f64>, y: Option<f64>| match (x, y) {
+        (Some(x), Some(y)) => close(x, y),
+        (x, y) => x.is_none() && y.is_none(),
+    };
+    a.0.len() == b.0.len()
+        && a.1.len() == b.1.len()
+        && a.2.len() == b.2.len()
+        && a.0.iter().zip(b.0).all(|(x, y)| {
+            x.pin == y.pin
+                && x.net == y.net
+                && x.fidelity == y.fidelity
+                && same(&x.voltage, &y.voltage)
+                && x.relative.len() == y.relative.len()
+                && x.relative.iter().zip(&y.relative).all(|(p, q)| p.0 == q.0 && same(&p.1, &q.1))
+        })
+        && a.1.iter().zip(b.1).all(|(x, y)| {
+            x.supply == y.supply
+                && x.net == y.net
+                && x.driven_by == y.driven_by
+                && same(&x.current, &y.current)
+                && optional(x.mean, y.mean)
+        })
+        && a.2.iter().zip(b.2).all(|(x, y)| {
+            x.component == y.component
+                && x.quantity == y.quantity
+                && x.pin == y.pin
+                && same(&x.value, &y.value)
+                && optional(x.mean, y.mean)
+        })
 }
 
 // ---------------------------------------------------------------- the document
@@ -274,9 +643,10 @@ fn optional(value: Option<f64>) -> Value {
 }
 
 fn extremes_fields(extremes: &Extremes, unit: &str) -> Vec<(String, Value)> {
+    let suffix = if unit.is_empty() { String::new() } else { format!("_{unit}") };
     vec![
-        (format!("min_{unit}"), number(extremes.min)),
-        (format!("max_{unit}"), number(extremes.max)),
+        (format!("min{suffix}"), number(extremes.min)),
+        (format!("max{suffix}"), number(extremes.max)),
         ("min_at".to_owned(), optional(extremes.min_at)),
         ("max_at".to_owned(), optional(extremes.max_at)),
     ]
@@ -327,6 +697,29 @@ pub fn supplies_value(supplies: &[SupplyCurrent]) -> Value {
                 .collect();
                 fields.extend(extremes_fields(&supply.current, "a"));
                 fields.insert("mean_a".to_owned(), optional(supply.mean));
+                fields.insert("driven_by".to_owned(), Value::from(supply.driven_by.as_str()));
+                Value::Object(fields)
+            })
+            .collect(),
+    )
+}
+
+/// `benches[].steps[].stress` of the results document.
+pub fn stress_value(stress: &[StressRecord]) -> Value {
+    Value::Array(
+        stress
+            .iter()
+            .map(|record| {
+                let mut fields: Object = [
+                    ("component".to_owned(), Value::from(record.component.as_str())),
+                    ("quantity".to_owned(), Value::from(record.quantity.name())),
+                    ("pin".to_owned(), record.pin.as_deref().map(Value::from).unwrap_or(Value::Null)),
+                    ("units".to_owned(), Value::from(record.quantity.units())),
+                ]
+                .into_iter()
+                .collect();
+                fields.extend(extremes_fields(&record.value, ""));
+                fields.insert("mean".to_owned(), optional(record.mean));
                 Value::Object(fields)
             })
             .collect(),
@@ -403,6 +796,25 @@ pub struct StepEvidence {
     pub label: String,
     pub pins: Vec<PinVoltages>,
     pub supplies: Vec<SupplyCurrent>,
+    pub stress: Vec<StressRecord>,
+}
+
+/// One entry of a bench's `models`: how a component or supply was simulated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelEvidence {
+    pub name: String,
+    /// `component`, `supply` or `model`.
+    pub kind: String,
+    /// Declared by the bench, not the board.
+    pub bench: bool,
+    pub fidelity: String,
+}
+
+impl ModelEvidence {
+    /// A board (or module) component the bench simulated with its own model, not a stand-in.
+    fn simulates_component(&self) -> bool {
+        self.kind == "component" && !self.bench && matches!(self.fidelity.as_str(), "ideal" | "macro" | "vendor")
+    }
 }
 
 /// One bench of a results document.
@@ -416,6 +828,7 @@ pub struct BenchEvidence {
     /// `dc`: the swept name and its base unit.
     pub sweep: Option<(String, String)>,
     pub status: String,
+    pub models: Vec<ModelEvidence>,
     pub steps: Vec<StepEvidence>,
 }
 
@@ -442,9 +855,10 @@ fn float(value: &Value, key: &str) -> Option<f64> {
 }
 
 fn read_extremes(value: &Value, unit: &str) -> Option<Extremes> {
+    let suffix = if unit.is_empty() { String::new() } else { format!("_{unit}") };
     Some(Extremes {
-        min: float(value, &format!("min_{unit}"))?,
-        max: float(value, &format!("max_{unit}"))?,
+        min: float(value, &format!("min{suffix}"))?,
+        max: float(value, &format!("max{suffix}"))?,
         min_at: float(value, "min_at"),
         max_at: float(value, "max_at"),
     })
@@ -472,6 +886,17 @@ pub fn read(file: &str, document: &Value) -> Result<Evidence, String> {
         let kind = text(&analysis, "kind").unwrap_or_default();
         let sweep = (kind == "dc")
             .then(|| (text(&analysis, "sweep").unwrap_or_default(), text(&analysis, "units").unwrap_or_default()));
+        let models = array(bench, "models")
+            .iter()
+            .filter_map(|model| {
+                Some(ModelEvidence {
+                    name: text(model, "name")?,
+                    kind: text(model, "kind").unwrap_or_default(),
+                    bench: matches!(model.get("bench"), Some(Value::Bool(true))),
+                    fidelity: text(model, "fidelity").unwrap_or_default(),
+                })
+            })
+            .collect();
         let mut steps = Vec::new();
         for (position, step) in array(bench, "steps").iter().enumerate() {
             let pins = array(step, "pins")
@@ -498,9 +923,32 @@ pub fn read(file: &str, document: &Value) -> Result<Evidence, String> {
                         voltage: float(supply, "voltage_v").unwrap_or(f64::NAN),
                         current: read_extremes(supply, "a")?,
                         mean: float(supply, "mean_a"),
+                        // Written before `driven_by`: only sources and replacements were recorded.
+                        driven_by: text(supply, "driven_by").unwrap_or_else(|| "source".to_owned()),
                     })
                 })
                 .collect();
+            let stress = array(step, "stress")
+                .iter()
+                .filter_map(|record| {
+                    Some(StressRecord {
+                        component: text(record, "component")?,
+                        quantity: StressQuantity::parse(&text(record, "quantity")?)?,
+                        pin: text(record, "pin"),
+                        value: read_extremes(record, "")?,
+                        mean: float(record, "mean"),
+                    })
+                })
+                .collect();
+            // A small-signal step whose bias point is an earlier step's: that step's records apply.
+            let shared = match step.get("bias_step") {
+                Some(Value::Int(index)) => index.to_string().parse::<usize>().ok(),
+                _ => None,
+            };
+            let (pins, supplies, stress) = match shared.and_then(|index| steps.get(index)) {
+                Some(StepEvidence { pins, supplies, stress, .. }) => (pins.clone(), supplies.clone(), stress.clone()),
+                None => (pins, supplies, stress),
+            };
             steps.push(StepEvidence {
                 index: match step.get("index") {
                     Some(Value::Int(index)) => index.to_string().parse().unwrap_or(position),
@@ -509,6 +957,7 @@ pub fn read(file: &str, document: &Value) -> Result<Evidence, String> {
                 label: text(step, "label").unwrap_or_default(),
                 pins,
                 supplies,
+                stress,
             });
         }
         benches.push(BenchEvidence {
@@ -517,6 +966,7 @@ pub fn read(file: &str, document: &Value) -> Result<Evidence, String> {
             kind,
             sweep,
             status: text(bench, "status").unwrap_or_default(),
+            models,
             steps,
         });
     }
@@ -539,6 +989,14 @@ pub const PIN_ABSOLUTE_HIGH: &str = "SIM_PIN_ABSOLUTE_HIGH";
 pub const PIN_ABSOLUTE_LOW: &str = "SIM_PIN_ABSOLUTE_LOW";
 pub const PIN_NOT_CHECKED: &str = "SIM_PIN_NOT_CHECKED";
 pub const PIN_NOT_SIMULATED: &str = "SIM_PIN_NOT_SIMULATED";
+pub const STRESS_POWER_HIGH: &str = "SIM_STRESS_POWER_HIGH";
+pub const STRESS_VOLTAGE_HIGH: &str = "SIM_STRESS_VOLTAGE_HIGH";
+pub const STRESS_CURRENT_HIGH: &str = "SIM_STRESS_CURRENT_HIGH";
+pub const STRESS_NOT_CHECKED: &str = "SIM_STRESS_NOT_CHECKED";
+pub const RAIL_MEAN_HIGH: &str = "SIM_RAIL_MEAN_HIGH";
+pub const RAIL_PEAK_HIGH: &str = "SIM_RAIL_PEAK_HIGH";
+pub const RAIL_INCOMPLETE: &str = "SIM_RAIL_INCOMPLETE";
+pub const RAIL_NOT_CHECKED: &str = "SIM_RAIL_NOT_CHECKED";
 
 /// The reason a simulated pin is not checked when it declares no absolute rating.
 const NO_RATING: &str = "no absolute rating";
@@ -610,6 +1068,15 @@ fn amps(value: f64) -> String {
     quantity_text(value, Units::of(Dimension::Current), 4, false)
 }
 
+fn in_units(value: f64, dimension: Dimension) -> String {
+    quantity_text(value, Units::of(dimension), 4, false)
+}
+
+/// A small-signal analysis, whose records are of its bias point.
+fn small_signal(kind: &str) -> bool {
+    matches!(kind, "ac" | "noise" | "loop" | "pz")
+}
+
 /// Where on the bench's axis a value was reached, in words.
 fn at_text(bench: &BenchEvidence, at: Option<f64>) -> String {
     match (bench.kind.as_str(), at) {
@@ -620,6 +1087,7 @@ fn at_text(bench: &BenchEvidence, at: Option<f64>) -> String {
                 + if units.is_empty() { "" } else { " " }
                 + &units
         }
+        (kind, _) if small_signal(kind) => format!(" at the bias point of the {kind} analysis"),
         _ => " at the operating point".to_owned(),
     }
 }
@@ -698,6 +1166,14 @@ fn judge(
     }
 }
 
+/// The ` (U1 replaced in this bench)` note of a stand-in's result.
+fn fidelity_note(component: &str, fidelity: &str) -> String {
+    match fidelity {
+        "replaced" | "ignored" => format!(" ({component} {fidelity} in this bench)"),
+        _ => String::new(),
+    }
+}
+
 /// ERC on simulated pin voltages (see the module docs).
 pub fn check_pins(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnostic> {
     let context = build_context(view.clone());
@@ -761,20 +1237,15 @@ pub fn check_pins(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnos
                         }
                         if excess > entry.excess {
                             let side = if upper { "above the absolute maximum" } else { "below the absolute minimum" };
-                            let fidelity = match record.fidelity.as_str() {
-                                "replaced" | "ignored" => {
-                                    format!(" ({} {} in this bench)", local.component, record.fidelity)
-                                }
-                                _ => String::new(),
-                            };
                             entry.excess = excess;
                             entry.message = format!(
-                                "bench {}, step {}: {quantity} reaches {}{}, {side} {limit_text} by {}{fidelity}",
+                                "bench {}, step {}: {quantity} reaches {}{}, {side} {limit_text} by {}{}",
                                 bench.name,
                                 copper_json::python_str_repr(&step.label),
                                 volts(value),
                                 at_text(bench, at),
                                 volts(excess.abs()),
+                                fidelity_note(&local.component, &record.fidelity),
                             );
                         }
                     }
@@ -789,15 +1260,10 @@ pub fn check_pins(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnos
             continue;
         }
         let code = if key.1 { PIN_ABSOLUTE_HIGH } else { PIN_ABSOLUTE_LOW };
-        let count = if entry.steps > 1 {
-            format!(" ({} of {} simulated steps exceed it)", entry.exceeding, entry.steps)
-        } else {
-            String::new()
-        };
         diagnostics.push(diagnostic(
             Severity::Error,
             code,
-            format!("{}{count}", entry.message),
+            format!("{}{}", entry.message, steps_count(entry.exceeding, entry.steps)),
             key.0.clone(),
             Some(format!(
                 "simulated in {}: change the circuit, the bench or the part; a stand-in model's result says what the stand-in does",
@@ -851,7 +1317,8 @@ pub fn check_pins(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnos
             Severity::Warning,
             PIN_NOT_SIMULATED,
             format!(
-                "{total} rated pins of {} components have no simulated voltage (no bench in {} solved them with an op, dc or tran analysis): {}",
+                "{total} rated pins of {} components have no simulated voltage (no bench in {} solved them with an \
+                 op, dc or tran analysis or at the bias point of a small-signal one): {}",
                 unsimulated.len(),
                 evidence.file,
                 listed.join(", ")
@@ -863,22 +1330,417 @@ pub fn check_pins(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnos
     diagnostics
 }
 
-/// The power-state check's lines on simulated rail currents (see the module docs).
-pub fn rail_lines(view: &FlatElectricalView, evidence: &Evidence) -> Vec<String> {
-    // (board supply index) -> lines.
-    let mut lines: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    let canonical = |net: &str| view.net_aliases.get(net).cloned().unwrap_or_else(|| net.to_owned());
+/// `1 bench`, `3 benches`.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// ` (2 of 3 simulated steps exceed it)` when more than one step was judged.
+fn steps_count(exceeding: usize, steps: usize) -> String {
+    if steps > 1 { format!(" ({exceeding} of {steps} simulated steps exceed it)") } else { String::new() }
+}
+
+/// The steady value of a record (the operating point, a transient run's mean, a bias point) or, for a dc
+/// sweep, whose every point is a steady state, its largest magnitude; with where it was reached.
+fn steady(bench: &BenchEvidence, extremes: &Extremes, mean: Option<f64>) -> (f64, Option<f64>) {
+    match mean {
+        Some(mean) if bench.kind != "dc" => (mean, None),
+        _ => extremes.peak(),
+    }
+}
+
+/// What a simulated component is, for the count of components whose stress was not checked.
+fn stress_class(part: &PartDefinition) -> Option<&'static str> {
+    match PassiveKind::of(part) {
+        Some(PassiveKind::Resistor) => return Some("resistor"),
+        Some(PassiveKind::Capacitor) => return Some("capacitor"),
+        _ => {}
+    }
+    let category = part.category.as_str();
+    if category.contains("diode") || part.sim.iter().any(|block| block.spec.kind == SimKind::Diode) {
+        Some("diode")
+    } else if category.contains("transistor") || category.contains("mosfet") || category.contains("bjt") {
+        Some("transistor")
+    } else {
+        None
+    }
+}
+
+/// A judged rating: the board component, the quantity and the pin of a current.
+type StressKey = (String, StressQuantity, Option<String>);
+
+/// One rating of one component judged over the benches and steps.
+struct StressWorst {
+    /// Value over rating of the worst record.
+    ratio: f64,
+    rating: f64,
+    message: String,
+    exceeding: usize,
+    steps: usize,
+}
+
+/// ERC on simulated component stress against the parts' ratings (see the module docs).
+pub fn check_stress(view: &FlatElectricalView, evidence: &Evidence) -> Vec<Diagnostic> {
+    let context = build_context(view.clone());
+    // (board component, quantity, pin) -> worst.
+    let mut worst: BTreeMap<StressKey, StressWorst> = BTreeMap::new();
+    let mut order = Vec::new();
+    // Board components a bench simulated with their own models.
+    let mut simulated: BTreeSet<String> = BTreeSet::new();
     for bench in evidence.benches.iter().filter(|bench| bench.status != "error") {
-        let instances: Vec<(String, Option<&copper_lang::model::ElaboratedModuleInstance>)> = match &bench.module {
-            None => vec![(String::new(), None)],
-            Some(module) => view
-                .module_instances
-                .iter()
-                .filter(|instance| &instance.module == module)
-                .map(|instance| (instance.path.clone(), Some(instance)))
-                .collect(),
+        for prefix in prefixes(view, bench) {
+            for model in bench.models.iter().filter(|model| model.simulates_component()) {
+                simulated.insert(format!("{prefix}{}", model.name));
+            }
+            for step in &bench.steps {
+                for record in &step.stress {
+                    let board_ref = format!("{prefix}{}", record.component);
+                    let Some(component) = context.component(&board_ref) else { continue };
+                    let Some(part) = view.library.get(&component.part) else { continue };
+                    let rating = match (record.quantity, &record.pin) {
+                        (StressQuantity::Current, Some(pin)) => pin_current_rating(&context, component, part, pin),
+                        (StressQuantity::Current, None) => None,
+                        (quantity, _) => part_rating(part, quantity),
+                    };
+                    let Some(rating) = rating else { continue };
+                    let ((value, at), what) = match record.quantity {
+                        StressQuantity::Voltage => (record.value.peak(), "peak"),
+                        _ => {
+                            let what = if bench.kind == "dc" { "largest" } else { "steady" };
+                            (steady(bench, &record.value, record.mean), what)
+                        }
+                    };
+                    let quantity_text = match (record.quantity, &record.pin) {
+                        (StressQuantity::Power, _) => format!("power into {board_ref}"),
+                        (StressQuantity::Voltage, _) => format!("voltage across {board_ref}"),
+                        (StressQuantity::Current, pin) => {
+                            format!("current into {board_ref}.{}", pin.as_deref().unwrap_or_default())
+                        }
+                    };
+                    let what = match (what, bench.kind.as_str()) {
+                        ("steady", "tran") => "mean",
+                        ("steady", _) => "",
+                        (what, _) => what,
+                    };
+                    let key = (board_ref.clone(), record.quantity, record.pin.clone());
+                    if !worst.contains_key(&key) {
+                        order.push(key.clone());
+                    }
+                    let entry = worst.entry(key).or_insert(StressWorst {
+                        ratio: f64::NEG_INFINITY,
+                        rating,
+                        message: String::new(),
+                        exceeding: 0,
+                        steps: 0,
+                    });
+                    entry.steps += 1;
+                    let magnitude = value.abs();
+                    if beyond(magnitude - rating, rating) {
+                        entry.exceeding += 1;
+                    }
+                    let ratio = magnitude / rating;
+                    if ratio > entry.ratio {
+                        let dimension = record.quantity.dimension();
+                        let (peak, peak_at) = record.value.peak();
+                        let peak_text = if record.quantity == StressQuantity::Voltage || bench.kind == "op" {
+                            String::new()
+                        } else {
+                            format!(" (peak {}{})", in_units(peak, dimension), at_text(bench, peak_at))
+                        };
+                        let what = if what.is_empty() { String::new() } else { format!("{what} ") };
+                        let rating_text = format!("{} {}", record.quantity.rating(), in_units(rating, dimension));
+                        let relation = if beyond(magnitude - rating, rating) {
+                            format!("above its {rating_text} by {}", in_units(magnitude - rating, dimension))
+                        } else {
+                            format!("within its {rating_text}")
+                        };
+                        entry.ratio = ratio;
+                        entry.message = format!(
+                            "bench {}, step {}: the {what}{quantity_text} is {}{}{peak_text}, {relation}",
+                            bench.name,
+                            copper_json::python_str_repr(&step.label),
+                            in_units(value, dimension),
+                            if what.trim() == "peak" || what.trim() == "largest" {
+                                at_text(bench, at)
+                            } else if small_signal(&bench.kind) || bench.kind == "op" {
+                                at_text(bench, None)
+                            } else {
+                                String::new()
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let mut diagnostics = Vec::new();
+    for key in &order {
+        let entry = &worst[key];
+        if entry.exceeding == 0 {
+            continue;
+        }
+        let code = match key.1 {
+            StressQuantity::Power => STRESS_POWER_HIGH,
+            StressQuantity::Voltage => STRESS_VOLTAGE_HIGH,
+            StressQuantity::Current => STRESS_CURRENT_HIGH,
         };
-        for (path, instance) in instances {
+        let subject = match &key.2 {
+            Some(pin) => format!("{}.{pin}", key.0),
+            None => key.0.clone(),
+        };
+        diagnostics.push(diagnostic(
+            Severity::Error,
+            code,
+            format!("{}{}", entry.message, steps_count(entry.exceeding, entry.steps)),
+            subject,
+            Some(format!(
+                "simulated in {}: change the circuit or the part, or check that the bench drives it as the board does",
+                evidence.file
+            )),
+        ));
+    }
+    // The summary: what was checked and the tightest margins, what has no rating.
+    let mut unrated: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut rated_unsimulated: Vec<String> = Vec::new();
+    for component in &view.components {
+        let Some(part) = view.library.get(&component.part) else { continue };
+        let rated = [StressQuantity::Power, StressQuantity::Voltage]
+            .into_iter()
+            .any(|quantity| part_rating(part, quantity).is_some())
+            || part.pins.keys().any(|pin| pin_current_rating(&context, component, part, pin).is_some());
+        let judged = worst.keys().any(|(reference, _, _)| reference == &component.reference);
+        if rated && !judged {
+            rated_unsimulated.push(component.reference.clone());
+        }
+        if !simulated.contains(&component.reference) {
+            continue;
+        }
+        let Some(class) = stress_class(part) else { continue };
+        let has = match class {
+            "resistor" => part_rating(part, StressQuantity::Power).is_some(),
+            "capacitor" => part_rating(part, StressQuantity::Voltage).is_some(),
+            _ => part.pins.keys().any(|pin| pin_current_rating(&context, component, part, pin).is_some()),
+        };
+        if !has {
+            *unrated.entry(class).or_default() += 1;
+        }
+    }
+    if !unrated.is_empty() || !rated_unsimulated.is_empty() {
+        let mut tightest: Vec<(&StressKey, &StressWorst)> = worst.iter().collect();
+        tightest.sort_by(|a, b| b.1.ratio.total_cmp(&a.1.ratio));
+        let margins: Vec<String> = tightest
+            .iter()
+            .take(3)
+            .map(|((reference, quantity, pin), entry)| {
+                let name = match pin {
+                    Some(pin) => format!("{reference}.{pin}"),
+                    None => reference.clone(),
+                };
+                format!(
+                    "{name} {} at {} % of {}",
+                    quantity.name(),
+                    crate::format::significant(entry.ratio * 100.0, 3),
+                    in_units(entry.rating, quantity.dimension())
+                )
+            })
+            .collect();
+        let checked = if worst.is_empty() {
+            "no simulated component declares a stress rating".to_owned()
+        } else {
+            format!(
+                "{} of simulated components checked (highest: {})",
+                plural(worst.len(), "rating", "ratings"),
+                margins.join("; ")
+            )
+        };
+        let rule = |class: &str| match class {
+            "resistor" => "rated_power",
+            "capacitor" => "rated_voltage",
+            _ => "current_max on a pin",
+        };
+        let mut parts = vec![checked];
+        if !unrated.is_empty() {
+            let total: usize = unrated.values().sum();
+            let listed: Vec<String> = unrated
+                .iter()
+                .map(|(class, count)| format!("{} ({})", plural(*count, class, &format!("{class}s")), rule(class)))
+                .collect();
+            parts.push(format!(
+                "{} not checked, their parts declare no rating: {}",
+                plural(total, "simulated component was", "simulated components were"),
+                listed.join(", ")
+            ));
+        }
+        if !rated_unsimulated.is_empty() {
+            parts.push(format!(
+                "rated but in no stress record (not simulated with their own model): {}",
+                rated_unsimulated.join(", ")
+            ));
+        }
+        diagnostics.push(diagnostic(
+            Severity::Warning,
+            STRESS_NOT_CHECKED,
+            format!("component stress: {}", parts.join("; ")),
+            view.name.clone(),
+            Some("declare the rating on the part from its data sheet; an unknown rating stays unknown".to_owned()),
+        ));
+    }
+    diagnostics
+}
+
+// ---------------------------------------------------------------- rails
+
+/// A declared limit on a rail's current.
+struct Budget {
+    value: f64,
+    /// Judged against the steady (mean) current.
+    mean: bool,
+    /// Judged against the peak current.
+    peak: bool,
+    /// Where it comes from, `current_max of supply VP`.
+    label: String,
+}
+
+/// The budgets of a board supply: its own, its source pin's rating and its source part's current limit.
+fn budgets(context: &Context, view: &FlatElectricalView, supply: &copper_lang::model::Supply) -> Vec<Budget> {
+    let mut budgets = Vec::new();
+    if let Some(limit) = &supply.current_max {
+        budgets.push(Budget {
+            value: base(limit),
+            mean: true,
+            peak: supply.current_peak_max.is_none(),
+            label: format!("current_max of supply {}", supply.name),
+        });
+    }
+    if let Some(limit) = &supply.current_peak_max {
+        budgets.push(Budget {
+            value: base(limit),
+            mean: false,
+            peak: true,
+            label: format!("current_peak_max of supply {}", supply.name),
+        });
+    }
+    let Some(source) = supply.source.as_ref().and_then(|source| context.canonical_endpoint(source)) else {
+        return budgets;
+    };
+    let Some(component) = context.component(&source.component) else { return budgets };
+    let Some(part) = view.library.get(&component.part) else { return budgets };
+    if let Some(rating) = pin_current_rating(context, component, part, &source.pin) {
+        budgets.push(Budget {
+            value: rating,
+            mean: true,
+            peak: false,
+            label: format!("current_max of {source}, its source"),
+        });
+    }
+    for block in &part.sim {
+        if !matches!(block.spec.kind, SimKind::Regulator | SimKind::Reference)
+            || block.pins.get("out") != Some(&source.pin)
+        {
+            continue;
+        }
+        if let Some(limit) = block.spec.parameters.get("output_current_limit") {
+            budgets.push(Budget {
+                value: base(&limit.value),
+                mean: true,
+                peak: true,
+                label: format!("output_current_limit of {}'s sim {} block", source.component, block.spec.kind.name()),
+            });
+        }
+    }
+    budgets
+}
+
+/// The records of one bench supply that drove a rail, in one bench and (for a module bench) one instance.
+struct Group<'a> {
+    bench: &'a BenchEvidence,
+    /// The module instance path of a module bench.
+    instance: Option<String>,
+    supply: &'a str,
+    driven_by: &'a str,
+    records: Vec<(&'a StepEvidence, &'a SupplyCurrent)>,
+}
+
+/// One figure of a group: its value (signed), the step and where it was reached.
+#[derive(Clone)]
+struct Figure {
+    value: f64,
+    step: String,
+    at: Option<f64>,
+}
+
+impl Group<'_> {
+    /// The largest steady magnitude over the steps.
+    fn steady(&self) -> Figure {
+        self.records
+            .iter()
+            .map(|(step, record)| {
+                let (value, at) = steady(self.bench, &record.current, record.mean);
+                Figure { value, step: step.label.clone(), at }
+            })
+            .max_by(|a, b| a.value.abs().total_cmp(&b.value.abs()))
+            .expect("a group has records")
+    }
+
+    /// The largest magnitude over the steps.
+    fn peak(&self) -> Figure {
+        self.records
+            .iter()
+            .map(|(step, record)| {
+                let (value, at) = record.current.peak();
+                Figure { value, step: step.label.clone(), at }
+            })
+            .max_by(|a, b| a.value.abs().total_cmp(&b.value.abs()))
+            .expect("a group has records")
+    }
+
+    /// `step 'nominal' at t = 1 us`.
+    fn step_text(&self, figure: &Figure) -> String {
+        format!(
+            "step {}{}",
+            copper_json::python_str_repr(&figure.step),
+            if figure.at.is_some() { at_text(self.bench, figure.at) } else { String::new() }
+        )
+    }
+
+    /// `bench B, step 'nominal' at t = 1 us`.
+    fn source_text(&self, figure: &Figure) -> String {
+        format!("bench {}, {}", self.bench.name, self.step_text(figure))
+    }
+}
+
+/// A rail total: a board bench's figure, or the sum of the module instances' worst shares.
+struct Total {
+    /// What it is, `board level, bench PowerSide` or `module instance AFE, its worst of 20 benches`.
+    label: String,
+    steady: f64,
+    steady_source: String,
+    peak: f64,
+    peak_source: String,
+    covered: BTreeSet<String>,
+}
+
+/// The worst exceeding of one kind (mean or peak) of one rail.
+struct RailWorst {
+    excess: f64,
+    message: String,
+}
+
+/// The power-state check on simulated rail currents (see the module docs): its diagnostics and the lines
+/// that list the figures.
+pub fn check_rails(view: &FlatElectricalView, evidence: &Evidence) -> (Vec<Diagnostic>, Vec<String>) {
+    let context = build_context(view.clone());
+    let canonical = |net: &str| view.net_aliases.get(net).cloned().unwrap_or_else(|| net.to_owned());
+    // Board supply index -> the groups that drove its net.
+    let mut groups: BTreeMap<usize, Vec<Group>> = BTreeMap::new();
+    for bench in evidence.benches.iter().filter(|bench| bench.status != "error") {
+        let instances: Vec<Option<&copper_lang::model::ElaboratedModuleInstance>> = match &bench.module {
+            None => vec![None],
+            Some(module) => {
+                view.module_instances.iter().filter(|instance| &instance.module == module).map(Some).collect()
+            }
+        };
+        for instance in instances {
             // Bench supply -> its steps' records.
             let mut by_supply: BTreeMap<&str, Vec<(&StepEvidence, &SupplyCurrent)>> = BTreeMap::new();
             for step in &bench.steps {
@@ -899,73 +1761,325 @@ pub fn rail_lines(view: &FlatElectricalView, evidence: &Evidence) -> Vec<String>
                 else {
                     continue;
                 };
-                let scope = match instance {
-                    None => String::new(),
-                    Some(_) => format!(" of module instance {path}"),
-                };
-                let means: Vec<f64> = records.iter().filter_map(|(_, record)| record.mean).collect();
-                let peak = records
-                    .iter()
-                    .map(|(step, record)| {
-                        let (value, at) = if record.current.max.abs() >= record.current.min.abs() {
-                            (record.current.max, record.current.max_at)
-                        } else {
-                            (record.current.min, record.current.min_at)
-                        };
-                        (value, at, *step)
-                    })
-                    .max_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))
-                    .expect("one record at least");
-                let steps = records.len();
-                let range = |values: &[f64]| {
-                    let lo = values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let hi = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    if lo == hi { amps(lo) } else { format!("{} to {}", amps(lo), amps(hi)) }
-                };
-                let figure = match bench.kind.as_str() {
-                    "op" => format!("{} (operating point", range(&means)),
-                    "tran" => format!(
-                        "mean {}, peak {}{} (step {}; transient",
-                        range(&means),
-                        amps(peak.0),
-                        at_text(bench, peak.1),
-                        copper_json::python_str_repr(&peak.2.label)
-                    ),
-                    _ => format!(
-                        "{}{} (step {}; {}",
-                        amps(peak.0),
-                        at_text(bench, peak.1),
-                        copper_json::python_str_repr(&peak.2.label),
-                        bench.kind
-                    ),
-                };
-                let steps_text = if steps == 1 { "1 step".to_owned() } else { format!("{steps} steps") };
-                lines
-                    .entry(index)
-                    .or_default()
-                    .push(format!("  {figure}, {steps_text}): bench {}, supply {name}{scope}", bench.name));
+                groups.entry(index).or_default().push(Group {
+                    bench,
+                    instance: instance.map(|instance| instance.path.clone()),
+                    supply: name,
+                    driven_by: records[0].1.driven_by.as_str(),
+                    records,
+                });
             }
         }
     }
+    // Canonical net -> the components with a pin on it, in board order.
+    let mut loads: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for net in &view.nets {
+        let entry = loads.entry(canonical(&net.name)).or_default();
+        for endpoint in &net.endpoints {
+            if endpoint.component != "port" && !entry.contains(&endpoint.component) {
+                entry.push(endpoint.component.clone());
+            }
+        }
+    }
+    let is_capacitor = |reference: &str| {
+        context
+            .component(reference)
+            .and_then(|component| view.library.get(&component.part))
+            .is_some_and(|part| PassiveKind::of(part) == Some(PassiveKind::Capacitor))
+    };
+    let covered_by = |group: &Group| -> BTreeSet<String> {
+        let prefix = group.instance.as_ref().map(|path| format!("{path}/")).unwrap_or_default();
+        group
+            .bench
+            .models
+            .iter()
+            .filter(|model| model.simulates_component())
+            .map(|model| format!("{prefix}{}", model.name))
+            .collect()
+    };
+    let mut diagnostics = Vec::new();
     let mut out = vec![format!(
-        "Rail currents, simulated (source: {}; I(SUPPLY) is the current a bench supply delivers into its net; \
-         no part or supply declares a rail current, so none is compared with a declared figure):",
+        "Rail currents, simulated (source: {}; the current a supply delivers into its net, per bench and supply; \
+         a module bench gives its instance's share):",
         evidence.file
     )];
     let mut unsimulated = Vec::new();
+    let mut unbudgeted = Vec::new();
+    let mut budget_unsimulated = Vec::new();
     for (index, supply) in view.supplies.iter().enumerate() {
-        match lines.get(&index) {
-            Some(found) => {
-                out.push(format!("RAIL {} ({}, net {}):", supply.name, supply.voltage, supply.net));
-                out.extend(found.iter().cloned());
+        let rail_budgets = budgets(&context, view, supply);
+        let Some(found) = groups.get(&index) else {
+            unsimulated.push(supply.name.clone());
+            if !rail_budgets.is_empty() {
+                budget_unsimulated.push(supply.name.clone());
             }
-            None => unsimulated.push(supply.name.clone()),
+            continue;
+        };
+        out.push(format!("RAIL {} ({}, net {}):", supply.name, supply.voltage, supply.net));
+        for group in found {
+            let scope = match &group.instance {
+                None => String::new(),
+                Some(path) => format!(" of module instance {path}"),
+            };
+            let driver = match group.driven_by {
+                "source" | "replacement" => String::new(),
+                component => format!(" (driven by {component})"),
+            };
+            let means: Vec<f64> = group.records.iter().filter_map(|(_, record)| record.mean).collect();
+            let peak = group.peak();
+            let steps = group.records.len();
+            let range = |values: &[f64]| {
+                let lo = values.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                if lo == hi { amps(lo) } else { format!("{} to {}", amps(lo), amps(hi)) }
+            };
+            let kind = group.bench.kind.as_str();
+            let figure = match kind {
+                "op" => format!("{} (operating point", range(&means)),
+                kind if small_signal(kind) => format!("{} (bias point of the {kind} analysis", range(&means)),
+                "tran" => format!(
+                    "mean {}, peak {}{} (step {}; transient",
+                    range(&means),
+                    amps(peak.value),
+                    at_text(group.bench, peak.at),
+                    copper_json::python_str_repr(&peak.step)
+                ),
+                _ => format!(
+                    "{}{} (step {}; {kind}",
+                    amps(peak.value),
+                    at_text(group.bench, peak.at),
+                    copper_json::python_str_repr(&peak.step),
+                ),
+            };
+            let steps_text = if steps == 1 { "1 step".to_owned() } else { format!("{steps} steps") };
+            out.push(format!(
+                "  {figure}, {steps_text}): bench {}, supply {}{scope}{driver}",
+                group.bench.name, group.supply
+            ));
         }
+        if supply.voltage.base_value().is_zero() {
+            continue;
+        }
+        // The totals: each board bench's figure, and the module instances' worst shares summed.
+        let mut totals: Vec<Total> = Vec::new();
+        for group in found.iter().filter(|group| group.instance.is_none()) {
+            let (steady, peak) = (group.steady(), group.peak());
+            totals.push(Total {
+                label: format!("board level, bench {}", group.bench.name),
+                steady: steady.value.abs(),
+                steady_source: group.step_text(&steady),
+                peak: peak.value.abs(),
+                peak_source: group.step_text(&peak),
+                covered: covered_by(group),
+            });
+        }
+        let mut instances: BTreeMap<&str, Vec<&Group>> = BTreeMap::new();
+        for group in found {
+            if let Some(path) = &group.instance {
+                instances.entry(path.as_str()).or_default().push(group);
+            }
+        }
+        if !instances.is_empty() {
+            let mut steady_sum = 0.0;
+            let mut peak_sum = 0.0;
+            let mut steady_parts = Vec::new();
+            let mut peak_parts = Vec::new();
+            let mut covered = BTreeSet::new();
+            for (path, members) in &instances {
+                let best = |figure: &dyn Fn(&Group) -> Figure| {
+                    members
+                        .iter()
+                        .map(|group| (figure(group), *group))
+                        .max_by(|a, b| a.0.value.abs().total_cmp(&b.0.value.abs()))
+                        .expect("an instance has groups")
+                };
+                let (steady, from) = best(&|group: &Group| group.steady());
+                steady_sum += steady.value.abs();
+                steady_parts.push(if instances.len() == 1 {
+                    from.source_text(&steady)
+                } else {
+                    format!("{path} {}, {}", amps(steady.value.abs()), from.source_text(&steady))
+                });
+                let (peak, from) = best(&|group: &Group| group.peak());
+                peak_sum += peak.value.abs();
+                peak_parts.push(if instances.len() == 1 {
+                    from.source_text(&peak)
+                } else {
+                    format!("{path} {}, {}", amps(peak.value.abs()), from.source_text(&peak))
+                });
+                for group in members {
+                    covered.extend(covered_by(group));
+                }
+            }
+            let benches: BTreeSet<&str> = instances.values().flatten().map(|group| group.bench.name.as_str()).collect();
+            let label = if instances.len() == 1 {
+                format!(
+                    "module instance {}, its worst of {}",
+                    instances.keys().next().expect("one instance"),
+                    plural(benches.len(), "bench", "benches")
+                )
+            } else {
+                format!(
+                    "sum over module instances {}, each its worst of {}, peaks summed as if they coincided",
+                    instances.keys().copied().collect::<Vec<_>>().join(", "),
+                    plural(benches.len(), "bench", "benches")
+                )
+            };
+            totals.push(Total {
+                label,
+                steady: steady_sum,
+                steady_source: steady_parts.join("; "),
+                peak: peak_sum,
+                peak_source: peak_parts.join("; "),
+                covered,
+            });
+        }
+        // Coverage: the loads on the rail (not its own source) that no bench simulated.
+        let source = supply.source.as_ref().and_then(|source| context.canonical_endpoint(source));
+        let rail_loads: Vec<String> = loads
+            .get(&canonical(&supply.net))
+            .into_iter()
+            .flatten()
+            .filter(|reference| source.as_ref().is_none_or(|source| &source.component != *reference))
+            .cloned()
+            .collect();
+        let covered_any: BTreeSet<&String> = totals.iter().flat_map(|total| total.covered.iter()).collect();
+        let (missing_capacitors, missing): (Vec<&String>, Vec<&String>) = rail_loads
+            .iter()
+            .filter(|reference| !covered_any.contains(reference))
+            .partition(|reference| is_capacitor(reference));
+        let budget_text: Vec<String> = rail_budgets
+            .iter()
+            .map(|budget| {
+                let applies = match (budget.mean, budget.peak) {
+                    (true, true) => "mean and peak",
+                    (true, false) => "mean",
+                    _ => "peak",
+                };
+                format!("{} {applies} ({})", amps(budget.value), budget.label)
+            })
+            .collect();
+        if budget_text.is_empty() {
+            out.push("  budget: none declared".to_owned());
+            unbudgeted.push(supply.name.clone());
+        } else {
+            out.push(format!("  budget: {}", budget_text.join("; ")));
+        }
+        for total in &totals {
+            let covered = rail_loads.iter().filter(|reference| total.covered.contains(*reference)).count();
+            out.push(format!(
+                "  total ({}): mean {} ({}), peak {} ({}); covers {covered} of {} loads on {}",
+                total.label,
+                amps(total.steady),
+                total.steady_source,
+                amps(total.peak),
+                total.peak_source,
+                rail_loads.len(),
+                supply.net
+            ));
+        }
+        if !missing.is_empty() || !missing_capacitors.is_empty() {
+            let mut parts = Vec::new();
+            if !missing.is_empty() {
+                parts.push(missing.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", "));
+            }
+            if !missing_capacitors.is_empty() {
+                parts.push(format!(
+                    "capacitors (no DC current; their charging current is not in the peak): {}",
+                    missing_capacitors.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+            out.push(format!("  in no bench: {}", parts.join("; ")));
+        }
+        // The judgement.
+        let incomplete = !missing.is_empty();
+        let mut worst: [Option<RailWorst>; 2] = [None, None];
+        for total in &totals {
+            for budget in &rail_budgets {
+                for (slot, applies, value, source, what) in [
+                    (0, budget.mean, total.steady, &total.steady_source, "mean"),
+                    (1, budget.peak, total.peak, &total.peak_source, "peak"),
+                ] {
+                    let excess = value - budget.value;
+                    if !applies || !beyond(excess, budget.value) {
+                        continue;
+                    }
+                    if worst[slot].as_ref().is_some_and(|known| known.excess >= excess) {
+                        continue;
+                    }
+                    let lower_bound = if incomplete {
+                        format!(" (and {} loads on the rail are in no bench)", missing.len())
+                    } else {
+                        String::new()
+                    };
+                    worst[slot] = Some(RailWorst {
+                        excess,
+                        message: format!(
+                            "rail {}: the {what} current {} ({}: {source}) is above its budget {} ({}) by {}{lower_bound}",
+                            supply.name,
+                            amps(value),
+                            total.label,
+                            amps(budget.value),
+                            budget.label,
+                            amps(excess)
+                        ),
+                    });
+                }
+            }
+        }
+        for (slot, code) in [(0, RAIL_MEAN_HIGH), (1, RAIL_PEAK_HIGH)] {
+            if let Some(found) = &worst[slot] {
+                diagnostics.push(diagnostic(
+                    Severity::Error,
+                    code,
+                    found.message.clone(),
+                    supply.name.clone(),
+                    Some(format!(
+                        "simulated in {}: lower the load, raise the budget only with a source for it, or check the bench",
+                        evidence.file
+                    )),
+                ));
+            }
+        }
+        if incomplete && !rail_budgets.is_empty() {
+            diagnostics.push(diagnostic(
+                Severity::Warning,
+                RAIL_INCOMPLETE,
+                format!(
+                    "rail {}: its simulated total leaves out loads no bench simulated, so it is not the rail's \
+                     whole current: {}",
+                    supply.name,
+                    missing.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                supply.name.clone(),
+                Some("add a bench that simulates them on this rail (a board-level bench covers every load)".to_owned()),
+            ));
+        }
+    }
+    if !budget_unsimulated.is_empty() || !unbudgeted.is_empty() {
+        let mut parts = Vec::new();
+        if !budget_unsimulated.is_empty() {
+            parts.push(format!("budgets no bench simulated: {}", budget_unsimulated.join(", ")));
+        }
+        if !unbudgeted.is_empty() {
+            parts.push(format!("simulated rails without a budget: {}", unbudgeted.join(", ")));
+        }
+        diagnostics.push(diagnostic(
+            Severity::Warning,
+            RAIL_NOT_CHECKED,
+            format!("rail currents not compared: {}", parts.join("; ")),
+            view.name.clone(),
+            Some(
+                "declare current_max on the supply (or on its source pin) from what feeds the rail; an unknown \
+                 budget stays unknown"
+                    .to_owned(),
+            ),
+        ));
     }
     if !unsimulated.is_empty() {
         out.push(format!("Not simulated (no bench drove their nets): {}", unsimulated.join(", ")));
     }
-    out
+    (diagnostics, out)
 }
 
 #[cfg(test)]
@@ -986,6 +2100,8 @@ mod tests {
     fn extremes_name_where_they_were_reached() {
         let e = Extremes::of(&[0.5, -1.0, 3.0, 3.0, -1.0], &[0.0, 1.0, 2.0, 3.0, 4.0]).unwrap();
         assert_eq!(e, Extremes { min: -1.0, max: 3.0, min_at: Some(1.0), max_at: Some(2.0) });
+        assert_eq!(e.peak(), (3.0, Some(2.0)));
+        assert_eq!(extremes(-4.0, 1.0).peak(), (-4.0, Some(1.0)));
         // An operating point has no axis.
         assert_eq!(Extremes::of(&[2.5], &[]).unwrap(), Extremes { min: 2.5, max: 2.5, min_at: None, max_at: None });
         assert_eq!(Extremes::of(&[1.0, f64::NAN], &[0.0, 1.0]), None);
@@ -1033,7 +2149,23 @@ mod tests {
     }
 
     #[test]
-    fn recorded_pins_and_supplies_read_back() {
+    fn nodes_without_a_dc_path_are_found() {
+        let mut circuit = Circuit::new();
+        let (a, b, c, d) = (circuit.node("A"), circuit.node("B"), circuit.node("C"), circuit.node("D"));
+        circuit.voltage_source("V1", a, NodeId::GROUND, copper_sim::SourceValue::dc(1.0)).unwrap();
+        circuit.capacitor("C1", a, b, 1e-9).unwrap();
+        // B and C: joined by a resistor, reached only through capacitors: floating.
+        circuit.resistor("R1", b, c, 1e3).unwrap();
+        circuit.capacitor("C2", c, NodeId::GROUND, 1e-9).unwrap();
+        // D: a resistor to ground.
+        circuit.resistor("R2", d, NodeId::GROUND, 1e3).unwrap();
+        circuit.capacitor("C3", a, d, 1e-9).unwrap();
+        let floating = floating_at_dc(&circuit);
+        assert_eq!(floating.into_iter().collect::<Vec<_>>(), vec!["B".to_owned(), "C".to_owned()]);
+    }
+
+    #[test]
+    fn recorded_pins_supplies_and_stress_read_back() {
         let pins = vec![PinVoltages {
             pin: "U1.INP".to_owned(),
             net: "IN".to_owned(),
@@ -1047,18 +2179,45 @@ mod tests {
             voltage: 5.0,
             current: extremes(1e-3, 1.6e-3),
             mean: Some(1.2e-3),
+            driven_by: "U9.OUT".to_owned(),
         }];
+        let stress = vec![
+            StressRecord {
+                component: "R1".to_owned(),
+                quantity: StressQuantity::Power,
+                pin: None,
+                value: extremes(0.0, 0.2),
+                mean: Some(0.1),
+            },
+            StressRecord {
+                component: "D1".to_owned(),
+                quantity: StressQuantity::Current,
+                pin: Some("A".to_owned()),
+                value: extremes(-1e-6, 0.5),
+                mean: None,
+            },
+        ];
         let step = object(vec![
             ("index", Value::from(0i64)),
             ("label", Value::from("nominal")),
             ("pins", pins_value(&pins)),
             ("supplies", supplies_value(&supplies)),
+            ("stress", stress_value(&stress)),
         ]);
         let bench = object(vec![
             ("name", Value::from("B")),
             ("module", Value::Null),
             ("status", Value::from("pass")),
             ("analysis", object(vec![("kind", Value::from("op"))])),
+            (
+                "models",
+                Value::Array(vec![object(vec![
+                    ("name", Value::from("R1")),
+                    ("kind", Value::from("component")),
+                    ("bench", Value::Bool(false)),
+                    ("fidelity", Value::from("ideal")),
+                ])]),
+            ),
             ("steps", Value::Array(vec![step])),
         ]);
         let source = SourceIdentity {
@@ -1078,6 +2237,8 @@ mod tests {
         assert_eq!(evidence.source, Some(source));
         assert_eq!(evidence.benches[0].steps[0].pins, pins);
         assert_eq!(evidence.benches[0].steps[0].supplies, supplies);
+        assert_eq!(evidence.benches[0].steps[0].stress, stress);
+        assert!(evidence.benches[0].models[0].simulates_component());
         assert!(read("x", &copper_json::parse("{\"schema\": \"other/v1\"}").unwrap()).is_err());
     }
 }
