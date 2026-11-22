@@ -3622,6 +3622,9 @@ pub fn bench_value(bench: &Bench) -> Value {
             if let Some(window) = tran.window {
                 entries.push(("window", text(window.name())));
             }
+            if let Some(accuracy) = tran.accuracy {
+                entries.push(("accuracy", text(accuracy.name())));
+            }
             object(entries)
         }
         Analysis::Loop(item) => crate::stability::loop_value(item, &node_value, &sim_quantity_value),

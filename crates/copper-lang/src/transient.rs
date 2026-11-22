@@ -10,6 +10,7 @@
 //!     steady = 1kHz;       // start in the periodic steady state (or a period, 1ms)
 //!     noise = true;        // transient noise sampled every max_step (seed = N; not with steady)
 //!     window = hann;       // the window of spectrum(x) without a fundamental
+//!     accuracy = high;     // reltol 1e-6 and max_step (stop - start) / 500 where not given
 //! }
 //! ```
 //!
@@ -60,6 +61,33 @@ pub struct TranAnalysis {
     pub seed: Option<u64>,
     /// `window = NAME;`: the window of a spectrum without a fundamental.
     pub window: Option<SpectrumWindow>,
+    /// `accuracy = normal | high;`: the preset of `reltol` and `max_step`
+    /// where they are not given (`None`: as written nowhere, the default).
+    pub accuracy: Option<TranAccuracy>,
+}
+
+/// The step-control presets of `analysis tran accuracy` (`copper_sim::Accuracy`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranAccuracy {
+    /// The default: `reltol` 1e-4, `max_step` (stop - start) / 50.
+    Normal,
+    /// `reltol` 1e-6, `max_step` (stop - start) / 500: about 2e-5 of a waveform's range.
+    High,
+}
+
+impl TranAccuracy {
+    pub const ALL: [TranAccuracy; 2] = [TranAccuracy::Normal, TranAccuracy::High];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TranAccuracy::Normal => "normal",
+            TranAccuracy::High => "high",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<TranAccuracy> {
+        TranAccuracy::ALL.into_iter().find(|accuracy| accuracy.name() == name)
+    }
 }
 
 /// The windows of `spectrum(x)` (a spectrum without a fundamental), as written.
@@ -108,6 +136,7 @@ pub(crate) fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<TranAn
     let mut noise = false;
     let mut seed = None;
     let mut window = None;
+    let mut accuracy = None;
     for entry in &item.entries {
         let SimValue::Scalar(value) = &entry.value else {
             let code = match entry.key.as_str() {
@@ -190,6 +219,29 @@ pub(crate) fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<TranAn
                     return Err(failure);
                 };
                 window = Some(parsed);
+            }
+            "accuracy" => {
+                let name = match value {
+                    Scalar::Str(name) => name.clone(),
+                    _ => String::new(),
+                };
+                let names: Vec<&str> = TranAccuracy::ALL.iter().map(|accuracy| accuracy.name()).collect();
+                let Some(parsed) = TranAccuracy::parse(&name) else {
+                    let mut failure = error(
+                        "SIM069",
+                        format!(
+                            "analysis tran accuracy is a preset of reltol and max_step, one of: {} (high: reltol 1e-6 and max_step (stop - start) / 500 where they are not given)",
+                            names.join(", ")
+                        ),
+                        &entry.location,
+                    );
+                    if let Some(suggestion) = close_match(&name, &names) {
+                        failure.hint = Some(format!("did you mean {}?", repr(&suggestion)));
+                        failure.replacement = Some(suggestion);
+                    }
+                    return Err(failure);
+                };
+                accuracy = Some(parsed);
             }
             "uic" => match value {
                 Scalar::Bool(flag) => uic = *flag,
@@ -301,7 +353,7 @@ pub(crate) fn analysis(item: &AnalysisDecl, scope: &ValueScope) -> Result<TranAn
             &item.location,
         ));
     }
-    Ok(TranAnalysis { stop, start, max_step, reltol, uic, steady, noise, seed, window })
+    Ok(TranAnalysis { stop, start, max_step, reltol, uic, steady, noise, seed, window, accuracy })
 }
 
 fn ratio(text: &str) -> Option<SimQuantity> {

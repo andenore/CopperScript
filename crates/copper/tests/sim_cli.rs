@@ -78,6 +78,61 @@ fn sim_impedance_analyzer_soil_sweep_passes() {
     let _ = std::fs::remove_dir_all(&out);
 }
 
+#[test]
+fn sim_results_do_not_depend_on_the_thread_count() {
+    // Every file `copper sim` writes is the same bit for bit on one thread and on several: the
+    // analyzer's Distortion (9 steps, each a sparse factorisation of the front end and a periodic
+    // steady state by shooting) and the preamplifier's Monte Carlo and worst-case benches, the
+    // preamplifier's twice on several threads. Each step owns its circuit and solver, the
+    // sparse elimination order depends only on the matrix (Markowitz counts, ties broken by size,
+    // then column and row), and the simulation crates iterate no hash maps.
+    let cases = [
+        ("examples/simulation/impedance_analyzer/board.copper", "Distortion"),
+        ("examples/simulation/preamp/board.copper", "GainMonteCarlo"),
+        ("examples/simulation/preamp/board.copper", "OffsetWorstCase"),
+    ];
+    for (board, bench) in cases {
+        let jobs: &[&str] = if bench == "Distortion" { &["1", "4"] } else { &["1", "4", "4"] };
+        let runs: Vec<(String, PathBuf)> = jobs
+            .iter()
+            .enumerate()
+            .map(|(k, jobs)| {
+                let out = scratch(&format!("jobs-{bench}-{k}"));
+                let output = copper(&["sim", board, "--bench", bench, "--jobs", jobs, "--out", out.to_str().unwrap()]);
+                assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+                // The table without its last line, which names the output directory.
+                let table: String = text(&output.stdout).lines().filter(|line| !line.starts_with("wrote ")).collect();
+                (table, out)
+            })
+            .collect();
+        let files = |directory: &Path| -> Vec<(String, Vec<u8>)> {
+            let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (path.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&path).unwrap())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let serial = files(&runs[0].1);
+        assert!(serial.iter().any(|(name, _)| name == "sim-results.json"), "{bench}");
+        for (stdout, out) in &runs[1..] {
+            assert_eq!(stdout, &runs[0].0, "{bench}: the table differs");
+            let parallel = files(out);
+            assert_eq!(parallel.len(), serial.len(), "{bench}");
+            for ((name, a), (other, b)) in serial.iter().zip(&parallel) {
+                assert_eq!(name, other, "{bench}");
+                assert!(a == b, "{bench}: {name} differs between --jobs 1 and --jobs 4");
+            }
+        }
+        for (_, out) in &runs {
+            let _ = std::fs::remove_dir_all(out);
+        }
+    }
+}
+
 fn rc_project(name: &str, bench: &str) -> PathBuf {
     let directory = scratch(name);
     std::fs::create_dir_all(directory.join("benches")).unwrap();

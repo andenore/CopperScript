@@ -367,3 +367,129 @@ fn enable_reads_either_polarity() {
         assert!((operating_point(&c).unwrap().voltage("out").unwrap() - want).abs() < 1e-12, "{en}");
     }
 }
+
+/// `VIN` into a regulator or reference `U1` in current limit (`I_lim` 0.2 A
+/// behind 0.1 ohm, set point `5 sign`), loaded by an ideal current sink `IL`
+/// of `sink` amperes in the model's polarity.
+fn limited_into_a_sink(sign: f64, reference: bool, sink: f64) -> Circuit {
+    let mut p = RegulatorParams::new(5.0 * sign);
+    p.output_resistance = 0.1;
+    p.output_current_limit = Some(0.2);
+    let mut c = Circuit::new();
+    let (i, o) = (c.node("in"), c.node("out"));
+    c.voltage_source("VIN", i, G, SourceValue::dc(6.0 * sign)).unwrap();
+    c.regulator("U1", RegulatorPins { input: i, out: o, gnd: G, en: None }, &p, reference).unwrap();
+    c.current_source("IL", o, G, SourceValue::dc(sink * sign)).unwrap();
+    c
+}
+
+#[test]
+fn current_limit_into_resistive_loads() {
+    // R_out = 0.1 ohm, I_lim = 0.2 A, 5 V: unlimited V_out = 5 RL / (RL + R_out),
+    // limited when that current exceeds I_lim, V_out = I_lim RL (the limit is a
+    // current source); a reference is the same model.
+    let loads: Vec<f64> = vec![0.5, 1.0, 5.0, 10.0, 24.0, 24.9, 25.1, 30.0, 100.0, 1e3];
+    for (sign, reference) in [(1.0, false), (-1.0, false), (1.0, true)] {
+        let mut p = RegulatorParams::new(5.0 * sign);
+        p.output_resistance = 0.1;
+        p.output_current_limit = Some(0.2);
+        for &rl in &loads {
+            let op = operating_point(&{
+                let mut c = Circuit::new();
+                let (i, o) = (c.node("in"), c.node("out"));
+                c.voltage_source("VIN", i, G, SourceValue::dc(6.0 * sign)).unwrap();
+                c.regulator("U1", RegulatorPins { input: i, out: o, gnd: G, en: None }, &p, reference).unwrap();
+                c.resistor("RL", o, G, rl).unwrap();
+                c
+            })
+            .unwrap();
+            let free = 5.0 * rl / (rl + 0.1);
+            let want = sign * if free / rl > 0.2 { 0.2 * rl } else { free };
+            let out = op.voltage("out").unwrap();
+            assert!((out - want).abs() < 1e-12, "{sign} {reference} {rl}: {out} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn current_limit_into_a_load_that_ignores_its_rail() {
+    // A sink of 0.3 A against a 0.2 A limit draws more than the limit at any
+    // voltage: the output is pulled to gnd and held there through R_out,
+    // V_out = -(0.3 - 0.2) 0.1 = -10 mV in the model's polarity, and the model
+    // delivers what the load takes. Below the limit (0.15 A) it regulates:
+    // 5 - 0.15 x 0.1 V. Regulator and reference alike, either polarity.
+    for (sign, reference) in [(1.0, false), (-1.0, false), (1.0, true), (-1.0, true)] {
+        let op = operating_point(&limited_into_a_sink(sign, reference, 0.3)).unwrap();
+        let out = op.voltage("out").unwrap();
+        assert!((out - sign * -0.01).abs() < 1e-12, "{sign} {reference}: {out}");
+        assert!((op.current("U1.out").unwrap() - sign * 0.3).abs() < 1e-12);
+        let op = operating_point(&limited_into_a_sink(sign, reference, 0.15)).unwrap();
+        let out = op.voltage("out").unwrap();
+        assert!((out - sign * (5.0 - 0.015)).abs() < 1e-12, "{sign} {reference}: {out}");
+    }
+}
+
+#[test]
+fn current_limit_folds_into_dropout() {
+    // Dropout 0.3 V, R_out 0.1 ohm, I_lim 0.2 A into 20 ohm: the command is
+    // m = max(0, min(5, V_in - 0.3)); unlimited V_out = m 20 / 20.1, limited at
+    // 0.2 A x 20 ohm = 4 V once m / 20.1 ohm exceeds 0.2 A (m > 4.02 V). From
+    // a high input the output is in limit at 4 V, then follows the input in
+    // dropout below 4.32 V.
+    let inputs: Vec<f64> = (0..=32).map(|k| k as f64 * 0.25).collect();
+    let mut p = RegulatorParams::new(5.0);
+    p.dropout = Some(0.3);
+    p.output_resistance = 0.1;
+    p.output_current_limit = Some(0.2);
+    let circuits: Vec<Circuit> = inputs.iter().map(|v| rail(*v, 0.0, Some(20.0), &p)).collect();
+    let res = dc_sweep(&circuits, &inputs).unwrap();
+    let out = res.voltage("out").unwrap();
+    for (k, &vin) in inputs.iter().enumerate() {
+        let m = (vin - 0.3).clamp(0.0, 5.0);
+        let want = (m * 20.0 / 20.1).min(4.0);
+        assert!((out[k] - want).abs() < 1e-9, "{vin}: {} vs {want}", out[k]);
+    }
+}
+
+#[test]
+fn transient_into_and_out_of_current_limit() {
+    // 5 V, R_out 0.1 ohm, I_lim 0.2 A, 100 uF on the output; a 0.3 A load from
+    // 1 ms to 7 ms (1 us edges). In limit the capacitor carries the difference:
+    // the output falls at (0.3 - 0.2) / 100 uF = 1000 V/s and reaches gnd at
+    // 6 ms, where it is held at -(0.3 - 0.2) 0.1 = -10 mV. Once the load is off
+    // the limit charges the capacitor at 0.2 A / 100 uF = 2000 V/s, back in
+    // regulation after 2.5 ms (with the 10 us R_out C tail).
+    let mut p = RegulatorParams::new(5.0);
+    p.output_resistance = 0.1;
+    p.output_current_limit = Some(0.2);
+    let mut c = rail(6.0, 0.0, None, &p);
+    let o = c.node("out");
+    c.capacitor("CO", o, G, 100e-6).unwrap();
+    let il = c.current_source("IL", o, G, SourceValue::dc(0.0)).unwrap();
+    c.set_waveform(il, Waveform::Pwl(vec![(1e-3, 0.0), (1.001e-3, 0.3), (7e-3, 0.3), (7.001e-3, 0.0)])).unwrap();
+    let mut options = TranOptions::new(12e-3);
+    options.max_step = Some(20e-6);
+    let res = transient(&c, &options).unwrap();
+    let (t, v) = (res.times(), res.voltage("out").unwrap());
+    let at = |time: f64| {
+        let k = t.partition_point(|x| *x < time);
+        let f = (time - t[k - 1]) / (t[k] - t[k - 1]);
+        v[k - 1] + f * (v[k] - v[k - 1])
+    };
+    let slope = |from: f64, to: f64| (at(to) - at(from)) / (to - from);
+    assert!((at(0.9e-3) - 5.0).abs() < 1e-9, "{}", at(0.9e-3));
+    let fall = slope(2e-3, 5e-3);
+    assert!((fall + 1000.0).abs() < 1.0, "falling at {fall} V/s");
+    // In limit from 4.98 V (5 V less I_lim R_out), reached 10 us ln 3 after the
+    // load is on (the R_out C time constant towards 4.97 V).
+    // Where the fall, extrapolated, reaches gnd.
+    let zero = 5e-3 + at(5e-3) / -fall;
+    let want = 1.0005e-3 + 10e-6 * 3f64.ln() + 4.98 / 1000.0;
+    assert!((zero - want).abs() < 1e-6, "at gnd at {zero} s vs {want}");
+    for time in [6.5e-3, 6.9e-3] {
+        assert!((at(time) + 0.01).abs() < 1e-6, "{time}: {}", at(time));
+    }
+    let rise = slope(7.5e-3, 9e-3);
+    assert!((rise - 2000.0).abs() < 2.0, "rising at {rise} V/s");
+    assert!((at(11e-3) - 5.0).abs() < 1e-6, "{}", at(11e-3));
+}

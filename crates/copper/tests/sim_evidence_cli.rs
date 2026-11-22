@@ -300,6 +300,23 @@ const RATED_GAIN: &str = "bench Gain for Amp {
 }
 ";
 
+/// The regulator itself drives POS with its own limit active: a 25 kohm load added on VP. At 1 V in the
+/// amplifier draws I_q + V(OUT) / 20 kohm = 1.1 mA whatever its rail, so the 1.2 mA limit leaves
+/// 0.1 mA for the load and VP = 0.1 mA x 25 kohm = 2.5 V; at 6 V in it draws 1.6 mA, more than the
+/// limit at any voltage, and the rail collapses onto GND (-(1.6 - 1.2) mA x 0.1 ohm = -40 uV).
+const RATED_LIMITED: &str = "bench Limited for Amp {
+    replace J2 with source { out = J2.1; ref = GND; dc = V_DRIVE; }
+    param V_DRIVE = 1V;
+    step V_DRIVE in 1V, 6V;
+    component RLOAD: RESISTOR { value = 25kohm; }
+    net VP { RLOAD.1; }
+    net GND { RLOAD.2; }
+    analysis op;
+    measure vp = V(VP);
+    measure out = V(OUT);
+}
+";
+
 fn rated_project(name: &str) -> PathBuf {
     project_with(
         name,
@@ -396,5 +413,63 @@ fn a_component_beyond_its_rating_fails_erc_with_the_bench_named() {
     // The bias point of the ac bench is judged like an operating point: 1 V on INP is inside VP + 0.3 V.
     let high = error_line(&text, "SIM_PIN_ABSOLUTE_HIGH", "U1.INP");
     assert!(high.contains("(1 of 3 simulated steps exceed it)"), "{high}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// The values of measure `name` of bench `bench` per step, from a results file.
+fn measure_values(results: &Path, bench: &str, name: &str) -> Vec<f64> {
+    let document = copper_json::parse(&std::fs::read_to_string(results).expect("the results")).expect("json");
+    let benches = document.get("benches").and_then(copper_json::Value::as_array).expect("benches");
+    let bench =
+        benches.iter().find(|b| b.get("name").and_then(copper_json::Value::as_str) == Some(bench)).expect("bench");
+    let measures = bench.get("measures").and_then(copper_json::Value::as_array).expect("measures");
+    let measure =
+        measures.iter().find(|m| m.get("name").and_then(copper_json::Value::as_str) == Some(name)).expect("measure");
+    let steps = measure.get("steps").and_then(copper_json::Value::as_array).expect("steps");
+    steps
+        .iter()
+        .map(|step| match step.get("value") {
+            Some(copper_json::Value::Float(v)) => *v,
+            other => panic!("value {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_regulator_in_its_own_current_limit_solves_and_its_rail_is_checked() {
+    let directory = project_with(
+        "limited",
+        &[
+            ("board.copper", RATED_BOARD),
+            ("parts/header.copper", HEADER),
+            ("parts/opamp.copper", OPAMP),
+            ("parts/res.copper", RATED_RESISTOR),
+            ("parts/ldo.copper", LDO),
+            ("benches/limited.copper", RATED_LIMITED),
+        ],
+    );
+    let results = simulate(&directory);
+    let vp = measure_values(&directory.join(results), "Limited", "vp");
+    let out = measure_values(&directory.join(results), "Limited", "out");
+    // The amplifier's own closed loop: V(OUT) = 2 V A / (1 + A / 2) x (1 / 2) with A = 1e5, and
+    // VP = (1.2 mA - 1 mA - V(OUT) / 20 kohm) x 25 kohm.
+    let a = 1e5;
+    let want_out = 1.0 / (1.0 / a + 0.5);
+    assert!((out[0] - want_out).abs() < 1e-9, "{out:?}");
+    let want_vp = (1.2e-3 - 1e-3 - want_out / 20e3) * 25e3;
+    assert!((vp[0] - want_vp).abs() < 1e-6, "{vp:?} vs {want_vp}");
+    // Collapsed: the amplifier's 1.6 mA (and the load's -1.6 nA) against the limit, through R_out.
+    let want_collapsed = -(1e-3 + 6.0 / (1.0 / a + 0.5) / 20e3 - 1.2e-3) * 0.1;
+    assert!((vp[1] - want_collapsed).abs() < 1e-8, "{vp:?} vs {want_collapsed}");
+    // The power check sees the regulator's own current: within its limit at 1 V, above it once collapsed.
+    let output = copper(&directory, &["power-check", "board.copper", "--sim-results", results]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}{}", stderr(&output));
+    assert!(
+        text.contains("1.2 mA to 1.6 mA (operating point, 2 steps): bench Limited, supply POS (driven by U2.OUT)"),
+        "{text}"
+    );
+    let mean = error_line(&text, "SIM_RAIL_MEAN_HIGH", "POS");
+    assert!(mean.contains("bench Limited: step 'V_DRIVE = 6 V'"), "{mean}");
     let _ = std::fs::remove_dir_all(&directory);
 }

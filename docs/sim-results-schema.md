@@ -161,7 +161,7 @@ steps has one step labelled `nominal`.
 | `benches[].steps[].transient.smallest_step_s` | float | The smallest accepted step. |
 | `benches[].steps[].transient.largest_step_s` | float | The largest accepted step. |
 | `benches[].steps[].transient.steady_iterations` | int | Newton iterations of the periodic steady state (0 without one). |
-| `benches[].steps[].transient.steady_periods` | int | Periods integrated to find it (0 without one). |
+| `benches[].steps[].transient.steady_periods` | int | Periods integrated to find it, one per Jacobian product included (0 without one). |
 | `benches[].steps[].transient.steady_residual` | float or null | Its final residual, `null` without a steady state. |
 | `benches[].steps[].transient.steady_fallback` | string or null | Why shooting gave up and the run settled period by period instead, `null` when shooting converged or without a steady state. |
 | `benches[].steps[].transient.noise_generators` | int | Noise generators injected (transient noise; 0 without). |

@@ -129,6 +129,30 @@ fn analysis_and_waveform_errors() {
 }
 
 #[test]
+fn analysis_tran_accuracy_preset() {
+    use copper_lang::transient::TranAccuracy;
+    let accuracy = |text: &str| tran_bench("step { final = 1V; }", text, "");
+    let bench = accuracy("analysis tran { stop = 1ms; accuracy = high; }").unwrap();
+    let Analysis::Tran(tran) = &bench.analysis else { panic!("tran") };
+    assert_eq!(tran.accuracy, Some(TranAccuracy::High));
+    assert!(bench_json(&bench).contains("\"accuracy\": \"high\""));
+    // Beside an explicit reltol and max_step (which win when the bench is run).
+    let bench = accuracy("analysis tran { stop = 1ms; accuracy = normal; reltol = 0.001%; max_step = 1us; }").unwrap();
+    let Analysis::Tran(tran) = &bench.analysis else { panic!("tran") };
+    assert_eq!(tran.accuracy, Some(TranAccuracy::Normal));
+    assert!(tran.reltol.is_some() && tran.max_step.is_some());
+    let Analysis::Tran(plain) = &accuracy("analysis tran { stop = 1ms; }").unwrap().analysis else { panic!("tran") };
+    assert_eq!(plain.accuracy, None);
+    let typo = error_of(accuracy("analysis tran { stop = 1ms; accuracy = hihg; }"));
+    assert!(
+        typo.contains("SIM069: analysis tran accuracy is a preset of reltol and max_step, one of: normal, high")
+            && typo.contains("did you mean 'high'?"),
+        "{typo}"
+    );
+    assert!(error_of(accuracy("analysis tran { stop = 1ms; accuracy = 2; }")).contains("SIM069"));
+}
+
+#[test]
 fn time_domain_functions_type_check() {
     let ok = |body: &str| tran(body).unwrap_or_else(|failure| panic!("{body}: {failure}"));
     let bench = ok(" let v = V(VOUT);

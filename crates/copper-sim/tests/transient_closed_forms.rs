@@ -413,6 +413,36 @@ fn opamp_output_current_limit() {
 }
 
 #[test]
+fn opamp_into_and_out_of_its_current_limit() {
+    // The follower (RL 10 kohm, R_out 1 ohm, I_lim 10 mA, output swing 1 V from
+    // the 15 V rails) steps from 0 to 5 V into 1 uF more. In limit the output
+    // charges as I_lim into RL || C: V(t) = I_lim RL (1 - exp(-t / (RL C))),
+    // 100 V (1 - exp(-t / 10 ms)), 4.9 V at 10 ms ln(100 / 95.1) = 0.5024 ms
+    // after the step; out of the limit it settles at 5 V.
+    let mut c = follower(Waveform::Step { initial: 0.0, final_value: 5.0, at: 1e-6, rise: 1e-9 }, |p| {
+        p.output_resistance = 1.0;
+        p.output_current_limit = Some(0.01);
+        p.output_swing_from_rail = Some(1.0);
+    });
+    let o = c.find_node("out").unwrap();
+    c.capacitor("CL", o, G, 1e-6).unwrap();
+    let mut options = TranOptions::new(3e-3);
+    options.max_step = Some(5e-6);
+    let res = transient(&c, &options).unwrap();
+    let (t, v) = (res.times(), res.voltage("out").unwrap());
+    let charging = |time: f64| 100.0 * (1.0 - (-(time - 1e-6) / 10e-3).exp());
+    let k = t.iter().position(|x| *x >= 0.2e-3).unwrap();
+    let error = (v[k] - charging(t[k])).abs();
+    assert!(error < 1e-4, "{} at {} s vs {}", v[k], t[k], charging(t[k]));
+    let at = crossings(t, &v, 4.9, 1.0)[0];
+    let want = 1e-6 + 10e-3 * (100.0f64 / 95.1).ln();
+    report("op-amp into and out of its current limit", &res, (at - want).abs() / want);
+    assert!((at - want).abs() < 1e-3 * want, "4.9 V at {at} s vs {want}");
+    let last = v[v.len() - 1];
+    assert!((last - 5.0).abs() < 1e-3, "{last}");
+}
+
+#[test]
 fn switch_with_hysteresis_turns_on_at_its_threshold() {
     // A ramp 0 -> 2 V over 1 ms controls a switch (threshold 1 V, hysteresis
     // 0.1 V, on 1 ohm, off 1 Gohm) from 1 V into 999 ohm: it turns on when the

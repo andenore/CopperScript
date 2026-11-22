@@ -459,7 +459,7 @@ pub fn timing_text(runs: &[BenchRun]) -> String {
             let periods = sum(|s| s.steady_periods);
             if periods > 0 {
                 lines.push(format!(
-                    "  steady state: {} Newton iterations, {periods} periods integrated (adaptive and replayed) before the recorded run",
+                    "  steady state: {} Newton iterations, {periods} periods integrated (adaptive, replayed and tangent passes) before the recorded run",
                     sum(|s| s.steady_iterations)
                 ));
             }

@@ -92,7 +92,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              capacitor part's esr and esl (or self_resonance) and an inductor part's esr (its DC resistance) are in \
              series with the element. \
              In analysis tran, steady = PERIOD (or steady = F0) starts the run at start in the periodic steady state \
-             of that period, found by shooting (Newton on the period map, its Jacobian applied by replayed periods; \
+             of that period, found by shooting (Newton on the period map, its Jacobian applied exactly by sensitivity integration along the period; \
              settling period by period where that fails, noted; SIM112: sources that do not repeat, ideal delays, ic, \
              uic); noise = true injects every noise generator (thermal, shot, amplifier noise with its 1/f corner) as \
              seeded random currents sampled every max_step, which sets the noise band (seed = N, SIM114); \

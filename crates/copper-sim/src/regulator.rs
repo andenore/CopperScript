@@ -50,6 +50,14 @@
 //! With an `output_current_limit` `I_lim` the command is clamped to
 //! `V(out) - V(gnd) +/- I_lim R_out`, so the current through `R.out` never
 //! exceeds `I_lim` either way; at the limit the output is a current source.
+//! On the set point's side the clamp is taken from `max(s (V(out) - V(gnd)), 0)`:
+//! a load that draws more than `I_lim` at any voltage (an amplifier's supply
+//! pin, whose quiescent and output currents do not depend on its rail at the
+//! operating point) pulls the output to `gnd` and is held there through
+//! `R_out`, at `-(I_load - I_lim) R_out` in the model's polarity, the rail
+//! collapsed. Without that bound such a load and the limit are two current
+//! sources in series, `V(R#x)` and `V(out)` appear only through their
+//! difference, and the operating point is singular.
 //! The output stage sources and sinks: disabled, the model holds its output at
 //! 0 V (as an output discharge would) rather than leaving it floating.
 //!
@@ -431,10 +439,16 @@ impl Circuit {
         if let Some(limit) = p.output_current_limit {
             let out = push(Control::Voltage(pins.out, pins.gnd), &mut controls);
             let swing = limit * p.output_resistance;
-            target = call(
-                Func::Limit,
-                vec![target, bin(BinaryOp::Sub, out.clone(), k(swing)), bin(BinaryOp::Add, out, k(swing))],
-            );
+            // The bound on the set point's side is taken from the output no
+            // further than `gnd`: an output driven past it (a load that draws
+            // more than the limit at any voltage) is held there through R_out.
+            let (low, high) = if s > 0.0 {
+                (out.clone(), call(Func::Max, vec![out, k(0.0)]))
+            } else {
+                (call(Func::Min, vec![out.clone(), k(0.0)]), out)
+            };
+            target =
+                call(Func::Limit, vec![target, bin(BinaryOp::Sub, low, k(swing)), bin(BinaryOp::Add, high, k(swing))]);
         }
         // V(gnd) - V(R#x) = -target.
         let commanded = if impedance { x.node("x")? } else { pins.out };

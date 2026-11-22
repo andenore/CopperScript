@@ -468,12 +468,12 @@ ignored or stand-ins, so the rails' upstream currents (VSYS, BOOST_IN,
 DDS_SW) are not their loads' and the DDS supply current is not simulated; a
 load counts as covered when its own model is simulated, not what it feeds
 (L1 covers BOOST_IN although the boost behind it is ignored); a `SLEEP`
-bench (firmware rules 1 and 2) is not built; a `sim regulator` whose
-`output_current_limit` is below the load fails to solve its operating point
-(singular at the model's internal node), so an active limit can be checked
-only where a stand-in drives the rail; `copper-sim` exposes no held operating
+bench (firmware rules 1 and 2) is not built; `copper-sim` exposes no held operating
 point, so the bias point repeats the hold of its small-signal analyses rather
-than reading theirs.
+than reading theirs. Settled in I6: a `sim regulator` whose
+`output_current_limit` is below its load solves (the singular point was a
+load that draws more than the limit at any voltage; the rail now collapses
+onto `gnd`), and `sim_evidence_cli.rs` checks the regulator's own limit.
 
 ### I5. Layout parasitics
 
@@ -500,6 +500,127 @@ Scope:
 
 Acceptance: `Distortion` runs without a fallback note; analyzer results are
 bit-identical across thread counts.
+
+Built on 22 November 2026.
+
+- Regulator in current limit. The cause, shown on the I4 board and on
+  copper-sim circuits: the limit keeps its equations (a limited regulator into
+  resistors solved before, `current_limit_either_way`); the singular
+  operating point is a load whose current does not depend on its rail. An
+  amplifier's supply pin draws `I_q` plus its output current whatever
+  `V(VP)` at the operating point (its swing and limits act in transient runs
+  only), so the limit, a current source behind `R_out`, and that load are two
+  current sources in series: `V(U2#x)` and `V(VP)` enter only through their
+  difference (`singular at U2#x`), and a load above the limit has no solution
+  at all. Fix (`regulator.rs`): the clamp's bound on the set point's side is
+  taken from `max(s V(out), 0)`, so an output pulled past `gnd` is held there
+  through `R_out`, at `-(I_load - I_lim) R_out`, the rail collapsed; on its
+  own side of `gnd` the expression and its value are unchanged. The same model
+  is the `sim reference`. An op-amp's `output_current_limit` acts in transient
+  runs only, so it cannot make an operating point singular, and in a run its
+  soft limit keeps a slope. Closed-form tests (`tests/regulators.rs`,
+  `tests/transient_closed_forms.rs`): ten resistive loads across the limit,
+  `V_out = min(5 RL / (RL + R_out), I_lim RL)`, both polarities and the
+  reference; a 0.3 A sink against 0.2 A, -10 mV in either polarity; the fold
+  from the limit (4 V into 20 ohm) into dropout below 4.32 V in, over a 0 to
+  8 V sweep; a 0.3 A load step into 100 uF, falling at 1000 V/s, reaching
+  `gnd` within 1 us of `1.0005 ms + 10 us ln 3 + 4.98 ms`, held at -10 mV and
+  recovering at 2000 V/s; an op-amp follower charging 1 uF at its 10 mA limit
+  (`I_lim RL (1 - e^(-t / RL C))`, 4.9 V within 1e-3 of 0.5024 ms) and
+  settling out of it. `sim_evidence_cli.rs` adds the I4 board with its own
+  regulator driving POS and a 25 kohm load: at 1 V in the amplifier draws
+  1.1 mA, so VP = (1.2 mA - 1.1 mA) 25 kohm = 2.50005 V (to 1e-6); at 6 V in it
+  draws 1.6 mA and VP collapses to -40 uV, which `power-check` reports above
+  the limit.
+- Shooting. At HEAD the 1 MHz, 0.65 V `Distortion` step no longer fell back
+  (3 Newton iterations, 11 periods): since I2 accepts stalled Newton
+  iterations its replays converge; the note last appears in the I1 results.
+  The difference quotients are replaced all the same by the exact product
+  (`transient.rs` `linearise`, `tangent`; `newton.rs` `jacobian_at`,
+  `rhs_tangent`): each step of the period just integrated (held: size,
+  method, switch states) has its Jacobian at its solution factored once per
+  Newton step (junctions at their exact voltages, no limiting), and a product
+  is one pass, each step's factors solved against the change of its
+  right-hand side that the previous state's change makes. That change is
+  written out per element: capacitor and charge companions, trapezoidal
+  history currents, inductor flux, and through a current control of a
+  capacitor or charge the law's, CCCS's and CCVS's slopes; charges and history
+  currents are carried on as the integration carries them. Matrix-free for
+  GMRES; no Newton iteration runs inside a product. Checked against central
+  differences of the replayed period on a circuit with every such element:
+  1.1e-8 of the largest entry over 195 steps
+  (`the_tangent_of_a_period_matches_its_difference_quotients`; it fails, 77
+  against -2.0, with the law's current-control term left out). Where it stops:
+  a switch's instant does not move with the state (no event-time
+  sensitivity), so near a switching event the Jacobian is that of the held
+  events, as the replays were. `Distortion`: no fallback on any of its 9
+  steps, 26 Newton iterations and 120 periods in all (27 and 127 before),
+  the bench in 4.6, 6.6 and 6.5 s against 11.5, 16.2 and 14.5 s before
+  (debug, `--timing`, the two builds alternated). Precision rectifier steady state against 20 periods: 3
+  iterations, 6 periods, largest V(OUT) difference over the period 4.4e-4 V
+  (the test's bound unchanged). The 1 MHz, 0.65 V step against a 400-period
+  settling run (`max_step` 5 ns, 101 882 steps): `current_fundamental` 2.3e-7
+  off it (4.2e-7 before), `pump_output_peak` 1.0e-5 (9.7e-6), the harmonic
+  ratios (2e-5 and below) within 4e-7 of it, against the step's 2e-4 floor,
+  before and after.
+- Thread count. Established identical, not changed: the seven examples'
+  outputs (`sim-results.json`, CSVs, HTML) are byte-identical at `--jobs`
+  1, 4 or 5 and 12 and between repeated runs (the analyzer, all 31 benches,
+  and the preamp's Monte Carlo and worst-case benches). Each step owns its
+  circuit and solver, the Markowitz order breaks ties by size, then column
+  and row, `parallel::map` returns in item order, and the simulation crates
+  iterate no hash maps (`BTreeMap` only). New test
+  `sim_results_do_not_depend_on_the_thread_count` (`sim_cli.rs`, 31 s in a
+  debug build): every file and the table of `Distortion` at `--jobs 1` and
+  4, and of the preamp's `GainMonteCarlo` and `OffsetWorstCase` at 1, 4 and
+  4 again, bit for bit. Other machines were not compared.
+- Accuracy preset: `analysis tran { ...; accuracy = high; }` (language
+  reference, "Transient analysis"; `sim_reference`, so completion and hover
+  have it): `reltol` 1e-6 and `max_step` `(stop - start) / 500` where not
+  given (`copper_sim::Accuracy`), an explicit `reltol` or `max_step` wins, the
+  default unchanged. Its level from the floor rule: `0.02 sqrt(reltol)` = 2e-5
+  of a smooth waveform's range (2e-4 at the default), and 500 steps keep a
+  record-long period's trapezoidal error at 1.3e-5. Against copper-sim at
+  `reltol` 1e-9 on the 21 reference decks' transients (ignored test
+  `accuracy_high_meets_its_error_level_on_the_reference_transients`, README
+  "Accuracy preset"): 43 of 66 probes within 2e-5, the linear `floor_`
+  decks 0.6 to 2.0 times it; at the fast edges of transistors, diodes and
+  the slewing follower 9e-5 to 4.5e-3, 1.2 to 100 times below the default.
+  `Startup` with `accuracy = high;` alone against `reltol` 1e-8 and
+  `max_step = 0.1ms` (four steps): voltage measures within 75 uV (the bench
+  as it is, its own `max_step = 1ms` at the default: 2.1 mV), times within
+  0.19 % (0.82 %), the inrush peak of the positive rail's current 0.44 %
+  (0.31 %; branch currents are not in the error control), in 12 037 steps
+  against the bench's 11 986. Tests:
+  `accuracy_high_tightens_the_step_control_where_it_is_not_given`
+  (`transient_runs.rs`: the RC step's 63 % crossing 4.3e-6 of the range at
+  high, 2.5e-4 at the default; explicit values win) and
+  `analysis_tran_accuracy_preset` (copper-lang: lowering, JSON, the
+  misspelt value with its hint).
+- Decision 6: every measure of six examples is identical, and of the
+  analyzer every measure but `Distortion`'s: its 99 values move, on all 9
+  steps, because the Newton iterates of the shooting method differ; each
+  steady state is the fixed point within one tolerance unit either way. The
+  largest changes: harmonic ratios by at most 2.2e-5 absolute (`gain10_thd`,
+  100 kHz, 0.65 V: 0.2325 by 9.3e-5 of itself), each below its step's
+  integration floor (2e-4, or 3e-7 where the steps are uniform, there by
+  7e-9 at most); `current_fundamental` by at most 2.0e-6 of itself;
+  `pump_output_peak` and `slew_needed` 4.3e-5; `pump_headroom`, the
+  difference of 4.42 V and the peak, by 8.1e-5 V (-0.850 mV to -0.769 mV at
+  100 kHz, 0.65 V). Neither set is the better number by anything the run
+  shows: the changes are below the integration floor, the last period's
+  residual is smaller in 7 of 9 steps, and at the step that used to fall
+  back a long settling run agrees with both within its floor.
+
+Open: event-time sensitivity of switches in the shooting Jacobian; a
+regulator sinking its limit against a source that pushes more in at any
+voltage still has no operating point (only the sourcing side is bounded); an
+op-amp in its transient current limit into a load beyond it, with nothing
+else on the node, runs away (no output clamp to the rails); `high` at fast
+nonlinear edges is above its level, and on `opamp_follower` and the BJT
+decks' base node it improves by only 1.2 to 1.3 times (why is not
+established); the peaks of branch-current spikes are not error-controlled;
+`Startup` keeps its hand-set `max_step` (decision 6).
 
 ### I7. Macro model fidelity
 

@@ -900,7 +900,7 @@ pub(crate) enum Failure {
 
 /// The factors of the last matrix: sparse, or dense where the sparse
 /// factorisation left the matrix to the dense one (see [`crate::sparse_lu`]).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Factors {
     Sparse(Box<SparseLu<f64>>),
     Dense(RealLu),
@@ -1194,6 +1194,198 @@ impl Solver {
             }
         }
         unreachable!("the loop returns at the last iteration")
+    }
+}
+
+/// The factored Jacobian of one step's system at its solution
+/// ([`Solver::jacobian_at`]), kept to apply the step's tangent map.
+#[derive(Debug, Clone)]
+pub(crate) struct StepJacobian(Factors);
+
+impl StepJacobian {
+    /// Solve the Jacobian against `b`.
+    pub fn solve(&self, b: &[f64]) -> Option<Vec<f64>> {
+        match &self.0 {
+            Factors::Sparse(lu) => lu.solve(b),
+            Factors::Dense(lu) => lu.solve(b),
+        }
+    }
+}
+
+/// The voltages the junctions and law controls of `m` are at in `x`,
+/// unlimited (in the slots of [`Model::slot`]): the point a Jacobian of the
+/// exact system is taken at. A current control's slot is unused (0).
+pub(crate) fn exact_junction(m: &Model, c: &Circuit, x: &[f64]) -> Vec<f64> {
+    let mut junction = vec![0.0; m.slots];
+    for &d in &m.diodes {
+        if let ElementKind::Diode { anode, cathode, .. } = c.elements()[d].kind() {
+            junction[m.slot[d]] = m.v(x, *anode) - m.v(x, *cathode);
+        }
+    }
+    for &l in &m.laws {
+        if let ElementKind::Law { law, .. } = c.elements()[l].kind() {
+            for (j, v) in law_voltages(m, law, x).into_iter().enumerate() {
+                junction[m.slot[l] + j] = if v.is_finite() { v } else { 0.0 };
+            }
+        }
+    }
+    junction
+}
+
+/// A tangent of a step's previous state: the changes of its unknowns, of its
+/// stored dynamic currents and of its charges (per element).
+#[derive(Debug, Clone)]
+pub(crate) struct Tangent {
+    pub x: Vec<f64>,
+    pub dynamic: Vec<f64>,
+    pub charge: Vec<f64>,
+}
+
+/// The change of the right-hand side of the step system of `ctx` (its
+/// previous state `ctx.prev`) at the solution `x` for a change `d` of the
+/// previous state, every element's current exact (not linearised) at `x`:
+/// `-dR/dprev d` for the residual `R(x, prev)` whose Jacobian in `x` is
+/// [`Solver::jacobian_at`]. Every stamp is affine in the previous state
+/// (the companion models of capacitors, inductors and charges), except
+/// through a current control of a capacitor or a charge, which enters a
+/// law's value and slopes: its change is the law's slope times the change of
+/// the control's constant.
+pub(crate) fn rhs_tangent(m: &Model, c: &Circuit, ctx: &Context, x: &[f64], d: &Tangent) -> Vec<f64> {
+    let n = m.layout.size();
+    let mut rhs = vec![0.0; n];
+    if ctx.method == Method::Dc || ctx.prev.is_none() {
+        return rhs;
+    }
+    let junction = exact_junction(m, c, x);
+    let all = vec![true; c.elements().len()];
+    let out = forms(m, c, ctx, x, &junction, &all);
+    let k_int = integration_factor(ctx);
+    let trap = ctx.method == Method::Trapezoidal;
+    let dv = |a: NodeId, b: NodeId| m.v(&d.x, a) - m.v(&d.x, b);
+    // Per element, the change of its form's constant (what a current control of it sees).
+    let mut form = vec![0.0; c.elements().len()];
+    for (i, e) in c.elements().iter().enumerate() {
+        let history = |i: usize| if trap { d.dynamic[i] } else { 0.0 };
+        form[i] = match (e.kind(), &m.roles[i]) {
+            (_, Role::Skip) => 0.0,
+            (ElementKind::Capacitor { a, b, farads }, _) => -(farads * k_int) * dv(*a, *b) - history(i),
+            (ElementKind::Diode { params, .. }, _) if params.has_charge() => -k_int * d.charge[i] - history(i),
+            (ElementKind::Cccs { control, gain, .. }, _) if out[control.index()].is_some() => {
+                gain * form[control.index()]
+            }
+            (ElementKind::Law { law, .. }, _) => law_tangent(m, ctx, x, &junction, &out, &form, i, law, d, k_int),
+            _ => 0.0,
+        };
+    }
+    for (i, e) in c.elements().iter().enumerate() {
+        let voltage_law = matches!(e.kind(), ElementKind::Law { law, .. } if law.output == Output::Voltage);
+        if form[i] != 0.0
+            && !voltage_law
+            && let Some((ta, tb)) = e.kind().terminals()
+        {
+            if let Some(r) = m.row(ta) {
+                rhs[r] -= form[i];
+            }
+            if let Some(r) = m.row(tb) {
+                rhs[r] += form[i];
+            }
+        }
+        let Some(k) = m.layout.branch_row[i] else { continue };
+        match e.kind() {
+            ElementKind::Inductor { .. } => {
+                for &(j, l) in &m.inductance[i] {
+                    let col = m.layout.branch_row[j].expect("inductor branch");
+                    rhs[k] -= k_int * l * d.x[col];
+                }
+                if trap {
+                    let (ta, tb) = e.kind().terminals().expect("an inductor has terminals");
+                    rhs[k] -= dv(ta, tb);
+                }
+            }
+            ElementKind::Ccvs { control, ohms, .. } if out[control.index()].is_some() => {
+                rhs[k] += ohms * form[control.index()];
+            }
+            ElementKind::Law { .. } if voltage_law => rhs[k] += form[i],
+            _ => {}
+        }
+    }
+    rhs
+}
+
+/// [`rhs_tangent`] of law element `i`: the change of its constant (current
+/// output) or of its branch row's constant (voltage output).
+#[allow(clippy::too_many_arguments)]
+fn law_tangent(
+    m: &Model,
+    ctx: &Context,
+    x: &[f64],
+    junction: &[f64],
+    out: &[Option<Form>],
+    form: &[f64],
+    i: usize,
+    law: &crate::behavioral::Law,
+    d: &Tangent,
+    k_int: f64,
+) -> f64 {
+    let (u, _) = law_controls(m, law, i, x, junction, out);
+    let f = law.value(&u, ctx.time.unwrap_or(0.0));
+    let mut slopes: Vec<f64> = f.d.into_iter().map(|d| if d.is_finite() { d } else { 0.0 }).collect();
+    let charge = (law.output == Output::Current).then(|| law.charge(&u)).flatten();
+    if let Some(q) = &charge {
+        for (s, dq) in slopes.iter_mut().zip(&q.d) {
+            *s += dq * k_int;
+        }
+    }
+    let mut change = 0.0;
+    for (g, control) in slopes.iter().zip(&law.controls) {
+        if let Control::Current(id) = *control
+            && *g != 0.0
+        {
+            change += g * form[id.index()];
+        }
+    }
+    if charge.is_some() {
+        change -= k_int * d.charge[i];
+        if ctx.method == Method::Trapezoidal {
+            change -= d.dynamic[i];
+        }
+    }
+    change
+}
+
+impl Solver {
+    /// The Jacobian of the step system of `ctx` at its solution `x`, every
+    /// junction and law control at its exact voltage there (no step
+    /// limiting), factored in the pivot order of `previous` where that still
+    /// serves.
+    pub(crate) fn jacobian_at(
+        &mut self,
+        m: &Model,
+        c: &Circuit,
+        ctx: &Context,
+        x: &[f64],
+        previous: Option<&StepJacobian>,
+    ) -> Result<StepJacobian, LuError> {
+        let n = m.layout.size();
+        let junction = exact_junction(m, c, x);
+        let mut rhs = self.fixed_part(m, c, ctx, x, &junction);
+        self.matrix(n);
+        let (Some(a), Some((_, fixed))) = (self.matrix.as_mut(), self.fixed.as_ref()) else {
+            unreachable!("the matrix and its fixed part are set above")
+        };
+        a.load(fixed);
+        stamp(m, c, ctx, x, &junction, Part::Nonlinear, Some(a), &mut rhs);
+        a.finish();
+        self.factorizations += 1;
+        let _span = timing::span(Phase::Factor);
+        let reuse = match previous {
+            Some(StepJacobian(Factors::Sparse(lu))) => Some((**lu).clone()),
+            _ => None,
+        };
+        Ok(StepJacobian(match crate::sparse_lu::factor_reusing(a, reuse) {
+            Some(lu) => Factors::Sparse(Box::new(lu)),
+            None => Factors::Dense(RealLu::factor(a.to_dense(), n)?),
+        }))
     }
 }
 

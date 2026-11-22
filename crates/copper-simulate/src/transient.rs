@@ -112,6 +112,14 @@ pub fn options(tran: &TranAnalysis, params: &Params) -> TranOptions {
     let mut options = TranOptions::new(value(&tran.stop, params));
     options.start = get(&tran.start, params);
     options.max_step = tran.max_step.as_ref().map(|q| value(q, params));
+    // `accuracy = high;` sets the tolerance and the step limit an explicit `reltol` or `max_step` leaves open.
+    if tran.accuracy == Some(copper_lang::transient::TranAccuracy::High) {
+        let high = copper_sim::Accuracy::High;
+        options.reltol = high.reltol();
+        if options.max_step.is_none() {
+            options.max_step = Some(high.max_step(options.stop - options.start));
+        }
+    }
     if let Some(reltol) = &tran.reltol {
         options.reltol = value(reltol, params);
     }

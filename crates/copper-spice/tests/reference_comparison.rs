@@ -987,3 +987,127 @@ fn transient_flicker_noise_matches_the_noise_analysis() {
         low *= 2.0;
     }
 }
+
+/// `accuracy = high` ([`copper_sim::Accuracy::High`]) against its error level
+/// on every deck's transient: each probe at the preset's `reltol` and
+/// `max_step` (none of the deck's own) against a much tighter copper-sim run
+/// of the same deck (`reltol` 1e-9, a step of at most a twenty-thousandth of
+/// the span), read at the preset run's own points (the tight run, linear
+/// between its points, is the reference): the largest difference, over the
+/// probe's range plus the step control's absolute tolerance (1 uV, or 1 nA
+/// for a current). A point within two of the tight run's steps of a jump
+/// (a step of the tight run that moves by more than 1e-3 of the range: a
+/// behavioural source or a switch changing discontinuously) is left out:
+/// there the difference is the jump's time, which each run places within
+/// its own step. The default preset is reported beside it. The level,
+/// `0.02 sqrt(reltol)`, is 2e-5 at `high` and 2e-4 at the default.
+///
+/// Asserted: no probe is worse at `high` than at the default (beyond 1e-6 of
+/// its range), and the linear circuits of the integration-floor decks are
+/// within twice the level (the rule holds within a factor of 2). Near the
+/// fast edges of nonlinear devices the difference is larger than the level
+/// (README, "Accuracy preset"); it is printed. Slow (about 5 minutes in a
+/// debug build: a run of 20 000 steps per deck), so run on request.
+#[test]
+#[ignore = "slow: the accuracy preset's evidence, run with --ignored accuracy_high"]
+fn accuracy_high_meets_its_error_level_on_the_reference_transients() {
+    use copper_sim::Accuracy;
+    let dir = root();
+    let mut lines = Vec::new();
+    let mut within = (0, 0);
+    for path in decks(&dir) {
+        let deck = read_deck(&path);
+        let Some(Card::Tran { start, uic, .. }) = deck.cards.iter().find(|c| matches!(c, Card::Tran { .. })) else {
+            continue;
+        };
+        let reference = read_reference(&dir, &deck.name);
+        let index = deck.cards.iter().position(|c| matches!(c, Card::Tran { .. })).unwrap();
+        let temp = reference_temps(&reference).first().unwrap().clone();
+        let stop = reference[&(index, temp.clone(), deck.tran_probes[0].clone())].last().unwrap().0;
+        let lib = deck_library(&deck, None);
+        let c = circuit(&lib, temp.parse().unwrap(), 0.0);
+        let span = stop - start;
+        let run = |reltol: f64, max_step: f64| {
+            let options = TranOptions {
+                start: *start,
+                max_step: Some(max_step),
+                reltol,
+                initial: InitialConditions { uic: *uic, ..Default::default() },
+                ..TranOptions::new(stop)
+            };
+            copper_sim::transient(&c, &options).unwrap_or_else(|e| panic!("{}: {e}", deck.name))
+        };
+        let tight = run(1e-9, span / 20000.0);
+        let presets = [Accuracy::Normal, Accuracy::High].map(|a| (a, run(a.reltol(), a.max_step(span))));
+        for p in &deck.tran_probes {
+            let values = |r: &copper_sim::TranResult| -> Vec<f64> {
+                if p.starts_with("v(") {
+                    let (a, b) = probe_nodes(p);
+                    match b {
+                        Some(b) => r.voltage_between(&node(&a), &node(&b)).unwrap(),
+                        None => r.voltage(&node(&a)).unwrap(),
+                    }
+                } else {
+                    r.current(&element(&p[2..p.len() - 1])).unwrap()
+                }
+            };
+            let (tt, tv) = (tight.times(), values(&tight));
+            let (lo, hi) = tv.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| (l.min(*v), h.max(*v)));
+            let absolute = if p.starts_with("v(") { 1e-6 } else { 1e-9 };
+            let scale = (hi - lo) + absolute;
+            let jumps: Vec<f64> =
+                (1..tt.len()).filter(|&k| (tv[k] - tv[k - 1]).abs() > 1e-3 * (hi - lo)).map(|k| tt[k]).collect();
+            let near_jump = |t: f64| {
+                let k = jumps.partition_point(|x| *x < t);
+                let window = 2.0 * span / 20000.0;
+                (k < jumps.len() && jumps[k] - t <= window) || (k > 0 && t - jumps[k - 1] <= window)
+            };
+            let at = |t: f64| {
+                let k = tt.partition_point(|x| *x < t).clamp(1, tt.len() - 1);
+                let s = ((t - tt[k - 1]) / (tt[k] - tt[k - 1])).clamp(0.0, 1.0);
+                tv[k - 1] + s * (tv[k] - tv[k - 1])
+            };
+            let mut errors = Vec::new();
+            for (accuracy, r) in &presets {
+                let (mut worst, mut when, mut left_out) = (0.0f64, 0.0, 0);
+                for (t, v) in r.times().iter().zip(values(r)) {
+                    if near_jump(*t) {
+                        left_out += 1;
+                        continue;
+                    }
+                    let e = (v - at(*t)).abs() / scale;
+                    if e > worst {
+                        (worst, when) = (e, *t);
+                    }
+                }
+                if *accuracy == Accuracy::High {
+                    within.1 += 1;
+                    if worst <= accuracy.error_level() {
+                        within.0 += 1;
+                    }
+                }
+                errors.push((worst, when, left_out, r.stats().accepted_steps));
+            }
+            assert!(errors[1].0 <= errors[0].0 + 1e-6, "{} {p}: {:?}", deck.name, errors);
+            if deck.name.starts_with("floor_") {
+                assert!(errors[1].0 <= 2.0 * Accuracy::High.error_level(), "{} {p}: {:?}", deck.name, errors);
+            }
+            lines.push(format!(
+                "{:<20} {:<12} range {:.3e}: default {:.2e} ({} steps), high {:.2e} at {:.4e} s ({} steps, {} points at jumps)",
+                deck.name,
+                p,
+                hi - lo,
+                errors[0].0,
+                errors[0].3,
+                errors[1].0,
+                errors[1].1,
+                errors[1].3,
+                errors[1].2
+            ));
+        }
+    }
+    for line in &lines {
+        println!("{line}");
+    }
+    println!("{} of {} probes within the level {:.0e} at high", within.0, within.1, Accuracy::High.error_level());
+}

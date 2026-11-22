@@ -192,6 +192,37 @@ magnitude, a vertical PNP, the JFET's `IS(T)` without `N` and with
 H(s)`, and LTspice's readings of element `IC=` (refused, as in ngspice) and
 of the diode's `ISR` and `IKF` (refused).
 
+## Accuracy preset
+
+`accuracy_high_meets_its_error_level_on_the_reference_transients` (ignored:
+about 5 minutes in a debug build) runs every deck's transient with copper-sim
+alone at the two presets of `copper_sim::Accuracy` and at `reltol` 1e-9 with
+at most a twenty-thousandth of the span per step, and reads the difference
+at the preset run's points, over the probe's range plus 1 uV (1 nA). Points
+within two tight steps of a jump (a behavioural source or switch changing
+discontinuously, or an edge faster than the tight run resolves) are left
+out. ngspice is not involved. Measured on 22 November 2026, 66 probes of 21
+decks:
+
+- 43 within `high`'s level, 2e-5 of the range. The linear decks: `floor_rlc`
+  2.2e-5 and 1.2e-5, `floor_sallen_key` 2.1e-5 and 1.4e-5, `floor_ladder`
+  4.0e-5 and 2.5e-5 (0.6 to 2.0 times the level; the default 1.7e-4 to
+  3.7e-4), `rectifier` 4.6e-5, 1.1e-5 and 8e-7, `ce_amp` 3e-7, `pspice_ic`
+  7e-6. Behavioural, switch and line decks are at the solver's rounding
+  (1e-7 and below) at either preset.
+- Above it, near the fast edges of nonlinear devices, where the difference
+  at a given time is the edge's shift: `mos3` v(d6) 9.3e-5 (default 8.9e-3),
+  `mos1` v(d5) 9.1e-5 (2.5e-3), `rlc` 1.1e-4 to 1.6e-4 (2.0e-3, 2.9e-3),
+  `jfet` v(d4) 4.1e-4 (1.1e-2), `diode` 1.2e-3 and 4.5e-4 (6.6e-3, 1.1e-2),
+  `cmos_inverter` i(vdd) 3.1e-3 (1.6e-2), `bjt_npn`/`bjt_pnp` v(b4) 6.6e-4
+  and 6.4e-4 (8.8e-4, 1.1e-3), `opamp_follower` 4.5e-3 and 1.1e-3 (5.3e-3,
+  1.4e-3). The last two improve by only 1.2 to 1.3 times; why is not
+  established (the tight run's own placement of the edge was not varied).
+
+The test asserts that no probe is worse at `high` than at the default (by
+more than 1e-6 of its range) and that the `floor_` decks are within twice
+the level.
+
 ## Not covered
 
 Lossy lines, `VDMOS`, BSIM, `ISS`, quasi-saturation, ngspice's `NLEV` noise

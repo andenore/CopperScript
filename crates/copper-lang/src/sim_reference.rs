@@ -74,6 +74,12 @@ pub const ANALYSES: [AnalysisKind; 7] = [
             item("start", "s", "the start of the recorded part (earlier points are solved, not kept)", "0.5ms"),
             item("max_step", "s", "the largest time step; uniform steps lower the spectrum's integration floor", "1us"),
             item("reltol", "number", "relative tolerance of the step control (default 1e-4)", "0.0001"),
+            item(
+                "accuracy",
+                "normal or high",
+                "a preset of reltol and max_step where they are not given: high is reltol 1e-6 and max_step (stop - start) / 500, an integration error of about 2e-5 of a waveform's range (normal, the default: 2e-4)",
+                "high",
+            ),
             item("uic", "true or false", "start from the ic values without an operating point", "true"),
             item(
                 "steady",

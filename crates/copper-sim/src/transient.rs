@@ -64,12 +64,21 @@
 //! the unknowns whose truncation error is controlled and `phi` integrates one
 //! period from it (restarted with backward Euler, as after a breakpoint).
 //! Each Newton step solves `(M - I) d = -F(s)` by GMRES with the monodromy
-//! matrix `M` applied by difference quotients: the period's accepted steps
-//! replayed from a perturbed state, step sizes, methods and switch states
-//! held. Once the corrections fall below 30 tolerance units the period is
-//! evaluated on those held steps too. Converged when a correction is within
-//! the tolerance on every state unknown; where the replays cannot follow (a
-//! limiter driven hard) or 20 iterations do not converge, the run settles
+//! matrix `M` applied exactly, by sensitivity integration along the period
+//! just integrated: its steps, sizes, methods and switch states held, each
+//! step's Jacobian at its solution factored once per Newton step, and a
+//! product is one pass through them, each step's factors solved against the
+//! change of its right-hand side the previous step's change makes (its
+//! unknowns, trapezoidal history currents and charges, carried on as the
+//! integration carries them). No Newton iteration runs in a product, so a
+//! limiter driven hard cannot make one fail. What it leaves out is the
+//! dependence of a switch's instant on the state: the map is that of the
+//! held switching instants (Newton then converges more slowly near an
+//! event, to the same fixed point). Once the corrections fall below 30
+//! tolerance units the period is evaluated on the held steps of the last
+//! adaptive period. Converged when a correction is within the tolerance on
+//! every state unknown; where a period cannot be integrated, a Jacobian
+//! cannot be factored or 20 iterations do not converge, the run settles
 //! period by period from the last integrated state instead, and
 //! [`TranStats::steady_fallback`] says why. Every source must repeat with the
 //! period from `start` on, and ideal delays are refused
@@ -92,12 +101,16 @@
 //! work. Every value is finite.
 
 use crate::analysis::Probes;
+use crate::behavioral::Control;
 use crate::circuit::{Circuit, ElementId, ElementKind, NodeId, SourceValue};
 use crate::diagnose::diagnose;
 use crate::error::{AnalysisPoint, SimError};
 use crate::lu::LuError;
 use crate::mna::{Layout, Unknown};
-use crate::newton::{Context, DcPoint, Failure, Method, Model, Solver, State, dc_point, element_current};
+use crate::newton::{
+    Context, DcPoint, Failure, Method, Model, Solver, State, StepJacobian, Tangent, dc_point, element_current,
+    rhs_tangent,
+};
 use crate::timing::{self, Phase};
 use crate::transient_noise::Injection;
 
@@ -300,6 +313,54 @@ impl TranOptions {
     }
 }
 
+/// A preset of the step control: the tolerance and the longest step a run
+/// takes where its options name none (an explicit `reltol` or `max_step`
+/// wins).
+///
+/// The error level of a preset follows the integration-floor rule of
+/// [`crate::spectrum::integration_floor`]: with the steps left to the error
+/// control, a smooth waveform carries an integration error of about `0.02
+/// sqrt(reltol)` of its range (near a fast edge of a nonlinear device the
+/// error at a given time is a shift of the edge, and larger: the reference
+/// decks' README, "Accuracy preset"). `Normal` is the default (`reltol` 1e-4,
+/// `max_step` a fiftieth of the recorded span): about 2e-4. `High` is
+/// `reltol` 1e-6, 2e-5 of the range, with `max_step` a five-hundredth of the
+/// span, so that a component whose period is the whole record keeps the
+/// trapezoidal amplitude error `(w h)^2 / 12` (1.3e-5 at 500 steps a
+/// period) below that level even where the error control would let the step
+/// grow to its limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Accuracy {
+    /// The default tolerances.
+    #[default]
+    Normal,
+    /// A hundredth of the default tolerance and ten times as many steps at most.
+    High,
+}
+
+impl Accuracy {
+    /// The relative tolerance of the preset.
+    pub fn reltol(self) -> f64 {
+        match self {
+            Accuracy::Normal => 1e-4,
+            Accuracy::High => 1e-6,
+        }
+    }
+
+    /// The longest step over a recorded span of `span` seconds.
+    pub fn max_step(self, span: f64) -> f64 {
+        match self {
+            Accuracy::Normal => span / 50.0,
+            Accuracy::High => span / 500.0,
+        }
+    }
+
+    /// The integration error the preset holds a waveform to, relative to its range: `0.02 sqrt(reltol)`.
+    pub fn error_level(self) -> f64 {
+        0.02 * self.reltol().sqrt()
+    }
+}
+
 /// The work a transient run did.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TranStats {
@@ -325,8 +386,9 @@ pub struct TranStats {
     pub noise_limited: usize,
     /// Newton iterations of the shooting method (with a steady-state period; 0 without).
     pub steady_iterations: usize,
-    /// Periods integrated by the shooting method: the adaptive ones and the
-    /// replays of their time steps for the Jacobian products.
+    /// Periods integrated by the shooting method: the adaptive ones, the
+    /// replays of their time steps, and one per Jacobian product (a pass of
+    /// the period's tangent map).
     pub steady_periods: usize,
     /// The last shooting residual, the change of the state over one period,
     /// in units of the truncation-error tolerance (largest over the unknowns).
@@ -609,16 +671,17 @@ fn initial_point(
     Ok((DcPoint { x, junction, switch_on }, dynamic))
 }
 
-/// One accepted step of a period, kept to replay it (the Jacobian products
-/// of the shooting method): its time, length, method, whether it landed on
-/// a breakpoint, and the switch states after it.
+/// One accepted step of a period, kept to replay it and to linearise the
+/// period along it (the Jacobian products of the shooting method): its
+/// time, length, method, whether it landed on a breakpoint, and the state
+/// after it (its switch states those the next step is solved with).
 #[derive(Debug, Clone)]
 struct GridStep {
     t: f64,
     h: f64,
     method: Method,
     left: bool,
-    switch_on: Vec<bool>,
+    after: State,
 }
 
 /// What every stretch of integration of one run shares.
@@ -917,7 +980,7 @@ impl Integrator<'_> {
             run.state = next_state;
             drop(control);
             if let Some(grid) = grid.as_deref_mut() {
-                grid.push(GridStep { t, h, method, left: breakpoint, switch_on: run.state.switch_on.clone() });
+                grid.push(GridStep { t, h, method, left: breakpoint, after: run.state.clone() });
             }
             if let Some(noise) = noise.as_deref_mut() {
                 noise.release(t);
@@ -969,9 +1032,17 @@ impl Integrator<'_> {
     }
 
     /// The steps of `grid` again from `start`, each solved by Newton from
-    /// the previous step's solution, the switch states as recorded.
-    fn replay(&self, solver: &mut Solver, start: &State, grid: &[GridStep]) -> Result<State, SimError> {
+    /// the previous step's solution, the switch states as recorded: the state
+    /// at the end and the steps as solved (a step taken in parts is recorded
+    /// part by part).
+    fn replay(
+        &self,
+        solver: &mut Solver,
+        start: &State,
+        grid: &[GridStep],
+    ) -> Result<(State, Vec<GridStep>), SimError> {
         let mut state = start.clone();
+        let mut solved_steps = Vec::with_capacity(grid.len());
         for step in grid {
             // A step whose Newton iteration does not converge from the previous
             // solution (a limiter driven hard, where the outcome hangs on rounding)
@@ -980,13 +1051,15 @@ impl Integrator<'_> {
             for parts in [1usize, 4, 16] {
                 let h = step.h / parts as f64;
                 let mut sub = state.clone();
+                let mut taken = Vec::with_capacity(parts);
                 let mut ok = true;
                 for part in 1..=parts {
                     let t = if part == parts { step.t } else { step.t - step.h + h * part as f64 };
                     let method = if parts == 1 { step.method } else { Method::BackwardEuler };
+                    let left = step.left && part == parts;
                     let ctx = Context {
                         time: Some(t),
-                        left: step.left && part == parts,
+                        left,
                         method,
                         h,
                         source_scale: 1.0,
@@ -997,8 +1070,10 @@ impl Integrator<'_> {
                     };
                     match solver.newton(self.m, self.c, &ctx, &sub.x, &sub.junction, 100) {
                         Ok(point) => {
-                            let switches = if part == parts { step.switch_on.clone() } else { sub.switch_on.clone() };
+                            let switches =
+                                if part == parts { step.after.switch_on.clone() } else { sub.switch_on.clone() };
                             sub = self.advance(&sub, point.x, point.junction, switches, method, h);
+                            taken.push(GridStep { t, h, method, left, after: sub.clone() });
                         }
                         Err(_) => {
                             ok = false;
@@ -1007,18 +1082,119 @@ impl Integrator<'_> {
                     }
                 }
                 if ok {
-                    solved = Some(sub);
+                    solved = Some((sub, taken));
                     break;
                 }
             }
-            state = solved.ok_or_else(|| {
+            let (next, taken) = solved.ok_or_else(|| {
                 SimError::SteadyState(format!(
-                    "the Newton iteration of a replayed period does not converge at {:e} s, even in steps of a sixteenth; the circuit is too strongly nonlinear for the shooting method's difference quotients",
+                    "the Newton iteration of a replayed period does not converge at {:e} s, even in steps of a sixteenth",
                     step.t
                 ))
             })?;
+            state = next;
+            solved_steps.extend(taken);
         }
-        Ok(state)
+        Ok((state, solved_steps))
+    }
+
+    /// The factored Jacobians of the steps of `trajectory` (a period from
+    /// `start`, as integrated), each at its solution.
+    fn linearise(
+        &self,
+        solver: &mut Solver,
+        start: &State,
+        trajectory: &[GridStep],
+    ) -> Result<Vec<StepJacobian>, SimError> {
+        let mut out: Vec<StepJacobian> = Vec::with_capacity(trajectory.len());
+        for (k, step) in trajectory.iter().enumerate() {
+            let prev = if k == 0 { start } else { &trajectory[k - 1].after };
+            let ctx = step_context(step, prev);
+            let jacobian = solver.jacobian_at(self.m, self.c, &ctx, &step.after.x, out.last()).map_err(|e| {
+                SimError::SteadyState(format!(
+                    "the Jacobian of the period's step at {:e} s cannot be factored ({e:?})",
+                    step.t
+                ))
+            })?;
+            out.push(jacobian);
+        }
+        Ok(out)
+    }
+
+    /// The tangent map of the period `trajectory` from `start` applied to
+    /// `dx`, a change of the unknowns at the start (the charges follow the
+    /// unknowns; the stored dynamic currents are not read by the first,
+    /// backward-Euler, step): the change of the unknowns at the end. Step by
+    /// step, each step's Jacobian (`jacobians`) is solved against the change
+    /// its previous state makes to its right-hand side ([`rhs_tangent`]), and
+    /// the stored currents and charges are carried on as
+    /// [`Integrator::advance`] carries them.
+    fn tangent(
+        &self,
+        start: &State,
+        trajectory: &[GridStep],
+        jacobians: &[StepJacobian],
+        dx: Vec<f64>,
+    ) -> Result<Vec<f64>, SimError> {
+        let (c, m) = (self.c, self.m);
+        let elements = c.elements().len();
+        let charge = self.charge_tangent(&start.x, &dx, &vec![0.0; elements]);
+        let mut d = Tangent { x: dx, dynamic: vec![0.0; elements], charge };
+        for (k, (step, jacobian)) in trajectory.iter().zip(jacobians).enumerate() {
+            let prev = if k == 0 { start } else { &trajectory[k - 1].after };
+            let ctx = step_context(step, prev);
+            let x = &step.after.x;
+            let rhs = rhs_tangent(m, c, &ctx, x, &d);
+            let dx = jacobian.solve(&rhs).ok_or_else(|| {
+                SimError::SteadyState(format!("the tangent of the period's step at {:e} s is not finite", step.t))
+            })?;
+            let k_int = if step.method == Method::Trapezoidal { 2.0 / step.h } else { 1.0 / step.h };
+            let charge = self.charge_tangent(x, &dx, &d.charge);
+            let mut dynamic = vec![0.0; elements];
+            for &e in &self.dynamic_elements {
+                let history = if step.method == Method::Trapezoidal { d.dynamic[e] } else { 0.0 };
+                dynamic[e] = match c.elements()[e].kind() {
+                    ElementKind::Capacitor { a, b, farads } => {
+                        let change = (m.v(&dx, *a) - m.v(&dx, *b)) - (m.v(&d.x, *a) - m.v(&d.x, *b));
+                        farads * k_int * change - history
+                    }
+                    _ => (charge[e] - d.charge[e]) * k_int - history,
+                };
+            }
+            d = Tangent { x: dx, dynamic, charge };
+        }
+        Ok(d.x)
+    }
+
+    /// The change of the charges of [`Integrator::charges`] at `x` for a
+    /// change `dx` of the unknowns; the other elements keep `carried`.
+    fn charge_tangent(&self, x: &[f64], dx: &[f64], carried: &[f64]) -> Vec<f64> {
+        let (c, m) = (self.c, self.m);
+        let mut charge = carried.to_vec();
+        for &d in &m.diodes {
+            if let ElementKind::Diode { anode, cathode, params } = c.elements()[d].kind() {
+                let v = m.v(x, *anode) - m.v(x, *cathode);
+                charge[d] = params.charge(v).1 * (m.v(dx, *anode) - m.v(dx, *cathode));
+            }
+        }
+        for &l in &m.laws {
+            if let ElementKind::Law { law, .. } = c.elements()[l].kind()
+                && law.has_charge()
+            {
+                let u = crate::newton::law_voltages(m, law, x);
+                charge[l] = law.charge(&u).map_or(0.0, |q| {
+                    law.controls
+                        .iter()
+                        .zip(&q.d)
+                        .map(|(control, dq)| match *control {
+                            Control::Voltage(p, n) if dq.is_finite() => dq * (m.v(dx, p) - m.v(dx, n)),
+                            _ => 0.0,
+                        })
+                        .sum()
+                });
+            }
+        }
+        charge
     }
 
     /// One period from unknowns `s` at `t0`, adaptive: the state at its
@@ -1043,6 +1219,21 @@ impl Integrator<'_> {
         let mut grid = Vec::new();
         self.integrate(solver, &mut run, breakpoints, None, Some(&mut grid), None)?;
         Ok((run.state, grid, run.scale))
+    }
+}
+
+/// The conditions `step` was solved under from `prev` (its switch states those of `prev`).
+fn step_context<'a>(step: &GridStep, prev: &'a State) -> Context<'a> {
+    Context {
+        time: Some(step.t),
+        left: step.left,
+        method: step.method,
+        h: step.h,
+        source_scale: 1.0,
+        gmin: 0.0,
+        anchor: None,
+        prev: Some(prev),
+        switch_on: &prev.switch_on,
     }
 }
 
@@ -1335,9 +1526,6 @@ pub fn transient(circuit: &Circuit, options: &TranOptions) -> Result<TranResult,
     Ok(TranResult { probes, model, times, points, dynamic_elements, stats })
 }
 
-/// The size of the perturbation of the shooting method's difference
-/// quotients, in units of the truncation-error tolerance (2-norm).
-const PERTURBATION: f64 = 10.0;
 /// Below this Newton correction (in tolerance units) the period map is
 /// evaluated on the time steps of the last adaptive period, held.
 const FREEZE: f64 = 30.0;
@@ -1351,9 +1539,9 @@ const FREEZE: f64 = 30.0;
 /// `F(s) = phi(s) - s`, where `phi` integrates one period from the state `s`
 /// (restarted there with backward Euler, as after a breakpoint): each Newton
 /// step solves `(M - I) d = -F(s)` by GMRES, where the monodromy matrix
-/// `M = dphi/ds` is applied by difference quotients: the period's own time
-/// steps replayed from `s + e v` (the step sizes, methods and switch states
-/// held, so the map is smooth in `s`). The state is weighted by its
+/// `M = dphi/ds` is applied exactly by the tangent map of the period just
+/// integrated ([`Integrator::tangent`]: the step sizes, methods and switch
+/// states held, so the map is smooth in `s`). The state is weighted by its
 /// truncation-error tolerance. Once the corrections are small the period
 /// itself is evaluated on the held steps of the last adaptive period too, so
 /// that the step control's choices do not keep moving the fixed point.
@@ -1400,15 +1588,16 @@ fn steady_run(
             Some(grid) if correction <= FREEZE => integrator.replay(solver, &start, grid).ok(),
             _ => None,
         };
-        let end = match replayed {
-            Some(end) => end,
+        // The period's end and the steps it was integrated in, which its Jacobian is taken along.
+        let (end, trajectory) = match replayed {
+            Some(replayed) => replayed,
             None => match integrator.period(solver, start.clone(), t0, &one_period) {
                 Ok((end, grid, scale)) => {
                     for (l, v) in largest.iter_mut().zip(&scale) {
                         *l = l.max(*v);
                     }
-                    held = Some(grid);
-                    end
+                    held = Some(grid.clone());
+                    (end, grid)
                 }
                 Err(error) if last_end.is_some() => {
                     break Err(format!(
@@ -1439,38 +1628,25 @@ fn steady_run(
         // GMRES on W (M - I) W^-1 y = -W F, d = W^-1 y.
         let b: Vec<f64> = (0..state.len()).map(|j| -weight[j] * residual[j]).collect();
         let tolerance = (1e-5 * b.iter().map(|v| v * v).sum::<f64>().sqrt()).max(1e-2);
-        let grid = held.as_deref().expect("an adaptive period ran");
-        let mut replays = 0;
+        // The monodromy matrix M applied exactly: the tangent map of the period's steps.
+        let jacobians = match integrator.linearise(solver, &start, &trajectory) {
+            Ok(jacobians) => jacobians,
+            Err(error) => {
+                break Err(format!("the shooting method's Jacobian products failed: {}", error_detail(&error)));
+            }
+        };
+        let mut products = 0;
         let apply = |v: &[f64]| -> Result<Vec<f64>, SimError> {
-            let size = v.iter().map(|x| x * x).sum::<f64>().sqrt();
-            if size == 0.0 {
-                return Ok(vec![0.0; v.len()]);
+            let mut dx = vec![0.0; n];
+            for (j, &(k, _)) in state.iter().enumerate() {
+                dx[k] = v[j] / weight[j];
             }
-            // A perturbation the replay cannot follow (a limiter driven hard) is retried smaller.
-            let mut failure = None;
-            for perturbation in [PERTURBATION, 1.0, 0.1] {
-                let e = perturbation / size;
-                let mut perturbed = x.clone();
-                for (j, &(k, _)) in state.iter().enumerate() {
-                    perturbed[k] += e * v[j] / weight[j];
-                }
-                let perturbed = integrator.restart(&perturbed, &start.junction, &start.switch_on, None);
-                replays += 1;
-                match integrator.replay(solver, &perturbed, grid) {
-                    Ok(out) => {
-                        return Ok(state
-                            .iter()
-                            .enumerate()
-                            .map(|(j, &(k, _))| weight[j] * (out.x[k] - end.x[k]) / e - v[j])
-                            .collect());
-                    }
-                    Err(error) => failure = Some(error),
-                }
-            }
-            Err(failure.expect("tried"))
+            products += 1;
+            let out = integrator.tangent(&start, &trajectory, &jacobians, dx)?;
+            Ok(state.iter().enumerate().map(|(j, &(k, _))| weight[j] * out[k] - v[j]).collect())
         };
         let solved = gmres(apply, &b, tolerance, STEADY_KRYLOV);
-        stats.steady_periods += replays;
+        stats.steady_periods += products;
         let y = match solved {
             Ok((y, _)) => y,
             Err(error) => {
@@ -1545,4 +1721,118 @@ fn steady_run(
     let rest = stretch(breakpoints, t0, integrator.stop, integrator.hmin);
     integrator.integrate(solver, &mut run, &rest, Some(t0), None, None)?;
     Ok(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::behavioral::{BinaryOp, Expr, Func, Law, Output};
+    use crate::devices::DiodeParams;
+    use crate::waveform::Waveform;
+
+    /// The tangent map of a period equals central differences of the replayed
+    /// period (the same steps from a perturbed start) on a circuit with every
+    /// kind of state and history the tangent carries: a capacitor and an
+    /// inductor (trapezoidal history), a diode with junction and diffusion
+    /// charge, and a law element, a CCCS and a CCVS controlled by the
+    /// capacitor's current (whose companion constant moves with the previous
+    /// state).
+    #[test]
+    fn the_tangent_of_a_period_matches_its_difference_quotients() {
+        let g = NodeId::GROUND;
+        let mut c = Circuit::new();
+        let (s, a, b, d, e) = (c.node("s"), c.node("a"), c.node("b"), c.node("d"), c.node("e"));
+        let v = c.voltage_source("V1", s, g, SourceValue::dc(0.0)).unwrap();
+        c.set_waveform(v, Waveform::Sine { offset: 0.2, amplitude: 1.0, frequency: 1e5, phase_deg: 0.0, delay: 0.0 })
+            .unwrap();
+        c.resistor("R1", s, a, 300.0).unwrap();
+        let params = DiodeParams {
+            saturation_current: 1e-14,
+            junction_capacitance: 2e-10,
+            transit_time: 1e-7,
+            ..DiodeParams::default()
+        };
+        c.diode("D1", a, g, &params).unwrap();
+        let cap = c.capacitor("C1", a, b, 2e-9).unwrap();
+        c.inductor("L1", b, g, 1e-4).unwrap();
+        c.resistor("R2", b, g, 50.0).unwrap();
+        let square = Expr::binary(
+            BinaryOp::Mul,
+            Expr::Const(30.0),
+            Expr::Call(Func::Tanh, vec![Expr::binary(BinaryOp::Mul, Expr::Var(0), Expr::Const(100.0))]),
+        );
+        c.law("B1", d, g, Law::expression(Output::Current, vec![Control::Current(cap)], square)).unwrap();
+        c.cccs("F1", d, g, cap, 0.5).unwrap();
+        c.resistor("R3", d, g, 1e3).unwrap();
+        c.ccvs("H1", e, g, cap, 200.0).unwrap();
+        c.resistor("R4", e, g, 1e3).unwrap();
+        let m = Model::new(&c, true).unwrap();
+        let mask: Vec<(usize, f64)> = m
+            .layout
+            .unknowns
+            .iter()
+            .enumerate()
+            .filter_map(|(k, u)| match u {
+                Unknown::Node(_) => Some((k, 1e-6)),
+                Unknown::Branch(i) if matches!(c.elements()[*i].kind(), ElementKind::Inductor { .. }) => {
+                    Some((k, 1e-9))
+                }
+                Unknown::Branch(_) => None,
+            })
+            .collect();
+        let dynamic_elements: Vec<usize> = (0..c.elements().len())
+            .filter(|&i| match c.elements()[i].kind() {
+                ElementKind::Capacitor { .. } => true,
+                ElementKind::Diode { params, .. } => params.has_charge(),
+                _ => false,
+            })
+            .collect();
+        let period = 1e-5;
+        let integrator = Integrator {
+            c: &c,
+            m: &m,
+            stop: period,
+            hmax: period / 50.0,
+            hmin: period * 1e-12,
+            event_tol: period * 1e-6,
+            reltol: 1e-4,
+            delays: Vec::new(),
+            mask: mask.clone(),
+            dynamic_elements,
+        };
+        let mut solver = Solver::default();
+        let dc = dc_point(&m, &c, &mut solver, Some(0.0), AnalysisPoint::InitialPoint).unwrap();
+        let start = integrator.restart(&dc.x, &dc.junction, &dc.switch_on, None);
+        let (_, grid, _) = integrator.period(&mut solver, start.clone(), 0.0, &[period]).unwrap();
+        assert!(grid.iter().any(|s| s.method == Method::Trapezoidal) && grid.len() > 20, "{} steps", grid.len());
+        let jacobians = integrator.linearise(&mut solver, &start, &grid).unwrap();
+        let mut worst: f64 = 0.0;
+        for (j, &(k, _)) in mask.iter().enumerate() {
+            let mut dx = vec![0.0; m.layout.size()];
+            dx[k] = 1.0;
+            let exact = integrator.tangent(&start, &grid, &jacobians, dx).unwrap();
+            let e = if matches!(m.layout.unknowns[k], Unknown::Node(_)) { 1e-4 } else { 1e-6 };
+            let mut shifted = |sign: f64| {
+                let mut x = dc.x.clone();
+                x[k] += sign * e;
+                let from = integrator.restart(&x, &dc.junction, &dc.switch_on, None);
+                integrator.replay(&mut solver, &from, &grid).unwrap().0.x
+            };
+            let (up, down) = (shifted(1.0), shifted(-1.0));
+            let scale = mask.iter().map(|&(i, _)| exact[i].abs()).fold(0.0, f64::max);
+            for &(i, _) in &mask {
+                let quotient = (up[i] - down[i]) / (2.0 * e);
+                worst = worst.max((exact[i] - quotient).abs() / scale);
+                assert!(
+                    (exact[i] - quotient).abs() <= 1e-6 * scale + 1e-12,
+                    "d x{i} / d x{k} (state {j}): tangent {} against difference quotient {quotient}",
+                    exact[i]
+                );
+            }
+        }
+        println!(
+            "tangent against difference quotients over {} steps: worst {worst:.2e} of the largest entry",
+            grid.len()
+        );
+    }
 }

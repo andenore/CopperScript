@@ -99,5 +99,5 @@ pub use regulator::{RegulatorParams, RegulatorPins};
 pub use semiconductors::{BjtParams, BjtPins, FetPins, JfetParams, Level3Params, MosLevel, MosParams};
 pub use stability::{LoopGainResult, PoleZeroResult, Root, Transfer, loop_gain, pole_zero};
 pub use temperature::{BjtTemperature, DiodeTemperature, JfetTemperature, thermal_voltage};
-pub use transient::{InitialConditions, TranNoise, TranOptions, TranResult, TranStats, transient};
+pub use transient::{Accuracy, InitialConditions, TranNoise, TranOptions, TranResult, TranStats, transient};
 pub use waveform::Waveform;

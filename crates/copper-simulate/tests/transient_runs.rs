@@ -201,3 +201,63 @@ fn parallel_steps_equal_the_serial_run_and_report_the_first_failing_step() {
     assert!(serial[0].steps.is_empty());
     assert_eq!(serial, parallel);
 }
+
+#[test]
+fn accuracy_high_tightens_the_step_control_where_it_is_not_given() {
+    // The RC step (tau 100 us) at the default, at accuracy = high, and at high
+    // with an explicit reltol and max_step, which win. The error of the 63 %
+    // crossing against tau: at high it is within the preset's level, 2e-5 of
+    // the range (0.02 sqrt(1e-6)); at the default within twice its 2e-4 (the
+    // rule holds within a factor of 2; here 2.5e-4, the crossing read between
+    // steps of 16 us).
+    let bench = |extra: &str| {
+        format!(
+            "bench Step for RC {{
+        replace J1 with source {{ out = J1.1; ref = GND; waveform = pulse {{ initial = 0V; pulsed = 1V; delay = 10us; width = 1ms; }}; }}
+        analysis tran {{ stop = 800us; {extra} }}
+        measure tau = cross(V(VOUT), 0.632121V) - 10us;
+        measure final = at(V(VOUT), 800us);
+    }}"
+        )
+    };
+    let run_with = |name: &str, extra: &str| {
+        let board = project(
+            name,
+            &[
+                (
+                    "board.copper",
+                    &RC.replace("HEADER;", "p.HEADER;")
+                        .replace("use library \"tiny\";", "use library \"tiny\"; import p \"./parts\";"),
+                ),
+                ("parts/header.copper", HEADER),
+                ("benches/step.copper", &bench(extra)),
+            ],
+        );
+        let runs = run(&board);
+        assert_eq!(runs[0].error, None, "{}", copper_simulate::results::text_table(&runs));
+        runs.into_iter().next().unwrap()
+    };
+    let solver = |r: &BenchRun| match r.steps[0].analysis {
+        copper_simulate::run::AnalysisRun::Tran { max_step, reltol, .. } => (max_step, reltol),
+        _ => unreachable!("a tran bench"),
+    };
+    let normal = run_with("accuracy-normal", "");
+    let high = run_with("accuracy-high", "accuracy = high;");
+    let explicit = run_with("accuracy-explicit", "accuracy = high; reltol = 0.001%; max_step = 4us;");
+    assert_eq!(solver(&normal), (None, 1e-4));
+    assert_eq!(solver(&high), (Some(800e-6 / 500.0), 1e-6));
+    let (max_step, reltol) = solver(&explicit);
+    assert_eq!(max_step, Some(4e-6));
+    assert!((reltol - 1e-5).abs() < 1e-18, "{reltol}");
+    // The crossing's error, in time over tau, is the waveform's error over its slope there (1/e of the range per tau).
+    let error = |r: &BenchRun| (measure(r, 0, "tau") / 100e-6 - 1.0).abs() / std::f64::consts::E;
+    let (e_normal, e_high) = (error(&normal), error(&high));
+    println!(
+        "RC step: tau error {e_normal:.2e} of the range at the default ({} steps), {e_high:.2e} at high ({} steps)",
+        normal.steps[0].transient.as_ref().unwrap().accepted_steps,
+        high.steps[0].transient.as_ref().unwrap().accepted_steps
+    );
+    assert!(e_high <= copper_sim::Accuracy::High.error_level(), "{e_high}");
+    assert!(e_normal <= 2.0 * copper_sim::Accuracy::Normal.error_level(), "{e_normal}");
+    assert!(e_high < e_normal);
+}

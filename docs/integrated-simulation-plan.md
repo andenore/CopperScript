@@ -65,7 +65,9 @@ Known weak spots of what is built:
 
 - Transient results at the default tolerances carry about 0.2 % integration
   error on the analyzer's start-up bench: a change of rounding in the solver
-  moves its measures by that much. Harmonics below the integration floor
+  moves its measures by that much. `accuracy = high;` (I6) holds that bench's
+  voltages within 75 uV and its times within 0.19 % of a much tighter run;
+  the bench itself keeps its hand-set step. Harmonics below the integration floor
   (F9) are not meaningful; the floor rule is an upper bound on four linear
   circuits now, not an estimate (I1).
 - The TL431 vendor model regulates (2.498 V) fed through a resistor, as TI's
@@ -566,8 +568,9 @@ Built on 21 November 2026. Diagnostics SIM112 to SIM115.
   settling run had not settled at 1 kHz in moist loam (pump peak 347.1 mV,
   now 339.2 mV, which a 400 ms run confirms).
 
-Open: the 1 MHz, 0.65 V `Distortion` step does not converge by shooting and
-falls back; the floor rule came from one circuit (I1 finds it an upper
+Open: (settled: the 1 MHz, 0.65 V `Distortion` step converges by shooting
+since I2, and since I6 the Jacobian products are exact, by sensitivity
+integration); the floor rule came from one circuit (I1 finds it an upper
 bound on three more); flicker noise in transient was checked only
 analytically (I1 compares it with ngspice's noise analysis: within 6 %); windowed spectra are amplitudes per bin, with
 no density view; a time plot of steps with different periods squeezes the
@@ -671,6 +674,10 @@ pins in no bench down from 85 to 29 (digital only).
   only parameters the board declares? Today: parameters, plus `replace`.
 - Does sparse elimination order make results differ between machines? If so,
   the ordering must be deterministic and independent of thread count.
+  Settled for thread count and repeated runs (I6): the order depends only on
+  the matrix, and every output is byte-identical at any `--jobs`
+  (`sim_results_do_not_depend_on_the_thread_count`). Other machines (another
+  CPU or compiler) were not compared.
 - Loop-gain syntax (F3) and `use layout` (F5) are proposals, not accepted
   language.
 - How the analyzer board gets its layout: by the normal routing pipeline, or

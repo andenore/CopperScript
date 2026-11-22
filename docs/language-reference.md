@@ -3498,7 +3498,7 @@ bench CurrentFlatness for HowlandPump {
 | `model NAME: KIND { ... }` | A built-in model the bench adds, on nodes as for `replace`: a stimulus such as `model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }` on a module port, or a `load`. Its name is new (`SIM049`); `I(NAME)` and `I(NAME.ROLE)` read the current into its terminals ([Expressions](#expressions)). |
 | `ignore X, Y;` | Removes components or supplies; their pins are open (`SIM038`). |
 | `analysis ac { from; to; points_per_decade; }`, `analysis op;` | One analysis, or several, each with its own measures and plots ([Several analyses](#several-analyses); `SIM040`, `SIM097`). `0 < from < to`; `points_per_decade` is 1 to 10000. `analysis NAME: KIND { ... }` names one of several. |
-| `analysis tran { stop; start; max_step; reltol; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
+| `analysis tran { stop; start; max_step; reltol; accuracy; uic; }` | A transient run from 0 to `stop` ([Transient analysis](#transient-analysis); `SIM069`). |
 | `analysis tran { ...; steady = 1kHz; }` | The run starts at `start` in the periodic steady state of that fundamental (or period, `steady = 1ms;`), found by shooting ([Periodic steady state](#periodic-steady-state); `SIM112`). |
 | `analysis tran { ...; max_step = 20ns; noise = true; seed = 7; }` | Transient noise: the circuit's noise generators as seeded random currents sampled every `max_step` ([Transient noise](#transient-noise); `SIM114`). |
 | `analysis dc { sweep = NAME; from; to; step; }` (or `points = N;`) | Operating points over a swept param, source or supply ([DC sweep](#dc-sweep); `SIM074`). |
@@ -4019,6 +4019,29 @@ waveform's value just before 0. `max_step` bounds the time step (default
 default `0.01%`) is the truncation error each step may make, relative to the
 largest value the node voltage or inductor current has had. Times may name
 params (`stop = T_STOP;`) and step with them. Errors are `SIM069`.
+
+`accuracy = high;` is a preset for runs whose result depends on the
+integration error, such as start-up and settling benches: `reltol` 1e-6 and
+`max_step` `(stop - start) / 500` where the bench gives none (an explicit
+`reltol` or `max_step` wins; `accuracy = normal;` is the default, `reltol`
+1e-4 and `(stop - start) / 50`). Its level follows the integration-floor
+rule ([Spectra](#spectra)): with the steps left to the error control a
+smooth waveform carries an error of about `0.02 sqrt(reltol)` of its range,
+2e-5 at `high` against 2e-4 at the default, and 500 steps over the record
+keep the trapezoidal amplitude error `(w h)^2 / 12` of a component whose
+period is the whole record at 1.3e-5. Measured against runs at `reltol`
+1e-9 (`crates/copper-spice/tests/reference/README.md`, "Accuracy preset"):
+the linear circuits of the reference decks are within 0.6 to 2.0 times the
+level; near the fast edges of transistors, diodes and slewing amplifiers the
+difference at a given time is a shift of the edge, up to 4.5e-3 of the
+range, 1.2 to 100 times below the default's. On the impedance analyzer's
+`Startup` bench (`accuracy = high` alone against `reltol` 1e-8 and
+`max_step = 0.1ms`) its voltage measures are within 75 uV (2.1 mV with the
+bench's own `max_step = 1ms` at the default) and its times within 0.19 %
+(0.82 %); the peak of the rail current's inrush spike is not resolved better
+(0.44 %): branch currents are not in the error control. It takes 1.3 to 9
+times the steps on the reference decks, and on `Startup` as many as the
+bench's hand-set `max_step` (12 037 against 11 986).
 `steady` ([Periodic steady state](#periodic-steady-state)), `noise` and
 `seed` ([Transient noise](#transient-noise)) and `window`
 ([Spectra](#spectra)) are described below.
@@ -4158,22 +4181,29 @@ truncation error the run controls (node voltages, or with behavioural
 sources the nodes of charge-storing elements, and inductor currents) and
 `phi` integrates one period from it, restarted there with backward Euler as
 after a breakpoint. Each Newton step solves `(M - I) d = -F(s)` by GMRES,
-where the monodromy matrix `M` is applied by difference quotients: the
-period's own time steps replayed from a perturbed state, with the step sizes,
-methods and switch states held so the map is smooth. Once the corrections are
-small the period itself is evaluated on those held steps too, so the step
-control's choices do not keep moving the fixed point. It stops when a
-correction is within the truncation-error tolerance on every state unknown
-(at most 20 Newton iterations); the operating point with the sources at
-`start` is the first guess. A linear circuit converges in two iterations; the
-cost of each is a period plus one replayed period per GMRES vector, about one
-per mode of the circuit that a period does not damp. The JSON's `transient`
-block per step has `steady_iterations`, `steady_periods` (adaptive and
-replayed) and `steady_residual` (the last change over a period, in tolerance
-units).
+where the monodromy matrix `M` is applied exactly by sensitivity
+integration: the linearised step map of the period's own time steps, with
+the step sizes, methods and switch states held so the map is smooth, each
+step's Jacobian at its solution factored once per Newton step and solved
+against the change the previous step makes to its right-hand side (its
+unknowns, the trapezoidal history currents and the charges). The instants at
+which switches change state are held too, so near a switching event the
+Jacobian is that of the held events and Newton converges more slowly, to the
+same fixed point. Once the corrections are small the period itself is
+evaluated on the held steps too, so the step control's choices do not keep
+moving the fixed point. It stops when a correction is within the
+truncation-error tolerance on every state unknown (at most 20 Newton
+iterations); the operating point with the sources at `start` is the first
+guess. A linear circuit converges in two iterations; the cost of each is a
+period, a factorisation per step of it, and one pass of triangular solves
+over the period per GMRES vector, about one per mode of the circuit that a
+period does not damp. The JSON's `transient` block per step has
+`steady_iterations`, `steady_periods` (adaptive and replayed periods, and one
+per Jacobian product) and `steady_residual` (the last change over a period,
+in tolerance units).
 
-When the shooting method cannot proceed (a replayed period that does not
-converge, as for an amplifier slewing hard at the start of the period, or no
+When the shooting method cannot proceed (a period from a corrected state
+that cannot be integrated, a step Jacobian that cannot be factored, or no
 convergence in 20 iterations), the run settles instead by integrating
 periods from the last integrated state until the change per period,
 extrapolated over the slowest mode, is within the tolerance (at most 400
