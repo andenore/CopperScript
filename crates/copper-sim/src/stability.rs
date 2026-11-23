@@ -41,7 +41,12 @@
 //! ([`crate::eigen::finite_eigenvalues`]: the infinite eigenvalues of the
 //! algebraic unknowns deflated by orthogonal transformations, then the
 //! eigenvalues of the reduced, nonsingular pencil by the shifted QR
-//! iteration). Each eigenvalue is then refined by Newton's method on the
+//! iteration). The slow roots come from the inverted pencil instead, whose
+//! largest eigenvalues they are ([`crate::eigen::with_slow_roots_inverted`]
+//! on the reduced pencil, then on the whole one where its QR iteration
+//! succeeds): in a stiff circuit the QR iteration's round-off is set by the
+//! fastest roots and can put a root of a few rad/s on the wrong side of the
+//! imaginary axis. Each eigenvalue is then refined by Newton's method on the
 //! original complex pencil (the bordered system `[G + s C, C x; e_k^T, 0]`,
 //! started from inverse iteration), which also gives its eigenvector: the
 //! nodes whose small-signal voltage is largest in that mode are the nodes the
@@ -475,6 +480,95 @@ fn roots(g: &Mat, c: &Mat, values: Vec<Complex>, node_names: Option<(&Circuit, &
             .then(a.value.re.total_cmp(&b.value.re))
     });
     // The roots at the origin: as many of the smallest as G's nullity.
+    let nullity = g_nullity(g);
+    for root in out.iter_mut().take(nullity) {
+        if root.value.abs() <= ORIGIN_TOLERANCE * scale {
+            root.origin = true;
+        }
+    }
+    out
+}
+
+/// The relative size, against the largest, from which an eigenvalue `mu` of
+/// `-G^-1 C` gives a slow root `s = 1 / mu` more accurately than the QR
+/// iteration on the pencil does ([`with_slow_roots_inverted`]).
+pub const INVERTED_SLOW: f64 = crate::eigen::INVERTED_SLOW;
+
+/// `direct`, the finite roots of `G + s C` from [`finite_eigenvalues`] (whose
+/// own slow roots come from its deflated pencil inverted, accurate to about
+/// 1e-4 there), with
+/// its slow roots taken from the eigenvalues `mu` of `-G^-1 C` instead (`s =
+/// 1 / mu`), when `G` is nonsingular. The QR iteration's absolute round-off is
+/// a multiple of `1e-16` times the norm of its balanced matrix, which in a
+/// stiff pencil (conductances from 1e-12 to 1e6 S beside microfarad couplings,
+/// as in vendor op-amp models with 1 uohm and 1 Tohm resistors) is set by the
+/// fastest roots, `1e15` rad/s and more: a root of a few rad/s can then come
+/// out on the wrong side of the imaginary axis, and a repeated one (two equal
+/// coupling networks) far off, where Newton's refinement does not converge.
+/// Inverted, the slowest roots are the largest `mu`, which the QR iteration
+/// gives to round-off relative to themselves. The `k` roots with `|mu|` at
+/// least [`INVERTED_SLOW`] of the largest replace the `k` smallest direct
+/// roots; the others stay. With a singular `G` (a node with only capacitors
+/// to it) the roots at the origin keep their direct values and the pencil is
+/// inverted at a shift `sigma` a hundredth of the slowest other root (`s =
+/// sigma + 1 / mu`).
+fn full_pencil_slow_roots(g: &Mat, c: &Mat, direct: Vec<Complex>) -> Vec<Complex> {
+    let n = g.rows;
+    let mut sorted = direct.clone();
+    sorted.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+    // Roots at the origin (a singular G) keep their direct values; the shift
+    // that makes G + sigma C invertible is then well below the slowest other root.
+    let nullity = g_nullity(g);
+    let sigma = match (nullity, sorted.get(nullity)) {
+        (0, _) => 0.0,
+        (_, Some(slowest)) if slowest.abs() > 0.0 => 1e-2 * slowest.abs(),
+        _ => return direct,
+    };
+    let shifted: Vec<f64> = g.a.iter().zip(&c.a).map(|(g, c)| g + sigma * c).collect();
+    let Ok(lu) = crate::real_lu::RealLu::factor(shifted, n) else { return direct };
+    let mut m = Mat::zeros(n, n);
+    for j in 0..n {
+        let column: Vec<f64> = (0..n).map(|i| -c.a[i * n + j]).collect();
+        let Some(x) = lu.solve(&column) else { return direct };
+        for (i, v) in x.iter().enumerate() {
+            m.a[i * n + j] = *v;
+        }
+    }
+    let Ok(mu) = crate::eigen::eigenvalues(&m) else { return direct };
+    // s = sigma + 1 / mu, the origin roots (the largest mu when sigma > 0) left out.
+    let mut inverted: Vec<(f64, Complex)> = mu
+        .iter()
+        .filter(|z| z.abs() > 0.0 && z.is_finite())
+        .map(|z| (z.abs(), Complex::new(sigma, 0.0) + Complex::ONE / *z))
+        .collect();
+    inverted.sort_by(|a, b| a.1.abs().total_cmp(&b.1.abs()));
+    if inverted.len() < nullity {
+        return direct;
+    }
+    let others = &inverted[nullity..];
+    let largest = others.iter().fold(0.0f64, |a, (m, _)| a.max(*m));
+    if largest == 0.0 || !largest.is_finite() {
+        return direct;
+    }
+    let mut slow: Vec<Complex> =
+        others.iter().filter(|(m, _)| *m >= INVERTED_SLOW * largest).map(|(_, s)| *s).collect();
+    if slow.is_empty() || nullity + slow.len() > direct.len() {
+        return direct;
+    }
+    for s in &mut slow {
+        if s.im.abs() <= 1e-12 * s.abs() {
+            s.im = 0.0;
+        }
+    }
+    let mut out: Vec<Complex> = sorted[..nullity].to_vec();
+    out.extend(slow.iter().copied());
+    out.extend(sorted.into_iter().skip(nullity + slow.len()));
+    out
+}
+
+/// The nullity of `G`: pivoted QR with rows scaled to a unit largest entry,
+/// at [`ORIGIN_RANK_TOLERANCE`] (the number of roots at the origin).
+fn g_nullity(g: &Mat) -> usize {
     let mut rows = g.clone();
     for i in 0..rows.rows {
         let big = (0..rows.cols).fold(0.0f64, |m, j| m.max(rows.a[i * rows.cols + j].abs()));
@@ -484,13 +578,7 @@ fn roots(g: &Mat, c: &Mat, values: Vec<Complex>, node_names: Option<(&Circuit, &
             }
         }
     }
-    let nullity = rows.rows - crate::eigen::qr_pivoted(&rows, ORIGIN_RANK_TOLERANCE, 0.0).rank;
-    for root in out.iter_mut().take(nullity) {
-        if root.value.abs() <= ORIGIN_TOLERANCE * scale {
-            root.origin = true;
-        }
-    }
-    out
+    rows.rows - crate::eigen::qr_pivoted(&rows, ORIGIN_RANK_TOLERANCE, 0.0).rank
 }
 
 /// The poles of `circuit` linearised at its operating point, and the zeros of
@@ -528,7 +616,8 @@ pub fn pole_zero(circuit: &Circuit, transfer: Option<&Transfer>) -> Result<PoleZ
         finite_eigenvalues(&g, &c).map_err(eigen_error)?
     };
     let (infinite, scale) = (spectrum.infinite, spectrum.norm);
-    let poles = roots(&g, &c, spectrum.values, Some((circuit, &layout)), scale);
+    let values = full_pencil_slow_roots(&g, &c, spectrum.values);
+    let poles = roots(&g, &c, values, Some((circuit, &layout)), scale);
     let zeros = match transfer {
         None => Vec::new(),
         Some(t) => {
@@ -1085,5 +1174,79 @@ mod tests {
             (forward.gain[k] - middlebrook).abs() > 1e-6 * forward.gain[k].abs()
         });
         assert!(differs);
+    }
+
+    /// A stiff self-written circuit (1 uohm, 1 mohm into 1 pF, 1 Tohm taps)
+    /// with two pairs of equal slow couplings: 47 kohm into 1 uF (-21.28 rad/s,
+    /// twice) and 33 Mohm into 4.7 nF (-6.447 rad/s, twice).
+    fn stiff_couplings(floating: bool) -> Circuit {
+        let mut c = Circuit::new();
+        let g = NodeId::GROUND;
+        let vd = c.node("vd");
+        c.voltage_source("VD", vd, g, SourceValue::ac(1.0, 0.0)).unwrap();
+        let vp = c.node("vp");
+        c.voltage_source("VP", vp, g, SourceValue::dc(5.0)).unwrap();
+        let (vpi, mid, reference) = (c.node("vpi"), c.node("mid"), c.node("ref"));
+        c.resistor("RZ", vp, vpi, 1e-6).unwrap();
+        c.resistor("RM1", vpi, mid, 1e7).unwrap();
+        c.resistor("RM2", mid, g, 1e7).unwrap();
+        c.vcvs("EREF", reference, g, mid, g, 1.0).unwrap();
+        let mut outputs = Vec::new();
+        for (k, source) in [vd, vd].into_iter().enumerate() {
+            let (i, t, o, p) = (
+                c.node(&format!("i{k}")),
+                c.node(&format!("t{k}")),
+                c.node(&format!("o{k}")),
+                c.node(&format!("p{k}")),
+            );
+            c.capacitor(&format!("C{k}"), source, i, 1e-6).unwrap();
+            c.resistor(&format!("R{k}"), i, reference, 47e3).unwrap();
+            c.resistor(&format!("RTA{k}"), i, t, 1e12).unwrap();
+            c.resistor(&format!("RTB{k}"), t, reference, 1e12).unwrap();
+            c.vcvs(&format!("E{k}"), o, reference, i, reference, 1.0).unwrap();
+            c.resistor(&format!("RX{k}"), o, p, 1e-3).unwrap();
+            c.capacitor(&format!("CP{k}"), p, g, 1e-12).unwrap();
+            c.resistor(&format!("RL{k}"), p, reference, 1e3).unwrap();
+            outputs.push(p);
+        }
+        for (k, source) in outputs.into_iter().enumerate() {
+            let (s, o) = (c.node(&format!("s{k}")), c.node(&format!("so{k}")));
+            c.capacitor(&format!("CS{k}"), source, s, 4.7e-9).unwrap();
+            c.resistor(&format!("RS{k}"), s, g, 33e6).unwrap();
+            c.vcvs(&format!("ES{k}"), o, g, s, g, 1.0).unwrap();
+            c.resistor(&format!("RO{k}"), o, g, 1e3).unwrap();
+        }
+        if floating {
+            // A node with only capacitors to it (an electrode in air): a root at the origin.
+            let air = c.node("air");
+            let p0 = c.find_node("p0").unwrap();
+            c.capacitor("CAIR1", p0, air, 1e-12).unwrap();
+            c.capacitor("CAIR2", air, g, 1e-12).unwrap();
+        }
+        c
+    }
+
+    #[test]
+    fn slow_roots_of_a_stiff_pencil_are_exact() {
+        // Before the slow roots came from the inverted pencil
+        // (`eigen::with_slow_roots_inverted`) they were 1.25e-3 and 7.6e-3 off
+        // here: the QR iteration's round-off is set by the 1e15 rad/s roots.
+        for floating in [false, true] {
+            let c = stiff_couplings(floating);
+            let result = pole_zero(&c, None).unwrap();
+            let values: Vec<Complex> = result.poles.iter().map(|p| p.value).collect();
+            let error = |want: f64| {
+                let mut e: Vec<f64> =
+                    values.iter().map(|z| (*z - Complex::new(want, 0.0)).abs() / want.abs()).collect();
+                e.sort_by(f64::total_cmp);
+                e[1] // both of the pair
+            };
+            // 47 kohm beside the two 1 Tohm taps; 33 Mohm behind the 1 mohm source.
+            let (a, b) = (-1.0 / (1e-6 / (1.0 / 47e3 + 1.0 / 2e12)), -1.0 / (33e6 * 4.7e-9 + 1e-3 * 4.7e-9));
+            let (ea, eb) = (error(a), error(b));
+            assert!(ea < 1e-8 && eb < 1e-8, "floating {floating}: {ea} {eb}");
+            assert!(result.stable(), "{:?}", result.poles);
+            assert_eq!(result.poles.iter().filter(|p| p.origin).count(), usize::from(floating));
+        }
     }
 }

@@ -52,6 +52,21 @@
 //! agree with their control voltages. A failure names the unknowns that
 //! moved most in the last iteration and the junctions that were not
 //! converged.
+//!
+//! When all of these fail and the circuit falls into parts whose operating
+//! points do not depend on each other, each part is solved on its own with
+//! the same aids and Newton finishes the whole from their solutions
+//! ([`dc_blocks`]). Two parts are independent at DC when no element joins
+//! them except through nodes that grounded voltage sources fix (supply
+//! rails) and capacitors (open): every node of one part then solves the same
+//! whatever the other does. The aids above each follow one parameter for the
+//! whole circuit (the gmin, the source scale, the pseudo-capacitance), so
+//! parts whose paths need different schedules fail together although each
+//! solves alone: the analyzer's front end with Analog Devices' ADA4807 and
+//! ADA4817 models, whose pump and sense buffers each settle by
+//! pseudo-transient continuation on their own but not together. The split
+//! runs only where every aid failed, so no operating point that solved
+//! before changes.
 
 use crate::behavioral::{Control, Output};
 use crate::circuit::{Circuit, ElementKind, NodeId, SourceValue};
@@ -1457,15 +1472,17 @@ pub(crate) fn dc_point(
                 .or_else(|| if m.laws.is_empty() { None } else { pseudo_transient(m, c, solver, &base) })
             {
                 Some(point) => point,
-                None => source_stepping(m, c, solver, &base).map_err(|failure| match failure {
-                    Failure::Singular(e) => singular(e),
-                    Failure::Diverged { nodes, elements } => no_convergence(
-                        at,
-                        nodes,
-                        elements,
-                        "Newton iteration, gmin stepping and source stepping all failed",
-                    ),
-                })?,
+                None => source_stepping(m, c, solver, &base)
+                    .or_else(|failure| by_blocks(m, c, solver, &base, at).ok_or(failure))
+                    .map_err(|failure| match failure {
+                        Failure::Singular(e) => singular(e),
+                        Failure::Diverged { nodes, elements } => no_convergence(
+                            at,
+                            nodes,
+                            elements,
+                            "Newton iteration, gmin stepping and source stepping all failed",
+                        ),
+                    })?,
             },
         };
         // Switch states consistent with the solution?
@@ -1531,6 +1548,171 @@ fn pseudo_transient(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context)
         }
     }
     None
+}
+
+thread_local! {
+    /// Set while [`by_blocks`] solves a part, so that the part is not split again.
+    static SPLITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The parts of `c` whose operating points do not depend on each other
+/// (module docs): per node, its part (`None` for ground and for nodes a
+/// grounded voltage source fixes), and the number of parts. The nodes an
+/// element reads or drives are joined (terminals, control nodes, the nodes
+/// of the element whose current controls it, both inductors of a coupling),
+/// except ground and fixed nodes; capacitors join nothing.
+pub(crate) fn dc_blocks(c: &Circuit) -> (Vec<Option<usize>>, usize) {
+    let count = c.node_count();
+    let mut fixed = vec![false; count];
+    for e in c.elements() {
+        if let ElementKind::VoltageSource { plus, minus, .. } = *e.kind() {
+            match (plus.is_ground(), minus.is_ground()) {
+                (false, true) => fixed[plus.index()] = true,
+                (true, false) => fixed[minus.index()] = true,
+                _ => {}
+            }
+        }
+    }
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut parent: Vec<usize> = (0..count).collect();
+    for e in c.elements() {
+        let mut nodes: Vec<NodeId> = match e.kind() {
+            ElementKind::Capacitor { .. } => continue,
+            ElementKind::VoltageSource { plus, minus, .. } if plus.is_ground() != minus.is_ground() => continue,
+            ElementKind::Coupling { l1, l2, .. } => {
+                let mut nodes = c.element(*l1).kind().nodes();
+                nodes.extend(c.element(*l2).kind().nodes());
+                nodes
+            }
+            kind => kind.nodes(),
+        };
+        match e.kind() {
+            ElementKind::Cccs { control, .. } | ElementKind::Ccvs { control, .. } => {
+                nodes.extend(c.element(*control).kind().nodes());
+            }
+            ElementKind::Law { law, .. } => {
+                for control in &law.controls {
+                    if let Control::Current(id) = *control {
+                        nodes.extend(c.element(id).kind().nodes());
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut free = nodes.iter().filter(|n| !n.is_ground() && !fixed[n.index()]).map(|n| n.index());
+        if let Some(first) = free.next() {
+            for other in free {
+                let (ra, rb) = (find(&mut parent, first), find(&mut parent, other));
+                parent[ra] = rb;
+            }
+        }
+    }
+    let mut part = vec![None; count];
+    let mut roots: Vec<usize> = Vec::new();
+    for i in 1..count {
+        if fixed[i] {
+            continue;
+        }
+        let root = find(&mut parent, i);
+        let k = roots.iter().position(|&r| r == root).unwrap_or_else(|| {
+            roots.push(root);
+            roots.len() - 1
+        });
+        part[i] = Some(k);
+    }
+    (part, roots.len())
+}
+
+/// The operating point solved part by part (module docs): each part with a
+/// nonlinear element in a copy of `c` whose other elements carry nothing and
+/// whose other nodes are held to ground, the parts' solutions together the
+/// start of a Newton solve of the whole circuit.
+fn by_blocks(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context, at: AnalysisPoint) -> Option<Converged> {
+    if SPLITTING.with(|s| s.get()) {
+        return None;
+    }
+    let (part, parts) = dc_blocks(c);
+    let element_part = |e: &crate::circuit::Element| -> Option<usize> {
+        let nodes = match e.kind() {
+            ElementKind::Coupling { l1, .. } => c.element(*l1).kind().nodes(),
+            kind => kind.nodes(),
+        };
+        nodes.iter().find_map(|n| part[n.index()])
+    };
+    let mut nonlinear: Vec<usize> = c
+        .elements()
+        .iter()
+        .filter(|e| {
+            matches!(e.kind(), ElementKind::Diode { .. } | ElementKind::Switch { .. } | ElementKind::Law { .. })
+        })
+        .filter_map(element_part)
+        .collect();
+    nonlinear.sort_unstable();
+    nonlinear.dedup();
+    if parts < 2 || nonlinear.len() < 2 {
+        return None;
+    }
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SPLITTING.with(|s| s.set(false));
+        }
+    }
+    SPLITTING.with(|s| s.set(true));
+    let _reset = Reset;
+    let mut x = vec![0.0; m.layout.size()];
+    let mut junction = vec![0.0; m.slots];
+    for &k in &nonlinear {
+        let mut sub = c.clone();
+        let mut kept = vec![false; c.elements().len()];
+        for (i, e) in c.elements().iter().enumerate() {
+            let grounded_source = matches!(*e.kind(),
+                ElementKind::VoltageSource { plus, minus, .. } if plus.is_ground() != minus.is_ground());
+            kept[i] = grounded_source || element_part(e) == Some(k);
+            if !kept[i] {
+                sub.elements[i].kind = ElementKind::CurrentSource {
+                    from: NodeId::GROUND,
+                    to: NodeId::GROUND,
+                    value: SourceValue::dc(0.0),
+                };
+                sub.waveforms.remove(&i);
+            }
+        }
+        for (n, p) in part.iter().enumerate() {
+            if p.is_some() && *p != Some(k) {
+                sub.resistor(&format!("#hold {}", c.node_name(NodeId(n))), NodeId(n), NodeId::GROUND, 1.0).ok()?;
+            }
+        }
+        let sm = Model::new(&sub, false).ok()?;
+        let point = dc_point(&sm, &sub, &mut Solver::default(), base.time, at).ok()?;
+        for (r, unknown) in m.layout.unknowns.iter().enumerate() {
+            let from = match *unknown {
+                Unknown::Node(n) if part[n.index()] == Some(k) => sm.layout.node_row[n.index()],
+                Unknown::Branch(e) if kept[e] && element_part(&c.elements()[e]) == Some(k) => sm.layout.branch_row[e],
+                _ => None,
+            };
+            if let Some(from) = from {
+                x[r] = point.x[from];
+            }
+        }
+        for (i, e) in c.elements().iter().enumerate() {
+            let len = match e.kind() {
+                ElementKind::Diode { .. } => 1,
+                ElementKind::Law { law, .. } => law.controls.len(),
+                _ => 0,
+            };
+            if len > 0 && element_part(e) == Some(k) {
+                junction[m.slot[i]..m.slot[i] + len].copy_from_slice(&point.junction[sm.slot[i]..sm.slot[i] + len]);
+            }
+        }
+    }
+    solver.newton(m, c, base, &x, &junction, 100).ok()
 }
 
 fn source_stepping(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context) -> Result<Converged, Failure> {
@@ -1726,6 +1908,64 @@ mod tests {
         let h = 1e-6;
         let numeric = (soft_limit(0.8 + h, 1.0).0 - soft_limit(0.8 - h, 1.0).0) / (2.0 * h);
         assert!((soft_limit(0.8, 1.0).1 - numeric).abs() < 1e-8);
+    }
+
+    /// Two diode stages on one fixed rail, a capacitor and a third stage
+    /// controlled from the first between them.
+    fn two_stage_circuit() -> (Circuit, [NodeId; 4]) {
+        let mut c = Circuit::new();
+        let (vp, a, b, d) = (c.node("vp"), c.node("a"), c.node("b"), c.node("d"));
+        c.voltage_source("VP", vp, NodeId::GROUND, SourceValue::dc(5.0)).unwrap();
+        let diode = crate::devices::DiodeParams { saturation_current: 1e-14, ..Default::default() };
+        c.resistor("RA", vp, a, 1e3).unwrap();
+        c.diode("DA", a, NodeId::GROUND, &diode).unwrap();
+        c.resistor("RB", vp, b, 2e3).unwrap();
+        c.diode("DB", b, NodeId::GROUND, &diode).unwrap();
+        c.capacitor("CAB", a, b, 1e-9).unwrap();
+        // A current into d controlled by V(a): d reads a, so it joins a's part.
+        c.vccs("GD", NodeId::GROUND, d, a, NodeId::GROUND, 1e-3).unwrap();
+        c.resistor("RD", d, vp, 1e3).unwrap();
+        c.diode("DD", d, NodeId::GROUND, &diode).unwrap();
+        (c, [vp, a, b, d])
+    }
+
+    #[test]
+    fn dc_blocks_split_at_fixed_nodes_and_capacitors() {
+        let (c, [vp, a, b, d]) = two_stage_circuit();
+        let (part, parts) = dc_blocks(&c);
+        assert_eq!(parts, 2);
+        assert_eq!(part[vp.index()], None, "a grounded source fixes the rail");
+        assert_eq!(part[0], None);
+        assert_ne!(part[a.index()], part[b.index()], "a capacitor joins nothing at DC");
+        assert_eq!(part[a.index()], part[d.index()], "a controlled source joins its control");
+    }
+
+    #[test]
+    fn the_operating_point_by_parts_is_the_operating_point() {
+        let (c, _) = two_stage_circuit();
+        let m = Model::new(&c, false).unwrap();
+        let whole = dc_point(&m, &c, &mut Solver::default(), None, AnalysisPoint::OperatingPoint).unwrap();
+        let switch_on = vec![false; c.elements().len()];
+        let base = Context {
+            time: None,
+            left: true,
+            method: Method::Dc,
+            h: 0.0,
+            source_scale: 1.0,
+            gmin: 0.0,
+            anchor: None,
+            prev: None,
+            switch_on: &switch_on,
+        };
+        let split = by_blocks(&m, &c, &mut Solver::default(), &base, AnalysisPoint::OperatingPoint)
+            .expect("two nonlinear parts are solved one by one");
+        for (k, (p, q)) in whole.x.iter().zip(&split.x).enumerate() {
+            assert!((p - q).abs() <= 1e-9 * p.abs().max(1.0), "unknown {k}: {p} against {q}");
+        }
+        // Not inside itself: a part is never split again.
+        SPLITTING.with(|s| s.set(true));
+        assert!(by_blocks(&m, &c, &mut Solver::default(), &base, AnalysisPoint::OperatingPoint).is_none());
+        SPLITTING.with(|s| s.set(false));
     }
 
     #[test]

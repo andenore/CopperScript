@@ -1,0 +1,98 @@
+// Analog Devices (Linear Technology) LTC6268IS6: 500 MHz FET-input op-amp, 6-lead TSOT-23.
+// Not on the board: the lower-capacitance sense buffer that ../README.md
+// ("ContactImbalance") names as a remedy for the 1.6 pF sense nodes (0.45 pF input
+// capacitance against the ADA4817's 1.3 pF; 3.1 V to 5.25 V supply, so it needs its own
+// +/-2.5 V rails). Here so that its macro model can be checked
+// (copper sim --check-model LTC6268IS6 board.copper --supply 5V) before a bench uses it.
+// CopperLib has the same part with the same pins (packages/parts/adi/ltc6268,
+// LTC6268IS6) without a sim block; this block belongs there once reviewed.
+// Source, read in this session: LTC6268/LTC6269 data sheet, document 62689f, the PDF
+// the owner downloaded from analog.com,
+// sha256 84b889464026e99243d23da3d3969af7d639fa0a1bf1661663c821ece84ec30b.
+//   p. 2, Pin Configuration: S6 package (1 OUT, 2 V-, 3 +IN, 4 -IN, 5 SHDN, 6 V+).
+//   p. 2, Absolute Maximum Ratings: supply V+ to V- 5.5 V; input voltage V- - 0.2 V to
+//     V+ + 0.2 V; input current (+IN, -IN) and SHDN current +/-1 mA; output current
+//     135 mA (no voltage rating for SHDN).
+//   p. 3-4, 5.0V Electrical Characteristics (V+ = 5 V, V- = 0 V, 25 C, RL = 1 kohm):
+//     offset 0.2 mV typ (VCM = 2.75 V); input bias current 3 fA typ (20 fA max);
+//     voltage noise 4.3 nV/rtHz at 1 MHz; current noise 5.5 fA/rtHz at 100 kHz; input
+//     resistance > 1000 Gohm differential and common mode; input capacitance 100 fF
+//     differential, 450 fF common mode; CMRR 90 dB typ (VCM 0.5 V to 3.2 V, PNP side);
+//     PSRR 95 dB typ; open-loop gain 250 V/mV typ (RL = 10 kohm); output swing low and
+//     high 140 mV max at 10 mA (80 / 70 mV typ); short-circuit current 90 mA typ, 60 mA
+//     min; supply current 16.5 mA typ per amplifier; SHDN enabled at >= 1.5 V or left
+//     open; -3 dB bandwidth (AV = 1) 350 MHz; gain-bandwidth 500 MHz typ (f = 10 MHz);
+//     slew rate 400 V/us rising, 260 V/us falling (typ).
+//   p. 5, 3.3V Electrical Characteristics: gain-bandwidth 420 MHz; open-loop gain
+//     200 V/mV; CMRR 100 dB typ (VCM 0.5 V to 1.2 V); supply current 16 mA typ.
+//   p. 12, Applications Information, Noise: the voltage noise's 1/f corner is at 80 kHz.
+//   p. 18, Rail-to-Rail Output: over 40 mA of output drive current over temperature.
+//   Typical performance characteristics at VS = +/-2.5 V, read numerically from the
+//     PDF's vector curves (not by eye): p. 9 "Gain and Phase vs Frequency" (RL = 1 kohm,
+//     CL = 0): 0 dB at 415 MHz, phase -126 degrees there, gain 34.3 dB at 10 MHz;
+//     p. 7 "CMRR vs Frequency": 84 dB at 100 kHz, 64 dB at 1 MHz, 45 dB at 10 MHz;
+//     p. 7 "PSRR vs Frequency": +PSRR 71 dB at 100 kHz, 52 dB at 1 MHz (-PSRR higher);
+//     p. 9 "Output Impedance vs Frequency": AV = 100, 26.5 to 28.2 ohm from 10 to 30 MHz;
+//     p. 8 "Input Referred Voltage Noise": 5.6 nV/rtHz at 100 kHz, 4.4 at 1 MHz.
+// Derived, not data-sheet numbers: second_pole 560 MHz gives the 54 degrees of phase
+// margin at the p. 9 crossing with the 500 MHz gain-bandwidth (-90 - atan(405/560));
+// cmrr_corner 50 kHz fits the CMRR curve from 100 kHz to 10 MHz with the table's 90 dB,
+// but it is left out: the common-mode term stops rising only at the gain-bandwidth
+// (plan I7), so it still feeds forward at about -12 dB at the 405 MHz crossing and moves
+// the checked phase margin from 54.2 to 57.0 degrees and the follower's peaking from 1.2
+// to 2.7 dB, away from the p. 9 curve's 54 degrees; CMRR stays flat at the table's figure;
+// psrr_corner 7 kHz fits the lower (+PSRR) curve at 100 kHz and 1 MHz with the table's
+// 95 dB; output_resistance 29 ohm is the AV = 100 output impedance times |1 + j A/100| at
+// 10 to 30 MHz, where the loop gain is below 0.5. The current noise rises above 1 MHz
+// (p. 9, "Input Referred Current Noise", the input capacitance against the voltage
+// noise) and has no 1/f corner; neither is modelled. Transient limits: slew rate the
+// rising typical (the falling 260 V/us is not modelled), swing the 140 mV maximum at
+// 10 mA, output current the 40 mA of p. 18 (the model needs output_resistance for it).
+// Input resistance: the table's bound, 1000 Gohm. No vendor model is registered.
+// Checked (copper sim --check-model p.LTC6268IS6 board.copper --supply 5V, 22 November
+// 2026): every declared figure within its tolerance at 5 V and 3.3 V; phase margin
+// 54.2 degrees at 404 MHz. The follower's -3 dB bandwidth is 662 MHz against the table's
+// 350 MHz, which the data sheet states with RL = 1 kohm and CL = 10 pF (its p. 9 curve
+// with CL = 10 pF crosses at 259 MHz with 47 degrees); the check loads 10 kohm and no
+// capacitance, so the two are not compared.
+// Footprint: KiCad Package_TO_SOT_SMD:SOT-23-6 (as CopperLib's part).
+part LTC6268IS6 {
+    category = "amplifier.opamp";
+    manufacturer = "Analog Devices";
+    footprint = "Package_TO_SOT_SMD:SOT-23-6";
+    source_document = "LTC6268/LTC6269 500MHz Ultra-Low Bias Current FET Input Op Amp";
+    source_revision = "62689f";
+    source_location = "p. 2 ratings and pinout; pp. 3-5 electrical characteristics; pp. 7-9 typical performance; p. 12 noise; p. 18 output";
+    source_url = "https://www.analog.com/media/en/technical-documentation/data-sheets/62689f.pdf";
+    source_checksum = "sha256:84b889464026e99243d23da3d3969af7d639fa0a1bf1661663c821ece84ec30b";
+
+    pin OUT  { number = "1"; domains = "analog"; directions = "output"; current_max = 135mA; }
+    pin VN   { number = "2"; domains = "power"; directions = "input"; absolute_min = "VP-5.5V"; }
+    pin INP  { number = "3"; domains = "analog"; directions = "input"; absolute_min = "VN-0.2V"; absolute_max = "VP+0.2V"; current_max = 1mA; }
+    pin INN  { number = "4"; domains = "analog"; directions = "input"; absolute_min = "VN-0.2V"; absolute_max = "VP+0.2V"; current_max = 1mA; }
+    pin SHDN { number = "5"; domains = "digital"; directions = "input"; current_max = 1mA; }
+    pin VP   { number = "6"; domains = "power"; directions = "input"; absolute_max = "VN+5.5V"; }
+
+    sim opamp {
+        inp = INP; inn = INN; out = OUT; vp = VP; vn = VN;
+        unmodelled = SHDN;
+        second_pole = 560MHz;                 // derived from p. 9, see above
+        // cmrr_corner = 50kHz;               // derived from p. 7: left out, see above
+        psrr = 95dB;                          // p. 4, typical
+        psrr_corner = 7kHz;                   // derived from p. 7
+        input_capacitance_common = 0.45pF;    // p. 3
+        input_capacitance_differential = 0.1pF;
+        input_resistance_common = 1000Gohm;   // p. 3, the bound
+        input_bias_current = 3fA;             // p. 3, typical
+        input_offset_voltage = 0.2mV;         // p. 3, typical
+        voltage_noise = 4.3nV/rtHz;           // p. 3, 1 MHz
+        voltage_noise_corner = 80kHz;         // p. 12
+        current_noise = 5.5fA/rtHz;           // p. 3, 100 kHz
+        slew_rate = 400V/us;                  // p. 4, rising, typical
+        output_resistance = 29ohm;            // derived from p. 9
+        output_swing_from_rail = 140mV;       // p. 4, maximum at 10 mA
+        output_current_limit = 40mA;          // p. 18
+        supply 5V { gbw = 500MHz; open_loop_gain = 108dB; cmrr = 90dB; quiescent_current = 16.5mA; }    // pp. 3-4
+        supply 3.3V { gbw = 420MHz; open_loop_gain = 106dB; cmrr = 100dB; quiescent_current = 16mA; }   // p. 5
+    }
+}

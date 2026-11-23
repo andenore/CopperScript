@@ -16,10 +16,11 @@
 //   ADC drivers on 0 V / 3.3 V, centred on V_MID, so that no output can leave the ADC
 //   range: U_B1 (gain 1), U_G10 (gain 10), U_G100 (gain 10 on V_10), and the
 //   transimpedance amplifier U_TIA (20 kohm, LC at V_MID). Each drives its ADC input
-//   through 49.9 ohm into 470 pF (anti-alias pole 6.8 MHz).
+//   through 49.9 ohm into 470 pF (anti-alias pole 6.8 MHz), the gain-1 driver through
+//   100 ohm into 1 nF (1.59 MHz).
 // Supply current, typical / maximum: +/-4.5 V rails 51.8 / 56.9 mA each, V3V3_ANA
 // 3.7 / 4.0 mA idle; simulated with typical parts while driving 1 MHz, up to 52.3 mA
-// and 6.1 mA (../README.md, "Supply current"; benches/supply_current.copper). Coupling time constants are at most
+// and 6.0 mA (../README.md, "Supply current"; benches/supply_current.copper). Coupling time constants are at most
 // 155 ms (4.7 nF x 33 Mohm), so a reading is valid about 0.8 s after the rails and
 // V_MID come up (../README.md, "Power cycling").
 module AnalogFrontEnd {
@@ -39,7 +40,7 @@ module AnalogFrontEnd {
     port GND: power_in;
 
     param C_COMP = 2.2pF;    // pump loop compensation, across R4 and across R2
-    param C_FB_TIA = 1.5pF;  // transimpedance feedback capacitance
+    param C_FB_TIA = 10pF;   // transimpedance feedback capacitance (0.8 MHz with 20 kohm; SPEC.md, "Vendor models")
     param R_GUARD = 49.9ohm; // series resistor from each guard driver to its guard
 
     // ---- DDS reconstruction filter: 3rd-order Butterworth, 3 MHz, 200 ohm both ends ----
@@ -97,6 +98,7 @@ module AnalogFrontEnd {
     component R_G1S: RESISTOR { value = 1kohm; }
     component U_G10: p.ADA4807_1ARJZ;
     component R_G1F: RESISTOR { value = 9.09kohm; }
+    component C_G1F: CAPACITOR { value = 2.2pF; }   // across R_G1F: phase lead for the loop (8 MHz), C0G
     component R_G1G: RESISTOR { value = 1kohm; }
     component C_G1G: CAPACITOR { value = 22uF; }   // DC gain 1, so V_10 sits at V_MID
     component C_G2: CAPACITOR { value = 1uF; }
@@ -104,6 +106,7 @@ module AnalogFrontEnd {
     component R_G2S: RESISTOR { value = 1kohm; }
     component U_G100: p.ADA4807_1ARJZ;
     component R_G2F: RESISTOR { value = 9.09kohm; }
+    component C_G2F: CAPACITOR { value = 2.2pF; }   // across R_G2F, as C_G1F
     component R_G2G: RESISTOR { value = 1kohm; }
     component C_G2G: CAPACITOR { value = 22uF; }
 
@@ -112,9 +115,12 @@ module AnalogFrontEnd {
     component R_TIA: RESISTOR { value = 20kohm; tolerance = 0.1%; }
     component C_TIA: CAPACITOR { value = C_FB_TIA; } // C0G
 
-    // ---- Anti-alias and ADC source impedance: 49.9 ohm into 470 pF (6.8 MHz) ----
-    component R_AA1: RESISTOR { value = 49.9ohm; }
-    component C_AA1: CAPACITOR { value = 470pF; }
+    // ---- Anti-alias and ADC source impedance: 49.9 ohm into 470 pF (6.8 MHz); the gain-1
+    // driver, a follower with no feedback network to compensate, through 100 ohm into
+    // 1 nF (1.59 MHz), which filters its own closed-loop peak at the pin; 100 ohm is
+    // the most PA1 may see with 2.5-cycle sampling (README.md, DS12288 Table 70) ----
+    component R_AA1: RESISTOR { value = 100ohm; }
+    component C_AA1: CAPACITOR { value = 1nF; }
     component R_AA10: RESISTOR { value = 49.9ohm; }
     component C_AA10: CAPACITOR { value = 470pF; }
     component R_AA100: RESISTOR { value = 49.9ohm; }
@@ -173,14 +179,14 @@ module AnalogFrontEnd {
     net V_1 { U_B1.OUT; U_B1.INN; R_AA1.1; }
     net G1_C { C_G1.2; R_G1B.1; R_G1S.1; }
     net G1_IN { R_G1S.2; U_G10.INP; }
-    net G1_FB { U_G10.INN; R_G1F.2; R_G1G.1; }
+    net G1_FB { U_G10.INN; R_G1F.2; R_G1G.1; C_G1F.2; }
     net G1_RC { R_G1G.2; C_G1G.1; }
-    net V_10 { U_G10.OUT; R_G1F.1; R_AA10.1; C_G2.1; }
+    net V_10 { U_G10.OUT; R_G1F.1; R_AA10.1; C_G2.1; C_G1F.1; }
     net G2_C { C_G2.2; R_G2B.1; R_G2S.1; }
     net G2_IN { R_G2S.2; U_G100.INP; }
-    net G2_FB { U_G100.INN; R_G2F.2; R_G2G.1; }
+    net G2_FB { U_G100.INN; R_G2F.2; R_G2G.1; C_G2F.2; }
     net G2_RC { R_G2G.2; C_G2G.1; }
-    net V_100 { U_G100.OUT; R_G2F.1; R_AA100.1; }
+    net V_100 { U_G100.OUT; R_G2F.1; R_AA100.1; C_G2F.1; }
     net E_LC { E_LC1.E; J_PROBE.LC; U_TIA.INN; R_TIA.2; C_TIA.2; }
     net V_TIA { U_TIA.OUT; R_TIA.1; C_TIA.1; R_AAI.1; }
     net V_MON_1 { R_AA1.2; C_AA1.1; port.V_MON_1; }

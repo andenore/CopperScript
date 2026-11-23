@@ -87,8 +87,18 @@ Known weak spots of what is built:
   closed forms where it does not; the LTspice dialect is not compared. Vendor-model transients are slow in the debug build (an OPA2277
   slew test did not finish in 40 minutes), so the slew checks are opt-in;
   their release timings are in the improvement plan (I1 follow-up).
-- No Analog Devices model has been loaded: analog.com refuses automated
-  downloads.
+- The Analog Devices models of the analyzer (ADA4817, ADA4807, AD8130) are
+  registered by hand (analog.com refuses automated downloads) and load and
+  converge unchanged; ngspice-46 gives the same operating points and AC
+  responses in local, gitignored decks (I3). They are local files, so only a
+  machine where the owner registered them runs `--models vendor`. With them
+  the analyzer's accuracy benches pass but five loop margins and the
+  closed-loop peaking fail: the ADA4807's mid-band phase lag, which its data
+  sheet confirms and the macro block lacks, plus the model's output
+  impedance, about twice the data sheet's (the false right half-plane poles
+  were copper's pole analysis, fixed in the I3 follow-up), and
+  `Startup` and `Distortion` do not finish (improvement plan, I3;
+  `examples/simulation/impedance_analyzer/SPEC.md`, "Vendor models").
 - The HTML reports have been looked at page kind by page kind (F10) but not
   used for real design work.
 
@@ -420,13 +430,16 @@ Built on 20 November 2026. Diagnostics SIM106 to SIM109.
 
 Open:
 
-- No Analog Devices model is loaded, so `SoilSweep` with vendor amplifier
-  models has not run. The ADA4817-1, ADA4807-1 and AD8130 files have to be
-  downloaded by hand; the analyzer parts carry the steps.
+- Since I3 the ADA4817, ADA4807 and AD8130 files, downloaded by hand, load
+  and run most analyzer benches with `--models vendor` (an operating point
+  solved part by part where the aids fail together); several loop margins
+  fail with them and `Startup`, `Distortion` and three stepped benches did
+  not finish (improvement plan, I3; SPEC.md, "Vendor models").
 - TI's TLV757 model (`.IC` inside its subcircuit) and TPS7A20 model (a
   global parameter) load and pass `--check-model` since I2, but the
   CopperLib blocks do not reference them yet.
-- LTC6268 has no block (its data sheet could not be fetched). Adjustable and
+- LTC6268: a macro block from its data sheet is in the analyzer's example
+  parts (`parts/analog_ltc6268.copper`, I3); CopperLib's part has none yet. Adjustable and
   isolated regulators, fully differential amplifiers, current-sense
   amplifiers and comparators have no model kind.
 - Settled in I7: an amplifier's `cmrr_corner` and `psrr_corner` terms stop

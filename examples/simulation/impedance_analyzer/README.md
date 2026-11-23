@@ -68,7 +68,7 @@ what the board around it would:
 | Port | Board net and source | In the benches |
 | --- | --- | --- |
 | `DDS_OUT` (input) | AD9833 VOUT, unfiltered: 38 mV to 0.65 V, 200 ohm on chip; off between measurements | `model DDS: source { out = DDS_OUT; ref = GND; ac = 0.3V; output_resistance = 200ohm; }` (0 V AC where a bench drives another node) |
-| `V_MON_1`, `V_MON_10`, `V_MON_100` (outputs) | sense voltage at gain 1, 10, 100 into PA1 (ADC2_IN2), PA6 (ADC2_IN3), PA7 (ADC2_IN4), fast channels | open: the ADC input is not modelled (its 470 pF reservoir is in the module) |
+| `V_MON_1`, `V_MON_10`, `V_MON_100` (outputs) | sense voltage at gain 1, 10, 100 into PA1 (ADC2_IN2), PA6 (ADC2_IN3), PA7 (ADC2_IN4), fast channels | open: the ADC input is not modelled (its 470 pF reservoir, 1 nF on `V_MON_1`, is in the module) |
 | `I_MON` (output) | current measurement into PA2 (ADC1_IN3), fast channel | open |
 | `V_MID` (power in) | 1.65 V, REF2033 VBIAS, from VP: switched | `supply MID { voltage = 1.65V; net = V_MID; }` |
 | `VP`, `VN` (power in) | +4.50 V (TPS7A4901, 150 mA) and -4.48 V (TPS7A3001, 200 mA): switched | `supply POS`, `supply NEG`, ideal DC sources |
@@ -107,7 +107,9 @@ sets for the front end:
   and 15). The ADC drivers run from `V3V3_ANA`, which is at most `V3V3`, so a
   powered driver cannot leave 0 V to 3.3 V.
 - **Source impedance.** At most 100 ohm with 2.5-cycle sampling (Table 70):
-  49.9 ohm plus the driver's closed-loop output impedance.
+  49.9 ohm plus the driver's closed-loop output impedance on PA2, PA6 and
+  PA7, 100 ohm plus it on PA1 (`V_MON_1`). The ADC timing (3.125 Msps,
+  16 ADC clocks a trigger) leaves no room for a longer sampling time.
 - **V_MID loading.** The front end adds no capacitance to `V_MID` (three
   47 kohm bias resistors and one amplifier input); the board's 1.1 uF there is
   the REF2033's output capacitor, well inside its 0 to 10 uF.
@@ -131,7 +133,8 @@ sees no back-power path through them.
 2. **ADC inputs stay analog.** PA1, PA2, PA6 and PA7 stay in analog mode
    (no output, no pull-up) whenever `ANA_EN` is low, Standby included: in
    Standby leave their bits in PWR_PUCRA clear (a pull-down is harmless but
-   not needed). Each pin faces an unpowered ADA4807 output through 49.9 ohm;
+   not needed). Each pin faces an unpowered ADA4807 output through 49.9 ohm
+   (PA1 through 100 ohm);
    a pin driven high or pulled up would push current through that output's
    protection diode into `V3V3_ANA` and from there into the AD9833 and the
    other three ADC drivers. In analog mode the only current is the pin's
@@ -139,7 +142,7 @@ sees no back-power path through them.
 3. **Program the DDS after the rails are up.** The AD9833 shares the switched
    3.3 V with the front end; write its registers after `ANA_EN` rises and its
    supply has settled, and start sampling about 1 s after `ANA_EN` rises (every
-   ADC input is within 1 mV of its final value 0.67 s after it, `Startup`; see
+   ADC input is within 1 mV of its final value 0.68 s after it, `Startup`; see
    [Power cycling](#power-cycling)).
 4. **Gain range.** At 1.3 kohm m the gain-10 channel is past its linear range;
    the firmware uses gain 1 there ([SoilSweep above the rated range](#soilsweep-above-the-rated-range)).
@@ -162,9 +165,9 @@ names.
 | Blocking and HC guard | `C_BLK` 100 nF (C0G or film); `U_FBB`'s output drives `GUARD_HC` through `R_GHC` 49.9 ohm | No DC through the soil. The guard driver is the pump's own feedback buffer; 49.9 ohm isolates its 120 pF guard load (with 0 ohm the guard tracking peaks to 376 %). |
 | Sense buffers | `C_CHP`, `C_CLP` 4.7 nF; `R_BHP`, `R_BLP` 33 Mohm (0.15 s, 1 Hz); `U_BHP`, `U_BLP` ADA4817 followers; each drives its guard through 49.9 ohm | FET input, lowest input capacitance on the board (1.3 pF). This capacitance, not the guard, limits dry-soil accuracy (see [Results](#results)). |
 | Differential receiver | `U_DIF` AD8130, gain 1 (FB to OUT, REF to ground) | High input impedance on both inputs and 80 dB minimum CMRR at 2 MHz. |
-| ADC drivers | `U_B1` gain 1, `U_G10` gain 10.09 (9.09 k / 1 k, `C_G1G` 22 uF for unity DC gain), `U_G100` another gain 10.09 on `V_10`; all ADA4807 on 0 V / `V3V3_ANA` (the switched 3.3 V); inputs AC-coupled with 1 uF and biased at `V_MID` through 47 kohm (3.4 Hz), 1 kohm series into each input | Powered from 0 V and at most the MCU's 3.3 V, no output can leave the ADC's range in any condition, saturation included. Each ADC input has its own channel; no analog switch. |
-| Transimpedance amplifier | `U_TIA` ADA4807 on 0 V / `V3V3_ANA`, `R_TIA` 20 kohm 0.1 %, `C_TIA` 1.5 pF; non-inverting input at `V_MID` | LC sits at `V_MID` (no DC current: every other electrode is capacitor-coupled). 0.3 V peak at 15 uA. 1.5 pF gives a 5.3 MHz pole and no peaking against 21 pF at LC. |
-| ADC interface | 49.9 ohm into 470 pF at each of `V_MON_1`, `V_MON_10`, `V_MON_100`, `I_MON` | 6.8 MHz anti-alias pole, identical on all four channels; the 470 pF is the charge reservoir for 2.5-cycle sampling. Source impedance at the pin: 49.9 ohm plus the amplifier's closed-loop output impedance, below the 100 ohm the STM32G474 needs. |
+| ADC drivers | `U_B1` gain 1, `U_G10` gain 10.09 (9.09 k / 1 k, `C_G1G` 22 uF for unity DC gain), `U_G100` another gain 10.09 on `V_10`; `C_G1F`, `C_G2F` 2.2 pF (C0G) across each 9.09 k; all ADA4807 on 0 V / `V3V3_ANA` (the switched 3.3 V); inputs AC-coupled with 1 uF and biased at `V_MID` through 47 kohm (3.4 Hz), 1 kohm series into each input | Powered from 0 V and at most the MCU's 3.3 V, no output can leave the ADC's range in any condition, saturation included. Each ADC input has its own channel; no analog switch. The 2.2 pF give each gain-10 stage's loop phase lead (8 MHz with 9.09 k), for the margin the vendor model needs (SPEC.md, "Vendor models"); they also make 8 MHz the stage's closed-loop pole: 5.8 MHz to -3 dB, 98.5 % and -9.3 degrees at 1 MHz (an untracked scratch bench, `ChannelCosts`). |
+| Transimpedance amplifier | `U_TIA` ADA4807 on 0 V / `V3V3_ANA`, `R_TIA` 20 kohm 0.1 %, `C_TIA` 10 pF (`C_FB_TIA`); non-inverting input at `V_MID` | LC sits at `V_MID` (no DC current: every other electrode is capacitor-coupled). 0.3 V peak at 15 uA. 10 pF gives a 0.8 MHz pole and no peaking against 21 pF at LC; it was 1.5 pF (5.3 MHz) until the vendor model's margin needed more (SPEC.md, "Vendor models"). The cost is at 1 MHz: the stage passes 62.5 % with 52 degrees of lag, and with its anti-alias RC the channel 61.9 % with 60.7 degrees (1.5 pF: 98.6 % and 19.7 degrees; `ChannelCosts`), so `I_MON` carries at most 0.19 V peak at 1 MHz instead of 0.30 V (`MeasurementNoise`). Calibration removes the response, not the lost signal. |
+| ADC interface | 100 ohm into 1 nF at `V_MON_1`; 49.9 ohm into 470 pF at `V_MON_10`, `V_MON_100`, `I_MON` | Anti-alias poles 1.59 MHz on the gain-1 channel and 6.8 MHz on the other three; the capacitors are the charge reservoirs for 2.5-cycle sampling. The gain-1 network filters the follower's own closed-loop peak at the pin, which the vendor model needs (SPEC.md, "Vendor models"); it was 49.9 ohm into 470 pF like the others. The cost is at 1 MHz: the gain-1 channel passes 84.7 % with -32.8 degrees (-3 dB at 1.59 MHz), the gain-10 channel 97.5 % with -18.2 degrees and the gain-100 channel 96.1 % with -28.0 degrees (with 49.9 ohm and without the 2.2 pF: 98.9 % and -9.1, 98.9 % and -11.8, 98.8 % and -15.2 degrees; `ChannelCosts`, 800 ohm soil, ADC pin against the receiver output). Calibration removes each channel's own response. Source impedance at the pin: 49.9 ohm plus the amplifier's closed-loop output impedance on `V_MON_10`, `V_MON_100` and `I_MON`, below the 100 ohm the STM32G474 needs with 2.5-cycle sampling; 100 ohm plus it on `V_MON_1`, at that limit. |
 | Decoupling | 100 nF at every supply pin (role `decoupling`), 10 uF bulk on VP and VN | ADA4817 data sheet p. 17. |
 | Probe access | `J_PROBE` 1 x 8: HC, guard HC, HP, guard HP, LP, guard LP, LC, ground | Each electrode beside its guard, so a coaxial lead can take the guard on its shield. |
 
@@ -191,7 +194,7 @@ delivers, from the rail that sources it:
 | --- | --- | --- | --- |
 | +4.5 V (`I(POS)`), mean | 51.80 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
 | -4.5 V (`-I(NEG)`), mean | 51.81 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
-| `V3V3_ANA`, mean | 3.66 mA | 5.59 / 5.23 mA | 6.09 mA |
+| `V3V3_ANA`, mean | 3.66 mA | 5.57 / 5.10 mA | 6.04 mA |
 | `V_MID` | -4.7 uA (the ADC drivers' and TIA's bias currents flow back into the REF2033) | | |
 
 What the simulation confirms and corrects:
@@ -206,8 +209,9 @@ What the simulation confirms and corrects:
   inside the 70 mA the rails are sized for (the bench's limit).
 - **`V3V3_ANA`: corrected for 1 MHz.** The idle 3.66 mA matches the hand
   value (4 x 0.915 mA), but driving 1 MHz the four ADC-side amplifiers source
-  1.6 to 1.9 mA more at the nominal drive (2.4 mA at 0.65 V): each drives
-  49.9 ohm into 470 pF (339 ohm at 1 MHz) besides its feedback network. The
+  1.4 to 1.9 mA more at the nominal drive (2.4 mA at 0.65 V): each drives
+  470 pF (339 ohm at 1 MHz) through 49.9 ohm, the gain-1 driver 1 nF through
+  100 ohm, besides its feedback network. The
   single-supply amplifiers sink into ground, so only the sourcing half-waves
   reach the rail. The 470 pF take a tenth of that current at 100 kHz and a
   thousandth at 1 kHz (not simulated). The battery budget below keeps 3.7 mA:
@@ -238,10 +242,10 @@ battery budget with these currents is under
 | --- | --- | --- |
 | Sense buffers (2) | ADA4817, 19 mA each | Needed. They set the sense nodes' capacitance and the sense path's common-mode rejection. The candidate at a fifth of the current, the OPA810 (3.7 mA, FET input, 70 MHz), would bring the rails to 21.2 mA typical / 24.1 mA maximum, but `SenseBufferTrade` shows its 2 pF input doubling the moist-soil error (100 ohm m, eps_r 25: 0.76 % / 0.13 deg against 0.38 % / 0.11 deg) and raising the dry-soil error (1 kohm m: 2.8 % / 7.9 deg against 1.8 % / 4.9 deg), and its CMRR falls to about 42 dB at 1 MHz (its Figure 7-50). With two units the path's 63 dB at 1 MHz would rest on how well two parts' common-mode errors match, which no data sheet bounds (a 10 % mismatch leaves about 62 dB; hand estimate). |
 | Receiver | AD8130, 10.8 mA | Needed: both inputs high impedance and 80 dB minimum CMRR at 2 MHz; no lower-power receiver with a guaranteed CMRR at MHz was found. |
-| Pump `U_PMP`, `U_FBB` | ADA4807, 1 mA each | The pump's output impedance at 1 MHz is set by the strays on HC (87 kohm, `PumpOutputImpedance`), not by gain-bandwidth, and the current is measured. `LoopPeaking` pump_current 6.2 % peaking. The rail-to-rail input also removes the ADA4817's +VS - 2.8 V input limit from the pump node. |
+| Pump `U_PMP`, `U_FBB` | ADA4807, 1 mA each | The pump's output impedance at 1 MHz is set by the strays on HC (87 kohm, `PumpOutputImpedance`), not by gain-bandwidth, and the current is measured. `LoopPeaking` pump_current 5.3 % peaking. The rail-to-rail input also removes the ADA4817's +VS - 2.8 V input limit from the pump node. |
 | Drive buffer | ADA4807, 1 mA | Unity gain at 1 MHz; 1.8 % peaking. |
-| ADC drivers (gain 1, 10, 10) | ADA4807 on `V3V3_ANA`, 0.9 mA each | 18 MHz closed-loop bandwidth at gain 10; the 3.2 degrees it costs at 1 MHz are calibrated out (the errors below are identical on all gain channels). |
-| Transimpedance | ADA4807 on `V3V3_ANA`, 0.9 mA | Bipolar input current (1.6 uA max) flows through `R_TIA` only: 32 mV of DC. No peaking with 1.5 pF. |
+| ADC drivers (gain 1, 10, 10) | ADA4807 on `V3V3_ANA`, 0.9 mA each | 5.8 MHz closed-loop bandwidth at gain 10 with the 2.2 pF across 9.09 kohm (23 MHz without); the 9.3 degrees it costs at 1 MHz (3.0 without) are calibrated out (the errors below are identical on all gain channels). |
+| Transimpedance | ADA4807 on `V3V3_ANA`, 0.9 mA | Bipolar input current (1.6 uA max) flows through `R_TIA` only: 32 mV of DC. No peaking with 10 pF; the 0.8 MHz bandwidth it gives costs signal at 1 MHz (see the circuit table above). |
 
 ### Power cycling
 
@@ -255,7 +259,7 @@ the absolute maximum ratings read from the data sheets:
 
 | Connection with the front end off | Level | Rating | Result |
 | --- | --- | --- | --- |
-| ADC pins PA1, PA2, PA6, PA7 (MCU powered) to the unpowered ADA4807 outputs, through 49.9 ohm | 0 V while the pins are in analog mode; current only the pins' leakage, out of the pin | ADA4807 output: no rating read for an unpowered output; its protection conducts above +VS = 0 V | inside with firmware rule 2; a pin driven high or pulled up (25-55 kohm) would back-power `V3V3_ANA` through that diode |
+| ADC pins PA1, PA2, PA6, PA7 (MCU powered) to the unpowered ADA4807 outputs, through 49.9 ohm (PA1 100 ohm) | 0 V while the pins are in analog mode; current only the pins' leakage, out of the pin | ADA4807 output: no rating read for an unpowered output; its protection conducts above +VS = 0 V | inside with firmware rule 2; a pin driven high or pulled up (25-55 kohm) would back-power `V3V3_ANA` through that diode |
 | DDS output into `U_DRV` through the filter, 1 uF and 10 kohm | AD9833 unpowered: 0 V | inputs -VS - 0.2 V to +VS + 0.2 V (ADA4807 Table 5) | inside with firmware rule 1 (no DDS line driven) |
 | `V_MID` into the transimpedance amplifier and, through 47 kohm, the ADC drivers | 0 V (REF2033 off with VP) | ADA4807 inputs -0.2 V to +VS + 0.2 V | inside in sleep |
 | Sense buffers (ADA4817), AC-coupled to the electrodes | electrodes at 0 V: LC follows the unpowered TIA input | -VS - 0.5 V to +VS + 0.5 V | inside |
@@ -305,9 +309,9 @@ capacitor then charges:
 
 The slowest is 155 ms. Five time constants, 0.8 s after the rails and `V_MID`
 are up, leave under 1 % of the step (simulated: every ADC input within 1 mV
-after 0.67 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
+after 0.68 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
 periods of a 1 kHz or faster signal rejects further: a reading is valid about
-1 s after switching the rails on (firmware rule 3; the simulated 0.67 s
+1 s after switching the rails on (firmware rule 3; the simulated 0.68 s
 includes the rails' soft-start, from models of the regulators). The shorter time constants change the
 bench results by at most 0.1 percentage points; `PumpOutputImpedance` at 1 kHz
 falls from 29 Mohm to 6.2 Mohm, still four times its limit.
@@ -345,7 +349,9 @@ carries `eps0 eps_r rho / R` (derived params, so the contacts follow the
 stepped `R_TRANSFER`). The firmware's result is
 `(V_MON / gain) / (I_MON / R_TIA)`; it is calibrated with a `reference` run on
 the card's 1 kohm with 0 ohm contacts, which removes each channel's own
-frequency response (about 10.4 degrees at 1 MHz, mostly the TIA's pole).
+frequency response (about 28 degrees at 1 MHz with the gain-1 channel: the
+current channel's 60.7 degrees of lag, mostly the TIA's 0.8 MHz pole, less
+the gain-1 channel's 32.8 degrees).
 
 | Bench | Analysis | Question |
 | --- | --- | --- |
@@ -423,19 +429,19 @@ headroom limits every step.
 
 | Soil | eps_r | Band: magnitude | Band: phase | Pump node peak | Sense input peak | Common mode / sense |
 | --- | --- | --- | --- | --- | --- | --- |
-| 5 ohm m (40 ohm) | 5, 25, 40 | 0.022 % | 0.027 deg | 25 mV | 5.3 mV | 8.0 |
-| 100 ohm m (800 ohm) | 5 | 0.35 % | 0.16 deg | 186 mV | 103 mV | 7.1 |
-| 100 ohm m | 25 | 0.38 % | 0.11 deg | 180 mV | 98 mV | 7.1 |
-| 100 ohm m | 40 | 0.39 % | 0.073 deg | 179 mV | 95 mV | 7.0 |
+| 5 ohm m (40 ohm) | 5, 25, 40 | 0.022 % | 0.026 deg | 25 mV | 5.6 mV | 8.4 |
+| 100 ohm m (800 ohm) | 5 | 0.36 % | 0.15 deg | 186 mV | 104 mV | 7.2 |
+| 100 ohm m | 25 | 0.39 % | 0.11 deg | 180 mV | 99 mV | 7.1 |
+| 100 ohm m | 40 | 0.39 % | 0.069 deg | 179 mV | 95 mV | 7.1 |
 
 | Soil | eps_r | 10 kHz | 100 kHz | 1 MHz |
 | --- | --- | --- | --- | --- |
-| 5 ohm m | 5, 25, 40 | 0.022 %, 0.0002 deg | 0.022 %, 0.0025 deg | 0.011 %, 0.027 deg |
-| 100 ohm m | 5 | 0.022 %, 0.0002 deg | 0.025 %, 0.0020 deg | 0.35 %, 0.16 deg |
-| 100 ohm m | 25 | 0.022 %, 0.0002 deg | 0.025 %, 0.0019 deg | 0.38 %, 0.11 deg |
-| 100 ohm m | 40 | 0.022 %, 0.0002 deg | 0.025 %, 0.0019 deg | 0.39 %, 0.073 deg |
+| 5 ohm m | 5, 25, 40 | 0.022 %, 0.0002 deg | 0.022 %, 0.0025 deg | 0.022 %, 0.026 deg |
+| 100 ohm m | 5 | 0.022 %, 0.0002 deg | 0.025 %, 0.0020 deg | 0.36 %, 0.15 deg |
+| 100 ohm m | 25 | 0.022 %, 0.0002 deg | 0.025 %, 0.0019 deg | 0.39 %, 0.11 deg |
+| 100 ohm m | 40 | 0.022 %, 0.0002 deg | 0.025 %, 0.0019 deg | 0.39 %, 0.069 deg |
 
-Current measurement error after calibration: 3e-9 % (requirement 0.5 %; a
+Current measurement error after calibration: 7e-10 % (requirement 0.5 %; a
 linear model with exact resistors cannot show more). The 0.022 % floor is the
 AD8130's common-mode rejection (90 dB minimum) times the common-mode ratio of 8.
 At 100 ohm m most of the remaining error comes from the sense nodes' 1.6 pF
@@ -450,20 +456,20 @@ Equal contacts, from 150 ohm m to the board's limit:
 
 | Soil | eps_r | Usable to | 100 kHz | 300 kHz | 1 MHz | Band |
 | --- | --- | --- | --- | --- | --- | --- |
-| 150 ohm m (1.2 kohm) | 5 | full | 0.029 %, 0.0019 deg | 0.088 %, 0.012 deg | 0.82 %, 0.29 deg | 0.82 %, 0.29 deg |
-| 150 ohm m | 25 | full | 0.029 %, 0.0018 deg | 0.088 %, 0.0079 deg | 0.86 %, 0.12 deg | 0.86 %, 0.12 deg |
-| 150 ohm m | 40 | full | 0.029 %, 0.0017 deg | 0.088 %, 0.0051 deg | 0.81 %, 0.0082 deg | 0.81 %, 0.012 deg |
-| 200 ohm m (1.6 kohm) | 5 | 824 kHz | 0.035 %, 0.0018 deg | 0.14 %, 0.015 deg | **1.5 %**, 0.41 deg | 1.5 %, 0.41 deg |
-| 200 ohm m | 25 | 831 kHz | 0.035 %, 0.0015 deg | 0.14 %, 0.0055 deg | **1.5 %**, 0.025 deg | 1.5 %, 0.026 deg |
-| 200 ohm m | 40 | 892 kHz | 0.035 %, 0.0012 deg | 0.14 %, 0.0010 deg | **1.2 %**, 0.17 deg | 1.2 %, 0.17 deg |
-| 300 ohm m (2.4 kohm) | 5 | 560 kHz | 0.051 %, 0.0014 deg | 0.29 %, 0.017 deg | **3.7 %**, 0.52 deg | 3.7 %, 0.52 deg |
-| 300 ohm m | 25 | 587 kHz | 0.051 %, 0.0002 deg | 0.28 %, 0.012 deg | **2.7 %**, 0.53 deg | 2.7 %, 0.53 deg |
-| 300 ohm m | 40 | 667 kHz | 0.051 %, 0.0006 deg | 0.27 %, 0.032 deg | **1.7 %**, 0.77 deg | 1.7 %, 0.77 deg |
-| 500 ohm m (4 kohm) | 5 | 343 kHz | 0.10 %, 0.0012 deg | 0.76 %, 0.0053 deg | **10 %**, 0.62 deg | 10 %, 0.62 deg |
+| 150 ohm m (1.2 kohm) | 5 | full | 0.029 %, 0.0019 deg | 0.088 %, 0.012 deg | 0.83 %, 0.28 deg | 0.83 %, 0.28 deg |
+| 150 ohm m | 25 | full | 0.029 %, 0.0018 deg | 0.088 %, 0.0079 deg | 0.87 %, 0.11 deg | 0.87 %, 0.11 deg |
+| 150 ohm m | 40 | full | 0.029 %, 0.0017 deg | 0.088 %, 0.0051 deg | 0.82 %, 0.0020 deg | 0.82 %, 0.010 deg |
+| 200 ohm m (1.6 kohm) | 5 | 821 kHz | 0.035 %, 0.0018 deg | 0.14 %, 0.014 deg | **1.5 %**, 0.41 deg | 1.5 %, 0.41 deg |
+| 200 ohm m | 25 | 828 kHz | 0.035 %, 0.0015 deg | 0.14 %, 0.0054 deg | **1.5 %**, 0.017 deg | 1.5 %, 0.021 deg |
+| 200 ohm m | 40 | 889 kHz | 0.035 %, 0.0012 deg | 0.14 %, 0.0011 deg | **1.2 %**, 0.18 deg | 1.2 %, 0.18 deg |
+| 300 ohm m (2.4 kohm) | 5 | 560 kHz | 0.051 %, 0.0014 deg | 0.29 %, 0.017 deg | **3.7 %**, 0.51 deg | 3.7 %, 0.51 deg |
+| 300 ohm m | 25 | 586 kHz | 0.051 %, 0.0002 deg | 0.28 %, 0.012 deg | **2.7 %**, 0.54 deg | 2.7 %, 0.54 deg |
+| 300 ohm m | 40 | 666 kHz | 0.051 %, 0.0006 deg | 0.27 %, 0.032 deg | **1.7 %**, 0.78 deg | 1.7 %, 0.78 deg |
+| 500 ohm m (4 kohm) | 5 | 343 kHz | 0.10 %, 0.0012 deg | 0.76 %, 0.0054 deg | **10 %**, 0.64 deg | 10 %, 0.64 deg |
 | 500 ohm m | 25 | 378 kHz | 0.10 %, 0.0062 deg | 0.67 %, 0.13 deg | **3.5 %**, **2.4 deg** | 3.5 %, 2.4 deg |
-| 500 ohm m | 40 | 502 kHz | 0.099 %, 0.0097 deg | 0.56 %, 0.19 deg | **1.2 %**, **1.9 deg** | 1.2 %, 1.9 deg |
+| 500 ohm m | 40 | 501 kHz | 0.099 %, 0.0097 deg | 0.56 %, 0.19 deg | **1.2 %**, **1.9 deg** | 1.2 %, 1.9 deg |
 | 1 kohm m (8 kohm) | 5 | 176 kHz | 0.34 %, 0.025 deg | **2.8 %**, 0.43 deg | **20 %**, **11 deg** | 20 %, 11 deg |
-| 1 kohm m | 25 | 207 kHz | 0.31 %, 0.062 deg | **1.5 %**, 0.95 deg | 0.060 %, **4.9 deg** | 1.8 %, 4.9 deg |
+| 1 kohm m | 25 | 207 kHz | 0.31 %, 0.062 deg | **1.5 %**, 0.95 deg | 0.065 %, **4.9 deg** | 1.8 %, 4.9 deg |
 | 1 kohm m | 40 | 316 kHz | 0.28 %, 0.084 deg | 0.69 %, 0.93 deg | **1.0 %**, **2.5 deg** | 1.0 %, 2.5 deg |
 | 1.3 kohm m (11 kohm) | 5 | 129 kHz | 0.61 %, 0.070 deg | **4.7 %**, **1.3 deg** | **16 %**, **19 deg** | 17 %, 19 deg |
 | 1.3 kohm m | 25 | 157 kHz | 0.52 %, 0.16 deg | **1.5 %**, **1.8 deg** | **2.4 %**, **5.2 deg** | 2.4 %, 5.2 deg |
@@ -475,7 +481,7 @@ of the plan; the exact values differ by up to 0.014 degrees and 0.018 % of
 the reading). At 10 kHz every soil here stays within 0.028 % and 0.0022 degrees. The usable
 frequency falls as one over the resistivity: about
 `160 kHz x (1 kohm m / resistivity)` for the worst permittivity (`upto`:
-824 kHz at 200 ohm m, 176 kHz at 1 kohm m, 129 kHz at 1.3 kohm m; the earlier
+821 kHz at 200 ohm m, 176 kHz at 1 kohm m, 129 kHz at 1.3 kohm m; the earlier
 grid readings were 794, 158 and 126 kHz). 150 ohm m still meets 1 % and
 1 degree over the band; the rating stops at 100 ohm m because a minimum-CMRR
 sense buffer adds its common-mode error on top
@@ -483,10 +489,10 @@ sense buffer adds its common-mode error on top
 
 | Soil | Soil current at 1 kHz / 1 MHz | Pump node / output peak | Gain-10 ADC peak |
 | --- | --- | --- | --- |
-| 150 ohm m | 14.8 / 14.2 to 15.9 uA | 0.28 / 0.42 V | 0.19 V |
+| 150 ohm m | 14.8 / 14.2 to 15.8 uA | 0.28 / 0.42 V | 0.19 V |
 | 200 ohm m | 14.8 / 13.2 to 15.5 uA | 0.36 / 0.50 V | 0.25 V |
-| 300 ohm m | 14.8 / 11.4 to 14.0 uA | 0.53 / 0.68 V | 0.36 V |
-| 500 ohm m | 14.8 / 9.1 to 10.4 uA | 0.89 / 1.04 V | 0.60 V |
+| 300 ohm m | 14.8 / 11.3 to 14.0 uA | 0.53 / 0.68 V | 0.36 V |
+| 500 ohm m | 14.8 / 9.0 to 10.4 uA | 0.89 / 1.04 V | 0.60 V |
 | 1 kohm m | 14.8 / 5.6 to 7.6 uA | 1.77 / 1.92 V | 1.19 V |
 | 1.3 kohm m | 14.7 / 4.1 to 7.3 uA | 2.43 / 2.58 V | 1.63 V |
 
@@ -500,30 +506,30 @@ firmware must use gain 1.
 
 | Reference | Contacts | Band: magnitude | Band: phase | Pump node peak |
 | --- | --- | --- | --- | --- |
-| 39 ohm | 0 | 0.012 % | 0.006 deg | 24 mV |
-| 39 ohm | 270 ohm | 0.022 % | 0.027 deg | 25 mV |
+| 39 ohm | 0 | 0.001 % | 0.006 deg | 24 mV |
+| 39 ohm | 270 ohm | 0.022 % | 0.026 deg | 25 mV |
 | 1 kohm | 0 | 0 (calibration point) | 0 | 28 mV |
-| 1 kohm | 6.8 kohm | 0.51 % | 0.23 deg | 229 mV |
-| 10 kohm | 0 | 0.0004 % | 0.0002 deg | 157 mV |
+| 1 kohm | 6.8 kohm | 0.52 % | 0.22 deg | 229 mV |
+| 10 kohm | 0 | 0.0001 % | 0.0002 deg | 157 mV |
 
 The soil-like contacts give the error of the soil they stand for: 270 ohm on
-39 ohm is 5 ohm m (SoilSweep: 0.022 %, 0.027 deg); 6.8 kohm on 1 kohm is about
-126 ohm m with almost no permittivity (0.51 %, between SoilSweep's 100 ohm m
+39 ohm is 5 ohm m (SoilSweep: 0.022 %, 0.026 deg); 6.8 kohm on 1 kohm is about
+126 ohm m with almost no permittivity (0.52 %, between SoilSweep's 100 ohm m
 and SoilSweep's 150 ohm m). The 10 kohm position drives the gain-10 channel
-to 1.56 V, past its linear range; the firmware reads it on gain 1 (155 mV).
+to 1.54 V, past its linear range; the firmware reads it on gain 1 (148 mV).
 
 ### CalibrationCard outside the rated range
 
 | Reference | Contacts | Usable to | 10 kHz | 100 kHz | 1 MHz |
 | --- | --- | --- | --- | --- | --- |
-| 39 ohm | 47 kohm | none (3.8 % at 1 kHz) | **3.8 %**, 0.021 deg | **4.1 %**, 0.21 deg | **33.7 %**, **3.7 deg** |
+| 39 ohm | 47 kohm | none (3.8 % at 1 kHz) | **3.8 %**, 0.021 deg | **4.1 %**, 0.21 deg | **33.8 %**, **3.8 deg** |
 | 1 kohm | 47 kohm | 178 kHz | 0.15 %, 0.0001 deg | 0.38 %, 0.0019 deg | **27.5 %**, **5.2 deg** |
-| 10 kohm | 47 kohm | 200 kHz | 0.017 %, 0.0007 deg | 0.24 %, 0.010 deg | **27.2 %**, **5.3 deg** |
-| 10 kohm | 68 kohm | 141 kHz | 0.026 %, 0.0015 deg | 0.49 %, 0.034 deg | **37.7 %**, **16.6 deg** |
+| 10 kohm | 47 kohm | 200 kHz | 0.017 %, 0.0007 deg | 0.24 %, 0.010 deg | **27.3 %**, **5.3 deg** |
+| 10 kohm | 68 kohm | 141 kHz | 0.026 %, 0.0015 deg | 0.49 %, 0.034 deg | **37.7 %**, **16.7 deg** |
 
 "Usable to" is read from the plotted error here. The bench has
-`usable_to_phase` (`upto` of the phase alone: 366 kHz for 68 kohm, 630 kHz,
-620 kHz and 799 kHz for the 47 kohm positions, full on every rated position),
+`usable_to_phase` (`upto` of the phase alone: 366 kHz for 68 kohm, 628 kHz,
+618 kHz and 797 kHz for the 47 kohm positions, full on every rated position),
 but no `usable_to_magnitude`: 39 ohm with 47 kohm contacts is 3.8 % off at
 1 kHz already, and `upto` of a comparison that fails at the first sample was a
 run-time error that stopped the whole bench. It is now "never" (phase F2 of
@@ -550,23 +556,26 @@ Contacts offset from the soil's own value, worst of eps_r 5, 25 and 40:
 
 | Contacts | 5 ohm m: magnitude, phase | 100 ohm m: magnitude, phase |
 | --- | --- | --- |
-| equal | 0.022 %, 0.027 deg | 0.39 %, 0.16 deg |
-| HC 10 times | 0.022 %, 0.027 deg | 0.39 %, 0.16 deg |
-| HP +100 ohm | 0.65 %, 0.41 deg | 0.59 %, 0.43 deg |
-| HP -100 ohm | 0.62 %, 0.47 deg | 0.33 %, 0.67 deg |
-| LP +100 ohm | 0.58 %, 0.41 deg | 0.35 %, 0.61 deg |
-| LP -100 ohm | 0.61 %, 0.35 deg | 0.55 %, 0.37 deg |
-| LC +200 ohm | 0.055 %, 0.16 deg | 0.38 %, 0.29 deg |
-| LC -200 ohm | 0.078 %, 0.11 deg | 0.41 %, 0.056 deg |
-| HP +100, LC +200 ohm | 0.79 %, 0.58 deg | 0.55 %, 0.32 deg |
-| HP -100, LC +200 ohm | 0.89 %, 0.91 deg | 0.32 %, 0.82 deg |
-| LP +100, LC +200 ohm | 0.84 %, 0.85 deg | 0.34 %, 0.76 deg |
+| equal | 0.022 %, 0.026 deg | 0.39 %, 0.15 deg |
+| HC 10 times | 0.022 %, 0.026 deg | 0.39 %, 0.15 deg |
+| HP +100 ohm | 0.52 %, 0.50 deg | 0.59 %, 0.44 deg |
+| HP -100 ohm | 0.47 %, 0.56 deg | 0.34 %, 0.67 deg |
+| LP +100 ohm | 0.43 %, 0.50 deg | 0.36 %, 0.61 deg |
+| LP -100 ohm | 0.48 %, 0.44 deg | 0.56 %, 0.37 deg |
+| LC +200 ohm | 0.044 %, 0.16 deg | 0.39 %, 0.28 deg |
+| LC -200 ohm | 0.089 %, 0.11 deg | 0.42 %, 0.058 deg |
+| HP +100, LC +200 ohm | 0.67 %, 0.67 deg | 0.55 %, 0.33 deg |
+| HP -100, LC +200 ohm | 0.73 %, 0.997 deg | 0.34 %, 0.82 deg |
+| LP +100, LC +200 ohm | 0.69 %, 0.94 deg | 0.36 %, 0.76 deg |
 
 A worse HC contact costs nothing. The rated imbalances are small: 100 ohm is
 36 % of a 5 ohm m contact (279 ohm) but only 1.8 % of a 100 ohm m one
 (5.58 kohm). The worst cases are the combinations whose phase errors add, at
-5 ohm m, where 200 ohm on LC raises the common-mode ratio from 8 to 13.
-Common-mode ratio over the bench: 3.7 to 13.0; pump node at most 0.94 V.
+5 ohm m, where 200 ohm on LC raises the common-mode ratio from 8 to 13.5.
+Common-mode ratio over the rated steps: 3.5 to 13.5; pump node at most 0.94 V.
+The worst, HP 100 ohm low with LC 200 ohm high at 5 ohm m, is 0.997 degrees
+of the 1 degree limit since the transimpedance and gain-1 anti-alias changes
+of 23 November 2026 (SPEC.md, "Vendor models"); it was 0.91 degrees.
 
 ### ContactImbalance outside the rated range
 
@@ -585,7 +594,7 @@ limits, `usable_to_phase` agrees with this table (for example 5 ohm m, HP
 | 110 % | full | full | full | 355 kHz | 398 kHz | full |
 | 120 % | full | full | full | 178 kHz | 200 kHz | full |
 | 150 % | full | full | full | 71 kHz | 79 kHz | 562 kHz |
-| 200 % | 708 kHz | 794 kHz | full | 35 kHz | 40 kHz | 282 kHz |
+| 200 % | 708 kHz | 708 kHz | full | 35 kHz | 40 kHz | 282 kHz |
 | 500 % | 178 kHz | 200 kHz | full | 9 kHz | 10 kHz | 71 kHz |
 | 1000 % | 79 kHz | 89 kHz | 562 kHz | none | none | 32 kHz |
 
@@ -594,24 +603,24 @@ SoilSweep):
 
 | Soil | Worse contact | 10 kHz | 100 kHz | 1 MHz |
 | --- | --- | --- | --- | --- |
-| 5 ohm m | HP 120 % | 0.021 %, 0.0024 deg | 0.024 %, 0.024 deg | 0.36 %, 0.22 deg |
-| 5 ohm m | HP 200 % | 0.016 %, 0.013 deg | 0.032 %, 0.13 deg | **1.8 %**, **1.2 deg** |
-| 5 ohm m | HP 1000 % | 0.037 %, 0.12 deg | 0.13 %, **1.2 deg** | **17.2 %**, **9.8 deg** |
-| 5 ohm m | LP 120 % | 0.023 %, 0.0025 deg | 0.020 %, 0.025 deg | 0.32 %, 0.24 deg |
-| 5 ohm m | LP 200 % | 0.028 %, 0.012 deg | 0.012 %, 0.12 deg | **1.6 %**, **1.1 deg** |
-| 5 ohm m | LP 1000 % | 0.074 %, 0.10 deg | 0.047 %, **1.0 deg** | **12.7 %**, **11.5 deg** |
-| 5 ohm m | LC 120 % | 0.027 %, 0.0006 deg | 0.026 %, 0.0061 deg | 0.0073 %, 0.064 deg |
-| 5 ohm m | LC 200 % | 0.045 %, 0.0021 deg | 0.044 %, 0.021 deg | 0.080 %, 0.21 deg |
-| 5 ohm m | LC 1000 % | 0.23 %, 0.017 deg | 0.22 %, 0.17 deg | 0.77 %, **1.7 deg** |
-| 100 ohm m | HP 120 % | 0.0048 %, 0.052 deg | 0.018 %, 0.52 deg | **2.3 %**, **5.5 deg** |
-| 100 ohm m | HP 200 % | 0.11 %, 0.26 deg | 0.051 %, **2.6 deg** | **16.5 %**, **25.7 deg** |
-| 100 ohm m | HP 1000 % | **1.1 %**, **2.4 deg** | **5.6 %**, **22.6 deg** | **304 %**, **99.7 deg** |
-| 100 ohm m | LP 120 % | 0.046 %, 0.046 deg | 0.039 %, 0.46 deg | 0.32 %, **5.2 deg** |
-| 100 ohm m | LP 200 % | 0.14 %, 0.23 deg | 0.18 %, **2.3 deg** | **6.8 %**, **24.8 deg** |
-| 100 ohm m | LP 1000 % | **1.2 %**, **2.0 deg** | **8.3 %**, **19.1 deg** | **330 %**, **53.9 deg** |
-| 100 ohm m | LC 120 % | 0.030 %, 0.0067 deg | 0.031 %, 0.067 deg | 0.24 %, 0.83 deg |
-| 100 ohm m | LC 200 % | 0.061 %, 0.033 deg | 0.057 %, 0.33 deg | 0.18 %, **3.7 deg** |
-| 100 ohm m | LC 1000 % | 0.37 %, 0.29 deg | 0.43 %, **2.9 deg** | **9.4 %**, **31.4 deg** |
+| 5 ohm m | HP 120 % | 0.021 %, 0.0024 deg | 0.024 %, 0.024 deg | 0.30 %, 0.27 deg |
+| 5 ohm m | HP 200 % | 0.016 %, 0.013 deg | 0.032 %, 0.13 deg | **1.4 %**, **1.4 deg** |
+| 5 ohm m | HP 1000 % | 0.037 %, 0.12 deg | 0.13 %, **1.2 deg** | **14.4 %**, **12.0 deg** |
+| 5 ohm m | LP 120 % | 0.023 %, 0.0025 deg | 0.020 %, 0.025 deg | 0.23 %, 0.29 deg |
+| 5 ohm m | LP 200 % | 0.028 %, 0.012 deg | 0.013 %, 0.12 deg | **1.2 %**, **1.4 deg** |
+| 5 ohm m | LP 1000 % | 0.074 %, 0.10 deg | 0.046 %, **1.0 deg** | **8.4 %**, **13.4 deg** |
+| 5 ohm m | LC 120 % | 0.027 %, 0.0006 deg | 0.026 %, 0.0061 deg | 0.0040 %, 0.064 deg |
+| 5 ohm m | LC 200 % | 0.045 %, 0.0021 deg | 0.044 %, 0.021 deg | 0.068 %, 0.21 deg |
+| 5 ohm m | LC 1000 % | 0.23 %, 0.017 deg | 0.22 %, 0.17 deg | 0.76 %, **1.7 deg** |
+| 100 ohm m | HP 120 % | 0.0048 %, 0.052 deg | 0.018 %, 0.52 deg | **2.2 %**, **5.6 deg** |
+| 100 ohm m | HP 200 % | 0.11 %, 0.26 deg | 0.051 %, **2.6 deg** | **16.2 %**, **26.0 deg** |
+| 100 ohm m | HP 1000 % | **1.1 %**, **2.4 deg** | **5.6 %**, **22.6 deg** | **305 %**, **100.4 deg** |
+| 100 ohm m | LP 120 % | 0.046 %, 0.046 deg | 0.039 %, 0.46 deg | 0.21 %, **5.2 deg** |
+| 100 ohm m | LP 200 % | 0.14 %, 0.23 deg | 0.18 %, **2.3 deg** | **7.4 %**, **24.9 deg** |
+| 100 ohm m | LP 1000 % | **1.2 %**, **2.0 deg** | **8.3 %**, **19.1 deg** | **333 %**, **53.4 deg** |
+| 100 ohm m | LC 120 % | 0.030 %, 0.0067 deg | 0.031 %, 0.067 deg | 0.25 %, 0.83 deg |
+| 100 ohm m | LC 200 % | 0.061 %, 0.033 deg | 0.057 %, 0.33 deg | 0.17 %, **3.7 deg** |
+| 100 ohm m | LC 1000 % | 0.37 %, 0.29 deg | 0.43 %, **2.9 deg** | **9.5 %**, **31.4 deg** |
 
 **The rule.** The phase error grows in proportion to frequency and to the
 contact difference `dR`. Coefficients in degrees per 100 ohm of difference per
@@ -624,10 +633,16 @@ first table:
 | --- | --- | --- | --- | --- | --- |
 | HP (phase negative) | 5 ohm m | 0.45 to 0.46 | 0.45 to 0.46 | 0.39 to 0.44 | 198 to 200 kHz kohm |
 | HP | 100 ohm m | 0.45 to 0.47 | 0.45 to 0.46 | 0.50 to 0.51 | 198 to 199 kHz kohm |
-| LP (phase positive) | 5 ohm m | 0.41 | 0.41 | 0.38 to 0.42 | 222 to 224 kHz kohm |
+| LP (phase positive) | 5 ohm m | 0.41 | 0.41 | 0.38 to 0.42 | 198 to 224 kHz kohm |
 | LP | 100 ohm m | 0.40 to 0.41 | 0.40 to 0.41 | 0.45 | 198 to 223 kHz kohm |
 | LC (phase positive) | 5 ohm m | 0.065 | 0.065 | 0.067 | 1.41 MHz kohm |
 | LC | 100 ohm m | 0.058 | 0.058 | 0.065 | 1.57 to 1.59 MHz kohm |
+
+The coefficients were read before the changes of 23 November 2026 (SPEC.md,
+"Vendor models") and not regenerated. The 10 kHz and 100 kHz errors they come
+from did not move at the precision shown; the 1 MHz ones did (the table
+above), so the 1 MHz column, the 5 ohm m rows most, is out of date. The last
+column's 198 kHz kohm for LP at 5 ohm m is the new 708 kHz reading at 200 %.
 
 The hand estimate `7 x 2 pi f x dR x 1.6 pF`, 0.40 degrees per 100 ohm per
 MHz, holds for a high LP contact (0.40 to 0.41 up to 100 kHz, 0.38 to 0.45 at
@@ -643,12 +658,13 @@ derivation that reproduces all three (first order, not simulated):
 also scales the sense-contact term through `k`, as the rated combinations show.
 
 Where the rule does not hold: above about 10 degrees the error grows more
-slowly than the rule says (HP 10 times worse at 100 ohm m: 99.7 degrees at
+slowly than the rule says (HP 10 times worse at 100 ohm m: 100.4 degrees at
 1 MHz, the rule gives about 250); below 10 kHz a sense contact tens of kohm too
 high adds a flat magnitude error (1.1 % at 10 kHz for 50 kohm; by hand, the
 33 Mohm bias resistor loading the contact at 8 times the sense voltage); and
-at 1 MHz and 5 ohm m a high HP contact also costs magnitude, about 0.6 % per
-100 ohm (1.79 % for 279 ohm), which reaches 1 % before the phase does. Calibration
+at 1 MHz and 5 ohm m a high HP contact also costs magnitude, about 0.5 % per
+100 ohm (1.43 % for 279 ohm), which reaches 1 % at about the contact
+difference where the phase reaches 1 degree (1.44 degrees for 279 ohm). Calibration
 cannot remove any of this: the contacts change at every insertion. Remedies,
 not built: capacitance neutralization of the sense buffers, a
 lower-capacitance buffer (LTC6268, 0.45 pF, needs its own +/-2.5 V rails), or
@@ -661,42 +677,42 @@ contacts (it can measure each contact through the probe header).
 
 | Residual on each node | Mask coupling at LP | eps_r 5 | eps_r 25 | eps_r 40 |
 | --- | --- | --- | --- | --- |
-| 0.3 pF | 0 | 0.35 %, 0.16 deg | 0.38 %, 0.11 deg | 0.39 %, 0.075 deg |
-| 0.3 pF | 0.2 pF | 0.40 %, 0.57 deg | 0.51 %, 0.51 deg | 0.57 %, 0.45 deg |
-| 1 pF | 0 | 0.74 %, 0.18 deg | 0.75 %, 0.083 deg | 0.72 %, 0.017 deg |
-| 1 pF | 0.2 pF | 0.81 %, 0.58 deg | 0.89 %, 0.47 deg | 0.92 %, 0.39 deg |
+| 0.3 pF | 0 | 0.36 %, 0.16 deg | 0.39 %, 0.11 deg | 0.40 %, 0.071 deg |
+| 0.3 pF | 0.2 pF | 0.42 %, 0.57 deg | 0.53 %, 0.50 deg | 0.58 %, 0.45 deg |
+| 1 pF | 0 | 0.75 %, 0.17 deg | 0.76 %, 0.074 deg | 0.73 %, 0.012 deg |
+| 1 pF | 0.2 pF | 0.83 %, 0.58 deg | 0.91 %, 0.46 deg | 0.94 %, 0.38 deg |
 
 The two limits are taken together: with both at once the error stays inside
-1 % at every permittivity (0.92 % worst). Pump node at most 186 mV.
+1 % at every permittivity (0.94 % worst). Pump node at most 186 mV.
 
 ### StrayCapacitance beyond the rating (moist loam, eps_r 25)
 
 | Guard | Residual on each node | Mask coupling at LP | Usable to | 100 kHz | 1 MHz | Band |
 | --- | --- | --- | --- | --- | --- | --- |
-| driven | 0.3 pF | 0 | full | 0.025 %, 0.0021 deg | 0.38 %, 0.11 deg | 0.38 %, 0.11 deg |
-| driven | 0.5 pF | 0 | full | 0.026 %, 0.0021 deg | 0.48 %, 0.11 deg | 0.48 %, 0.11 deg |
-| driven | 1 pF | 0 | full | 0.029 %, 0.0020 deg | 0.75 %, 0.083 deg | 0.75 %, 0.083 deg |
-| driven | 1.5 pF | 0 | 967 kHz | 0.032 %, 0.0019 deg | **1.07 %**, 0.033 deg | 1.07 %, 0.033 deg |
-| driven | 2 pF | 0 | 835 kHz | 0.036 %, 0.0018 deg | **1.4 %**, 0.043 deg | 1.4 %, 0.043 deg |
-| driven | 3 pF | 0 | 654 kHz | 0.045 %, 0.0014 deg | **2.3 %**, 0.28 deg | 2.3 %, 0.28 deg |
-| driven | 4 pF | 0 | 536 kHz | 0.057 %, 0.0009 deg | **3.2 %**, 0.64 deg | 3.2 %, 0.64 deg |
-| driven | 5 pF | 0 | 453 kHz | 0.071 %, 0.0002 deg | **4.2 %**, **1.1 deg** | 4.2 %, 1.1 deg |
-| driven | 20 pF | 0 | 134 kHz | 0.57 %, 0.053 deg | **11.0 %**, **16.6 deg** | 11.8 %, 16.6 deg |
-| grounded | 20.3 pF | 0 | 133 kHz | 0.58 %, 0.057 deg | **9.4 %**, **16.8 deg** | 10.9 %, 16.8 deg |
-| driven | 0.3 pF | 0.1 pF | full | 0.026 %, 0.022 deg | 0.45 %, 0.31 deg | 0.45 %, 0.31 deg |
-| driven | 0.3 pF | 0.2 pF | full | 0.027 %, 0.042 deg | 0.51 %, 0.51 deg | 0.51 %, 0.51 deg |
-| driven | 0.3 pF | 0.3 pF | full | 0.027 %, 0.062 deg | 0.58 %, 0.70 deg | 0.58 %, 0.70 deg |
-| driven | 0.3 pF | 0.5 pF | 919 kHz | 0.029 %, 0.10 deg | 0.72 %, **1.1 deg** | 0.72 %, 1.1 deg |
-| driven | 0.3 pF | 1 pF | 490 kHz | 0.032 %, 0.20 deg | **1.08 %**, **2.1 deg** | 1.08 %, 2.1 deg |
-| driven | 0.3 pF | 2 pF | 248 kHz | 0.040 %, 0.40 deg | **1.9 %**, **4.0 deg** | 1.9 %, 4.0 deg |
-| driven | 0.3 pF | 10 pF | 50 kHz | 0.15 %, **2.0 deg** | **12.3 %**, **18.1 deg** | 12.3 %, 18.1 deg |
-| driven | 0.3 pF | 100 pF | 5.0 kHz | **6.6 %**, **19.2 deg** | **284 %**, **64.8 deg** | 284 %, 64.8 deg |
-| driven | 5 pF | 10 pF | 50 kHz | 0.25 %, **2.0 deg** | **19.2 %**, **14.6 deg** | 19.2 %, 14.6 deg |
-| driven | 5 pF | 100 pF | 5.0 kHz | **7.2 %**, **19.1 deg** | **284 %**, **55.8 deg** | 284 %, 56.2 deg |
-| driven | 20 pF | 10 pF | 50 kHz | 0.93 %, **1.9 deg** | **24.7 %**, **5.2 deg** | 24.7 %, 5.2 deg |
-| driven | 20 pF | 100 pF | 5.0 kHz | **9.3 %**, **18.5 deg** | **232 %**, **31.0 deg** | 232 %, 39.1 deg |
-| grounded | 20.3 pF | 10 pF | 50 kHz | 0.95 %, **1.9 deg** | **22.7 %**, **5.4 deg** | 22.7 %, 5.4 deg |
-| grounded | 20.3 pF | 100 pF | 5.0 kHz | **9.3 %**, **18.5 deg** | **226 %**, **31.2 deg** | 226 %, 38.9 deg |
+| driven | 0.3 pF | 0 | full | 0.025 %, 0.0021 deg | 0.39 %, 0.11 deg | 0.39 %, 0.11 deg |
+| driven | 0.5 pF | 0 | full | 0.026 %, 0.0021 deg | 0.49 %, 0.10 deg | 0.49 %, 0.10 deg |
+| driven | 1 pF | 0 | full | 0.029 %, 0.0020 deg | 0.76 %, 0.074 deg | 0.76 %, 0.074 deg |
+| driven | 1.5 pF | 0 | 960 kHz | 0.032 %, 0.0019 deg | **1.08 %**, 0.020 deg | 1.08 %, 0.020 deg |
+| driven | 2 pF | 0 | 830 kHz | 0.036 %, 0.0018 deg | **1.4 %**, 0.062 deg | 1.4 %, 0.062 deg |
+| driven | 3 pF | 0 | 651 kHz | 0.045 %, 0.0014 deg | **2.3 %**, 0.31 deg | 2.3 %, 0.31 deg |
+| driven | 4 pF | 0 | 534 kHz | 0.057 %, 0.0009 deg | **3.2 %**, 0.69 deg | 3.2 %, 0.69 deg |
+| driven | 5 pF | 0 | 452 kHz | 0.071 %, 0.0002 deg | **4.2 %**, **1.2 deg** | 4.2 %, 1.2 deg |
+| driven | 20 pF | 0 | 134 kHz | 0.57 %, 0.053 deg | **10.5 %**, **17.0 deg** | 11.7 %, 17.0 deg |
+| grounded | 20.3 pF | 0 | 133 kHz | 0.58 %, 0.057 deg | **8.9 %**, **17.1 deg** | 10.8 %, 17.1 deg |
+| driven | 0.3 pF | 0.1 pF | full | 0.026 %, 0.022 deg | 0.46 %, 0.30 deg | 0.46 %, 0.30 deg |
+| driven | 0.3 pF | 0.2 pF | full | 0.027 %, 0.042 deg | 0.53 %, 0.50 deg | 0.53 %, 0.50 deg |
+| driven | 0.3 pF | 0.3 pF | full | 0.027 %, 0.062 deg | 0.60 %, 0.70 deg | 0.60 %, 0.70 deg |
+| driven | 0.3 pF | 0.5 pF | 918 kHz | 0.029 %, 0.10 deg | 0.75 %, **1.1 deg** | 0.75 %, 1.1 deg |
+| driven | 0.3 pF | 1 pF | 488 kHz | 0.032 %, 0.20 deg | **1.13 %**, **2.1 deg** | 1.13 %, 2.1 deg |
+| driven | 0.3 pF | 2 pF | 247 kHz | 0.040 %, 0.40 deg | **2.0 %**, **4.0 deg** | 2.0 %, 4.0 deg |
+| driven | 0.3 pF | 10 pF | 50 kHz | 0.15 %, **2.0 deg** | **12.7 %**, **18.1 deg** | 12.7 %, 18.1 deg |
+| driven | 0.3 pF | 100 pF | 5.0 kHz | **6.6 %**, **19.2 deg** | **288 %**, **64.3 deg** | 288 %, 64.3 deg |
+| driven | 5 pF | 10 pF | 50 kHz | 0.25 %, **2.0 deg** | **19.6 %**, **14.5 deg** | 19.6 %, 14.5 deg |
+| driven | 5 pF | 100 pF | 5.0 kHz | **7.2 %**, **19.1 deg** | **287 %**, **55.3 deg** | 287 %, 55.9 deg |
+| driven | 20 pF | 10 pF | 50 kHz | 0.93 %, **1.9 deg** | **24.4 %**, **5.7 deg** | 24.4 %, 5.7 deg |
+| driven | 20 pF | 100 pF | 5.0 kHz | **9.3 %**, **18.5 deg** | **232 %**, **30.3 deg** | 232 %, 39.0 deg |
+| grounded | 20.3 pF | 10 pF | 50 kHz | 0.95 %, **1.9 deg** | **22.4 %**, **5.8 deg** | 22.4 %, 5.8 deg |
+| grounded | 20.3 pF | 100 pF | 5.0 kHz | **9.3 %**, **18.5 deg** | **226 %**, **30.5 deg** | 226 %, 38.8 deg |
 
 At 10 kHz every step stays within 0.12 %; the phase there is 0.2 degrees per
 10 pF of mask coupling (2.0 degrees for 100 pF). The guards are worth what
@@ -737,12 +753,16 @@ settles the question: stable (see there).
 
 ### SenseCommonMode: pass (rated: at least 63 dB at 1 MHz)
 
+The rejection is the common-mode voltage over what arrives at `V_D`, the
+receiver's output, so the ADC channels' own responses (their gain stages and
+anti-alias poles, which the reading shares) do not enter it.
+
 | Contacts | LP buffer CMRR | Rejection at 1 MHz (also the band minimum) |
 | --- | --- | --- |
-| 0 | 90 dB (typical, as HP) | 84.6 dB |
-| 0 | 77 dB (data-sheet minimum) | 69.9 dB |
+| 0 | 90 dB (typical, as HP) | 84.5 dB |
+| 0 | 77 dB (data-sheet minimum) | 69.8 dB |
 | 5.58 kohm (100 ohm m) | 90 dB | 84.4 dB |
-| 5.58 kohm | 77 dB | 66.8 dB |
+| 5.58 kohm | 77 dB | 66.7 dB |
 
 The limit was 70 dB (SPEC.md), which a buffer at its data-sheet minimum misses
 even without contacts. It is now 63 dB, from the error budget: the common mode
@@ -754,32 +774,32 @@ at the minimum CMRR loses 15 to 18 dB: its common-mode error falls to about
 output, pushes that error back into the node through the 20 pF to the guard,
 multiplied by `omega C_g R_contact`. The model's error has one sign; real
 units can have either, so the worst case is about 3 dB worse still (hand
-estimate), which 66.8 dB still covers. Driving each guard from a separate,
+estimate), which 66.7 dB still covers. Driving each guard from a separate,
 filtered copy would not help: the guard must follow the node.
 
 ### SenseCommonMode above the rated range
 
 | Contacts | LP buffer CMRR | 10 kHz | 100 kHz | 1 MHz (also the band minimum) |
 | --- | --- | --- | --- | --- |
-| 11.2 kohm (200 ohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.3 dB |
-| 11.2 kohm | 77 dB | 82.2 dB | 81.2 dB | **62.8 dB** |
-| 27.9 kohm (500 ohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.0 dB |
-| 27.9 kohm | 77 dB | 82.2 dB | 80.3 dB | **55.4 dB** |
-| 55.8 kohm (1 kohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.3 dB |
-| 55.8 kohm | 77 dB | 82.1 dB | 78.2 dB | **50.1 dB** |
-| 72.5 kohm (1.3 kohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.8 dB |
-| 72.5 kohm | 77 dB | 82.1 dB | 76.9 dB | **49.0 dB** |
+| 11.2 kohm (200 ohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.2 dB |
+| 11.2 kohm | 77 dB | 82.2 dB | 81.2 dB | **62.7 dB** |
+| 27.9 kohm (500 ohm m) | 90 dB | 90.0 dB | 89.9 dB | 83.9 dB |
+| 27.9 kohm | 77 dB | 82.2 dB | 80.3 dB | **55.3 dB** |
+| 55.8 kohm (1 kohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.2 dB |
+| 55.8 kohm | 77 dB | 82.1 dB | 78.2 dB | **50.0 dB** |
+| 72.5 kohm (1.3 kohm m) | 90 dB | 90.0 dB | 89.9 dB | 84.7 dB |
+| 72.5 kohm | 77 dB | 82.1 dB | 76.9 dB | **48.9 dB** |
 
 The loss grows with the contact resistance and with frequency. Up to 100 kHz a
 minimum-CMRR buffer keeps at least 76.9 dB at every contact here, so in the
 degraded range the common mode costs at most 0.1 % below 100 kHz (7 times
 10^(-76.9/20), by hand); at 1 MHz it falls below 63 dB between 100 ohm m
-(66.8 dB) and 200 ohm m (62.8 dB), which is why the rating stops at 100 ohm m.
+(66.7 dB) and 200 ohm m (62.7 dB), which is why the rating stops at 100 ohm m.
 
 ### LoopPeaking: pass
 
 Every loop at most 6.3 % (0.53 dB) above its in-band gain from 1 kHz to 1 GHz:
-drive buffer 1.8 %, pump current 6.2 %, sense buffer 6.3 %, guard 0 %,
+drive buffer 1.8 %, pump current 5.3 %, sense buffer 6.3 %, guard 0 %,
 receiver 3.2 %, gain-1 driver 1.8 %, gain-10 stages 0 %, transimpedance 0 %.
 
 ### LoopStability: pass (every loop at least 45 degrees; no pole in the right half-plane)
@@ -794,10 +814,10 @@ attached as in `LoopPeaking`:
 | Pump feedback buffer and HC guard (`U_FBB.OUT`) | 72.4 deg | 150 MHz | 39.2 dB |
 | Drive buffer (`U_DRV.OUT`) | 61.6 deg | 159 MHz | |
 | HP sense buffer (`U_BHP.OUT`) | 58.9 deg | 299 MHz | |
-| Receiver (`U_DIF.OUT`) | 61.1 deg | 228 MHz | |
+| Receiver (`U_DIF.OUT`) | 61.2 deg | 227 MHz | |
 | Gain-1 driver (`U_B1.OUT`) | 49.1 deg | 117 MHz | |
-| Gain-10 stage, gain-100 stage | 71.6 deg | 16.3 MHz | |
-| Transimpedance (`U_TIA.OUT`) | 67.9 deg | 11.2 MHz | |
+| Gain-10 stage, gain-100 stage | 91.6 deg, 91.7 deg | 64.4 MHz | |
+| Transimpedance (`U_TIA.OUT`) | 80.2 deg | 51.0 MHz | |
 
 The poles (`analysis pz`): 55, none in the right half-plane. The least
 damped pairs: 16.4 Hz with damping 0.17 in the pump and its guard (`DRIVE`,
@@ -862,21 +882,26 @@ uses the 1/f corners now in the part files ([Data-sheet facts](#data-sheet-facts
 
 | Channel | Soil | Signal at the ADC (peak) | SNR at 1 kHz | 10 kHz | 100 kHz | 1 MHz | Referred to the sense voltage, 1 kHz / 100 kHz |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| gain 1 | 5 ohm m (0.59 mV) | 0.59 mV | 55.2 dB | 58.4 dB | 58.9 dB | 58.9 dB | 22.4 / 15.1 nV/rtHz |
-| gain 1 | 100 ohm m | 11.9 mV | 79.9 dB | 82.0 dB | 82.2 dB | 82.1 dB | 26.5 / 20.6 nV/rtHz |
+| gain 1 | 5 ohm m (0.59 mV) | 0.59 mV | 55.2 dB | 58.4 dB | 58.8 dB | 58.9 dB | 22.4 / 15.2 nV/rtHz |
+| gain 1 | 100 ohm m | 11.9 mV | 79.9 dB | 81.9 dB | 82.2 dB | 82.1 dB | 26.5 / 20.6 nV/rtHz |
 | gain 1 | 1.3 kohm m | 162 mV | 94.3 dB | 94.9 dB | 94.4 dB | 85.3 dB | 69.7 / 63.1 nV/rtHz |
 | gain 10 | 5 ohm m | 6.0 mV | 55.1 dB | 58.2 dB | 58.6 dB | 58.6 dB | 22.8 / 15.6 nV/rtHz |
 | gain 10 | 100 ohm m | 120 mV | 79.8 dB | 81.8 dB | 82.1 dB | 82.0 dB | 26.8 / 21.0 nV/rtHz |
 | gain 100 | 5 ohm m | 60.4 mV | 55.1 dB | 58.2 dB | 58.6 dB | 58.6 dB | 22.8 / 15.6 nV/rtHz |
 | gain 100 | 100 ohm m | 1.21 V | 79.8 dB | 81.8 dB | 82.1 dB | 82.0 dB | 26.8 / 21.0 nV/rtHz |
-| current | every soil | 0.29 to 0.30 V | 98.3 dB | 99.5 dB | 99.5 to 99.6 dB | 96.9 to 99.2 dB | 4.0 / 3.2 to 3.5 pA/rtHz (referred to the current) |
+| current | every soil | 0.29 to 0.30 V | 98.3 dB | 99.5 dB | 99.5 to 99.6 dB | 96.7 to 99.1 dB | 4.0 / 3.2 to 3.5 pA/rtHz (referred to the current) |
+
+The signal column is at 1 kHz. At 1 MHz the current channel carries 0.07 to
+0.19 V peak (0.12 to 0.30 V before the transimpedance amplifier's 10 pF of
+23 November 2026; `current_signal_1mhz`); its noise falls with it, so its SNR
+there moved by at most 0.24 dB.
 
 Contributors, share of the noise power in the 1 kHz band at 1 kHz / at
 100 kHz (gain 1; gain 100 within a few points, its second stage adds 2 to 6 %):
 
 | Soil | Sense buffers (ADA4817) | Receiver (AD8130) | ADC driver | Soil and contacts (thermal) | Drive (pump, DDS, filter) | 33 Mohm bias |
 | --- | --- | --- | --- | --- | --- | --- |
-| 5 ohm m | **59 %** / 15 % | 33 % / **68 %** | 6 % / 12 % | 2 % / 4 % | 0 % / 0 % | 0.3 % / 0 % |
+| 5 ohm m | **59 %** / 15 % | 33 % / **68 %** | 6 % / 13 % | 2 % / 4 % | 0 % / 0 % | 0.3 % / 0 % |
 | 100 ohm m | **43 %** / 8 % | 24 % / 37 % | 4 % / 7 % | 27 % / **47 %** | 1 % / 2 % | 0.2 % / 0 % |
 | 1.3 kohm m | 6 % / 2 % | 4 % / 4 % | 1 % / 1 % | **55 %** / **66 %** | 34 % / 27 % | 0.2 % / 0.2 % |
 
@@ -913,7 +938,7 @@ What it means:
   (`impedance_noise_1khz`; the phase's RMS in radians is the same number,
   `impedance_phase_noise_1khz` in degrees): at 5 ohm m 0.12 % and 0.070
   degrees (0.049 ohm of 40 ohm); at 100 ohm m 0.0071 % and 0.0041 degrees; at
-  1.3 kohm m 0.0012 % and 0.0007 degrees; at 100 kHz 0.081 %, 0.0054 % and
+  1.3 kohm m 0.0012 % and 0.0007 degrees; at 100 kHz 0.081 %, 0.0055 % and
   0.0012 %. The 1 % and 1 degree accuracy is therefore not noise-limited at
   1 kHz bandwidth: three standard deviations at 5 ohm m and 1 kHz are 0.37 %
   and 0.21 degrees, and a 10 Hz bandwidth (a 100 ms record per frequency)
@@ -955,10 +980,10 @@ estimated 50 us, and the AD9833's unprogrammed output steps to an estimated
 
 | Electrodes | Settled within 1 mV: gain 1 / 10 / 100 / current | ADC inputs linear from (gain 100) | Pump output, lowest / highest | Pump node settled within 1 mV |
 | --- | --- | --- | --- | --- |
-| in air | 356 / 470 / 666 / 11 ms | 165 ms | -1.82 V / 2.22 V | 73 ms |
-| 5 ohm m | 355 / 472 / 667 / 577 ms | 165 ms | -1.82 V / 2.15 V | 716 ms |
-| 100 ohm m | 355 / 473 / 669 / 365 ms | 162 ms | -1.53 V / 2.06 V | 449 ms |
-| 1.3 kohm m | 385 / 477 / 673 / 129 ms | 168 ms | -0.39 V / 1.46 V | 80 ms |
+| in air | 356 / 470 / 668 / 11 ms | 165 ms | -1.82 V / 2.22 V | 73 ms |
+| 5 ohm m | 355 / 472 / 667 / 578 ms | 165 ms | -1.82 V / 2.15 V | 716 ms |
+| 100 ohm m | 355 / 473 / 672 / 364 ms | 161 ms | -1.53 V / 2.06 V | 449 ms |
+| 1.3 kohm m | 385 / 477 / 675 / 131 ms | 168 ms | -0.39 V / 1.45 V | 80 ms |
 
 - **Rails.** The regulator models start the rails earlier than the estimated
   ramps did (each LDO enables as its input, rising with the converters'
@@ -973,8 +998,8 @@ estimated 50 us, and the AD9833's unprogrammed output steps to an estimated
   converters' switching ripple (the models are averaged) and their loops'
   transients.
 - **Settling.** Every ADC input is within 1 mV (about one LSB) of its final
-  value 0.67 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
-  firmware rule 3 and the battery budget allow, with 0.33 s to spare (the
+  value 0.68 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
+  firmware rule 3 and the battery budget allow, with 0.32 s to spare (the
   limit of the bench). With the estimated ramps it was 0.66 s; the later
   `V_MID` adds up to 9 ms, and 30 ms to the current channel at 5 ohm m. The
   hand estimate was 0.8 s from the slowest network (155 ms x 5). The slowest
@@ -1024,15 +1049,15 @@ three standard deviations) and the worst-case corners (42 variables):
 | Drive current at 1 kHz | 14.85 uA | 0.16 % (14.79 to 14.90 uA) | 14.75 / 14.94 uA (-0.6 / +0.6 %) | no, and not needed: it is measured |
 | Pump output impedance at 1 kHz | 6.22 Mohm | 0.26 Mohm (5.52 to 6.91) | 5.07 / 7.55 Mohm | no; sets how much current reaches the soil |
 | at 10 kHz | 11.3 Mohm | 0.24 Mohm (10.8 to 12.0) | 9.8 / 13.1 Mohm | no |
-| Gain-1 channel before calibration (10 kHz) | -0.08 % | 0.038 % (-0.15 to +0.04 %) | -0.22 / +0.07 % | yes |
-| Gain-10 channel before calibration | -0.08 % | 0.35 % (-0.77 to +0.80 %) | -2.0 / +1.9 % | yes |
-| Gain-100 channel before calibration (against 100) | +1.73 % | 0.59 % (+0.21 to +3.0 %) | -2.0 / +5.6 % | yes |
-| Phase before calibration at 1 MHz | 10.4 deg | 0.22 deg (9.9 to 11.0) | 8.9 / 12.0 deg | yes |
-| Error after calibration, band (limit 1 %, 1 deg) | 0.38 %, 0.11 deg | 0.012 %, 0.004 deg (max 0.42 %, 0.12 deg) | max 0.43 %, 0.12 deg | what is left is the soil's, not the parts' |
-| 5 ohm m, after calibration | 0.022 %, 0.027 deg | max 0.049 %, 0.059 deg | max 0.062 %, 0.027 deg | |
-| Current error after calibration, every soil (limit 0.5 %) | 2e-11 | max 3e-11 | max 2e-11 | yes |
+| Gain-1 channel before calibration (10 kHz) | -0.07 % | 0.038 % (-0.14 to +0.04 %) | -0.22 / +0.07 % | yes |
+| Gain-10 channel before calibration | -0.07 % | 0.35 % (-0.76 to +0.81 %) | -2.0 / +1.9 % | yes |
+| Gain-100 channel before calibration (against 100) | +1.73 % | 0.59 % (+0.22 to +3.0 %) | -2.0 / +5.6 % | yes |
+| Phase before calibration at 1 MHz | 27.7 deg | 0.55 deg (26.2 to 29.0) | 24.2 / 31.1 deg | yes |
+| Error after calibration, band (limit 1 %, 1 deg) | 0.39 %, 0.11 deg | 0.013 %, 0.004 deg (max 0.43 %, 0.12 deg) | max 0.44 %, 0.12 deg | what is left is the soil's, not the parts' |
+| 5 ohm m, after calibration | 0.022 %, 0.026 deg | max 0.054 %, 0.059 deg | max 0.069 %, 0.026 deg | |
+| Current error after calibration, every soil (limit 0.5 %) | 1e-11 | max 2e-11 | max 1e-11 | yes |
 | Sense-path rejection at 10 kHz (5 / 100 ohm m / 1.3 kohm m) | 89.1 / 90.0 / 90.0 dB | 3.6 / 3.9 / 5.2 dB (min 82.5 / 82.8 / 81.9) | 80.6 / 80.6 / 77.3 dB | no |
-| at 1 MHz | 84.5 / 84.6 / 84.6 dB | 1.1 / 2.4 / 3.3 dB (min 81.1 / 79.5 / 73.8) | 79.8 / 77.7 / 71.2 dB | no |
+| at 1 MHz | 84.3 / 84.5 / 84.5 dB | 1.1 / 2.4 / 3.3 dB (min 81.0 / 79.4 / 73.7) | 79.6 / 77.6 / 71.1 dB | no |
 
 Yield 100 % against the limits (calibrated accuracy on the rated soils,
 current error everywhere); 1.3 kohm m is outside the rated range (2.4 %,
@@ -1041,7 +1066,7 @@ current error everywhere); 1.3 kohm m is outside the rated range (2.4 %,
 - **Calibration removes the parts.** Every gain and phase error the
   tolerances cause (R_TIA, the gain resistors, the anti-alias and coupling
   parts) is a property of the board, which the card calibrates: after
-  calibration the spread is 0.012 % at 100 ohm m. What remains is the soil
+  calibration the spread is 0.013 % at 100 ohm m. What remains is the soil
   error of `SoilSweep`, which calibration never removed.
 - **The LT5400's matching hardly matters.** The pump's output impedance at
   1 kHz is set by the `C_NDC` DC servo (sensitivity 1.3 Mohm over its 10 %)
@@ -1053,14 +1078,16 @@ current error everywhere); 1.3 kohm m is outside the rated range (2.4 %,
   against the AD9833's fixed 200 ohm (the divider that halves the DDS); R_SET's
   0.1 % adds 0.1 %. The current is measured, so this costs nothing.
 - **Common-mode rejection is not calibrated and the coupling capacitors set
-  it.** With matched buffers the path rejects 84.6 dB at 1 MHz; a 10 % X7R
+  it.** With matched buffers the path rejects 84.5 dB at 1 MHz (at `V_D`, as
+  in `SenseCommonMode`); a 10 % X7R
   mismatch between `C_CHP` and `C_CLP` (4.7 nF each) turns the common mode
   into a differential signal through their divider against the buffers' 1.3 pF
   inputs (sensitivity 14 dB over each capacitor's range at 10 kHz), down to
-  77.7 dB at 100 ohm m and 71.2 dB at 1.3 kohm m in the worst case. Inside the
+  77.6 dB at 100 ohm m and 71.1 dB at 1.3 kohm m in the worst case. Inside the
   rated range that alone costs up to 0.09 % of the reading (7 times
-  10^(-77.7/20), by hand), and it adds to the buffers' CMRR mismatch of `SenseCommonMode` (66.8 dB with one
-  buffer at its minimum), which was simulated with equal capacitors; the
+  10^(-77.6/20), by hand), and it adds to the buffers' CMRR mismatch of
+  `SenseCommonMode` (66.7 dB with one buffer at its minimum), which was
+  simulated with equal capacitors; the
   combination was not simulated. C0G coupling capacitors at 5 % or better
   would halve the term (a design choice, not made).
 - **Worst case against Monte Carlo.** The corner search assumes each measure
@@ -1126,14 +1153,14 @@ control shortens some of them (the 1.3 kohm m runs).
 | Same with a 50 MHz amplifier | 170 kohm, why a fast amplifier is specified | not needed: the 1 MHz output impedance is stray-limited and the current is measured |
 | Pump output swing at the limit | 2.4 V plus up to 0.7 V for strays, of 3.1 V | 2.43 V at the node, 2.58 V at the amplifier, of 4.4 V; strays do not add swing, they divert current (4 to 8 uA of 15 uA reach the soil at 1 MHz) |
 | Extra drop on 10 kohm for HC capacitance (guard table) | 0.42 to 1.7 V | none; the regulated current splits between strays and soil instead |
-| Common-mode error | 0.2 % at 70 dB | 0.022 % (receiver at 90 dB minimum, matched buffers); one buffer at minimum CMRR gives 66.8 dB at 100 ohm m |
-| Sense contact pole | 0.3 pF guarded node: 0.6 deg (5.6 kohm), 6 deg (56 kohm) | the node is 1.6 pF (the buffer's own 1.3 pF); equal contacts: 0.16 deg at 100 ohm m, 2.5 to 11 deg at 1 kohm m, up to 19 deg at 1.3 kohm m |
-| Transimpedance phase lag at 1 MHz | 7 deg (8 MHz) | 10.7 deg (5.3 MHz with 1.5 pF); whole channel 10.3 to 10.5 deg before calibration, 0 after |
+| Common-mode error | 0.2 % at 70 dB | 0.022 % (receiver at 90 dB minimum, matched buffers); one buffer at minimum CMRR gives 66.7 dB at 100 ohm m |
+| Sense contact pole | 0.3 pF guarded node: 0.6 deg (5.6 kohm), 6 deg (56 kohm) | the node is 1.6 pF (the buffer's own 1.3 pF); equal contacts: 0.15 deg at 100 ohm m, 2.5 to 11 deg at 1 kohm m, up to 19 deg at 1.3 kohm m |
+| Transimpedance phase lag at 1 MHz | 7 deg (8 MHz) | 52 deg (0.8 MHz with 10 pF since 23 November 2026; 10.7 deg with the 1.5 pF before), 60.7 deg for the current channel with its anti-alias RC (`ChannelCosts`); the impedance before calibration 27.6 to 27.7 deg on the rated soils (`SoilSweep`; the gain-1 channel's 32.8 deg subtract), 0 after |
 | Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoise`) |
 | Slew rate needed | 20 V/us | 3.8 V/us at 1 MHz into 1.3 kohm m (0.61 V peak at the pump output: the strays take the current there), 2.59 V peak at 1 kHz; ADA4807 225 V/us, no harmonic from slewing (`Distortion`) |
-| Start-up | 0.8 s from the slowest network | 0.67 s to 1 mV on every ADC input (`Startup`, rails from models of the regulators) |
+| Start-up | 0.8 s from the slowest network | 0.68 s to 1 mV on every ADC input (`Startup`, rails from models of the regulators) |
 | Guard loop stability | unknown | stable: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair, 4.06 kHz with damping 0.27 in air, is the guard and pump mode behind the -42.5 kohm negative real part, which therefore does not oscillate |
-| Card within 1 % and 1 deg | required, with 47 kohm contacts on every position | 47 kohm is not soil-like: 27 to 34 % and 3.7 to 5.3 deg at 1 MHz (CalibrationCard). With soil-like contacts (270 ohm on 39 ohm, 6.8 kohm on 1 kohm) at most 0.51 % and 0.23 deg (CalibrationCard) |
+| Card within 1 % and 1 deg | required, with 47 kohm contacts on every position | 47 kohm is not soil-like: 27 to 34 % and 3.8 to 5.3 deg at 1 MHz (CalibrationCard). With soil-like contacts (270 ohm on 39 ohm, 6.8 kohm on 1 kohm) at most 0.52 % and 0.22 deg (CalibrationCard) |
 | Amplifier supply | about 10 V total | ADA4817 5 to 10 V, abs. max 10.6 V; +/-4.5 V fits. ADA4807 2.7 to 11 V |
 
 ## What the simulation cannot tell
@@ -1164,11 +1191,16 @@ control shortens some of them (the 1.3 kohm m runs).
 - No layout extraction: every stray above is an estimate.
 - Each rated bench varies one condition at a time with the others nominal, so
   the rated range is not a combined worst case (SPEC.md, "Usable range").
-- The models are built-in macro models, fitted to data-sheet tables and
-  figures; no vendor model was run. CMRR is a single corner fit; the AD8130's
-  feedback pair has no input model; the ADA4807 has no output resistance.
+- The benches run built-in macro models, fitted to data-sheet tables and
+  figures; the amplifiers' vendor models run with `copper sim --models vendor`
+  (SPEC.md, "Vendor models"), where two loops still fail. CMRR is a single
+  corner fit; the AD8130's feedback pair has no input model; the ADA4807 has
+  no output resistance, so the default run does not show what the gain-1
+  driver's 100 ohm and 1 nF change (its margin is 49.2 degrees with either
+  network).
 - The ADC itself (sampling capacitor, kickback, injection) is not modelled;
-  the 470 pF reservoir and 49.9 ohm are sized by hand.
+  the 470 pF reservoirs and 49.9 ohm (1 nF and 100 ohm on PA1) are sized by
+  hand.
 - The BAT54S clamps of the first version were removed: the ADC drivers'
   supplies make them unnecessary.
 - Power-down is a hand estimate ([Power cycling](#power-cycling)).
@@ -1400,7 +1432,7 @@ applied below. Self-discharge of a few percent per month is not included either.
 
 The duty-cycle rows add 1 s per cycle on top of the 5 s measurement. That second
 covers the wake from Standby (2.46 mA, Table 35), HSE and PLL start, rail
-soft-start, front-end settling (0.67 s simulated from `ANA_EN` to every ADC
+soft-start, front-end settling (0.68 s simulated from `ANA_EN` to every ADC
 input within 1 mV, `Startup`, the rails' soft-start included; most of that
 second) and storing the result. The sleep current is only about 1.7 % of the duty-cycled average, so
 measurement time dominates battery life. Shortening the measurement, or
@@ -1701,7 +1733,7 @@ unchanged from the first revision are marked "as before".
   `U_DRV`'s input.
 - **Sense-path rejection with real parts.** `SenseCommonMode` (a buffer at its
   minimum CMRR) and `ResistorWorstCase` (10 % X7R coupling capacitors
-  mismatched: down to 77.7 dB at 1 MHz, 100 ohm m) each stay inside the 63 dB
+  mismatched: down to 77.6 dB at 1 MHz, 100 ohm m) each stay inside the 63 dB
   budget; both at once were not simulated.
 - **Power-down order.** Whether `V_MID` always falls before `V3V3_ANA` when
   `ANA_EN` falls is a hand estimate; the TPS22918's output-discharge

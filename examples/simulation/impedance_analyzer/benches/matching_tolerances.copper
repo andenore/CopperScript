@@ -31,7 +31,8 @@
 //    (V2 - V1) / (I1 - I2), node strays included, as PumpOutputImpedance measures it.
 //  - SHORT: the transfer resistance shorted (1 mohm) with the step's contacts: the
 //    sense electrodes then carry only the common mode (the LC contact's drop), and
-//    its ratio to V_MON_1 is the sense path's common-mode rejection in place.
+//    its ratio to V_D, the receiver's output, is the sense path's common-mode
+//    rejection in place (the ADC channels after V_D left out, as in SenseCommonMode).
 fixture MatchingTolerances for AnalogFrontEnd {
     ignore RN_HOW;
     component RN_R1: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
@@ -102,5 +103,5 @@ fixture MatchingTolerances for AnalogFrontEnd {
     let e100 = z100 / z_true / reference(z100 / z_true, CARD);
     let ei = i_meas / i_lc / reference(i_meas / i_lc, CARD);
     let z_out = (reference(V(E_HC), LOAD2) - V(E_HC)) / (i_hc - reference(i_hc, LOAD2));
-    let rejection = reference(V(E_LP) / V(V_MON_1), SHORT);
+    let rejection = reference(V(E_LP) / V(V_D), SHORT);
 }
