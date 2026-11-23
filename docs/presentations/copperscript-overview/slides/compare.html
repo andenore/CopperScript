@@ -1,0 +1,15 @@
+<section id="compare">
+<p class="eyebrow">19 / COMPARED WITH OTHER WAYS</p>
+<h2 class="title">What an agent works with in each approach.</h2>
+<table class="spec">
+<tr><th style="width:17%">The agent needs</th><th style="width:27%">GUI EDA: KiCad, Altium</th><th style="width:26%">Netlist as code, e.g. SKiDL</th><th style="width:30%">CopperScript</th></tr>
+<tr><td>Something to write</td><td>Clicks, or drawing files of symbols and geometry</td><td>Code that emits a netlist</td><td>Typed source: connections and intent</td></tr>
+<tr><td>The intent</td><td>In the designer’s head and datasheets; partly as rules and net classes</td><td>Mostly connectivity; layout intent is left to the PCB tool</td><td>Roles, decoupling targets, pairs, skew and bands, compiled and checked</td></tr>
+<tr><td>Feedback it can read</td><td>ERC and DRC reports, markers in the GUI</td><td>Language errors, then the PCB tool’s checks</td><td>Located JSON findings with codes, hints and fixes</td></tr>
+<tr><td>A layout</td><td>Interactive, expert-driven and mature</td><td>Done by hand in a GUI tool</td><td>A bounded automatic pipeline (experimental) with grouped issues and views</td></tr>
+<tr><td>Trustworthy inputs</td><td>Libraries and versions managed by hand</td><td>Code in Git; part data varies</td><td>Pinned packages with source references; every byte hashed</td></tr>
+</table>
+<div class="spacer"></div>
+<p class="small">Simplified: each tool has scripting, plug-ins and exceptions. KiCad and Altium remain the reference for interactive, expert layout.</p>
+<aside>A fair comparison from the point of view of an AI agent. Graphical tools such as KiCad and Altium are mature and excellent for an expert who places and routes by hand; an agent, though, has to drive a GUI or edit drawing files whose meaning is geometry, and most of the engineering intent lives outside the design. Netlist-as-code tools such as SKiDL give the agent text to write, but mostly for connectivity, and the layout still happens in a GUI. CopperScript puts connectivity and intent in one typed source, answers with machine-readable findings, and runs layout as a bounded pipeline that reports why it failed. Its router is experimental; the GUI tools remain better for interactive layout, and CopperScript exports to KiCad so the two can be combined.</aside>
+</section>

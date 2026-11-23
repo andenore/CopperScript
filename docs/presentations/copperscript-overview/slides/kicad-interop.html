@@ -1,0 +1,14 @@
+<section id="kicad-interop">
+<p class="eyebrow">17 / WORKS WITH KICAD</p>
+<h2 class="title">KiCad stays in the loop.</h2>
+<p class="lead" style="width:1500px; margin-bottom:40px">CopperScript is the source; KiCad is an export target, a library source and an independent check. Finish, review or hand over a design in KiCad at any point.</p>
+<div class="cards cards-3">
+<div class="card"><h3>Native KiCad projects</h3><p class="body">Every board command writes .kicad_pcb, .kicad_pro and its footprint library; <span style="color:#A4472A">export-kicad</span> writes a KiCad schematic.</p></div>
+<div class="card" style="animation-delay:100ms"><h3>KiCad’s own libraries</h3><p class="body">Footprints and 3D models come from KiCad’s repositories, pinned by commit in copper.mod.</p></div>
+<div class="card" style="animation-delay:200ms"><h3>An independent check</h3><p class="body"><span style="color:#A4472A">--verify kicad</span> refills and runs DRC with kicad-cli; <span style="color:#A4472A">compare-cam</span> compares two plots.</p></div>
+</div>
+<div class="cards" style="grid-template-columns:1fr; margin-top:28px">
+<div class="card" style="animation-delay:300ms"><h3>Reference layouts</h3><p class="body"><span style="color:#A4472A">copper view --reference</span> overlays a KiCad board, such as a manufacturer’s evaluation layout, aligned on the package pads.</p></div>
+</div>
+<aside>CopperScript does not replace KiCad. Every PCB-producing command writes a complete KiCad project with its own footprint library, so the board opens in KiCad without setup, and copper export-kicad writes a KiCad 8 schematic as a derived artifact. Footprints and 3D models come from KiCad’s official repositories pinned by commit. copper build can verify with KiCad 10 instead of the native filler and DRC, and copper compare-cam compares the native and KiCad plots. copper view --reference overlays a reference KiCad board aligned on the package pads, which is how blocked package exits are compared with a manufacturer’s layout. There is no Altium integration, and the KiCad board importer of the old Python implementation has not been ported.</aside>
+</section>

@@ -1,0 +1,14 @@
+<section id="failure-modes" class="paper2">
+<p class="eyebrow">20 / WHERE AGENTS GO WRONG</p>
+<h2 class="title">Each common mistake meets a check.</h2>
+<table class="spec">
+<tr><th style="width:40%">The agent…</th><th style="width:60%">What catches it in CopperScript</th></tr>
+<tr><td>invents a pin, footprint or rating</td><td>Parts come from pinned libraries with cited sources; unknown facts stay unresolved</td></tr>
+<tr><td>connects the right nets with the wrong intent</td><td>Roles and relationships compile; ERC checks ratings, rails, buses and open pins</td></tr>
+<tr><td>cannot see the layout it produced</td><td><i>copper issues</i> and <i>copper view</i>: located causes, legends and pictures</td></tr>
+<tr><td>takes “it compiles” for “it works”</td><td>Every report says what it did not check; screening is never a pass</td></tr>
+<tr><td>patches one board instead of the method</td><td>Clear ownership; routing fixes go into generic algorithms, checked against reference layouts</td></tr>
+<tr><td>loses track of what changed</td><td>The lock and run.json hash every input and output; stale results are refused</td></tr>
+</table>
+<aside>This is the goal of the project in one table: improve an LLM’s ability to produce a good board by closing off the ways it typically goes wrong. Language models invent plausible part data, so parts come from pinned libraries with cited sources and missing facts stay visible. They connect the right nets but ignore why, so intent such as decoupling targets and pin roles is part of the source and checked. They cannot look at a layout, so issues and views give them located causes, text legends and pictures. They over-trust a clean result, so every report names its limits. They patch symptoms, so the project’s rules send fixes into generic algorithms compared with manufacturer reference layouts. And they lose track of state, so every input and output is hashed and old evidence is refused.</aside>
+</section>
