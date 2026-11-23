@@ -1,0 +1,18 @@
+<section id="peripherals">
+<p class="eyebrow">08 / PERIPHERAL SELECTION</p>
+<h2 class="title">Choose pins; the compiler checks the mux.</h2>
+<div class="cols-wide">
+<p class="code"><span class="c">// library: the MCU’s device (excerpt)</span><br><span class="k">peripheral</span> I2C1: <span class="t">i2c</span> {<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SDA: open_drain;<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SCL: open_drain;<br>}<br><span class="k">mux</span> PB7: I2C1.SDA { selector = <span class="s">"AF6"</span>; }<br><span class="k">mux</span> PB6: I2C1.SCL { selector = <span class="s">"AF6"</span>; }<br><br><span class="c">// board: select the peripheral’s pins</span><br><span class="k">configure</span> U1.I2C1 <span class="k">as</span> SENSOR_BUS {<br>&#160;&#160;&#160;&#160;SDA = PB7;<br>&#160;&#160;&#160;&#160;SCL = PB6;<br>}</p>
+<div>
+<p class="lead" style="margin-bottom:28px">The choice lowers to the selector, AF6, in the IR. ERC then checks:</p>
+<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
+<li>every required signal is assigned</li>
+<li>the pin exists on this package and can carry it</li>
+<li>no pin or peripheral is used twice</li>
+<li>drive types are electrically compatible</li>
+<li>shared resources are not set two ways</li>
+</ul>
+</div>
+</div>
+<aside>A device describes the silicon once: its pads, power domains, peripherals and which pads each peripheral signal can use. A package part bonds its pins to those pads. On the board, configure picks the pins for one peripheral; it does not connect anything, nets still do that. The compiler lowers the choice to the concrete alternate-function selector and reports a missing signal, an impossible mux, a pin used twice, an electrical mismatch or a conflicting shared resource. Modes that firmware switches at run time are declared as firmware_managed.</aside>
+</section>

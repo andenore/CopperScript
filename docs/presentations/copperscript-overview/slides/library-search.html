@@ -1,0 +1,13 @@
+<section id="library-search" class="paper2">
+<p class="eyebrow">07 / LIBRARY CONTEXT</p>
+<h2 class="title">Ask the library, get its sources.</h2>
+<div class="cols-wide">
+<p class="code"><span class="c">$ copper library search "coin cell holder"</span><br>{ <span class="s">"symbol"</span>: <span class="v">"KEYSTONE_3034"</span>,<br>&#160;&#160;<span class="s">"manufacturer"</span>: <span class="v">"Keystone Electronics"</span>,<br>&#160;&#160;<span class="s">"category"</span>: <span class="v">"connector.battery.coin_cell"</span>,<br>&#160;&#160;<span class="s">"source_document"</span>: <span class="v">"Keystone M65 catalogue:</span><br><span class="v">&#160;&#160;&#160;&#160;&#160;&#160;3034 SMT retainer for 20 mm cells"</span>,<br>&#160;&#160;<span class="s">"source_location"</span>: <span class="v">"M65 catalogue page 9,</span><br><span class="v">&#160;&#160;&#160;&#160;&#160;&#160;figure 1 and 3034 row"</span>,<br>&#160;&#160;<span class="s">"source_url"</span>: <span class="v">"https://www.keyelco.com/…/M65p9.pdf"</span>,<br>&#160;&#160;<span class="s">"version"</span>: <span class="v">"50655eff…"</span>,<br>&#160;&#160;<span class="s">"source_sha256"</span>: <span class="v">"sha256:28432c0c…"</span> }</p>
+<div class="cards" style="grid-template-columns:1fr; gap:20px">
+<div class="card" style="padding:28px 32px"><h3>Only what you declared</h3><p class="body">Search covers the project’s pinned dependencies, not the whole internet.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>One section at a time</h3><p class="body"><span style="color:#A4472A">library inspect</span> returns interfaces, requirements or notes on request.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Facts cite their source</h3><p class="body">Down to the page and figure. A fact without one stays unresolved.</p></div>
+</div>
+</div>
+<aside>Real output, trimmed, from searching the coin-cell project’s dependencies. The result names the part, its version and hashes, and the exact catalogue page, figure and URL its facts came from. An agent searches only the libraries the project declares, then inspects one section of one contract, so it spends its context on the facts it needs. The output also states its evidence level, here source declarations only, so nobody mistakes a declaration for a measurement.</aside>
+</section>

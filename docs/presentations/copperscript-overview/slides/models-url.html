@@ -1,0 +1,17 @@
+<section id="models-url">
+<p class="eyebrow">12 / VENDOR MODELS</p>
+<h2 class="title">Vendor models by URL, checked by hash.</h2>
+<div class="cols-wide">
+<p class="code"><span class="k">part</span> OPA810_VENDOR {<br>&#160;&#160;&#160;&#160;<span class="k">sim spice</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;source = <span class="s">"https://www.ti.com/lit/zip/SBOMB73"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;sha256 = <span class="v">"bee7ec13…905c4a0a0"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;member = <span class="s">"opa810_a.lib"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;subckt = <span class="s">"OPA810"</span>; dialect = pspice;<br>&#160;&#160;&#160;&#160;}<br>}<br><br><span class="k">part</span> Widget {<br>&#160;&#160;&#160;&#160;model = <span class="s">"https://vendor.example/models/Widget.step"</span>;<br>&#160;&#160;&#160;&#160;model_sha256 = <span class="v">"…"</span>;<br>&#160;&#160;&#160;&#160;model_redistributable = false;<br>}</p>
+<div>
+<p class="lead" style="margin-bottom:28px">SPICE and 3D models stay on the vendor’s site and under the vendor’s terms.</p>
+<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
+<li><span style="color:#A4472A">copper models fetch</span> downloads them once into the project cache</li>
+<li>Builds never download; a changed file fails its hash</li>
+<li>Nothing is shipped unless the part says it may be</li>
+<li><span style="color:#A4472A">copper sim --check-model</span> compares a vendor model with the built-in one</li>
+</ul>
+</div>
+</div>
+<aside>The first part is the repository’s OPA810 example: TI’s PSpice model archive pinned by URL and SHA-256, with the file and subcircuit inside it named. The second shows the 3D model fields from the 3D models guide, abridged. Vendor files are often licensed for your own designs but not for redistribution, so the compiler fetches them only on request, checks every byte against the declared hash, and keeps them out of exports unless the part marks them redistributable. The simulator can run the vendor model or the built-in macro model and compare the two.</aside>
+</section>

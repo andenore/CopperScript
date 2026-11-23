@@ -1,0 +1,11 @@
+<section id="deps-url">
+<p class="eyebrow">06 / DEPENDENCIES</p>
+<h2 class="title">Import parts by URL, pinned by hash.</h2>
+<p class="code"><span class="c">// board.copper: a package, imported by its URL</span><br><span class="k">import</span> nordic <span class="s">"github.com/andenore/CopperLib/packages/parts/nordic/nrf52832"</span>;<br><span class="k">component</span> U_NRF: <span class="t">nordic.NRF52832_QFAA</span>;<br><br><span class="c">// copper.mod: the exact revision of each library, and local overrides</span><br><span class="k">require</span> github.com/andenore/CopperLib <span class="v">50655eff5613690a606c9dd1de456b2adae249df</span><br><span class="k">require</span> github.com/KiCad/kicad-footprints <span class="v">7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd</span><br><span class="k">replace</span> github.com/copperscript/examples =&gt; ../packages</p>
+<div class="cards cards-3" style="margin-top:28px">
+<div class="card" style="padding:28px 32px"><h3>Every byte locked</h3><p class="body">copper.lock keeps a SHA-256 for each part, footprint and 3D model; --locked rejects any change.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Reproducible offline</h3><p class="body">GitHub or GitLab at a tag or commit, fetched once; --offline never touches the network.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Data, never code</h3><p class="body">Packages hold declarations only. Nothing in a dependency is ever executed.</p></div>
+</div>
+<aside>Real lines from the nRF52 coin-cell example. A board imports a package by a stable URL-like path and gives it an alias. The project’s copper.mod pins each library to a tag or commit, here CopperLib and KiCad’s own footprint repository, and can redirect one to a local directory while developing. copper lock writes copper.lock: a module digest plus the SHA-256 and size of every .copper, footprint, 3D-model, JSON and CSV file. With --locked any changed byte is an error, and --offline works from the cache. Package code is never executed, which matters when an agent pulls in libraries.</aside>
+</section>

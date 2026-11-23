@@ -1,0 +1,13 @@
+<section id="panel-build" class="paper2">
+<p class="eyebrow">13 / BUILD SETTINGS AND PANELS</p>
+<h2 class="title">Fab settings and panels are source too.</h2>
+<div class="cols-wide">
+<p class="code"><span class="k">board</span> Example {<br>&#160;&#160;&#160;&#160;<span class="k">build</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;fab_profile = <span class="s">"jlcpcb-six-layer"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;routing { effort = balanced; time_budget = <span class="v">600s</span>; }<br>&#160;&#160;&#160;&#160;}<br>}<br><br><span class="k">panel</span> ExamplePanel {<br>&#160;&#160;&#160;&#160;spacing = <span class="v">2 mm</span>; fiducials = <span class="v">3</span>;<br>&#160;&#160;&#160;&#160;mouse_bite = { drill = <span class="v">0.5 mm</span>; pitch = <span class="v">0.75 mm</span>; };<br>&#160;&#160;&#160;&#160;<span class="k">board</span> MONO { source = <span class="s">"…/board.copper"</span>; … }<br>&#160;&#160;&#160;&#160;<span class="k">tab</span> mono_top { board = MONO; side = top; at = <span class="v">8 mm</span>; }<br>}</p>
+<div class="cards" style="grid-template-columns:1fr; gap:20px">
+<div class="card" style="padding:28px 32px"><h3>Settings in the board</h3><p class="body">The build block feeds route-board and copper build; the command line still overrides it.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>One panel board</h3><p class="body"><span style="color:#A4472A">copper panelize</span> writes rails, tabs, mouse bites and fiducials as one board.</p></div>
+<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Checked like any board</h3><p class="body">Native fill and DRC run on it unchanged; a fab preset checks the fab’s rules.</p></div>
+</div>
+</div>
+<aside>Two smaller features that remove hidden state. A board’s build block keeps its fab profile, placement and routing settings in source instead of a Makefile; precedence is command line, then source, then compiler default. A panel document places already-routed boards with rails, tabs, mouse bites, fiducials and tooling holes, and copper panelize writes one KiCad board for the whole panel, so the native fill, DRC and plotter run on it unchanged. A fab preset fills in the fab’s values and checks the panel against its rules. Both excerpts are abridged from the language reference and the panel example.</aside>
+</section>

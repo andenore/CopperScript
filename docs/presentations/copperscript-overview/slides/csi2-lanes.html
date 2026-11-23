@@ -1,0 +1,16 @@
+<section id="csi2-lanes">
+<p class="eyebrow">10 / DIFFERENTIAL PAIRS AND SKEW</p>
+<h2 class="title">A four-lane CSI-2 link, matched in source.</h2>
+<div class="cols-wide">
+<p class="code"><span class="c">// the clock pair; D0–D3 are declared the same way</span><br><span class="k">constraint</span> routing(CSI_CLK_P) {<br>&#160;&#160;&#160;&#160;kind = differential; partner = CSI_CLK_N;<br>&#160;&#160;&#160;&#160;width = <span class="v">0.14mm</span>; pair_gap = <span class="v">0.26mm</span>;<br>&#160;&#160;&#160;&#160;max_skew = <span class="v">0.1mm</span>;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span class="c">// P against N</span><br>&#160;&#160;&#160;&#160;target_impedance_ohms = <span class="v">100</span>;&#160;&#160;<span class="c">// differential</span><br>&#160;&#160;&#160;&#160;target_single_ended_ohms = <span class="v">50</span>;<br>&#160;&#160;&#160;&#160;allowed_layers = <span class="s">"F.Cu"</span>; max_vias = <span class="v">0</span>;<br>&#160;&#160;&#160;&#160;layer_group = <span class="s">"csi"</span>;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span class="c">// clock + lanes</span><br>}<br><span class="k">constraint</span> length_match(CSI_CLK_P, CSI_CLK_N,<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;CSI_D0_P, CSI_D0_N, … CSI_D3_P, CSI_D3_N) {<br>&#160;&#160;&#160;&#160;id = <span class="s">"csi-lanes"</span>; max_skew = <span class="v">0.5mm</span>;<br>}</p>
+<div>
+<p class="code" style="padding:28px 32px"><span class="c">$ copper si-check board.copper</span><br>CLK&#160;&#160;&#160;diff <span class="v">99.7 Ω</span> · SE <span class="v">51.9 Ω</span>&#160;&#160;<span class="s">pass</span><br>D0–D3 diff <span class="v">99.7 Ω</span> · SE <span class="v">51.9 Ω</span>&#160;&#160;<span class="s">pass ×4</span><br>MATCH csi-lanes: 10 nets, ≤ <span class="v">0.5 mm</span><br>LAYER csi: clock + 4 lanes</p>
+<ul style="font-size:26px; line-height:1.45; color:#4D5550; padding-left:32px; margin:28px 0 0">
+<li>Before routing, impedance is screened against the declared stack-up</li>
+<li>The router compensates skew inside each pair, then tunes the group to its longest lane with bumps or serpentines</li>
+<li>A miss is a DRC-LENGTH-MATCH review warning, never hidden</li>
+</ul>
+</div>
+</div>
+<aside>Signal-integrity intent for a MIPI CSI-2 D-PHY link with a clock and four data lanes. Each pair gets a differential routing rule: partner, width and gap, its own skew budget, differential and single-ended impedance targets, the layers it may use and a layer group that keeps clock and data on the same layers. One length_match group holds all ten nets to 0.5 mm. The output on the right is copper si-check on a four-lane fixture with a six-layer stack-up, abridged: all five pairs screen at 99.7 ohm differential and 51.9 ohm single-ended, inside their targets. During routing, intra-pair skew is compensated first, then each lane of the group is tuned towards the longest; tuning_style chooses bumps or serpentines, and tuning_group bends adjacent lanes together. Skew and length misses are reported as review warnings rather than silently accepted. Impedance screening is an estimate from the declared stack-up, not a field-solver sign-off.</aside>
+</section>

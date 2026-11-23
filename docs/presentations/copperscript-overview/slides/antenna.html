@@ -1,0 +1,12 @@
+<section id="antenna" class="dark">
+<p class="eyebrow">11 / ANTENNA SYNTHESIS</p>
+<h2 class="title">Declare the band. Synthesize the copper.</h2>
+<div class="cols" style="grid-template-columns:740px 1fr; gap:56px">
+<div>
+<p class="code" style="padding:32px"><span class="k">constraint</span> antenna(ANT1.FEED) {<br>&#160;&#160;&#160;&#160;name = <span class="s">"bt"</span>;<br>&#160;&#160;&#160;&#160;x = <span class="v">18mm</span>; y = <span class="v">0mm</span>;<br>&#160;&#160;&#160;&#160;width = <span class="v">22mm</span>; height = <span class="v">6mm</span>;<br>&#160;&#160;&#160;&#160;ground = GND;<br>&#160;&#160;&#160;&#160;bands = <span class="s">"2400 MHz-2483.5 MHz"</span>;<br>&#160;&#160;&#160;&#160;track_width = <span class="v">1mm</span>;<br>&#160;&#160;&#160;&#160;<span class="c">// pasted from synthesize-antenna</span><br>&#160;&#160;&#160;&#160;geometry =<br>&#160;&#160;&#160;&#160;&#160;&#160;<span class="s">"monopole height=5.3mm length=22.77mm"</span>;<br>&#160;&#160;&#160;&#160;tuned_for = <span class="s">"sha256:fadfbf76…95ba"</span>;<br>}</p>
+<p class="small" style="margin-top:24px">The digest binds the geometry to this board’s outline, stack-up, ground and feed. Change one and the board stops compiling until synthesis runs again.</p>
+</div>
+<img src="assets/antenna-synthesis.png" alt="Antenna synthesis result for the 2.4 GHz monopole: the synthesized trace in the board corner next to the shorter first-order template, and the return-loss chart with the matched curve dipping below −10 dB across the band; resonance 2.37 GHz, worst in band −12.3 dB matched, match 0.85 nH and 2.54 pF, 86 % radiation efficiency" style="width:868px; height:588px; object-fit:contain; border-radius:12px">
+</div>
+<aside>From the antenna synthesis example. You reserve a board-edge region, name the ground and the band. copper synthesize-antenna tunes the trace on a pinned pure-Rust full-wave FDTD model of this board, polishes height and length, fits an L-section match and verifies the result on a fine mesh, then prints the geometry and digest to paste into the source. The first-order quarter-wave template resonates at 2.72 GHz; the synthesized monopole resonates at 2.37 GHz and stays better than −12.3 dB across the band once matched, with 0.85 nH series and 2.54 pF shunt and 86 % radiation efficiency. The figure is drawn from the recorded synthesis data on the project website. It is simulation evidence for one model: the enclosure, cables and nearby parts are not in it, so bench tuning and testing remain.</aside>
+</section>
