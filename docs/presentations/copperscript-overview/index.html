@@ -591,8 +591,20 @@ body.show-notes .notes{display:block}
 <p class="small" style="margin-top:32px">The fab profile and placement and routing settings live in the board’s <i>build</i> block, so the commands stay short. KiCad is optional, as an independent cross-check.</p>
 <aside>How to build and route a board. Check first. Then copper build runs the standard pipeline: copper check, route-board, a native zone refill, the native design-rule check and a completion gate, writing everything into a fresh run directory with a run.json that records the inputs and outputs by hash. If something fails, copper issues groups the causes and copper view draws them; fix the source and build again. Finally export-manufacturing writes the fabrication files and refuses a run that failed or whose sources have changed. Projects with a Makefile wrap step two as make route.</aside>
 </section>
+<section id="view-issues" class="paper2">
+<p class="eyebrow">16 / FINDING THE CAUSE</p>
+<h2 class="title">copper issues names it. copper view shows it.</h2>
+<div class="cols" style="grid-template-columns:1fr 812px; gap:56px">
+<div>
+<p class="code" style="padding:32px 36px"><span class="c">$ copper issues RUN</span><br>fail&#160;&#160;19 grouped issue(s)<br><span class="k">X1</span> ESCAPE-CROSSING&#160;&#160;SNK/J and SRC/J:<br>&#160;&#160;&#160;21 crossing net pairs on one layer;<br>&#160;&#160;&#160;move CSI_AN, CSI_AP, … to another layer<br><span class="k">C1</span> CRITICAL-UNROUTED&#160;&#160;planned crossing<br>&#160;&#160;&#160;is impossible on In2.Cu<br><span class="c">$ copper view RUN --issue X1</span><br>layers F.Cu · 75 pads, 127 track segments<br>pad SRC/J.14 CSI_AP @(<span class="v">15.400</span>, <span class="v">8.175</span>)<br>pad SNK/J.14 CSI_AP @(<span class="v">52.175</span>, <span class="v">32.600</span>)<br>…</p>
+<p class="small" style="margin-top:24px">Each issue has an id, a cause and a place. The view rings its pads on every copper layer and prints a legend that often answers the question without the picture.</p>
+</div>
+<img src="assets/copper-view-escape.png" alt="copper view of issue X1 on F.Cu: the two CSI-2 connectors with every pad of the issue ringed in red, each lane in its own colour, and the one pair that did route drawn between them" style="box-sizing:border-box; width:812px; height:583px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+</div>
+<aside>A real failure: a quick four-lane CSI-2 test board between two CopperLib camera connectors, routed with the standard pipeline. copper issues turned the run’s findings into 19 grouped issues, each with an id, a cause and a window. X1 says the two connectors’ pins escape in an order that makes 21 net pairs cross on one layer and names the nets to move; C1 says the planned crossing is impossible on the layers allowed. copper view --issue X1 draws that window per copper layer, rings every pad of the issue and colours each lane, so the escape order of both connectors can be compared at a glance; its legend lists the pads with coordinates. The same commands frame a net, a pad, a component or any window; --filled shows the saved zone fills, placement trials that were rejected show the pose that was kept, and --reference overlays a manufacturer’s layout aligned on the package pads, which is how blocked package exits are compared with the reference design. Output abridged. The fix belongs in placement or the source, and the agent never needs a one-off script to see it.</aside>
+</section>
 <section id="ai-statement" class="accent">
-<p class="eyebrow">16 / WHY IT SUITS AI AGENTS</p>
+<p class="eyebrow">17 / WHY IT SUITS AI AGENTS</p>
 <div class="spacer"></div>
 <p class="statement fade" style="width:1560px">An agent makes good decisions when every decision gets fast, located and honest feedback.</p>
 <div class="spacer"></div>
@@ -600,7 +612,7 @@ body.show-notes .notes{display:block}
 <aside>This is the central claim about AI. Language models are good at writing structured text and at reacting to precise feedback. They are bad at guessing facts they cannot see and at judging their own work. CopperScript is built around that: give the agent text to write, facts to retrieve instead of guess, and checks that answer quickly, point at the exact line and never pretend a missing input passed.</aside>
 </section>
 <section id="loop" class="dark">
-<p class="eyebrow">17 / THE AGENT LOOP</p>
+<p class="eyebrow">18 / THE AGENT LOOP</p>
 <h2 class="title">Retrieve, write, check, fix. Repeat.</h2>
 <div class="flow">
 <div class="step"><h3>Orient</h3><p class="body">A guide bundled with the compiler, one topic at a time</p><p class="out">agent-guide</p></div>
@@ -618,7 +630,7 @@ body.show-notes .notes{display:block}
 <aside>The loop in commands. copper agent-guide gives a short bootstrap and topics such as syntax, libraries, verification, iteration and simulation. copper library search and inspect retrieve only the contracts the task needs. copper check --json returns located findings with machine-applicable fixes. copper explain describes a diagnostic code, copper query answers questions about the compiled design, and copper issues and copper view group routing failures and draw them.</aside>
 </section>
 <section id="agent-choices">
-<p class="eyebrow">18 / DESIGNED FOR GOOD DECISIONS</p>
+<p class="eyebrow">19 / DESIGNED FOR GOOD DECISIONS</p>
 <h2 class="title">Six choices that keep an agent honest.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">01</p><h3>Text, not clicks</h3><p class="body">The agent writes source it can diff and explain. No GUI to drive, no hidden state.</p></div>
@@ -631,7 +643,7 @@ body.show-notes .notes{display:block}
 <aside>Six design choices. One: text instead of a GUI, so the agent’s work is reviewable. Two: retrieval from pinned, versioned libraries, so it does not invent part data; facts the source does not give stay explicitly unresolved. Three: units and roles, so many wrong decisions fail to compile. Four: compact, located, machine-readable diagnostics, so the agent spends its context on the problem. Five: no silent passes; screening results and missing evidence stay visible. Six: when routing fails, the project improves the generic algorithm by comparing with manufacturer reference layouts, rather than adding board-specific patches.</aside>
 </section>
 <section id="check-example" class="paper2">
-<p class="eyebrow">19 / WHAT THE AGENT SEES</p>
+<p class="eyebrow">20 / WHAT THE AGENT SEES</p>
 <h2 class="title">copper check --json, on a broken board.</h2>
 <div class="cols">
 <p class="code">{ <span class="s">"code"</span>: <span class="v">"SUPPLY_VOLTAGE_HIGH"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"error"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1.VDD"</span>,<br>&#160;&#160;<span class="s">"message"</span>: <span class="v">"5 V exceeds the pin</span><br><span class="v">&#160;&#160;&#160;&#160;maximum 3.6 V"</span>,<br>&#160;&#160;<span class="s">"location"</span>: { <span class="s">"line"</span>: 15 } }<br><br>{ <span class="s">"code"</span>: <span class="v">"UNMARKED_PIN"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"warning"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1"</span>,<br>&#160;&#160;<span class="s">"hint"</span>: <span class="v">"connect them, or declare</span><br><span class="v">&#160;&#160;&#160;&#160;intent with no_connect</span><br><span class="v">&#160;&#160;&#160;&#160;U1.PA0, U1.TX { reason }"</span> }</p>
@@ -646,7 +658,7 @@ body.show-notes .notes{display:block}
 <aside>Real output from the repository’s invalid-board example, trimmed to two of its twelve findings. The first is a rating violation the compiler found because the part declares its voltage range. The second shows how CopperScript separates mistakes from decisions: a pin left open must be marked no_connect with a reason, otherwise it is reported. Findings can also carry machine-applicable fixes, which an agent applies only when the source still holds the original text.</aside>
 </section>
 <section id="review-loop">
-<p class="eyebrow">20 / PEOPLE STAY IN THE LOOP</p>
+<p class="eyebrow">21 / PEOPLE STAY IN THE LOOP</p>
 <h2 class="title">Humans review; the next run listens.</h2>
 <div class="cols">
 <div>
@@ -668,7 +680,7 @@ body.show-notes .notes{display:block}
 <aside>Agents do not replace engineering review. CopperReview lets a person inspect the board and leave notes tied to components, nets, regions and issue ids; the export feeds the next agent run. Ownership rules tell an agent where a change belongs: algorithms in CopperScript, reusable definitions in libraries, board composition and evidence in the board repository.</aside>
 </section>
 <section id="features" class="paper2">
-<p class="eyebrow">21 / INCLUDED TODAY</p>
+<p class="eyebrow">22 / INCLUDED TODAY</p>
 <h2 class="title">One compiler, from source to fab files.</h2>
 <div class="cards cards-4" style="gap:20px">
 <div class="card" style="padding:26px 28px"><h3>Electrical checks</h3><p class="body">Ratings, power states, buses, open pins</p></div>
@@ -687,7 +699,7 @@ body.show-notes .notes{display:block}
 <aside>Twelve capabilities in one Rust binary. Electrical checks cover ratings, output conflicts, power-state back-power, I²C pull-ups and unmarked pins. Libraries are versioned and locked by hash. Mechanics have a browser editor that writes source. Placement and routing are a bounded, experimental pipeline with grouped diagnostics. Hard macros, antenna synthesis, circuit simulation and EMI screening are built in. Zone fill, DRC, Gerber and drill plotting are native, with CAM read-back; KiCad is optional, as an independent cross-check and an export target. Panels, a language server, a VS Code extension and the CopperReview viewer complete it.</aside>
 </section>
 <section id="analysis" class="dark">
-<p class="eyebrow">22 / ANALYSIS IN THE COMPILER</p>
+<p class="eyebrow">23 / ANALYSIS IN THE COMPILER</p>
 <h2 class="title">Real numbers from the examples.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">CIRCUIT SIMULATION</p><div class="stat"><p class="big">66.8 nV/√Hz</p><p class="label">preamp output noise at 1 kHz. The bench’s own hand estimate: about 67. Five benches, with a 200-board Monte Carlo, in about 0.1 s.</p></div></div>
@@ -699,7 +711,7 @@ body.show-notes .notes{display:block}
 <aside>These numbers come from running the current compiler on the repository examples. The noise bench matches the engineer’s hand calculation written in the bench file. The EMI comparison shows what an input filter does, though the filtered example also declares a 2 A operating point instead of the current-limit worst case, so it is not the filter alone. The antenna example shows synthesis moving a textbook quarter-wave guess, which resonates 12 % high, onto the band.</aside>
 </section>
 <section id="tracker">
-<p class="eyebrow">23 / A REAL DESIGN</p>
+<p class="eyebrow">24 / A REAL DESIGN</p>
 <h2 class="title">The asset tracker, routed natively.</h2>
 <div class="cols" style="grid-template-columns:600px 1fr; gap:72px">
 <img src="assets/asset-tracker-top.png" alt="Top copper of CopperAssetTracker rendered from its native Gerber plot, with tracks and exposed copper in gold" style="width:600px; height:480px; object-fit:contain; border-radius:12px">
@@ -716,7 +728,7 @@ body.show-notes .notes{display:block}
 <aside>The showcase board from the 7 November 2026 routing review. The current source was routed with the standard pipeline, filled, checked by the native DRC with zero violations and zero unconnected items, and its Gerbers were read back against the netlist with no shorts or opens. The picture is the native plot, not a render. It remains a review candidate: RF and USB requirement checks, supplier availability, assembly review and prototype validation are open, and 12 electrical-requirement checks remain blocked.</aside>
 </section>
 <section id="limits">
-<p class="eyebrow">24 / WHAT IT DOES NOT CLAIM</p>
+<p class="eyebrow">25 / WHAT IT DOES NOT CLAIM</p>
 <h2 class="title">Evidence, not approval.</h2>
 <table class="spec">
 <tr><th style="width:34%">Result</th><th style="width:66%">What it does not establish</th></tr>
@@ -731,7 +743,7 @@ body.show-notes .notes{display:block}
 <aside>Every result has a scope, and the project states it. A prototype, lab measurements and compliance testing are still required. For an agent this matters a lot: it cannot mistake a clean check for a finished product, because reports name what they did not check and missing evidence remains visible.</aside>
 </section>
 <section id="start" class="dark">
-<p class="eyebrow">25 / GET STARTED</p>
+<p class="eyebrow">26 / GET STARTED</p>
 <h2 class="title">Start with a small circuit.</h2>
 <div class="cols-wide">
 <p class="code">git clone https://github.com/andenore/CopperScript<br>cd CopperScript<br>cargo install --locked --path crates/copper<br><br><span class="c"># orient, then check and compile</span><br>copper agent-guide<br>copper check examples/valid_board/board.copper<br><br><span class="c"># simulate a low-noise preamp</span><br>copper sim examples/simulation/preamp/board.copper</p>
