@@ -2,11 +2,11 @@
 
 A 29-slide introduction to CopperScript: the idea (engineering intent belongs in
 source), how the language works (dependencies imported by URL, library context,
-peripheral selection, modules, differential pairs and skew matching for a four-
-lane CSI-2 link, antenna synthesis, vendor models, build settings and panels), a
-complete small board and how to build and route it, the live routing lab, how
-the design helps an AI agent make good decisions, the features included today
-and what the results do not claim. Every slide has speaker notes.
+peripheral selection, modules, differential pairs and skew matching for a
+four-lane CSI-2 link, antenna synthesis, vendor models, build settings and
+panels), a complete small board and how to build and route it, the live routing
+lab, how the design helps an AI agent make good decisions, the features included
+today and what the results do not claim. Every slide has speaker notes.
 
 - [copperscript-overview.pdf](copperscript-overview.pdf): one slide per page,
   readable on GitHub.
