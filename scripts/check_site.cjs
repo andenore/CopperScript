@@ -134,6 +134,8 @@ function checkSite(site = SITE) {
       if (file.endsWith(".svg")) checkXml(path.join(assets, file));
       if (file.endsWith(".json")) JSON.parse(fs.readFileSync(path.join(assets, file), "utf8"));
     }
+    for (const file of fs.readdirSync(path.join(assets, "emi")))
+      if (file.endsWith(".svg")) checkXml(path.join(assets, "emi", file));
     const html = fs.readFileSync(index, "utf8");
     for (const match of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) JSON.parse(match[1]);
     // The antenna figure must show the geometry the example declares, tuned
@@ -146,6 +148,21 @@ function checkSite(site = SITE) {
     for (const [name, design] of Object.entries(antenna.designs))
       if (!(design.curve.length > 10) || design.final_fidelity !== "fine" || !design.board.tracks.some(t => t.locked))
         errors.push(`antenna-synthesis.json: ${name} lacks a fine-mesh curve or locked antenna copper`);
+    // The EMI pages are copper emi-check output of the examples they name, and
+    // the noise figure is a passing copper sim run; the page quotes its numbers.
+    const emi = JSON.parse(fs.readFileSync(path.join(assets, "emi/emi-screening.json"), "utf8"));
+    for (const [name, record] of Object.entries(emi.pages)) {
+      if (sha256(path.join(assets, "emi", name)) !== record.sha256)
+        errors.push(`emi/${name}: bytes do not match emi-screening.json`);
+      if (sha256(path.join(ROOT, record.example)) !== record.example_sha256)
+        errors.push(`emi/${name}: ${record.example} changed since the page was made; re-run copper emi-check`);
+    }
+    const noise = JSON.parse(fs.readFileSync(path.join(assets, "simulation-noise.json"), "utf8"));
+    if (noise.status !== "pass" || !(noise.curve.length > 10) || !fs.existsSync(path.join(ROOT, noise.bench_file)))
+      errors.push("simulation-noise.json: lacks a passing run, its curve or its bench file");
+    for (const quoted of [`${(noise.measures.en_out_1khz.value * 1e9).toFixed(1)} nV/√Hz`,
+      `${(noise.measures.en_in_1khz.value * 1e9).toFixed(2)} nV/√Hz`, `${(noise.measures.vn_audio.value * 1e6).toFixed(2)} µV`])
+      if (!html.includes(`<strong>${quoted}</strong>`)) errors.push(`index.html: simulation figure does not quote ${quoted}`);
     const png = fs.readFileSync(path.join(assets, "social-preview.png"));
     if (!png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) errors.push("Social preview is not a PNG");
   } catch (error) {

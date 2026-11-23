@@ -226,3 +226,110 @@ if (navigator.clipboard && window.isSecureContext) {
     show(data, "synthesized");
   }).catch(() => {});
 })();
+
+// EMI screening pages: copper emi-check --plot-summary output, copied byte for
+// byte (scripts/update_site_analysis.cjs). The links open each SVG without JavaScript.
+(() => {
+  const pages = {
+    bare: { alt: "copper emi-check summary of the buck converter without an input filter: hot loop 4.97 nH, conducted emission 49.6 dB over the average limit with 55 of 60 harmonics over, near-field map and conducted spectrum", caption: "No input filter, worst case at the 4.5 A current limit · 95.6 dBµV at 500 kHz, 49.6 dB over the CISPR 32 class B average limit; 55 of 60 harmonics over." },
+    filter: { alt: "copper emi-check summary of the same buck converter with a 4.7 µH and 10 µF input filter at a 2 A load: conducted emission 6.4 dB under the average limit, no harmonic over, near-field map, conducted spectrum and input-network impedance", caption: "4.7 µH and 10 µF input filter, declared 2 A load · 39.6 dBµV at 500 kHz, 6.4 dB under the average limit; 0 of 60 harmonics over. Same placement and hot loop." }
+  };
+  const image = document.getElementById("emi-shot"), caption = document.getElementById("emi-caption"), fullsize = document.getElementById("emi-fullsize");
+  const links = document.querySelectorAll("[data-emi]");
+  links.forEach(link => link.addEventListener("click", event => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    const page = pages[link.dataset.emi];
+    if (!page || !image || !caption) return;
+    event.preventDefault();
+    image.src = link.getAttribute("href");
+    image.alt = page.alt;
+    caption.textContent = page.caption;
+    if (fullsize) fullsize.href = link.getAttribute("href");
+    links.forEach(item => item.removeAttribute("aria-current"));
+    link.setAttribute("aria-current", "true");
+  }));
+})();
+
+// Noise density of the preamp: the recorded curves of a copper sim run in
+// assets/simulation-noise.json (see scripts/update_site_analysis.cjs).
+(() => {
+  const host = document.getElementById("sim-chart-svg");
+  if (!host || !window.fetch) return;
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (name, attrs = {}, parent) => {
+    const node = document.createElementNS(NS, name);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+  const text = (parent, x, y, content, attrs = {}) => { const t = el("text", {x, y, ...attrs}, parent); t.textContent = content; return t; };
+  const hz = f => f >= 1e6 ? `${+(f / 1e6).toPrecision(3)} MHz` : f >= 1e3 ? `${+(f / 1e3).toPrecision(3)} kHz` : `${+f.toPrecision(3)} Hz`;
+  const nv = v => v >= 1e-6 ? `${(v * 1e6).toPrecision(3)} µV/√Hz` : `${(v * 1e9).toPrecision(3)} nV/√Hz`;
+  const SERIES = [
+    {index: 1, name: "total", color: "#ad4b28", width: 2.5, dash: ""},
+    {index: 2, name: "sensor", color: "#1f7fb0", width: 1.6, dash: "5 3"},
+    {index: 3, name: "R_G", color: "#5f7d60", width: 1.6, dash: "5 3"},
+    {index: 4, name: "op-amp", color: "#6b5aa6", width: 1.6, dash: "2 3"}
+  ];
+
+  function draw(data) {
+    const curve = data.curve.filter(p => p[0] >= 10);
+    const W = 520, H = 300, m = {l: 48, r: 64, t: 12, b: 34};
+    const [fmin, fmax] = [curve[0][0], curve.at(-1)[0]];
+    const [vmin, vmax] = [1e-8, 1e-6];
+    const lx = Math.log10, X = f => m.l + (lx(f) - lx(fmin)) / (lx(fmax) - lx(fmin)) * (W - m.l - m.r);
+    const Y = v => m.t + (lx(vmax) - lx(Math.min(Math.max(v, vmin / 2), vmax * 2))) / (lx(vmax) - lx(vmin)) * (H - m.t - m.b);
+    const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": `Output noise density of the preamp from ${hz(fmin)} to ${hz(fmax)}, total and the sensor, R_G and op-amp contributions. The key values are listed below the chart.`});
+    const font = {"font-family": "Consolas, monospace", "font-size": 10, fill: "#626962"};
+    for (const v of [1e-8, 3e-8, 1e-7, 3e-7, 1e-6]) {
+      el("line", {x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "#d6d8cc"}, svg);
+      text(svg, m.l - 6, Y(v) + 3.5, v >= 1e-6 ? "1 µ" : `${Math.round(v * 1e9)} n`, {...font, "text-anchor": "end"});
+    }
+    for (let f = 10; f <= fmax * 1.01; f *= 10) {
+      el("line", {x1: X(f), x2: X(f), y1: m.t, y2: H - m.b, stroke: "#e1e2d8"}, svg);
+      text(svg, X(f), H - m.b + 16, hz(f).replace(" ", ""), {...font, "text-anchor": "middle"});
+    }
+    // The limit of en_out_1khz, drawn where the bench measures it.
+    const limit = 75e-9;
+    el("line", {x1: X(1000) - 16, x2: X(1000) + 16, y1: Y(limit), y2: Y(limit), stroke: "#7a5a3a", "stroke-width": 1.5, "stroke-dasharray": "4 3"}, svg);
+    text(svg, X(1000), Y(limit) - 6, "limit at 1 kHz", {...font, "text-anchor": "middle", fill: "#7a5a3a"});
+    for (const s of SERIES) {
+      const d = curve.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[s.index]).toFixed(1)}`).join("");
+      el("path", {d, fill: "none", stroke: s.color, "stroke-width": s.width, "stroke-dasharray": s.dash, "stroke-linejoin": "round"}, svg);
+    }
+    // Direct labels at the 1 kHz to 10 kHz plateau, spread so they never overlap.
+    const anchor = curve.find(p => p[0] >= 3000) || curve.at(-1);
+    const labels = SERIES.map(s => [Y(anchor[s.index]), s]).sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < labels.length; i++) labels[i][0] = Math.max(labels[i][0], labels[i - 1][0] + 12);
+    for (const [y, s] of labels) text(svg, W - m.r + 6, y + 3.5, s.name, {...font, fill: s.color});
+    const cross = el("g", {visibility: "hidden"}, svg);
+    const vline = el("line", {y1: m.t, y2: H - m.b, stroke: "#252b29"}, cross);
+    const dots = SERIES.map(s => el("circle", {r: 3.5, fill: s.color, stroke: "#ebece3", "stroke-width": 1.5}, cross));
+    const box = el("rect", {width: 150, height: 72, fill: "#fcfcfb", stroke: "#cbd0c0"}, cross);
+    const lines = [0, 1, 2, 3, 4].map(() => el("text", {class: "chart-tip"}, cross));
+    const hit = el("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"}, svg);
+    const move = event => {
+      const point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY;
+      const local = point.matrixTransform(svg.getScreenCTM().inverse());
+      let best = curve[0];
+      for (const p of curve) if (Math.abs(X(p[0]) - local.x) < Math.abs(X(best[0]) - local.x)) best = p;
+      const x = X(best[0]);
+      vline.setAttribute("x1", x); vline.setAttribute("x2", x);
+      SERIES.forEach((s, i) => { dots[i].setAttribute("cx", x); dots[i].setAttribute("cy", Y(best[s.index])); });
+      const bx = x + 158 > W ? x - 158 : x + 8, by = m.t + 6;
+      box.setAttribute("x", bx); box.setAttribute("y", by);
+      [hz(best[0]), ...SERIES.map(s => `${s.name.padEnd(7)}${nv(best[s.index])}`)].forEach((content, i) => {
+        lines[i].textContent = content; lines[i].setAttribute("x", bx + 8); lines[i].setAttribute("y", by + 14 + i * 13);
+      });
+      cross.setAttribute("visibility", "visible");
+    };
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerdown", move);
+    hit.addEventListener("pointerleave", () => cross.setAttribute("visibility", "hidden"));
+    text(svg, (m.l + W - m.r) / 2, H - 3, "frequency", {...font, "text-anchor": "middle"});
+    host.replaceChildren(svg);
+  }
+
+  fetch("assets/simulation-noise.json?v=20261123").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(draw).catch(() => {});
+})();

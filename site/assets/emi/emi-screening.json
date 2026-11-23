@@ -1,0 +1,18 @@
+{
+  "schema": "copperscript-site-emi/v1",
+  "compiler_commit": "201ae83",
+  "pages": {
+    "emi-buck.svg": {
+      "example": "examples/emi_buck/board.copper",
+      "command": "copper emi-check examples/emi_buck/board.copper --allow-proxy-footprints --plot-summary emi-buck.svg",
+      "example_sha256": "d86fab7c11cfcf6432da89392fa34131d0b3d4a925c66d0b7004e216dc661b78",
+      "sha256": "f315a3c7466c1286e2293eaafd7e17c3b9d64d38dc2c5dc3880ff4ec4dc7701a"
+    },
+    "emi-buck-filter.svg": {
+      "example": "examples/emi_buck_filter/board.copper",
+      "command": "copper emi-check examples/emi_buck_filter/board.copper --allow-proxy-footprints --plot-summary emi-buck-filter.svg",
+      "example_sha256": "d05394b0ba930351aa70cb994f65d3b9028e978c3e33c425c1f26be8a9443081",
+      "sha256": "514c05bfe7a18fa057a0827585c0ab2d5b4958cb0ea04502a7b27be24b2f6a73"
+    }
+  }
+}
