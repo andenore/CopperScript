@@ -1,0 +1,18 @@
+<section id="simple-board" class="paper2">
+<p class="eyebrow">07 / A COMPLETE SMALL BOARD</p>
+<h2 class="title">A Bluetooth coin-cell board in one file.</h2>
+<div class="cols" style="grid-template-columns:1010px 1fr; gap:64px">
+<p class="code"><span class="k">board</span> Nrf52CoinCell {<br>&#160;&#160;&#160;&#160;<span class="k">import</span> nordic <span class="s">"…/CopperLib/…/nordic/nrf52832"</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> U_NRF: <span class="t">nordic.NRF52832_QFAA</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> BT1: <span class="t">keystone.KEYSTONE_3034</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> C_VDD1: <span class="t">CAPACITOR</span> { value = <span class="v">100nF</span>; }<br>&#160;&#160;&#160;&#160;<span class="k">net</span> VBAT { BT1.POS; U_NRF.VDD_1; C_VDD1.1; … }<br>&#160;&#160;&#160;&#160;<span class="k">supply</span> VBAT { voltage = <span class="v">3V</span>; external = true; }<br>&#160;&#160;&#160;&#160;<span class="k">constraint</span> fixed_placement(BT1) { x = <span class="v">15mm</span>; y = <span class="v">25mm</span>; }<br>&#160;&#160;&#160;&#160;<span class="k">physical_macro</span> nordic-antenna-trial:<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span class="t">nordic_layout.NRF52832_JOHANSON_SIX_LAYER_TRIAL</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;member U1 = U_NRF; member ANT = ANT_BT; …<br>&#160;&#160;&#160;&#160;}<br>}</p>
+<div>
+<p class="lead" style="margin-bottom:28px">27 components and 20 nets on a 50 × 40 mm, six-layer board:</p>
+<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
+<li>nRF52832 Bluetooth LE chip</li>
+<li>CR2032 coin-cell holder</li>
+<li>Chip antenna in Nordic’s reference RF layout, reused as a hard macro</li>
+<li>Debug header, crystal, two LEDs, two buttons</li>
+</ul>
+<p class="small" style="margin-top:28px">Parts and the RF layout come from CopperLib, pinned by hash in copper.lock.</p>
+</div>
+</div>
+<aside>A real, complete example from the repository: examples/nrf52_coin_cell. It is about 135 lines of source. The chip, antenna, battery holder and debug connector are imported from CopperLib at pinned revisions; the radio’s matching network and antenna copper come from Nordic’s reference layout, packaged as a hard macro and bound to the board’s components and nets. The excerpt is abridged: the full file has every decoupling capacitor, the crystal, LEDs, buttons, all nets and every placement. It is a powered electrical example, not a production-qualified product.</aside>
+</section>

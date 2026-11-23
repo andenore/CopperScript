@@ -1,0 +1,12 @@
+<section id="analysis" class="dark">
+<p class="eyebrow">17 / ANALYSIS IN THE COMPILER</p>
+<h2 class="title">Real numbers from the examples.</h2>
+<div class="cards cards-3">
+<div class="card"><p class="num">CIRCUIT SIMULATION</p><div class="stat"><p class="big">66.8 nV/√Hz</p><p class="label">preamp output noise at 1 kHz. The bench’s own hand estimate: about 67. Five benches, with a 200-board Monte Carlo, in about 0.1 s.</p></div></div>
+<div class="card" style="animation-delay:150ms"><p class="num">EMI SCREENING</p><div class="stat"><p class="big">+49.6 dB</p><p class="label">buck converter over the CISPR 32 class B average limit with no input filter; 6.4 dB under with an LC filter (and a 2 A load).</p></div></div>
+<div class="card" style="animation-delay:300ms"><p class="num">ANTENNA SYNTHESIS</p><div class="stat"><p class="big">2.37 GHz</p><p class="label">monopole resonance after full-wave tuning, from 2.72 GHz for the quarter-wave template; 86 % radiation efficiency.</p></div></div>
+</div>
+<div class="spacer"></div>
+<p class="lead" style="width:1500px">An agent can ask “is this good?” and get a number tied to the source, instead of a guess. Every one is evidence for review, not a qualification.</p>
+<aside>These numbers come from running the current compiler on the repository examples. The noise bench matches the engineer’s hand calculation written in the bench file. The EMI comparison shows what an input filter does, though the filtered example also declares a 2 A operating point instead of the current-limit worst case, so it is not the filter alone. The antenna example shows synthesis moving a textbook quarter-wave guess, which resonates 12 % high, onto the band.</aside>
+</section>

@@ -1,0 +1,18 @@
+<section id="pipeline">
+<p class="eyebrow">06 / FROM SOURCE TO COPPER</p>
+<h2 class="title">Every transformation stays inspectable.</h2>
+<div class="flow">
+<div class="step"><h3>Describe</h3><p class="body">Parts, nets, supplies and constraints in .copper</p><p class="out">source + lock</p></div>
+<div class="gap-arrow"><x-shape kind="arrow-right"></x-shape></div>
+<div class="step" style="animation-delay:100ms"><h3>Check &amp; simulate</h3><p class="body">Electrical rules, power states and benches</p><p class="out">IR + results</p></div>
+<div class="gap-arrow"><x-shape kind="arrow-right"></x-shape></div>
+<div class="step" style="animation-delay:200ms"><h3>Place, route &amp; screen</h3><p class="body">Bounded pipeline, hard macros, EMI screening</p><p class="out">board + report</p></div>
+<div class="gap-arrow"><x-shape kind="arrow-right"></x-shape></div>
+<div class="step" style="animation-delay:300ms"><h3>Fill, check &amp; plot</h3><p class="body">Native zone fill, DRC, Gerbers and panels</p><p class="out">fab files</p></div>
+<div class="gap-arrow"><x-shape kind="arrow-right"></x-shape></div>
+<div class="step" style="animation-delay:400ms"><h3>Review &amp; qualify</h3><p class="body">CopperReview, then lab and prototype evidence</p><p class="out">a decision</p></div>
+</div>
+<div class="spacer"></div>
+<p class="lead" style="width:1500px">Each stage writes JSON with a schema and the SHA-256 of its inputs. Changed inputs invalidate old evidence, and missing evidence stays visible instead of turning into a pass.</p>
+<aside>The whole flow runs from one source. Each step writes a report a person or an agent can read: compiled IR, simulation results, route reports, DRC and CAM read-back. Outputs record hashes of their inputs, so stale evidence is detected rather than reused. KiCad remains available as an independent cross-check and export target.</aside>
+</section>

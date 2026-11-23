@@ -1,0 +1,17 @@
+<section id="part-code">
+<p class="eyebrow">04 / FACTS AND RELATIONSHIPS</p>
+<h2 class="title">Parts hold facts; boards hold intent.</h2>
+<div class="cols">
+<div>
+<p class="code-label">library: part definition</p>
+<p class="code"><span class="k">part</span> BME280 {<br>&#160;&#160;&#160;&#160;category = <span class="s">"sensor.environmental"</span>;<br>&#160;&#160;&#160;&#160;<span class="k">pin</span> VDD {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;number = <span class="s">"1"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;domains = <span class="s">"power"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_min = <span class="v">1.71V</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_max = <span class="v">3.6V</span>;<br>&#160;&#160;&#160;&#160;}<br>}</p>
+<p class="small" style="margin-top:24px">Ratings come from the datasheet, with units. Put 5 V on this pin and the compiler says <i>“5 V exceeds the pin maximum 3.6 V”</i>, with the line.</p>
+</div>
+<div>
+<p class="code-label">board: component</p>
+<p class="code"><span class="k">component</span> C_MCU: <span class="t">CAPACITOR</span> {<br>&#160;&#160;&#160;&#160;value = <span class="v">100nF</span>;<br>&#160;&#160;&#160;&#160;role = decoupling;<br>&#160;&#160;&#160;&#160;decouples = <span class="s">"U_MCU.VDD"</span>;<br>}</p>
+<p class="small" style="margin-top:24px">A relationship, not just a value. The pin association survives compilation and steers decoupling placement and how the capacitor feeds the pin.</p>
+</div>
+</div>
+<aside>Two layers of information. Library parts hold facts copied from datasheets, with units and source provenance. Board components hold relationships: this capacitor decouples that pin. Both survive compilation into the intermediate representation, so checks, placement and routing can act on them. The excerpts are shortened; the component is from the CopperAssetTracker board.</aside>
+</section>

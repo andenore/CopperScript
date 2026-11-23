@@ -41,6 +41,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Work on compiler internals or ERC | [Compiler architecture](compiler-architecture.md) |
 | Find the code behind a JSON document's `schema` | [Output and input schemas](schemas.md) |
 | Plan usability or speed improvements across the workspace | [Architecture and design review (2026-11)](architecture-review-2026-11.md) |
+| Present CopperScript (overview slide deck, PDF and browser viewer) | [Overview deck](presentations/copperscript-overview/README.md) |
 | Plan unfinished work | [Current backlog](../TODO.md) |
 
 

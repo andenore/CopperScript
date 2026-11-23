@@ -1,0 +1,15 @@
+<section id="blocks">
+<p class="eyebrow">03 / HOW THE LANGUAGE WORKS</p>
+<h2 class="title">A small set of typed building blocks.</h2>
+<table class="spec">
+<tr><th style="width:22%">Block</th><th style="width:78%">What it declares</th></tr>
+<tr><td>part · device</td><td>A component’s pins, domains, directions, ratings and roles; a device’s silicon pads, power domains and peripheral mux options</td></tr>
+<tr><td>component</td><td>One placed instance of a part, with its value, footprint and relationships such as <i>decouples = U1.VDD</i></td></tr>
+<tr><td>net · supply</td><td>Connections, and the rails that power them, with voltage and current budgets</td></tr>
+<tr><td>module</td><td>A reusable circuit with ports, instantiated on a board or simulated alone</td></tr>
+<tr><td>constraint · mechanical</td><td>Outline, holes, keepouts, placement, routing rules, antennas and emission standards</td></tr>
+<tr><td>power_state · bench</td><td>Steady-state rail scenarios, and simulation benches with measures and limits</td></tr>
+<tr><td>physical_macro · panel · build</td><td>Reusable hard layouts, fabrication panels and build settings, in source</td></tr>
+</table>
+<aside>The vocabulary is small. Parts and devices describe what a component is. Components, nets and supplies describe the board. Modules make circuits reusable. Constraints and mechanical blocks carry physical intent. Power states and benches carry analysis. Macros, panels and build blocks carry layout and manufacturing settings. All of it compiles into inspectable JSON intermediate representations.</aside>
+</section>

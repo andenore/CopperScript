@@ -1,0 +1,22 @@
+<section id="review-loop">
+<p class="eyebrow">15 / PEOPLE STAY IN THE LOOP</p>
+<h2 class="title">Humans review; the next run listens.</h2>
+<div class="cols">
+<div>
+<h3 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:44px; font-weight:600; line-height:1.15; margin-bottom:24px">CopperReview in the browser</h3>
+<p class="lead">Schematic, layout, 3D, EMI and assembly views of the compiled board, running the same compiler as WebAssembly. Select parts, nets or a region, write what should improve, cite issue ids, and export a review the next LLM-assisted run can read.</p>
+<p class="small" style="margin-top:24px">The viewer is read-only: notes never edit the board or its constraints.</p>
+</div>
+<div>
+<h3 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:44px; font-weight:600; line-height:1.15; margin-bottom:24px">Clear ownership</h3>
+<table class="spec">
+<tr><th style="width:38%">Repository</th><th style="width:62%">Owns</th></tr>
+<tr><td>CopperScript</td><td>Language, compiler and generic algorithms</td></tr>
+<tr><td>CopperLib</td><td>Versioned parts, circuits and contracts</td></tr>
+<tr><td>A board repo</td><td>Composition and its evidence</td></tr>
+</table>
+<p class="small" style="margin-top:24px">An agent knows where a change belongs, so a fix for one board does not leak into the compiler.</p>
+</div>
+</div>
+<aside>Agents do not replace engineering review. CopperReview lets a person inspect the board and leave notes tied to components, nets, regions and issue ids; the export feeds the next agent run. Ownership rules tell an agent where a change belongs: algorithms in CopperScript, reusable definitions in libraries, board composition and evidence in the board repository.</aside>
+</section>

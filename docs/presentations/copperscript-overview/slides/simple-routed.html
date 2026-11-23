@@ -1,0 +1,17 @@
+<section id="simple-routed" class="dark">
+<p class="eyebrow">09 / THE RESULT</p>
+<h2 class="title">The coin-cell board, built in 3 seconds.</h2>
+<div class="cols" style="grid-template-columns:740px 1fr; gap:72px">
+<img src="assets/nrf52-coin-cell-routed.png" alt="The routed nRF52 coin-cell board from its native plot: top copper in red, inner and bottom copper in purple and blue, exposed pads in gold, with the coin-cell holder on the left and the nRF52 chip upper right" style="width:740px; height:600px; object-fit:contain; border-radius:12px">
+<div>
+<div class="cards" style="grid-template-columns:1fr 1fr; gap:36px 28px">
+<div class="stat"><p class="big">19 / 19</p><p class="label">signal nets routed, plus a ground plane</p></div>
+<div class="stat"><p class="big">3.1 s</p><p class="label">for check, route, fill, DRC and gate</p></div>
+<div class="stat"><p class="big">213</p><p class="label">tracks, with 44 vias</p></div>
+<div class="stat"><p class="big">0</p><p class="label">DRC violations, 0 unconnected</p></div>
+</div>
+<p class="small" style="margin-top:40px">Run today with <i>make EXAMPLE=nrf52 route</i>. Drawn by copper render from the native Gerber plot. Placement is provisional and the board is not production-qualified.</p>
+</div>
+</div>
+<aside>This is the output of the build on the previous slide, run on the coin-cell example today. All 19 ordinary nets routed with none left open, the inner ground plane filled and verified, and the native DRC reported zero violations and zero unconnected items. The whole build took about three seconds on a 4-core cloud machine. The picture is the board’s own Gerber plot: red is top copper, blue and purple are inner and bottom layers, gold is exposed copper. The DRC lists 8 check groups it does not make, and RF, power and prototype qualification remain open.</aside>
+</section>

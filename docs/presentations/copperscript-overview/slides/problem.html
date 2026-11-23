@@ -1,0 +1,12 @@
+<section id="problem">
+<p class="eyebrow">01 / THE PROBLEM</p>
+<h2 class="title">A schematic says what connects.<br>It rarely says why.</h2>
+<div class="cards cards-3">
+<div class="card"><p class="num">A CAPACITOR</p><h3>…protects one particular pin.</h3><p class="body">Its value is on the schematic. Which supply pin it decouples, and how close it must sit, is not.</p></div>
+<div class="card" style="animation-delay:120ms"><p class="num">A CONVERTER</p><h3>…has a critical current loop.</h3><p class="body">The hot loop and its switch node decide the board’s emissions. A netlist shows neither.</p></div>
+<div class="card" style="animation-delay:240ms"><p class="num">A RADIO</p><h3>…needs geometry and a return path.</h3><p class="body">Reference layouts and keepouts live in application notes, not in the design file.</p></div>
+</div>
+<div class="spacer"></div>
+<p class="lead" style="width:1500px">In a graphical CAD tool this intent stays in the designer’s head, the datasheet and a PDF. An AI agent sees none of it, so it cannot respect it or be checked against it.</p>
+<aside>The core problem. Design intent is the most important information on a board, and it is the least written down. A human expert carries it in their head. An AI agent working on the same files has no access to it, which is why agents tend to produce boards that connect correctly but are poorly designed.</aside>
+</section>
