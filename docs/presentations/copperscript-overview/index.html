@@ -457,7 +457,7 @@ body.show-notes .notes{display:block}
 <div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Reproducible offline</h3><p class="body">GitHub or GitLab at a tag or commit, fetched once; --offline never touches the network.</p></div>
 <div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Data, never code</h3><p class="body">Packages hold declarations only. Nothing in a dependency is ever executed.</p></div>
 </div>
-<aside>Real lines from the nRF52 coin-cell example. A board imports a package by a stable URL-like path and gives it an alias. The project’s copper.mod pins each library to a tag or commit, here CopperLib and KiCad’s own footprint repository, and can redirect one to a local directory while developing. copper lock writes copper.lock: a module digest plus the SHA-256 and size of every .copper, footprint, 3D-model, JSON and CSV file. With --locked any changed byte is an error, and --offline works from the cache. Package code is never executed, which matters when an agent pulls in libraries.</aside>
+<aside>Real lines from an example board in the repository. A board imports a package by a stable URL-like path and gives it an alias. The project’s copper.mod pins each library to a tag or commit, here CopperLib and KiCad’s own footprint repository, and can redirect one to a local directory while developing. copper lock writes copper.lock: a module digest plus the SHA-256 and size of every .copper, footprint, 3D-model, JSON and CSV file. With --locked any changed byte is an error, and --offline works from the cache. Package code is never executed, which matters when an agent pulls in libraries.</aside>
 </section>
 <section id="library-search" class="paper2">
 <p class="eyebrow">07 / LIBRARY CONTEXT</p>
@@ -470,7 +470,7 @@ body.show-notes .notes{display:block}
 <div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Facts cite their source</h3><p class="body">Down to the page and figure. A fact without one stays unresolved.</p></div>
 </div>
 </div>
-<aside>Real output, trimmed, from searching the coin-cell project’s dependencies. The result names the part, its version and hashes, and the exact catalogue page, figure and URL its facts came from. An agent searches only the libraries the project declares, then inspects one section of one contract, so it spends its context on the facts it needs. The output also states its evidence level, here source declarations only, so nobody mistakes a declaration for a measurement.</aside>
+<aside>Real output, trimmed, from searching an example project’s pinned dependencies. The result names the part, its version and hashes, and the exact catalogue page, figure and URL its facts came from. An agent searches only the libraries the project declares, then inspects one section of one contract, so it spends its context on the facts it needs. The output also states its evidence level, here source declarations only, so nobody mistakes a declaration for a measurement.</aside>
 </section>
 <section id="peripherals">
 <p class="eyebrow">08 / PERIPHERAL SELECTION</p>
@@ -579,26 +579,8 @@ body.show-notes .notes{display:block}
 <p class="lead" style="width:1500px">Each stage writes JSON with a schema and the SHA-256 of its inputs. Changed inputs invalidate old evidence, and missing evidence stays visible instead of turning into a pass.</p>
 <aside>The whole flow runs from one source. Each step writes a report a person or an agent can read: compiled IR, simulation results, route reports, DRC and CAM read-back. Outputs record hashes of their inputs, so stale evidence is detected rather than reused. KiCad remains available as an independent cross-check and export target.</aside>
 </section>
-<section id="simple-board" class="paper2">
-<p class="eyebrow">15 / A COMPLETE SMALL BOARD</p>
-<h2 class="title">A Bluetooth coin-cell board in one file.</h2>
-<div class="cols" style="grid-template-columns:1010px 1fr; gap:64px">
-<p class="code"><span class="k">board</span> Nrf52CoinCell {<br>&#160;&#160;&#160;&#160;<span class="k">import</span> nordic <span class="s">"…/CopperLib/…/nordic/nrf52832"</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> U_NRF: <span class="t">nordic.NRF52832_QFAA</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> BT1: <span class="t">keystone.KEYSTONE_3034</span>;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> C_VDD1: <span class="t">CAPACITOR</span> { value = <span class="v">100nF</span>; }<br>&#160;&#160;&#160;&#160;<span class="k">net</span> VBAT { BT1.POS; U_NRF.VDD_1; C_VDD1.1; … }<br>&#160;&#160;&#160;&#160;<span class="k">supply</span> VBAT { voltage = <span class="v">3V</span>; external = true; }<br>&#160;&#160;&#160;&#160;<span class="k">constraint</span> fixed_placement(BT1) { x = <span class="v">15mm</span>; y = <span class="v">25mm</span>; }<br>&#160;&#160;&#160;&#160;<span class="k">physical_macro</span> nordic-antenna-trial:<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span class="t">nordic_layout.NRF52832_JOHANSON_SIX_LAYER_TRIAL</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;member U1 = U_NRF; member ANT = ANT_BT; …<br>&#160;&#160;&#160;&#160;}<br>}</p>
-<div>
-<p class="lead" style="margin-bottom:28px">27 components and 20 nets on a 50 × 40 mm, six-layer board:</p>
-<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
-<li>nRF52832 Bluetooth LE chip</li>
-<li>CR2032 coin-cell holder</li>
-<li>Chip antenna in Nordic’s reference RF layout, reused as a hard macro</li>
-<li>Debug header, crystal, two LEDs, two buttons</li>
-</ul>
-<p class="small" style="margin-top:28px">Parts and the RF layout come from CopperLib, pinned by hash in copper.lock.</p>
-</div>
-</div>
-<aside>A real, complete example from the repository: examples/nrf52_coin_cell. It is about 135 lines of source. The chip, antenna, battery holder and debug connector are imported from CopperLib at pinned revisions; the radio’s matching network and antenna copper come from Nordic’s reference layout, packaged as a hard macro and bound to the board’s components and nets. The excerpt is abridged: the full file has every decoupling capacitor, the crystal, LEDs, buttons, all nets and every placement. It is a powered electrical example, not a production-qualified product.</aside>
-</section>
 <section id="build-route">
-<p class="eyebrow">16 / BUILD AND ROUTE A BOARD</p>
+<p class="eyebrow">15 / BUILD AND ROUTE A BOARD</p>
 <h2 class="title">Four commands from source to fab files.</h2>
 <div class="cards" style="grid-template-columns:1fr 1fr; gap:24px">
 <div class="card" style="padding:30px 32px"><p class="num">1 · CHECK</p><p class="cmd" style="margin-top:0; margin-bottom:12px">copper check board.copper --locked</p><p class="body">Electrical rules and ratings; every imported package verified against copper.lock.</p></div>
@@ -609,42 +591,8 @@ body.show-notes .notes{display:block}
 <p class="small" style="margin-top:32px">The fab profile and placement and routing settings live in the board’s <i>build</i> block, so the commands stay short. KiCad is optional, as an independent cross-check.</p>
 <aside>How to build and route a board. Check first. Then copper build runs the standard pipeline: copper check, route-board, a native zone refill, the native design-rule check and a completion gate, writing everything into a fresh run directory with a run.json that records the inputs and outputs by hash. If something fails, copper issues groups the causes and copper view draws them; fix the source and build again. Finally export-manufacturing writes the fabrication files and refuses a run that failed or whose sources have changed. Projects with a Makefile wrap step two as make route.</aside>
 </section>
-<section id="simple-routed" class="dark">
-<p class="eyebrow">17 / THE RESULT</p>
-<h2 class="title">The coin-cell board, built in 3 seconds.</h2>
-<div class="cols" style="grid-template-columns:740px 1fr; gap:72px">
-<img src="assets/nrf52-coin-cell-routed.png" alt="The routed nRF52 coin-cell board from its native plot: top copper in red, inner and bottom copper in purple and blue, exposed pads in gold, with the coin-cell holder on the left and the nRF52 chip upper right" style="width:740px; height:600px; object-fit:contain; border-radius:12px">
-<div>
-<div class="cards" style="grid-template-columns:1fr 1fr; gap:36px 28px">
-<div class="stat"><p class="big">19 / 19</p><p class="label">signal nets routed, plus a ground plane</p></div>
-<div class="stat"><p class="big">3.1 s</p><p class="label">for check, route, fill, DRC and gate</p></div>
-<div class="stat"><p class="big">213</p><p class="label">tracks, with 44 vias</p></div>
-<div class="stat"><p class="big">0</p><p class="label">DRC violations, 0 unconnected</p></div>
-</div>
-<p class="small" style="margin-top:40px">Run today with <i>make EXAMPLE=nrf52 route</i>. Drawn by copper render from the native Gerber plot. Placement is provisional and the board is not production-qualified.</p>
-</div>
-</div>
-<aside>This is the output of the build on the previous slide, run on the coin-cell example today. All 19 ordinary nets routed with none left open, the inner ground plane filled and verified, and the native DRC reported zero violations and zero unconnected items. The whole build took about three seconds on a 4-core cloud machine. The picture is the board’s own Gerber plot: red is top copper, blue and purple are inner and bottom layers, gold is exposed copper. The DRC lists 8 check groups it does not make, and RF, power and prototype qualification remain open.</aside>
-</section>
-<section id="live-demo">
-<p class="eyebrow">18 / LIVE ROUTING LAB</p>
-<h2 class="title">Route a board in your browser.</h2>
-<div class="cols" style="grid-template-columns:1040px 1fr; gap:64px">
-<img src="assets/routing-lab.png" alt="The CopperScript live routing lab: eight crossing signals routed on two copper layers around a hatched central keepout, with the result panel showing 8 of 8 signals connected, 12 vias and 0 DRC findings" style="width:1040px; height:600px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
-<div>
-<p class="lead" style="margin-bottom:28px">The real Rust routing pipeline, compiled to WebAssembly, runs in a browser worker. Nothing is precomputed.</p>
-<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
-<li>8 of 8 crossing signals, 12 vias, 0 DRC findings, in about 0.6 s</li>
-<li>Edit the source, route again, compare before and after</li>
-<li>Block the corridor: open nets are reported, never faked</li>
-</ul>
-<p class="cmd" style="font-family:'JetBrains Mono', 'Courier New', monospace; font-size:24px; color:#A4472A; margin-top:32px">andenore.github.io/<br>CopperScript/demo/routing</p>
-</div>
-</div>
-<aside>The live routing lab on the project website. It compiles a small self-contained .copper board in the browser and runs the same copper-route pipeline as the native tool, with the same global routing, negotiation, exact commit checks and internal DRC, in a web worker. The default case weaves eight crossed signals around a keepout on two layers; this screenshot is from a local run of the current source: 8 of 8 connected, 12 vias, no DRC findings, in about 0.6 seconds. Other cases show a layer change and a blocked corridor, where the lab reports the open nets instead of showing a canned success. The geometry is synthetic teaching material, not a qualified circuit.</aside>
-</section>
 <section id="ai-statement" class="accent">
-<p class="eyebrow">19 / WHY IT SUITS AI AGENTS</p>
+<p class="eyebrow">16 / WHY IT SUITS AI AGENTS</p>
 <div class="spacer"></div>
 <p class="statement fade" style="width:1560px">An agent makes good decisions when every decision gets fast, located and honest feedback.</p>
 <div class="spacer"></div>
@@ -652,7 +600,7 @@ body.show-notes .notes{display:block}
 <aside>This is the central claim about AI. Language models are good at writing structured text and at reacting to precise feedback. They are bad at guessing facts they cannot see and at judging their own work. CopperScript is built around that: give the agent text to write, facts to retrieve instead of guess, and checks that answer quickly, point at the exact line and never pretend a missing input passed.</aside>
 </section>
 <section id="loop" class="dark">
-<p class="eyebrow">20 / THE AGENT LOOP</p>
+<p class="eyebrow">17 / THE AGENT LOOP</p>
 <h2 class="title">Retrieve, write, check, fix. Repeat.</h2>
 <div class="flow">
 <div class="step"><h3>Orient</h3><p class="body">A guide bundled with the compiler, one topic at a time</p><p class="out">agent-guide</p></div>
@@ -670,7 +618,7 @@ body.show-notes .notes{display:block}
 <aside>The loop in commands. copper agent-guide gives a short bootstrap and topics such as syntax, libraries, verification, iteration and simulation. copper library search and inspect retrieve only the contracts the task needs. copper check --json returns located findings with machine-applicable fixes. copper explain describes a diagnostic code, copper query answers questions about the compiled design, and copper issues and copper view group routing failures and draw them.</aside>
 </section>
 <section id="agent-choices">
-<p class="eyebrow">21 / DESIGNED FOR GOOD DECISIONS</p>
+<p class="eyebrow">18 / DESIGNED FOR GOOD DECISIONS</p>
 <h2 class="title">Six choices that keep an agent honest.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">01</p><h3>Text, not clicks</h3><p class="body">The agent writes source it can diff and explain. No GUI to drive, no hidden state.</p></div>
@@ -683,7 +631,7 @@ body.show-notes .notes{display:block}
 <aside>Six design choices. One: text instead of a GUI, so the agent’s work is reviewable. Two: retrieval from pinned, versioned libraries, so it does not invent part data; facts the source does not give stay explicitly unresolved. Three: units and roles, so many wrong decisions fail to compile. Four: compact, located, machine-readable diagnostics, so the agent spends its context on the problem. Five: no silent passes; screening results and missing evidence stay visible. Six: when routing fails, the project improves the generic algorithm by comparing with manufacturer reference layouts, rather than adding board-specific patches.</aside>
 </section>
 <section id="check-example" class="paper2">
-<p class="eyebrow">22 / WHAT THE AGENT SEES</p>
+<p class="eyebrow">19 / WHAT THE AGENT SEES</p>
 <h2 class="title">copper check --json, on a broken board.</h2>
 <div class="cols">
 <p class="code">{ <span class="s">"code"</span>: <span class="v">"SUPPLY_VOLTAGE_HIGH"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"error"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1.VDD"</span>,<br>&#160;&#160;<span class="s">"message"</span>: <span class="v">"5 V exceeds the pin</span><br><span class="v">&#160;&#160;&#160;&#160;maximum 3.6 V"</span>,<br>&#160;&#160;<span class="s">"location"</span>: { <span class="s">"line"</span>: 15 } }<br><br>{ <span class="s">"code"</span>: <span class="v">"UNMARKED_PIN"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"warning"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1"</span>,<br>&#160;&#160;<span class="s">"hint"</span>: <span class="v">"connect them, or declare</span><br><span class="v">&#160;&#160;&#160;&#160;intent with no_connect</span><br><span class="v">&#160;&#160;&#160;&#160;U1.PA0, U1.TX { reason }"</span> }</p>
@@ -698,7 +646,7 @@ body.show-notes .notes{display:block}
 <aside>Real output from the repository’s invalid-board example, trimmed to two of its twelve findings. The first is a rating violation the compiler found because the part declares its voltage range. The second shows how CopperScript separates mistakes from decisions: a pin left open must be marked no_connect with a reason, otherwise it is reported. Findings can also carry machine-applicable fixes, which an agent applies only when the source still holds the original text.</aside>
 </section>
 <section id="review-loop">
-<p class="eyebrow">23 / PEOPLE STAY IN THE LOOP</p>
+<p class="eyebrow">20 / PEOPLE STAY IN THE LOOP</p>
 <h2 class="title">Humans review; the next run listens.</h2>
 <div class="cols">
 <div>
@@ -720,7 +668,7 @@ body.show-notes .notes{display:block}
 <aside>Agents do not replace engineering review. CopperReview lets a person inspect the board and leave notes tied to components, nets, regions and issue ids; the export feeds the next agent run. Ownership rules tell an agent where a change belongs: algorithms in CopperScript, reusable definitions in libraries, board composition and evidence in the board repository.</aside>
 </section>
 <section id="features" class="paper2">
-<p class="eyebrow">24 / INCLUDED TODAY</p>
+<p class="eyebrow">21 / INCLUDED TODAY</p>
 <h2 class="title">One compiler, from source to fab files.</h2>
 <div class="cards cards-4" style="gap:20px">
 <div class="card" style="padding:26px 28px"><h3>Electrical checks</h3><p class="body">Ratings, power states, buses, open pins</p></div>
@@ -739,7 +687,7 @@ body.show-notes .notes{display:block}
 <aside>Twelve capabilities in one Rust binary. Electrical checks cover ratings, output conflicts, power-state back-power, I²C pull-ups and unmarked pins. Libraries are versioned and locked by hash. Mechanics have a browser editor that writes source. Placement and routing are a bounded, experimental pipeline with grouped diagnostics. Hard macros, antenna synthesis, circuit simulation and EMI screening are built in. Zone fill, DRC, Gerber and drill plotting are native, with CAM read-back; KiCad is optional, as an independent cross-check and an export target. Panels, a language server, a VS Code extension and the CopperReview viewer complete it.</aside>
 </section>
 <section id="analysis" class="dark">
-<p class="eyebrow">25 / ANALYSIS IN THE COMPILER</p>
+<p class="eyebrow">22 / ANALYSIS IN THE COMPILER</p>
 <h2 class="title">Real numbers from the examples.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">CIRCUIT SIMULATION</p><div class="stat"><p class="big">66.8 nV/√Hz</p><p class="label">preamp output noise at 1 kHz. The bench’s own hand estimate: about 67. Five benches, with a 200-board Monte Carlo, in about 0.1 s.</p></div></div>
@@ -751,7 +699,7 @@ body.show-notes .notes{display:block}
 <aside>These numbers come from running the current compiler on the repository examples. The noise bench matches the engineer’s hand calculation written in the bench file. The EMI comparison shows what an input filter does, though the filtered example also declares a 2 A operating point instead of the current-limit worst case, so it is not the filter alone. The antenna example shows synthesis moving a textbook quarter-wave guess, which resonates 12 % high, onto the band.</aside>
 </section>
 <section id="tracker">
-<p class="eyebrow">26 / A REAL DESIGN</p>
+<p class="eyebrow">23 / A REAL DESIGN</p>
 <h2 class="title">The asset tracker, routed natively.</h2>
 <div class="cols" style="grid-template-columns:600px 1fr; gap:72px">
 <img src="assets/asset-tracker-top.png" alt="Top copper of CopperAssetTracker rendered from its native Gerber plot, with tracks and exposed copper in gold" style="width:600px; height:480px; object-fit:contain; border-radius:12px">
@@ -768,7 +716,7 @@ body.show-notes .notes{display:block}
 <aside>The showcase board from the 7 November 2026 routing review. The current source was routed with the standard pipeline, filled, checked by the native DRC with zero violations and zero unconnected items, and its Gerbers were read back against the netlist with no shorts or opens. The picture is the native plot, not a render. It remains a review candidate: RF and USB requirement checks, supplier availability, assembly review and prototype validation are open, and 12 electrical-requirement checks remain blocked.</aside>
 </section>
 <section id="limits">
-<p class="eyebrow">27 / WHAT IT DOES NOT CLAIM</p>
+<p class="eyebrow">24 / WHAT IT DOES NOT CLAIM</p>
 <h2 class="title">Evidence, not approval.</h2>
 <table class="spec">
 <tr><th style="width:34%">Result</th><th style="width:66%">What it does not establish</th></tr>
@@ -783,7 +731,7 @@ body.show-notes .notes{display:block}
 <aside>Every result has a scope, and the project states it. A prototype, lab measurements and compliance testing are still required. For an agent this matters a lot: it cannot mistake a clean check for a finished product, because reports name what they did not check and missing evidence remains visible.</aside>
 </section>
 <section id="start" class="dark">
-<p class="eyebrow">28 / GET STARTED</p>
+<p class="eyebrow">25 / GET STARTED</p>
 <h2 class="title">Start with a small circuit.</h2>
 <div class="cols-wide">
 <p class="code">git clone https://github.com/andenore/CopperScript<br>cd CopperScript<br>cargo install --locked --path crates/copper<br><br><span class="c"># orient, then check and compile</span><br>copper agent-guide<br>copper check examples/valid_board/board.copper<br><br><span class="c"># simulate a low-noise preamp</span><br>copper sim examples/simulation/preamp/board.copper</p>
