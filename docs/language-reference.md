@@ -3223,7 +3223,12 @@ scaled from each model's `TNOM` ([Temperature](#temperature),
 exact derivatives of every expression and device equation (forward-mode
 automatic differentiation), junction and FET voltage limiting, and for a
 circuit with such elements pseudo-transient continuation besides gmin and
-source stepping; in a transient run, a node that jumps (a behavioural source
+source stepping; when all of these fail, the parts of the circuit whose
+operating points do not depend on each other (joined only through nodes a
+grounded voltage source fixes, such as supply rails, or through capacitors)
+are solved one by one and Newton finishes the whole from their solutions
+(the analyzer's front end with the ADA4807 and ADA4817 vendor models: each
+part settles alone, not together); in a transient run, a node that jumps (a behavioural source
 switching) is accepted as a discontinuity once the step reaches a
 billionth of the run, and integration restarts there. A junction converges
 on its current as well as its voltage (SPICE's current test: a diode with
@@ -3329,6 +3334,9 @@ the follower is the small-signal `-3 dB` bandwidth at unity gain.
 | OPA2182 (SBOMB13) | yes | converges | slew rate 5.33 V/us on the check's 2.5 V follower step (the step used to stop with a collapsing time step; ngspice 5.32 V/us), 5.6 V/us on a 10 V step in ngspice | 10 V/us |
 | OPA2189 (SBOMAE9) | yes | converges | slew rate 11.6 V/us on the check's 1.8 V step (ngspice 11.6 V/us), 14.0 V/us on a 10 V step in ngspice | 20 V/us |
 | OPA548 (SBOM088) | yes | converges: supply current 4.295 mA at +/-30 V (ngspice 4.295 mA) | slew rate 5.8 V/us on the check's 12.7 V step (ngspice 5.9 V/us) | 17 mA; 10 V/us |
+| ADA4817 (`ada4817.cir` Rev. 2.1, registered by hand) | yes | converges: 19.0 mA at +/-4.5 V, as ngspice | GBW 415 MHz; open-loop gain 64.0 dB; follower 1.37 GHz with 14.0 dB of peaking (ngspice: the same resonance, 13.1 dB at its 1.06 GHz sample); slew 720 V/us | GBW 410 MHz; 65 dB; 870 V/us |
+| ADA4807 (`ADA4807.cir` Rev. 4.0, by hand) | yes | converges: 1.002 mA at +/-4.5 V, as ngspice | GBW 191 MHz; open-loop gain 130.8 dB at 9 V and 3.3 V alike; follower 204 MHz; slew 203 V/us | 180 MHz (`G = +1`); 130 dB at +/-5 V, 113 dB at 3 V; 225 V/us |
+| AD8130 (`ad8130.cir` 2012, by hand) | yes | converges: 14.15 mA and 3.0 mV offset at +/-4.5 V, as ngspice | GBW 176 MHz; phase margin 58.0 degrees; follower 245 MHz; slew 2.19 kV/us; noise not modelled (its notes) | 10.8 mA, 0.4 mV; 270 MHz (`G = +1`); 58 degrees; 1090 V/us |
 
 Where these models differ from their data sheets (OPA548 supply current
 and slew, OPA2182 and OPA2189 slew), ngspice-46 in PSpice mode gives the
@@ -3401,10 +3409,10 @@ per run. The results name the model each component ran with, as always.
 
 ```copper
 sim spice {
-    sha256 = "...";                                       // of the file you download
-    download = "ADA4817-1 SPICE macro model, analog.com product page, Tools & Simulations";
-    subckt = "ADA4817"; dialect = pspice; terminals = INP, INN, VP, VN, OUT;
-    unmodelled = FB, PD, NC, EP;
+    sha256 = "ea71baae252baa830fa26c0124be0123e6d734ca97edcacdc9caf55eae954dc7";   // of the file you download
+    download = "ADA4817 SPICE macro model (ada4817.cir, Rev. 2.1), analog.com product page (https://www.analog.com/en/products/ada4817-1.html), downloaded by hand";
+    subckt = "ADA4817"; dialect = pspice; terminals = INP, INN, VP, VN, OUT, FB, PD;
+    unmodelled = NC, EP;
 }
 ```
 
@@ -3427,8 +3435,9 @@ download it. A run that needs it while it is not in the cache stops with
 gitignored; the board builds the same everywhere the same bytes are
 registered. The analyzer example's Analog Devices parts
 (`examples/simulation/impedance_analyzer/parts/analog_ada4817.copper`,
-`analog_ada4807.copper`, `analog_ad8130.copper`) describe the steps for their
-models.
+`analog_ada4807.copper`, `analog_ad8130.copper`) carry such blocks for the
+three Analog Devices models and describe the steps; the models load and agree
+with ngspice-46 (plan I3, `docs/simulation-improvement-plan.md`).
 
 ### Checking a part's models
 

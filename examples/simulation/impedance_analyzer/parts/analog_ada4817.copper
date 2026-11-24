@@ -46,26 +46,22 @@
 // block leaves FB unmodelled. Footprint: KiCad
 // Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm (unverified against the RD-8-1
 // land pattern).
-// Vendor model, registered by hand (plan F6). analog.com refuses scripted
-// downloads, so this part has no sim spice block yet and every bench runs the
-// macro model above. To run the vendor model:
-//   1. Download the ADA4817-1 SPICE macro model yourself from its product page,
+// Vendor model, registered by hand (plan F6, I3): the sim spice block below. analog.com
+// refuses scripted downloads, so the file is never fetched or committed; every bench
+// runs the macro model above unless copper sim is given --models vendor. To run it:
+//   1. Download the ADA4817 SPICE macro model yourself from the product page,
 //      https://www.analog.com/en/products/ada4817-1.html, "Tools & Simulations"
-//      (the .cir netlist; if it comes as a ZIP, keep the archive and name the
-//      netlist inside it with member = "...").
-//   2. copper models add examples/simulation/impedance_analyzer/board.copper FILE
-//      refuses a file no part declares yet, and prints its SHA-256 and the
-//      .SUBCKT lines it holds.
-//   3. Add below the sim block above:
-//        sim spice { sha256 = "THAT HASH"; download = "ADA4817-1 SPICE macro model, analog.com product page";
-//                    subckt = "NAME"; dialect = pspice; terminals = INP, INN, VP, VN, OUT (as its header orders them); unmodelled = ...; }
-//      with the terminals in the .SUBCKT's node order (its header names them;
-//      the macro block's roles are inp INP, inn INN, out OUT, vp VP, vn VN; FB, PD, NC and EP are unmodelled), every pin a terminal or unmodelled.
-//   4. Run copper models add again: it copies the file into
-//      .copper-cache/spice/<sha256>/; then copper sim --models vendor (or
-//      copper sim --check-model ADA4817_1ARDZ BOARD) runs it. A board without the file
-//      still builds and runs the macro model; with --models vendor it stops
-//      with SIM108, naming what to download.
+//      (ada4817.cir, Rev. 2.1; its SHA-256 must be the block's).
+//   2. copper models add examples/simulation/impedance_analyzer/board.copper ada4817.cir
+//      copies it into the project's gitignored .copper-cache/spice/<sha256>/.
+//   3. copper sim --models vendor BOARD, or copper sim --check-model ADA4817_1ARDZ BOARD
+//      --supply 9V. Without the file the board still builds and runs the macro model;
+//      --models vendor then stops with SIM108, naming what to download.
+// The subcircuit's nodes are +IN, -IN, +VS, -VS, OUT, FB, PD (its "Node Assignments").
+// Inside, FB joins OUT through 1 mohm; the block puts the FB node on the OUT pin, as the
+// board wires it, so that a loop probe at OUT breaks the whole feedback path (with FB a
+// terminal of its own the loop closes through FB around the probe). PD is modelled (the
+// board ties it to VP, on); --check-model needs --tie PD=vp.
 part ADA4817_1ARDZ {
     category = "amplifier.opamp";
     manufacturer = "Analog Devices";
@@ -107,5 +103,15 @@ part ADA4817_1ARDZ {
         output_swing_from_rail = 1.1V;        // Table 1, minimum, RL = 1 kohm
         output_current_limit = 40mA;          // Table 1, linear output current
         quiescent_current = 19mA;             // Table 1, typical, +/-5 V
+    }
+
+    sim spice {
+        sha256 = "ea71baae252baa830fa26c0124be0123e6d734ca97edcacdc9caf55eae954dc7";
+        download = "ADA4817 SPICE macro model (ada4817.cir, Rev. 2.1), analog.com product page (https://www.analog.com/en/products/ada4817-1.html), downloaded by hand";
+        subckt = "ADA4817";
+        dialect = pspice;
+        terminals = INP, INN, VP, VN, OUT, OUT, PD;   // the subcircuit's FB node on OUT, as the board wires it
+        unmodelled = FB, NC, EP;
+        note = "a follower peaks by 13 to 14 dB near 1.1 GHz and slews at 720 V/us (data sheet 870 V/us); ngspice-46 gives the same operating point and response from this file (I3), so the figures are the model's";
     }
 }

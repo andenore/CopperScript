@@ -28,13 +28,20 @@
 //     0.915 mA typ, 1.0 mA max.
 //   Table 5 p. 9: supply 11 V; input voltage +/-VS +/- 0.2 V; differential input
 //     +/-1.4 V.
-//   Figure 23 p. 15: open-loop gain and phase (+/-2.5 V): unity-gain crossing near
-//     200 MHz with about 55 degrees of phase margin.
+//   Figure 23 p. 15: open-loop gain and phase (+/-2.5 V), read numerically from its
+//     vector curves (I3, 22 November 2026): unity-gain crossing at 94 MHz with
+//     68 degrees of phase margin; 33.4 dB and -104.5 degrees at 5 MHz, 26.5 dB
+//     and -110.8 degrees at 10 MHz. (An earlier reading, a crossing near 200 MHz
+//     with about 55 degrees, was wrong.)
 //   Figure 25 p. 15: CMRR flat near -110 dB to about 20 kHz, about -78 dB at 1 MHz.
 //   Page 25: DISABLE needs no connection logic beyond a pull to +VS to stay on.
 // Derived, not data-sheet numbers (see ../README.md): gbw 180 MHz is the G = +1
-// bandwidth read as a single-pole gain-bandwidth; second_pole 300 MHz gives the
-// 55 degree margin of Figure 23; cmrr_corner 25 kHz fits Figure 25. No output
+// bandwidth read as a single-pole gain-bandwidth; second_pole 300 MHz was chosen
+// for the 55 degree margin of that wrong Figure 23 reading. They therefore do not
+// reproduce the curve (the macro model lags about -91 degrees between 2 and
+// 50 MHz, the part -104 to -114); left as they are, pending the owner's decision
+// on the macro model (SPEC.md, "Vendor models"). cmrr_corner 25 kHz fits
+// Figure 25. No output
 // resistance is given; the model has none (unverified), so it has no output current
 // limit either (the model needs an output resistance for one; Figure 54 p. 22 shows
 // the closed-loop output impedance). Transient limits: the slew rate is the +/-5 V
@@ -47,26 +54,19 @@
 // (copper sim's supply-current model). No PSRR is given here: the data sheet's was
 // not read.
 // Footprint: KiCad Package_TO_SOT_SMD:SOT-23-6.
-// Vendor model, registered by hand (plan F6). analog.com refuses scripted
-// downloads, so this part has no sim spice block yet and every bench runs the
-// macro model above. To run the vendor model:
-//   1. Download the ADA4807-1 SPICE macro model yourself from its product page,
+// Vendor model, registered by hand (plan F6, I3): the sim spice block below. analog.com
+// refuses scripted downloads, so the file is never fetched or committed; every bench
+// runs the macro model above unless copper sim is given --models vendor. To run it:
+//   1. Download the ADA4807 SPICE macro model yourself from the product page,
 //      https://www.analog.com/en/products/ada4807-1.html, "Tools & Simulations"
-//      (the .cir netlist; if it comes as a ZIP, keep the archive and name the
-//      netlist inside it with member = "...").
-//   2. copper models add examples/simulation/impedance_analyzer/board.copper FILE
-//      refuses a file no part declares yet, and prints its SHA-256 and the
-//      .SUBCKT lines it holds.
-//   3. Add below the sim block above:
-//        sim spice { sha256 = "THAT HASH"; download = "ADA4807-1 SPICE macro model, analog.com product page";
-//                    subckt = "NAME"; dialect = pspice; terminals = INP, INN, VP, VN, OUT (as its header orders them); unmodelled = ...; }
-//      with the terminals in the .SUBCKT's node order (its header names them;
-//      the macro block's roles are inp INP, inn INN, out OUT, vp VP, vn VN; DISABLE is unmodelled), every pin a terminal or unmodelled.
-//   4. Run copper models add again: it copies the file into
-//      .copper-cache/spice/<sha256>/; then copper sim --models vendor (or
-//      copper sim --check-model ADA4807_1ARJZ BOARD) runs it. A board without the file
-//      still builds and runs the macro model; with --models vendor it stops
-//      with SIM108, naming what to download.
+//      (ADA4807.cir, Rev. 4.0; its SHA-256 must be the block's).
+//   2. copper models add examples/simulation/impedance_analyzer/board.copper ADA4807.cir
+//      copies it into the project's gitignored .copper-cache/spice/<sha256>/.
+//   3. copper sim --models vendor BOARD, or copper sim --check-model ADA4807_1ARJZ BOARD
+//      --supply 9V. Without the file the board still builds and runs the macro model;
+//      --models vendor then stops with SIM108, naming what to download.
+// The subcircuit's nodes are +IN, -IN, +VS, -VS, OUT, DISABLE (its "Node Assignments");
+// DISABLE is modelled (the board ties it to the positive rail, on).
 part ADA4807_1ARJZ {
     category = "amplifier.opamp";
     manufacturer = "Analog Devices";
@@ -107,5 +107,14 @@ part ADA4807_1ARJZ {
         output_swing_from_negative_rail = 0.1V;    // Table 2, minimum, RL = 1 kohm
         supply 3V { quiescent_current = 0.915mA; }  // Table 4, typical
         supply 10V { quiescent_current = 1.0mA; }   // Table 2 (+/-5 V), typical
+    }
+
+    sim spice {
+        sha256 = "c58ef48b55332004036c1268032cff82949d45a047b934a6ab146b69c7892f81";
+        download = "ADA4807 SPICE macro model (ADA4807.cir, Rev. 4.0), analog.com product page (https://www.analog.com/en/products/ada4807-1.html), downloaded by hand";
+        subckt = "ADA4807";
+        dialect = pspice;
+        terminals = INP, INN, VP, VN, OUT, DISABLE;
+        note = "open-loop gain 130.8 dB and supply current 1.0 mA at every supply (data sheet: 130 dB and 1.0 mA at +/-5 V, 113 dB and 0.915 mA at 3 V) and 4.5 pF of common-mode input capacitance per input (CinCMP, CinCMN; data sheet 1 pF): the file's own; ngspice-46 gives the same operating point and response (I3)";
     }
 }

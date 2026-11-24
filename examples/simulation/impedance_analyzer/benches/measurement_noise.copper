@@ -25,7 +25,7 @@
 // capacitance current, the ADC's own noise, rail noise (ideal supplies).
 // Channels: the sense buffers and the receiver at gain 1, then U_B1 (gain 1), U_G10
 // (gain 10.09), U_G10 and U_G100 (gain 10.09 each); the transimpedance amplifier U_TIA,
-// 20 kohm with 1.5 pF (SPEC.md estimated 0.9 pA/rtHz from R_TIA alone). The drive's own
+// 20 kohm with 10 pF (SPEC.md estimated 0.9 pA/rtHz from R_TIA alone). The drive's own
 // current noise is real current through the soil: both channels see it, so it largely
 // cancels in the impedance, which the last measures compute with it.
 bench MeasurementNoise for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {

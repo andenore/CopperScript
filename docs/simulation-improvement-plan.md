@@ -358,6 +358,439 @@ Acceptance: the analyzer's benches pass with vendor models, or each failing
 limit is explained in SPEC.md; `copper check --sim-results` reports no
 unrated simulated pin.
 
+Built on 22 November 2026, from the three files the owner downloaded from
+analog.com (`ada4817.cir` Rev. 2.1, `ADA4807.cir` Rev. 4.0, `ad8130.cir`
+2012), registered with `copper models add` into the gitignored
+`.copper-cache/spice/<sha256>/`; nothing from them is committed.
+
+- Blocks: `sim spice` with `sha256`, `download`, `subckt`, `dialect = pspice`
+  and `note` on `analog_ada4817.copper`, `analog_ada4807.copper` and
+  `analog_ad8130.copper`, terminals in each file's "Node assignments" order.
+  The ADA4817's FB node is put on the OUT pin, as the board wires it: with
+  FB a terminal of its own the loop probe at OUT left the internal 1 mohm FB
+  path closed and `LoopStability.sense_buffer_hp` read 360 degrees. A
+  checkout without the files builds and runs the macro models unchanged;
+  `--models vendor` there stops every bench with `SIM108` and
+  `--check-model` reports the vendor model as not run (checked with the
+  cache moved aside).
+- Reader: all three load and converge unchanged (PSpice resistor models with
+  `T_ABS = -273`, `VSWITCH`, 1 uohm resistors, `POLY(1)` with `(a,b)` nodes,
+  `POLY(2)` current controls, BF-only BJTs). ngspice-46 in local, gitignored
+  decks (`tests/reference/vendor/`: each model as a follower at +/-4.5 V,
+  op and ac to 1 or 3 GHz, plus the open loop through 1 GH): 24 series,
+  1500 values; operating points within their bounds (supply currents
+  19.000 mA, 1.0018 mA, 14.148 mA in both), AC within 2e-4 except the
+  ADA4817 follower at its 1.06 GHz resonance (13 dB peak, 1.93 times the
+  bound) and the ADA4807's 8e-11 A V- current at 112 MHz (1.79 times); the
+  cause of those two is not established.
+- Solver (`newton.rs`, general): the analyzer's front end with the ADA4807
+  and ADA4817 models together had no operating point (Newton, gmin
+  stepping, pseudo-transient continuation and source stepping all failed),
+  although each model alone solved by pseudo-transient continuation. Traced
+  with temporary output: gmin stepping fails at 1e-5 S; an adaptive variant
+  (tried, not kept) stalls at 2.6e-5 S with steps below 1e-6 decades,
+  DRV_BUF, HC_FB and the slew-clamp junctions of the three pump amplifiers
+  unconverged (a fold of the pump loop, inferred, not shown); source stepping
+  stalls at 3.8 % of the sources (also with steps down to 1e-9); and
+  pseudo-transient continuation cycles between 6e-5 and 4e-3 S for its 400
+  steps, the unconverged unknowns alternating between the pump's and the
+  ADC drivers' amplifiers (the enable comparators' sources and junctions:
+  each ADA4807 and ADA4817 enables itself with a smooth switch that feeds its
+  own control). One schedule serves every part there, and each part settles
+  alone. A power-up transient (sources ramped from zero, ngspice's
+  `optran` idea) was tried and dropped: its step collapsed at 19 ns in the
+  ADA4817's mid-supply network. Fix: when every aid fails, the parts whose
+  operating points do not depend on each other (joined only through nodes a
+  grounded voltage source fixes, or through capacitors) are solved one by
+  one with the same aids and Newton finishes the whole (`dc_blocks`,
+  `by_blocks`). It runs only after every other aid failed, so no operating
+  point that solved before changes. Tests: `dc_blocks` splits at a fixed
+  rail and a capacitor and joins a controlled source to its control; the
+  solution by parts equals the plain one within 1e-9 (copper-sim unit tests;
+  the circuit that needs it, the analyzer with vendor files, cannot be
+  committed).
+- `--check-model` at 9 V (the board's +/-4.5 V; `--tie PD=vp` for the
+  ADA4817, `DISABLE=vp` for the ADA4807): every macro figure within its
+  tolerance; vendor beside macro beside the data sheet as recorded in the
+  part file:
+
+  | Part | Figure | Vendor | Macro | Data sheet |
+  | --- | --- | --- | --- | --- |
+  | ADA4817 | supply current | 19.0 mA | 19.0 mA | 19 mA typ (+/-5 V) |
+  | | open-loop gain | 64.0 dB | 65.0 dB | 62 min / 65 typ dB |
+  | | gain-bandwidth | 415 MHz | 409 MHz | 410 MHz |
+  | | follower | 1.37 GHz, 14.0 dB peaking | 585 MHz, 0.6 dB | not recorded |
+  | | noise at 800 kHz / 10 Hz | 3.68 / 170 nV/rtHz | 4.02 / 113 nV/rtHz | 4 (100 kHz) / about 175 (Figure 30) |
+  | | slew rate | 720 V/us | 880 V/us | 870 V/us |
+  | ADA4807 | supply current (9 V / 3.3 V) | 1.002 / 1.001 mA | 1.0 / 0.915 mA | 1.0 / 0.915 mA |
+  | | open-loop gain (9 V / 3.3 V) | 130.8 / 130.9 dB | 113 / 113 dB | 130 (+/-5 V) / 113 (3 V) dB |
+  | | gain-bandwidth | 191 MHz | 180 MHz | 180 MHz (`G = +1` bandwidth) |
+  | | unity crossing, margin | 97 MHz, 69.5 deg | 159 MHz, 62.6 deg | near 200 MHz, about 55 deg (Figure 23, +/-2.5 V) |
+  | | follower | 204 MHz | 255 MHz | 180 MHz |
+  | | slew rate | 203 V/us | 228 V/us | 225 V/us rising |
+  | AD8130 | supply current | 14.15 mA | 10.8 mA | 10.8 typ / 11.6 max mA |
+  | | output offset | 3.0 mV | 0.40 mV | 0.4 typ / 1.8 max mV |
+  | | open-loop gain | 74.5 dB | 74.0 dB | 74 dB |
+  | | gain-bandwidth, margin | 176 MHz, 58.0 deg | 269 MHz, 61.6 deg | 270 MHz (`G = +1` bandwidth); 58 deg (Figure 74) |
+  | | follower | 245 MHz | 376 MHz | 270 MHz |
+  | | slew rate | 2.19 kV/us | 1.08 kV/us | 1090 V/us |
+
+  The vendor figures are the files' own (ngspice agrees); each block's
+  `note` says so. Where the macro differs from the vendor model and the
+  data sheet agrees with the vendor model: the ADA4807's open-loop gain at
+  +/-4.5 V (130 dB at +/-5 V in Table 2, recorded; the block uses the 3 V
+  113 dB for every supply) and its follower bandwidth (180 MHz recorded;
+  vendor 204, macro 255), and the AD8130's follower bandwidth (270 MHz
+  recorded; vendor 245 MHz, macro 376 MHz) with its 58 degrees (vendor 58.0,
+  macro 61.6). Proposed, not made: `supply 10V { open_loop_gain = 130dB; }`
+  on the ADA4807, and for both amplifiers a `gbw` lowered so that the macro
+  follower meets the recorded `G = +1` bandwidth (both blocks read that
+  bandwidth as a single-pole gain-bandwidth, which the second pole then
+  raises by 40 %). Each moves rated analyzer results that README.md and
+  SPEC.md quote, so it is the owner's call (decision 6).
+- LTC6268: the analyzer does not use it; README.md names it as the
+  lower-capacitance sense buffer. `parts/analog_ltc6268.copper` (example
+  local, the pins of CopperLib's `LTC6268IS6`, which has no block) carries a
+  `sim opamp` block from the data sheet the owner downloaded (62689f),
+  every figure with its page; the curve readings (gain and phase, CMRR,
+  PSRR, output impedance, noise) were taken numerically from the PDF's
+  vector curves. `--check-model` passes at 5 V and 3.3 V (phase margin 54.2
+  degrees against the curve's 54). The fitted `cmrr_corner` (50 kHz) is
+  left out: I7's term stops rising only at the gain-bandwidth, so it still
+  feeds forward at about -12 dB at the 405 MHz crossing (checked on the I7
+  tree: margin 57.0 against 54.2 degrees, follower peaking 2.7 against
+  1.2 dB; every check passes either way).
+- Ratings: none added. The 26 unrated simulated pins of the front end (the
+  AD8130's eight, OUT and DISABLE of the seven ADA4807s, OUT and PD of the
+  two ADA4817s) need figures the part files do not record: the AD8129/AD8130
+  Rev. C "Absolute Maximum Ratings" table (supply, input and differential
+  input voltage, PD) and whether the ADA4817-1 Rev. A (p. 5) and ADA4807
+  Rev. B (Table 5) tables rate OUT, PD and DISABLE at all. `copper check
+  --sim-results`: 51 unrated simulated pins before and after (the I4 count).
+
+Analyzer with `--models vendor` (release build, bench by bench; every
+vendor operating point goes through all aids to the split, 12 to 67 s a
+step), against the default run (worst rated step, macro then vendor):
+
+| Bench | Default | Vendor | Changed limits |
+| --- | --- | --- | --- |
+| `SoilSweep` | 0.39 %, 0.16 deg | 0.34 %, 0.076 deg | none; dry-soil current at 1 MHz 4.1 to 1.7 uA (the ADA4807 model's 4.5 pF at PUMP) |
+| `LoopStability` | margins 49 to 79 deg, stable | pump 54, feedback buffer 65, receiver 58, gain 1 56 deg | drive buffer 43.3, sense buffer 41.5, gain 10 and 100 34.4 and 34.7, transimpedance 10.6 deg (min 45); poles in the right half-plane (round-off of the pole analysis, fixed in the follow-up) |
+| `GuardStability` | stable, 79 and 74 deg | 54 and 69 deg | poles in the right half-plane (round-off, fixed in the follow-up) |
+| `LoopPeaking` | 1.00 to 1.06 | receiver 1.06, pump current 1.00 | drive buffer 1.33, sense buffer 1.52, gain 1 1.25, gain 10 1.73, gain 100 1.71, transimpedance 4.59 (max 1.12) |
+| `CalibrationCard` | 0.51 %, 0.23 deg | 0.46 %, 0.13 deg | none |
+| `StrayCapacitance` | 0.92 %, 0.58 deg | 0.86 %, 0.48 deg | none |
+| `ContactImbalance` | 0.89 %, 0.91 deg | 0.84 %, 0.70 deg over the first 115 of 192 steps | no operating point at step 116 (800 ohm, 5.56 pF, LP contact 110 %), even split |
+| `SenseCommonMode` | 66.8 dB | 64.0 dB | none (min 63 dB) |
+| `PumpOutputImpedance` | 6.2 Mohm at 1 kHz | 7.2 Mohm | none |
+| `DcOperatingPoint` | within 56 mV | within 53 mV | none |
+| `SupplyCurrent`, `PowerSide` | 51.8 mA a rail | 55.2 mA (AD8130 14.15 mA) | none (max 70 mA) |
+| `MeasurementNoise` | no limits | SNR within 5 dB of the default; the AD8130 model has no noise | - |
+| `Startup` | settled in 0.67 s | no operating point at the start of the first step (rails at 0 V, electrodes in air): the unpowered ADA4817 models | not judged |
+| `Distortion` | no limits | did not finish: out of memory after 86 min in the whole run (an 11.7 MB allocation, a dense 1209 by 1209 matrix's size), 11.2 GB after 30 min on two threads (the shooting method keeps every step of a period for its exact tangent) | - |
+| `ResistorMatching`, `ResistorWorstCase` | pass | not run to the end (hundreds of operating points at 12 to 67 s each) | not judged |
+
+SPEC.md, "Vendor models", explains each failing limit (follow-up below).
+
+Decision 6: every measure of the seven examples is identical with the
+default models (the spice blocks and the LTC6268 part add nothing to a
+default run; the split never runs there).
+
+Follow-up, 22 November 2026 (why the loop limits fail; scratch decks in the
+session's scratchpad `i3/loop/`, not committed):
+
+- Loop analysis checked. Each failing loop built stand-alone (the amplifier
+  with the board's feedback network, load and supplies; the soil at 800 ohm;
+  vendor models) and run through copper-sim and ngspice-46 (Tian's two
+  injections in ngspice, a closed-loop AC run and a step in both). Margins
+  and closed-loop peaking, copper / ngspice: transimpedance 10.14 / 10.14
+  degrees, 4.987 / 4.987; gain 10 34.36 / 34.36, 1.732 / 1.732; gain 100
+  34.78 / 34.78, 1.714 / 1.714; gain 1 55.86 / 55.86, 1.253 / 1.253; drive
+  buffer 43.30 / 43.30, 1.332 / 1.332; sense buffer (with the real LP
+  buffer and receiver) 41.55 / 41.55, 1.562 / 1.563. The analyzer's figures
+  are reproduced (43.3, 41.5, 34.4, 34.7, 10.6 degrees; 1.33, 1.52, 1.25,
+  1.73, 1.71, 4.59). Loop gains agree within 1e-4 of `max(|T|, 1e-3)` at
+  every frequency, except the drive buffer below 10 MHz, where ngspice's Tian
+  combination gives `|T|` = 7.7 at phase 180 degrees against copper's
+  `A` = 1.9e5 (the closed loop, the step, the crossover and the margin agree;
+  the cause is not established). Steps agree within 1.2e-3 of the step and
+  ring as the margins say: transimpedance 16 % overshoot, ringing at
+  5.7 MHz with damping 0.045; gain 10 38.5 %, 6.4 MHz, 0.35; gain 1 15 %,
+  0.52. No copper bug in the loop analysis.
+- Pole analysis: a copper bug, fixed (`eigen.rs`
+  `with_slow_roots_inverted`, `stability.rs` `full_pencil_slow_roots`). The
+  right half-plane poles of the vendor circuits were round-off: the QR
+  iteration's absolute error scales with its matrix's norm, set by the vendor
+  models' fastest roots (1e15 rad/s and more), so roots of a few rad/s came
+  out on either side of the axis. Evidence: the pump circuit with its 0 V
+  probe source at three places (the same circuit) gave three different sets
+  (1.8 and 35.5 Hz, 4.7 and 193 Hz, 3.3 and 119 Hz), all unrefined; giving
+  one of two equal coupling networks 47.5 kohm instead of 47 kohm removed the
+  sense circuit's four; a 0.1 s transient of the sense circuit (1.5 million
+  steps) decays at -6.4 rad/s where the analysis claimed +44 and +212 rad/s.
+  Fix: the slow roots (those whose `mu = 1 / (s - sigma)` is at least 1e-4
+  of the largest) are taken from the eigenvalues of `-(G + sigma C)^-1 C`,
+  which the QR iteration gives to round-off relative to themselves: first on
+  the deflated pencil inside `finite_eigenvalues` (no infinite eigenvalues
+  there; about 1e-4 accurate on the test circuit), then on the whole pencil
+  where its QR iteration succeeds (round-off); `sigma` is 0, or with roots
+  at the origin a hundredth of the slowest other root. The stand-alone
+  circuits now give -6.44 rad/s twice (4.7 nF and 33 Mohm), -21.28 twice
+  (1 uF and 47 kohm) and no right half-plane pole; the three pump
+  placements agree (least damped 16.4 Hz, damping 0.166). Test
+  (self-written stiff circuit, 1 uohm to 1 Tohm, with and without a floating
+  node): `slow_roots_of_a_stiff_pencil_are_exact` (the slow roots were
+  1.25e-3 and 7.6e-3 off before; now within 1e-12, 5e-10 with the shift).
+  Decision 6: three pole dampings move at round-off (Howland
+  `Stability.poles` 1.3e-16 and 2.2e-16 relative, the analyzer's
+  `LoopStability.poles` 3.3e-16, `GuardStability.poles` 3.7e-12: Newton's
+  refinement converged from a slightly different start), everything else
+  identical to the I7 baseline. Analyzer with vendor models: `LoopStability.poles`
+  passes (197 poles, least damped 5.41 MHz with damping 0.088 and 16.4 Hz
+  with 0.166, as the stand-alone circuits give); `GuardStability.poles`
+  keeps one pair at 607 MHz with damping -0.067 whose mode spreads over four
+  unrelated ADA4807 instances (not established; no transient run for it).
+- Causes per loop, against the ADA4807 Rev. B and ADA4817 data sheets found
+  on disk (read numerically from their vector curves). The ADA4807 model's
+  open-loop phase lag between 2 and 50 MHz is the part's (Figure 23 at
+  +/-2.5 V: -104.5 degrees at 5 MHz, -110.8 at 10 MHz, 94 MHz crossing with
+  68 degrees; model -102.9, -110.3, 97 MHz with 69.5; the part file's earlier
+  reading "near 200 MHz, about 55 degrees" was wrong and is corrected there);
+  its output impedance is
+  about twice the part's (open-loop 114 ohm against 52 to 56 ohm implied by
+  Figure 54 and Figure 23; as a follower 2.1 to 2.9 times Figure 54; in the
+  data sheet's Figure 67 circuit 5.1 dB of peaking with 470 pF and 20 ohm
+  where Figure 68 shows 3 dB). With the output resistance at 56 ohm the
+  stand-alone loops give: drive buffer 53.8 degrees (passes), gain 1 59.8
+  (peaking 1.18 fails), gain 10 and 100 39.0 and 39.3, transimpedance 22.7
+  (fail). The ADA4817 model matches its data sheet's output impedance at 10
+  and 100 MHz (0.19 and 2.1 ohm against 0.25 and 2) and its crossing phase;
+  the sense buffer loses its margin to the receiver's input (51.1 degrees
+  without it) and is damped by the guard (4.7 degrees without it).
+- Options (scratch variants, not applied), SPEC.md "Vendor models": board
+  (2.2 pF across each 9.09 kohm, 10 pF transimpedance feedback, 200 ohm
+  before the gain-1 driver's 470 pF) and macro (`output_resistance = 56ohm`
+  on the ADA4807). Board, vendor: gain 1 60.8 degrees (peaking 1.12),
+  gain 10 and 100 72.5 and 73.0 (1.03), transimpedance 47.3 (1.00), drive
+  and sense buffers unchanged (43.3, 41.5); `SoilSweep` 0.35 % and 0.091
+  degrees, `StrayCapacitance` 0.88 % and 0.48 degrees; `CalibrationCard`
+  stops at one position (no operating point). Board, macro: gain stages 91.6,
+  transimpedance 80.2, accuracy within limits. Macro `output_resistance =
+  56ohm`: transimpedance 41.0 degrees and its peaking 1.17 and the drive
+  buffer's peaking 1.18 fail in the default run, the rest passes, accuracy
+  unchanged; a lower `second_pole` cannot represent Figure 23's mid-band lag
+  without wrecking the followers (60 MHz: gain 1 28, drive buffer 23
+  degrees).
+
+Decision, 23 November 2026 (the owner): the board option is the circuit.
+`analog/front_end.copper` has 2.2 pF (`C_G1F`, `C_G2F`) across each gain
+stage's 9.09 kohm, `C_FB_TIA` 10 pF instead of 1.5 pF and, on the gain-1
+channel, `R_AA1` 100 ohm and `C_AA1` 1 nF instead of 49.9 ohm and 470 pF; the
+README and SPEC.md describe it ("Vendor models"). The option as first applied
+had `R_AA1` 200 ohm into 470 pF. It was replaced the same day because PA1 may
+see at most 100 ohm with 2.5-cycle sampling (DS12288 Table 70) and the ADC
+timing (3.125 Msps, 16 ADC clocks a trigger) leaves no room for a longer
+sampling time. The network mostly filters the follower's own closed-loop peak
+at the pin (the bare vendor follower peaks 1.1 dB); vendor models,
+`LoopPeaking.gain1_driver` and the `LoopStability.gain1_driver` margin:
+49.9 ohm and 470 pF 1.253 and 55.9 degrees, 100 ohm and 470 pF 1.145,
+150 ohm and 470 pF 1.125, 200 ohm and 470 pF 1.118 and 60.8, 100 ohm and
+680 pF 1.133 and 62.0, 100 ohm and 1 nF 1.124 and 62.5, 100 ohm and 1.2 nF
+1.121 and 62.7. 100 ohm into 1 nF has the best margin of those that meet the
+100 ohm rule, and its peaking misses the 1.12 limit by 0.004 on the vendor
+models. The follower at a noise gain of 2 (1.1 kohm feedback, 100 ohm across
+the inputs) with 49.9 ohm into 470 pF was dropped: peaking 1.397, margin
+46.7 degrees. `SenseCommonMode` and `MatchingTolerances` now take the
+rejection at `V_D`, the receiver's output, instead of `V_MON_1`, so the gain-1
+channel's response no longer enters it (with 200 ohm it had read 1.2 dB high
+at 1 MHz).
+Costs, default models: the transimpedance stage's bandwidth falls to 0.8 MHz
+(at 1 MHz the current channel passes 61.9 % with 60.7 degrees of lag, 98.6 %
+and 19.7 before, so `I_MON` carries at most 0.19 V there instead of 0.30 V);
+the gain-1 channel's anti-alias pole is 1.59 MHz against 6.8 MHz on the
+other three (at 1 MHz 84.7 % and -32.8 degrees against the gain-10 channel's
+97.5 % and -18.2; 98.9 % and -9.1, 98.9 % and -11.8 before); `ContactImbalance`'s
+worst rated phase is 0.9966 degrees of its 1 degree limit (0.91 before);
+PA1's source impedance is 100 ohm plus the follower's, at the limit.
+`SenseCommonMode` at 5.58 kohm is 66.66 dB (66.76 before any board change).
+Every default bench still passes (gain stages 91.6 and 91.7 degrees,
+transimpedance 80.2). With the vendor models on the final board:
+`LoopStability` pump 54.25, feedback buffer 64.58, receiver 58.23, gain 1 62.54, gain 10 72.5, gain 100 73.0, transimpedance 47.31 degrees and its poles pass; the drive buffer (43.3) and the sense buffer (41.5) fail; `LoopPeaking` gain 10 1.027, gain 100 1.026, receiver 1.056 pass, the drive buffer (1.331), the sense buffer (1.517) and the gain-1 driver (1.124 against 1.12) fail; `SenseCommonMode` 63.95 dB (limit 63), `SoilSweep` 0.35 % and 0.091 degrees and `StrayCapacitance` 0.88 % and 0.48 degrees pass; `CalibrationCard` and `GuardStability` were not rerun on the final board (measured, `--models vendor`, 23 November 2026). With the vendor models on the board as first changed (200 ohm
+into 470 pF; measured): `LoopStability` pump 54.25, feedback buffer 64.58,
+receiver 58.23, gain 1 60.78, gain 10 72.5, gain 100 73.0, transimpedance
+47.31 degrees and its poles pass, the drive buffer (43.3) and the sense
+buffer (41.5) fail; `LoopPeaking` gain 1 1.118 (limit 1.12), gain 10 1.027,
+gain 100 1.026, receiver 1.056 pass, drive buffer 1.331 and sense buffer
+1.517 fail; `SoilSweep` 0.3497 % and 0.0906 degrees and `StrayCapacitance`
+0.881 % and 0.4772 degrees pass; `CalibrationCard` stops at its 10 kohm
+position with 0 ohm contacts (no operating point).
+
+Second follow-up, 23 November 2026 (the vendor benches that did not finish,
+and the two buffer loops; scratch in the session's `i3b/`, not committed):
+
+- Where the time went. One operating point of the vendor front end took
+  10.4 s, every aid but the last failing first: Newton from zero 1.1 s,
+  gmin stepping 0.1 s, pseudo-transient continuation 3.0 s, source stepping
+  1.3 s, then the split 4.9 s (each of its six parts: Newton and gmin
+  stepping fail, pseudo-transient continuation solves). And a step solved
+  its circuit several times: a reference run's circuit once more, and every
+  `at(x, f)` between the swept samples twice more (the bench's circuit and
+  the reference's), so `CalibrationCard` spent 65 to 72 s a step on eight
+  operating points.
+- Operating-point hints (`copper_sim::DcHint`, `with_dc_hint`, `dc_hint`).
+  A small-signal bench with several steps or variation runs solves its first
+  step alone; its operating point, its circuit and the aid that solved it
+  hint every other step, a step's nominal points hint its Monte Carlo runs
+  and corners (each reference run by the same reference at nominal values
+  first), and a run's own point hints its reference runs. Only when Newton
+  from zero fails does a hinted solve try Newton from the hint's points,
+  then continuation from the hint's circuit (`Aid::Continuation`: its
+  resistances, controlled-source gains and source values moved to the
+  circuit's in steps, Newton at each), then the hint's aid, then the other
+  aids; every attempt runs on a fresh solver, so the result depends on the
+  circuit and the hint alone, and every run gets the same hint whatever the
+  thread count. From a neighbouring step's point the vendor front end solves
+  in 0.08 to 0.2 s. `ResistorMatching`'s Monte Carlo run 70 needed both:
+  its `SHORT` reference has no operating point by any aid from zero but
+  solves from the nominal `SHORT` reference's, and its own circuit (the
+  resistors drawn far enough that `U_PMP` and `U_DRV` start elsewhere) solves
+  only by continuation from the nominal one. Tests:
+  `a_hint_starts_newton_from_a_related_operating_point`,
+  `continuation_from_the_hints_circuit_solves_where_newton_from_its_point_does_not`,
+  `hints_nest_and_restore`, `the_operating_point_by_parts_is_the_operating_point`
+  (copper-sim), `hinted_steps_references_and_monte_carlo_runs_do_not_depend_on_threads`
+  (copper-simulate, jobs 1 against 4).
+- The last 32 linearisations are remembered process-wide by circuit and hint
+  (`linearized_at_point`): the single-frequency solves and the reference runs
+  that repeat across steps reuse them; the same solve would give the same
+  result. Test: `a_linearisation_is_remembered_per_circuit_and_hint`.
+- A transient run after an aided operating point stalled within the first
+  microsecond (the step shrinking to 1e-15 s at the sense buffers, the pump or
+  the gain stages) where the old solver went on: the caller's solver still
+  held the factors of Newton's failed iterates, whose pivot order the run
+  reused, and a solve in a stale order of a badly scaled matrix (1 uohm beside
+  1 Tohm) is too inaccurate for Newton to converge. Fixed: the caller's
+  solver is factored afresh at the aided solution, and a transient step whose
+  Newton diverges is retried once on factors ordered afresh before a shorter
+  step is tried (`Solver::forget_factors`; test:
+  `freshly_ordered_factors_solve_the_same_newton_iteration`). The 2 us
+  transient from the operating point matches the old solver's (5.696 mV peak
+  at `BUF_HP`). Tried and dropped: a further retry on dense factors (partial
+  pivoting at every column) before the shorter step; it got no transient
+  further (`Distortion` stopped at 14.77 us instead of 15.09 us, after
+  5738 s instead of 569 s) and moved `SupplyCurrent.driving` at 7e-6.
+- The shooting method's memory (`JACOBIAN_BUDGET`, 512 MiB): it kept the
+  factored Jacobian of every step of a period, 11.7 MB each where the sparse
+  LU leaves a vendor matrix dense, 11 GB and out of memory over one period of
+  the 1209-unknown front end. The factors beyond the budget are refactored at
+  each tangent product from the same factors before them, so the tangent is
+  the same bit for bit (test: `the_tangent_of_a_period_matches_its_difference_quotients`,
+  with no factors kept and with half of them kept).
+- Poles: a root whose Newton refinement fails (a repeated root, or a QR value
+  with no eigenvalue near it) is now refined by inverse iteration at a fixed
+  shift beside the QR value and certified by its backward error (at most
+  1e-11; `nearest_eigenvalue`). All 192 vendor roots of `GuardStability.poles`
+  are certified (52 were unrefined). The 607 MHz pair with damping -0.0667 is
+  real for the model: certified, reproduced by a stand-alone deck of the two
+  sense buffers and the receiver as that bench wires them, and a 1 uA, 1 ns
+  kick into `SNS_HP` grows from 1.9 mV to a 0.57 V limit cycle within 40 ns
+  in copper's transient and in ngspice-46's alike. The bench leaves the HP and
+  LP guards unloaded (no electrode strays but HC's); with the HP and LP strays
+  that are always there (20 pF to the guard, 100 pF guard to ground) the
+  stand-alone sense buffers are stable (least damped 549 MHz, damping 0.090).
+  The bench is unchanged, so it fails. Tests:
+  `repeated_roots_are_certified_by_inverse_iteration`,
+  `a_qr_value_with_no_eigenvalue_near_it_is_replaced`. Default runs: the
+  three repeated 6.79 MHz anti-alias roots of `LoopStability.poles` and
+  `GuardStability.poles`, unrefined before, are now certified (values within
+  1.4e-11, imaginary parts of 1e-8 Hz now 0); every measure is unchanged.
+- `Startup` cannot run on the vendor models: its first point has every rail at
+  0 V, where the AD8130 model has no meaningful operating point (copper: a
+  singular system; ngspice-46: 3.5e13 A from its rails) and copper does not
+  solve the unpowered ADA4817 model either (Newton cycles between two
+  iterates in its supply-current mirror below about 1 V on its rails, every
+  aid too), though ngspice-46 does (19 mA quiescent, 7 uV out).
+  The AD8130's is the model's limit; the ADA4817's is copper's, not fixed.
+- `Distortion` does not finish (SPEC.md, "Vendor models"): no longer out of
+  memory, but the vendor transient reaches 15.09 us of the first 1 kHz
+  period after 569 s and stops (Newton diverging at every step down to the
+  floor, at ADA4807 model nodes). On a plain 60 us transient of the same
+  circuit the old solver takes 0.32 ns steps (570 s for 10 us, agreeing to
+  2e-6 with the new one there) and had not stopped after 40 minutes, where
+  the new one with the dense retry stopped at 14.8 us. One 1 ms period takes
+  10 to 16 hours at either pace. Tried and dropped: the
+  shorter step after a failed one restarting with backward Euler (as SPICE
+  drops to first order; it stopped at 14.84 us, slower) and the dense retry
+  above. Not established: why Newton diverges there.
+- Buffers. Drive buffer: stand-alone in copper and in ngspice-46 (margin
+  43.30 degrees both, closed-loop peaking 1.3316 both); the bare vendor
+  follower has 50.8 degrees and peaks 1.14, with the pump's 10 kohm 51.3 and
+  1.14, and the LT5400's 2.75 pF on `DRV_BUF` takes it to 43.3 and 1.33 (with
+  the model's output resistance at the 56 ohm the data sheet implies: 53.8
+  and 1.11). Fix: a 33 ohm and 10 nF snubber from the output to ground (no
+  series resistor before R1): stand-alone 64.2 degrees and 1.11. The gain-1
+  driver gets the same snubber beside its 100 ohm into 1 nF (1.124 to 1.109,
+  62.3 degrees). Both are now on the board (`R_SN_DRV`, `C_SN_DRV`, `R_SN_B1`,
+  `C_SN_B1`); their cost, SPEC.md "Vendor models": vendor bandwidth 179 to
+  35.6 MHz and 70.8 to 29.7 MHz, accuracy and noise unchanged, default worst
+  rail current 52.28 to 55.06 mA. Sense buffer: copper and ngspice-46 agree
+  (41.55 degrees, peaking 1.5614 and 1.5616); the bare vendor ADA4817
+  follower has 52.7 degrees but a second crossing at 1.3 GHz and peaks 5.6,
+  4 pF of load (the AD8130's input) takes it to 35 degrees, and the guard's
+  49.9 ohm into 120 pF is what damps it. Options measured, none meeting both
+  limits: 200 ohm to 1 kohm in series with each receiver input, margin 50.3
+  to 51.0 degrees (passes) and peaking 1.30 (fails; in the analyzer 50.26 and
+  1.296); with a 10 ohm and 10 nF snubber besides, 58.8 and 1.15, but that
+  loads each sense buffer with 18 ohm at 1 MHz under up to 0.8 V of common
+  mode (44 mA); a larger guard resistor raises the peaking (100 ohm: 1.38,
+  200 ohm: 1.69). Not applied.
+- `MatchingTolerances` now varies `C_G1F` and `C_G2F` (5 %, declared last so
+  the other parts' Monte Carlo draws are unchanged); the README's
+  `ContactImbalance` rule-coefficient table is regenerated (it reproduced the
+  I7 baseline but for 3 cells; new 1 MHz columns).
+- Times, vendor models, release build, 12 threads (before: the binary at
+  201ae83b on the same circuit, or as noted):
+
+  | Bench | Before | After |
+  | --- | --- | --- |
+  | `CalibrationCard` | 72 s | 55 s |
+  | `ContactImbalance` | stopped at step 116 of 192 (the circuit before the board change) | 398 s, every step |
+  | `ResistorMatching` | not run to the end (hundreds of operating points at 10 to 67 s); with the hints alone, Monte Carlo run 70 had no operating point | 1078 s |
+  | `ResistorWorstCase` | not run to the end (hundreds of operating points at 10 to 67 s) | 908 s |
+  | `GuardStability.poles` | 52 of 190 poles unrefined | 89 s, all 192 roots certified |
+  | `Distortion` | out of memory after 86 min | stops at 15.09 us after 569 s |
+  | `Startup` | no operating point | no operating point, after 842 s |
+  | All benches | not run to the end | 4788 s, at most 1.4 GB |
+
+  Default models: every measure of the seven examples identical to the
+  baseline taken at 201ae83b before any change (the analyzer at 201ae83b's
+  circuit: 7002 of 7002; the six others: all), except the pole fields named
+  above; the analyzer's default run with `--jobs 1` is identical to the
+  default thread count. With the snubbers, the analyzer's default run moves
+  in `SupplyCurrent.driving`, `Distortion`, `Startup` (0.67 s settling kept)
+  and at 1e-13 in `ResistorMatching` and `ResistorWorstCase`.
+
+The vendor results on the final circuit are in SPEC.md, "Vendor models".
+
+Open: acceptance is not met. With the vendor models the sense buffer's
+margin (41.5 degrees) and peaking (1.517) still fail (taken as the part's;
+the options above each fail a limit or cost 44 mA), and
+`GuardStability.poles` fails for a real 607 MHz pair of the sense buffers
+with the HP and LP electrodes unloaded (stable with their strays; the bench
+is the owner's call); `Startup` (no operating point with the rails at 0 V:
+the AD8130 model's limit and copper's on the unpowered ADA4817) and
+`Distortion` (the transient's pace on the vendor circuit, and Newton
+diverging at 15 us) do not finish; 51 simulated pins stay unrated. Also
+open: the proposed macro changes (I3 above and `output_resistance = 56ohm`,
+pending the owner's macro decision); the ADA4807 macro block's `gbw`
+180 MHz and `second_pole` 300 MHz, which do not reproduce Figure 23 (part
+file); the drive buffer's low-frequency Tian difference in ngspice; the
+vendor circuit's factorisations (the sparse LU often leaves its matrix to
+the dense one, 11.7 MB of factors for 1209 unknowns), 84 % of
+`ResistorMatching`'s time; the LTC6268 block in CopperLib; the two AC
+differences of the I3 ngspice comparison; a committable deck that fails
+without the split.
+
 ### I4. Checks that compare
 
 Today the evidence checks list simulated values. Only pin voltages are

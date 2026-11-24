@@ -13,7 +13,9 @@
 //    circuit").
 //  - Everything below is an assumption, stated here because the module gives no
 //    tolerance for it: resistors 1 % (thick film); C0G capacitors 5 % (C_BLK, C_TIA,
-//    C_CMP_N, C_CMP_P, the filter's C_F1 and C_F2, the anti-alias C_AA*); X7R
+//    C_CMP_N, C_CMP_P, the filter's C_F1 and C_F2, the anti-alias C_AA*, the gain
+//    stages' C_G1F and C_G2F, last in the list so that the Monte Carlo draws of the
+//    others stay as they were); X7R
 //    coupling capacitors 10 % (C_IN, C_NDC, C_CHP, C_CLP, C_B1, C_G1, C_G2); the 22 uF
 //    DC blocks 20 %; the filter inductor 10 %. Supply decoupling is left out (an AC
 //    short either way).
@@ -31,7 +33,8 @@
 //    (V2 - V1) / (I1 - I2), node strays included, as PumpOutputImpedance measures it.
 //  - SHORT: the transfer resistance shorted (1 mohm) with the step's contacts: the
 //    sense electrodes then carry only the common mode (the LC contact's drop), and
-//    its ratio to V_MON_1 is the sense path's common-mode rejection in place.
+//    its ratio to V_D, the receiver's output, is the sense path's common-mode
+//    rejection in place (the ADC channels after V_D left out, as in SenseCommonMode).
 fixture MatchingTolerances for AnalogFrontEnd {
     ignore RN_HOW;
     component RN_R1: RESISTOR { value = 10kohm; tolerance = 7.5%; match = "LT5400"; match_tolerance = 0.0125%; }
@@ -91,6 +94,8 @@ fixture MatchingTolerances for AnalogFrontEnd {
     tolerance C_G1G = 20%;
     tolerance C_G2G = 20%;
     tolerance L_F1 = 10%;
+    tolerance C_G1F = 5%;
+    tolerance C_G2F = 5%;
 
     reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF; }
     reference LOAD2 { R_TRANSFER = 2kohm; R_CONTACT = 14kohm; }
@@ -102,5 +107,5 @@ fixture MatchingTolerances for AnalogFrontEnd {
     let e100 = z100 / z_true / reference(z100 / z_true, CARD);
     let ei = i_meas / i_lc / reference(i_meas / i_lc, CARD);
     let z_out = (reference(V(E_HC), LOAD2) - V(E_HC)) / (i_hc - reference(i_hc, LOAD2));
-    let rejection = reference(V(E_LP) / V(V_MON_1), SHORT);
+    let rejection = reference(V(E_LP) / V(V_D), SHORT);
 }

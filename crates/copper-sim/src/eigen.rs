@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | [`qr_pivoted`] | Householder QR with column pivoting: `A P = Q R`, the rank where a pivot falls to `tol` of the first |
 //! | [`eigenvalues`] | balancing by powers of two, Householder reduction to Hessenberg form, Francis double-shift QR (the EISPACK `balanc`, `orthes` and `hqr` sequence) |
-//! | [`finite_eigenvalues`] | the finite eigenvalues of a real pencil `G + s C` with singular `C`: the infinite ones deflated by orthogonal transformations first (see the function) |
+//! | [`finite_eigenvalues`] | the finite eigenvalues of a real pencil `G + s C` with singular `C`: the infinite ones deflated by orthogonal transformations first (see the function), the slow ones from the inverted reduced pencil ([`with_slow_roots_inverted`]) |
 //!
 //! Everything is dense and `O(n^3)`; no dependency.
 
@@ -567,6 +567,72 @@ pub fn finite_eigenvalues(g: &Mat, c: &Mat) -> Result<Spectrum, EigenError> {
     reduce(&g, &c, floor)
 }
 
+/// The relative size, against the largest, from which an eigenvalue `mu` of
+/// `-G^-1 C` gives a slow root `s = 1 / mu` of a regular pencil more
+/// accurately than the eigenvalues of `-C^-1 G` do ([`with_slow_roots_inverted`]).
+pub const INVERTED_SLOW: f64 = 1e-4;
+
+/// `direct`, the eigenvalues of `-C^-1 G` of a pencil with nonsingular `C`
+/// (the infinite eigenvalues already deflated), with its slow roots taken from
+/// the eigenvalues `mu` of `-G^-1 C` instead (`s = 1 / mu`) when `G` is
+/// nonsingular too. The QR iteration's absolute round-off is a multiple of
+/// `1e-16` times the norm of its balanced matrix, which in a stiff pencil
+/// (conductances from 1e-12 to 1e6 S beside microfarad couplings, as in vendor
+/// op-amp models with 1 uohm and 1 Tohm resistors) is set by the fastest
+/// roots, 1e15 rad/s and more: a root of a few rad/s can then come out on the
+/// wrong side of the imaginary axis, and a repeated one (two equal coupling
+/// networks) far off. Inverted, the slowest roots are the largest `mu`, which
+/// the QR iteration gives to round-off relative to themselves. The `k` roots
+/// with `|mu|` at least [`INVERTED_SLOW`] of the largest replace the `k`
+/// smallest direct roots. With roots at the origin (`G` singular) the
+/// pencil is inverted at a shift `sigma`, a hundredth of the slowest other
+/// root, and `s = sigma + 1 / mu`.
+pub(crate) fn with_slow_roots_inverted(g: &Mat, c: &Mat, direct: Vec<Complex>) -> Vec<Complex> {
+    let n = g.rows;
+    // With roots at the origin (a node with only capacitors to it) G is
+    // singular: invert at a shift a hundredth of the slowest other root.
+    let fastest = direct.iter().fold(0.0f64, |a, z| a.max(z.abs()));
+    let near_origin = |z: &Complex| z.abs() <= 1e-9 * fastest;
+    let sigma = if direct.iter().any(near_origin) {
+        match direct.iter().filter(|z| !near_origin(z)).map(|z| z.abs()).min_by(f64::total_cmp) {
+            Some(slowest) => 1e-2 * slowest,
+            None => return direct,
+        }
+    } else {
+        0.0
+    };
+    let shifted: Vec<f64> = g.a.iter().zip(&c.a).map(|(g, c)| g + sigma * c).collect();
+    let Ok(lu) = RealLu::factor(shifted, n) else { return direct };
+    let mut m = Mat::zeros(n, n);
+    for j in 0..n {
+        let column: Vec<f64> = (0..n).map(|i| -c.get(i, j)).collect();
+        let Some(x) = lu.solve(&column) else { return direct };
+        for (i, v) in x.iter().enumerate() {
+            m.set(i, j, *v);
+        }
+    }
+    let Ok((mu, _)) = balanced_eigenvalues(&m) else { return direct };
+    let largest = mu.iter().fold(0.0f64, |a, z| a.max(z.abs()));
+    if largest == 0.0 || !largest.is_finite() || mu.len() != direct.len() {
+        return direct;
+    }
+    let mut slow: Vec<Complex> = mu
+        .iter()
+        .filter(|z| z.abs() >= INVERTED_SLOW * largest)
+        .map(|z| Complex::new(sigma, 0.0) + Complex::new(1.0, 0.0) / *z)
+        .collect();
+    for s in &mut slow {
+        if s.im.abs() <= 1e-12 * s.abs() {
+            s.im = 0.0;
+        }
+    }
+    let mut fast = direct;
+    fast.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+    let k = slow.len();
+    slow.extend(fast.into_iter().skip(k));
+    slow
+}
+
 /// One deflation step of [`finite_eigenvalues`] on a scaled pencil, then the
 /// reduced pencil (orthogonal transformations keep its scaling).
 fn reduce(g: &Mat, c: &Mat, floor: f64) -> Result<Spectrum, EigenError> {
@@ -599,7 +665,7 @@ fn reduce(g: &Mat, c: &Mat, floor: f64) -> Result<Spectrum, EigenError> {
             }
         }
         let (values, norm) = balanced_eigenvalues(&m)?;
-        return Ok(Spectrum { values, infinite: 0, norm });
+        return Ok(Spectrum { values: with_slow_roots_inverted(g, c, values), infinite: 0, norm });
     }
     let qt = qr.q.transpose();
     let (qg, qc) = (qt.mul(&gd), qt.mul(&cd));

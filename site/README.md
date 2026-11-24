@@ -13,9 +13,9 @@ secondary action is to inspect a complete, documented board.
 - Introduce CopperScript consistently across the three repository READMEs.
 - Show actual source, inspectable IR and illustrations rendered from native plots rather than
   invented renders or unsupported performance claims.
-- Explain language intent, hard macros, antenna synthesis, the shared
-  workflow, the tracker, quick start, practical questions and repository
-  ownership in that order.
+- Explain language intent, hard macros, antenna synthesis, circuit
+  simulation, EMI screening, the shared workflow, the tracker, review, quick
+  start, practical questions and repository ownership in that order.
 - Use static HTML/CSS and small progressive enhancements. No framework,
   installation, external fonts, analytics or board build is needed to publish.
 - Add descriptive page metadata, a canonical URL, PNG share image and sitemap.
@@ -42,7 +42,8 @@ Open `http://127.0.0.1:8000/`. Check both a wide and a narrow viewport and the
 five board-view links, including the combined six-layer view with fills hidden.
 The hero stacks the top, In2 and bottom showcase plots; hovering widens the
 stack. In the antenna section, switch between the template and the synthesized
-design and hover the return-loss chart.
+design and hover the return-loss chart. In the simulation section hover the
+noise chart; in the EMI section switch between the two summary pages.
 Package pads are highlighted gold in the surface, placement and combined views.
 The full-size SVG link follows the selected view. The site also works without JavaScript: the views open
 their SVG files, the quick-start text remains selectable and FAQs use native
@@ -143,6 +144,34 @@ node scripts/check_site.cjs
 The JSON records the SHA-256 of each input. Review the resonance, band and
 efficiency wording in `index.html` against the new numbers; the stat tiles are
 filled from the JSON, the prose is not.
+
+## Maintain the simulation and EMI figures
+
+`assets/simulation-noise.json` holds the noise curves and measures of the
+preamp's `MeasurementNoise` bench (`examples/simulation/preamp`), copied from a
+`copper sim` run's `sim-results.json` and CSV. `assets/emi/` holds two
+`copper emi-check --plot-summary` pages, byte for byte: `examples/emi_buck`
+(no input filter, current-limit worst case) and `examples/emi_buck_filter`
+(LC input filter, declared 2 A load). `emi/emi-screening.json` records each
+page's SHA-256 and the SHA-256 of the example it came from; `check_site.cjs`
+fails when either changes, and when the noise numbers quoted in `index.html`
+differ from the JSON. Nothing is drawn by hand.
+
+From the repository root, with a release `copper` (each run takes under a
+second):
+
+```console
+copper=target/release/copper; out=build/promo
+$copper sim examples/simulation/preamp/board.copper --bench MeasurementNoise --out $out/sim
+$copper emi-check examples/emi_buck/board.copper --allow-proxy-footprints --plot-summary $out/emi/summary.svg
+$copper emi-check examples/emi_buck_filter/board.copper --allow-proxy-footprints --plot-summary $out/emi/filter-summary.svg
+node scripts/update_site_analysis.cjs --sim-dir $out/sim \
+  --emi-bare $out/emi/summary.svg --emi-filter $out/emi/filter-summary.svg
+node scripts/check_site.cjs
+```
+
+Review the stat tiles and prose of both sections in `index.html` and the EMI
+captions and descriptions in `assets/site.js` against the new numbers.
 
 ## Maintain the CopperReview screenshots
 

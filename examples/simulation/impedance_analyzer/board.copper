@@ -307,7 +307,7 @@ board ImpedanceAnalyzer {
     net DDS_OUT { U_DDS.VOUT; AFE.DDS_OUT; }
 
     // Analog front end to the ADCs. In sleep the front end is unpowered and these pins
-    // face the outputs of unpowered ADA4807s through 49.9 ohm: they stay in analog mode
+    // face the outputs of unpowered ADA4807s through 49.9 ohm (PA1 100 ohm): they stay in analog mode
     // with no pull-up (README.md, "Firmware rules").
     net V_MON_1 { U_MCU.PA1; AFE.V_MON_1; }
     net V_MON_10 { U_MCU.PA6; AFE.V_MON_10; }

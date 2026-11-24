@@ -665,7 +665,7 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
     };
     // The nominal run of every step, in parallel: each is independent.
     let combinations = combinations(bench);
-    let nominal_runs = crate::parallel::map(&combinations, |stepped| {
+    let run_nominal = |stepped: &Vec<(String, Quantity)>| {
         let step_clock = clock.map(|_| std::time::Instant::now());
         let mut params = nominal.clone();
         for (name, quantity) in stepped {
@@ -683,14 +683,36 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                 .collect::<Result<Vec<bool>, String>>()
         });
         let solved = covered.and_then(|covered| {
-            let step = run_step(design, bench, &wiring, &params, &marks, &covered, Some(&probes))?;
+            let step = run_step(design, bench, &wiring, &params, &marks, &covered, Some(&probes), &[])?;
             Ok((step, covered))
         });
         (params, solved, step_clock.map_or(0.0, |start| start.elapsed().as_secs_f64()))
-    });
+    };
+    // A small-signal bench with several steps or variation runs solves its
+    // first step alone, then the others in parallel with its operating point
+    // as their hint: a solve whose Newton iteration from zero fails starts
+    // from that point and that step's aid (`copper_sim::DcHint`). Every step
+    // gets the same hint whatever the thread count, so the results do not
+    // depend on it; a circuit that solves from zero ignores the hint.
+    let hinted = small_signal(bench) && (combinations.len() > 1 || bench.variation.is_some());
+    let step_hint = |params: &Params, under: Option<std::sync::Arc<copper_sim::DcHint>>| {
+        copper_sim::with_dc_hint(under, || {
+            lower::lower(design, bench, &wiring, params).ok().and_then(|lowered| copper_sim::dc_hint(&lowered.circuit))
+        })
+    };
+    let (nominal_runs, first_hint) = match combinations.split_first() {
+        Some((first, rest)) if hinted => {
+            let first = run_nominal(first);
+            let hint = first.1.is_ok().then(|| step_hint(&first.0, None)).flatten();
+            let rest =
+                crate::parallel::map(rest, |stepped| copper_sim::with_dc_hint(hint.clone(), || run_nominal(stepped)));
+            (std::iter::once(first).chain(rest).collect::<Vec<_>>(), hint)
+        }
+        _ => (crate::parallel::map(&combinations, run_nominal), None),
+    };
     // Then in step order: the variation runs of each step (in parallel
     // themselves), the first error ending the bench as a serial run would.
-    for (stepped, (params, solved, seconds)) in combinations.into_iter().zip(nominal_runs) {
+    for (index, (stepped, (params, solved, seconds))) in combinations.into_iter().zip(nominal_runs).enumerate() {
         let step_clock = clock.map(|_| std::time::Instant::now());
         let label = step_label(&stepped);
         let fixed: Vec<&str> = stepped.iter().map(|(name, _)| name.as_str()).collect();
@@ -704,6 +726,12 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
                     marks: &marks,
                     fixed: &fixed,
                     covered: &covered,
+                    // The step's own nominal points, solved under the hint its nominal run had.
+                    hints: if hinted {
+                        step_hints(design, bench, &wiring, &params, if index == 0 { None } else { first_hint.clone() })
+                    } else {
+                        StepHints::default()
+                    },
                 };
                 variation.run_step(&context, &params, &mut step).map(|()| (step, models))
             }
@@ -838,6 +866,10 @@ pub fn analysis_run(analysis: &Analysis, params: &Params) -> AnalysisRun {
 /// Solve the analysis of a lowered bench at frequency `f` alone (`at(x, f)`
 /// between two samples of `analysis ac` or `analysis noise`).
 pub(crate) fn solve_point(lowered: &Lowered, analysis: &Analysis, params: &Params, f: f64) -> Result<Solution, String> {
+    copper_sim::with_dc_hint(lowered.hint.clone(), || solve_point_hinted(lowered, analysis, params, f))
+}
+
+fn solve_point_hinted(lowered: &Lowered, analysis: &Analysis, params: &Params, f: f64) -> Result<Solution, String> {
     let sweep = Sweep::List(vec![f]);
     let solution = match analysis {
         Analysis::Ac { .. } => copper_sim::ac(&lowered.circuit, &sweep).map(Solution::Ac),
@@ -929,6 +961,63 @@ fn solve(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params) -> Re
     Ok((lowered, solution))
 }
 
+/// The operating-point hints of the runs of one step (`copper_sim::DcHint`):
+/// the hint its own run is solved under, and per reference run (in
+/// `bench.references` order) a hint of its own, tried before the step's own
+/// operating point.
+#[derive(Clone, Debug, Default)]
+pub struct StepHints {
+    pub main: Option<std::sync::Arc<copper_sim::DcHint>>,
+    pub references: Vec<Option<std::sync::Arc<copper_sim::DcHint>>>,
+}
+
+/// Whether the bench's analysis is a small-signal one, whose operating points are hinted.
+fn small_signal(bench: &Bench) -> bool {
+    matches!(bench.analysis, Analysis::Ac { .. } | Analysis::Noise(_) | Analysis::Loop(_) | Analysis::Pz(_))
+}
+
+/// The params of the reference run `k` of `bench` at a step's `params`.
+fn reference_params(bench: &Bench, k: usize, params: &Params) -> Result<Params, String> {
+    let reference = &bench.references[k];
+    let mut overridden = params.clone();
+    for (name, quantity) in &reference.overrides {
+        overridden.insert(name.clone(), value(quantity, params));
+    }
+    let mut fixed: Vec<&str> = reference.overrides.iter().map(|(name, _)| name.as_str()).collect();
+    fixed.extend(bench.steps.iter().flat_map(|step| step.params()));
+    derive(bench, &mut overridden, &fixed)?;
+    Ok(overridden)
+}
+
+/// The hints the nominal run of a step at `params` leaves, solved under
+/// `under` as that run was ([`run_step`]): its operating point, and each
+/// reference run's (solved under that point). The step's variation runs start
+/// from them: a Monte Carlo run's reference run is closest to the same
+/// reference at nominal values.
+pub(crate) fn step_hints(
+    design: &Design,
+    bench: &Bench,
+    wiring: &Wiring,
+    params: &Params,
+    under: Option<std::sync::Arc<copper_sim::DcHint>>,
+) -> StepHints {
+    if !small_signal(bench) {
+        return StepHints::default();
+    }
+    let hint_of = |params: &Params| {
+        lower::lower(design, bench, wiring, params).ok().and_then(|lowered| copper_sim::dc_hint(&lowered.circuit))
+    };
+    let main = copper_sim::with_dc_hint(under, || hint_of(params));
+    let references = (0..bench.references.len())
+        .map(|k| {
+            let overridden = reference_params(bench, k, params).ok()?;
+            copper_sim::with_dc_hint(main.clone(), || hint_of(&overridden))
+        })
+        .collect();
+    StepHints { main, references }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_step(
     design: &Design,
     bench: &Bench,
@@ -937,20 +1026,22 @@ pub(crate) fn run_step(
     marks: &Marks,
     covered: &[bool],
     probes: Option<&crate::evidence::Probes>,
+    reference_hints: &[Option<std::sync::Arc<copper_sim::DcHint>>],
 ) -> Result<(StepRun, Vec<ModelUse>), String> {
     let (lowered, solution) = solve(design, bench, wiring, params)?;
-    // Reference runs: the same bench with each reference's params.
+    // Reference runs: the same bench with each reference's params, a
+    // small-signal one hinted by its own hint, if any, then by this run's
+    // operating point (`copper_sim::DcHint`).
+    let hint =
+        if small_signal(bench) && !bench.references.is_empty() { copper_sim::dc_hint(&lowered.circuit) } else { None };
     let mut runs: Vec<(String, Lowered, Solution, Params)> = Vec::new();
-    for reference in &bench.references {
-        let mut overridden = params.clone();
-        for (name, quantity) in &reference.overrides {
-            overridden.insert(name.clone(), value(quantity, params));
-        }
-        let mut fixed: Vec<&str> = reference.overrides.iter().map(|(name, _)| name.as_str()).collect();
-        fixed.extend(bench.steps.iter().flat_map(|step| step.params()));
-        derive(bench, &mut overridden, &fixed)?;
-        let (lowered, solution) = solve(design, bench, wiring, &overridden)
-            .map_err(|error| format!("reference {}: {error}", reference.name))?;
+    for (k, reference) in bench.references.iter().enumerate() {
+        let overridden = reference_params(bench, k, params)?;
+        let own = reference_hints.get(k).cloned().flatten();
+        let reference_hint = copper_sim::DcHint::join(own, hint.clone());
+        let (lowered, solution) =
+            copper_sim::with_dc_hint(reference_hint, || solve(design, bench, wiring, &overridden))
+                .map_err(|error| format!("reference {}: {error}", reference.name))?;
         runs.push((reference.name.clone(), lowered, solution, overridden));
     }
     let _evaluation = copper_sim::timing::span(copper_sim::timing::Phase::Evaluation);
