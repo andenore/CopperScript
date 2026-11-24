@@ -44,9 +44,15 @@ pub const PIVOT_THRESHOLD: f64 = 0.1;
 /// fraction of the largest entry of its column.
 pub const REFACTOR_THRESHOLD: f64 = 1e-3;
 /// Pivots at or below this magnitude (equilibrated matrix) are left to the
-/// dense factorisation, whose tolerance ([`crate::lu::PIVOT_TOLERANCE`])
+/// dense factorisation, whose tolerance it is: the dense factorisation
 /// decides whether the matrix is singular.
-pub const PIVOT_FLOOR: f64 = 1e-10;
+pub const PIVOT_FLOOR: f64 = crate::lu::PIVOT_TOLERANCE;
+/// Factors with a pivot below this magnitude (equilibrated matrix: the last
+/// pivots of a nearly singular one, nearly floating nodes held by 1 Tohm)
+/// are weak: their solves are refined until the correction stops shrinking.
+pub const WEAK_PIVOT: f64 = 1e-10;
+/// Refinement steps of a solve with weak factors at most.
+const WEAK_REFINEMENTS: usize = 4;
 
 /// The arithmetic the factorisation needs: `f64` and [`Complex`].
 pub trait Scalar:
@@ -349,6 +355,8 @@ pub struct SparseLu<T> {
     u_rows: Vec<usize>,
     u_values: Vec<T>,
     diag: Vec<T>,
+    /// Whether a pivot is below [`WEAK_PIVOT`].
+    weak: bool,
 }
 
 impl<T: Scalar> SparseLu<T> {
@@ -510,6 +518,7 @@ impl<T: Scalar> SparseLu<T> {
             u_start,
             u_rows,
             u_values,
+            weak: diag.iter().any(|d| d.magnitude() < WEAK_PIVOT),
             diag,
         })
     }
@@ -567,6 +576,7 @@ impl<T: Scalar> SparseLu<T> {
             self.diag[j] = d;
         }
         self.a_values.clone_from(&a.values);
+        self.weak = self.diag.iter().any(|d| d.magnitude() < WEAK_PIVOT);
         self.row_scale = row_scale;
         self.col_scale = col_scale;
         true
@@ -609,20 +619,31 @@ impl<T: Scalar> SparseLu<T> {
         if x.iter().any(|z| !z.finite()) {
             return None;
         }
-        let residual: Vec<T> = (0..n)
-            .map(|r| {
-                let mut s = b[r];
-                for e in self.a_row_start[r]..self.a_row_start[r + 1] {
-                    s -= self.a_values[e] * x[self.a_cols[e]];
-                }
-                s
-            })
-            .collect();
-        let d = self.substitute(&residual);
-        if d.iter().all(|z| z.finite()) {
+        // One step of refinement; weak factors take more, while the
+        // correction (in the columns' own scale) keeps shrinking.
+        let mut last = f64::INFINITY;
+        for _ in 0..if self.weak { WEAK_REFINEMENTS } else { 1 } {
+            let residual: Vec<T> = (0..n)
+                .map(|r| {
+                    let mut s = b[r];
+                    for e in self.a_row_start[r]..self.a_row_start[r + 1] {
+                        s -= self.a_values[e] * x[self.a_cols[e]];
+                    }
+                    s
+                })
+                .collect();
+            let d = self.substitute(&residual);
+            if !d.iter().all(|z| z.finite()) {
+                break;
+            }
+            let size = d.iter().zip(&self.col_scale).map(|(z, s)| z.magnitude() / s).fold(0.0, f64::max);
+            if size >= last {
+                break;
+            }
             for (xi, di) in x.iter_mut().zip(&d) {
                 *xi += *di;
             }
+            last = size;
         }
         x.iter().all(|z| z.finite()).then_some(x)
     }
@@ -767,10 +788,16 @@ mod tests {
         // A zero column (the unknown appears in no equation).
         let a = SparseMatrix::from_dense(&[1.0, 0.0, 2.0, 0.0], 2);
         assert!(SparseLu::factor(&a).is_err());
-        // Nearly singular but within the dense tolerance: also left to it, which solves it.
+        // Nearly singular but within the dense tolerance: factored here as
+        // weak factors, whose refined solve is the dense solve's.
         let a = SparseMatrix::from_dense(&[1.0, 1.0, 1.0, 1.0 + 1e-11], 2);
-        assert!(SparseLu::factor(&a).is_err());
-        assert!(RealLu::factor(a.to_dense(), 2).is_ok());
+        let lu = SparseLu::factor(&a).expect("a pivot within the dense tolerance");
+        assert!(lu.weak);
+        let want = RealLu::factor(a.to_dense(), 2).unwrap().solve(&[1.0, 2.0]).unwrap();
+        let got = lu.solve(&[1.0, 2.0]).unwrap();
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() <= 1e-4 * w.abs(), "{got:?} against {want:?}");
+        }
         // Refactoring into a singular matrix fails rather than dividing by zero.
         let mut a = SparseMatrix::from_dense(&[2.0, 1.0, 1.0, 2.0], 2);
         let mut lu = SparseLu::factor(&a).unwrap();

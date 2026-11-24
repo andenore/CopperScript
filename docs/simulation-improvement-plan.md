@@ -1377,6 +1377,54 @@ with a self-written deck that fails before the fix; the tolerance benches'
 vendor run time stated before and after; the `Distortion` divergence
 explained, fixed or not.
 
+Status, 24 November 2026: solver part built in `copper-sim` only (`newton.rs`,
+`sparse_lu.rs`, `real_lu.rs`, `lu.rs`), not committed.
+
+- Newton that stops on its own rounding (`NOISE_SETTLE`,
+  `Solver::rounding_noise`). A vendor amplifier's internal gain node is
+  fixed only to the gain times the rounding of its input voltages (43 mV on
+  the ADA4807's node 200 against a 1.65 mV tolerance), so Newton moved it
+  for ever and the transient shortened its step to the floor: that was the
+  `Distortion` stop at 15 us. In the last iterations before the limit an
+  unknown that moves by at most eight times its rounding noise counts as
+  settled, and four settled iterations in a row are accepted. This is a
+  looser acceptance than the tolerance, used only where the tolerance
+  cannot be met. Test: `a_node_fixed_only_to_its_rounding_settles`.
+- PSpice's smooth switch in a latch (`Aid::Unwindowed`): the vendor models'
+  power-down logic made the windowed control alternate for ever. A new aid,
+  tried after Newton from zero fails, linearises the smooth controls where
+  they are. Test:
+  `a_smooth_switch_latch_is_solved_with_its_control_linearised_where_it_is`.
+- Sparse LU: pivots down to the dense tolerance are factored as weak
+  factors, whose solves are refined up to four steps, instead of leaving
+  the matrix to the dense LU. The dense elimination skips the pivot row's
+  zeros, which changes no factor (test
+  `skipping_the_pivot_rows_zeros_changes_no_factor`).
+
+Checked on a release build against fbde72c2: the seven examples on default
+models give the same 7187 values but one (a `GuardStability.poles` damping,
+6e-13 relative). The analyzer with `--models vendor`: `Distortion` now runs
+all 9 steps; the whole run takes 3337 s where it took 4701 s and stopped in
+`Distortion`; no limited measure changes its verdict, and the limited
+values move by at most 2e-5 relative, apart from `current_error`, a 1e-9
+quantity that moves by up to 13 % of itself. The vendor `Distortion` values
+are not judged yet: THD reaches 37 % on the gain-1 channel at steps where
+`pump_headroom` is negative, which looks like the intended clipping steps
+but has no reference run.
+
+Open:
+
+- `Startup` on vendor models still has no operating point. The unpowered
+  ADA4817 model is not physical at 0 V rails: ngspice-46's solution puts
+  1.7e17 A through the input clamps, and copper's matrix goes singular on
+  the way there; the AD8130 model is singular at 0 V too. The honest bench
+  starts from the regulators' undervoltage-lockout point, where the models
+  are defined. A diagnostic that names the parts whose supply pins sit at
+  0 V when an operating point fails is not built.
+- The I6 leftovers above: not started.
+- SPEC's "Vendor models" table and the I3 "Open" paragraph predate this and
+  need a refresh from this vendor run.
+
 ### I11. Mixed signal (proposal)
 
 Not designed. The analyzer's benches drive the analog module with ideal
