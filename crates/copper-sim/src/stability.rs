@@ -50,9 +50,15 @@
 //! original complex pencil (the bordered system `[G + s C, C x; e_k^T, 0]`,
 //! started from inverse iteration), which also gives its eigenvector: the
 //! nodes whose small-signal voltage is largest in that mode are the nodes the
-//! pole dominates. A pole whose refinement does not converge (a repeated
-//! pole, for instance) or runs to another eigenvalue keeps its QR value and
-//! is marked unrefined.
+//! pole dominates. Where that refinement does not converge (a repeated
+//! pole: identical sub-circuits) or runs to another eigenvalue, inverse
+//! iteration at a fixed shift beside the QR value finds the eigenvalue
+//! nearest it, independently of the QR iteration, and certifies it when its
+//! backward error `||(G + s C) x|| / ((||G|| + |s| ||C||) ||x||)` is within
+//! [`CERTIFIED`] ([`nearest_eigenvalue`]): a QR value of a stiff pencil with
+//! no eigenvalue near it is replaced by the one that is there, and a real one
+//! is confirmed. A pole neither method certifies keeps its QR value and is
+//! marked unrefined; roots at the origin are not refined.
 //!
 //! The zeros of a transfer function `V(out) - V(ref)` per unit of an input
 //! source are the finite eigenvalues of the bordered pencil
@@ -395,6 +401,96 @@ fn refine(g: &Mat, c: &Mat, guess: Complex, spectral: f64) -> (Option<Complex>, 
     (None, Some(initial))
 }
 
+/// The backward error below which [`nearest_eigenvalue`] accepts an
+/// eigenvalue: `||(G + s C) x|| <= CERTIFIED (||G|| + |s| ||C||) ||x||`
+/// (maximum norms), `s` an exact eigenvalue of a pencil that close to this one.
+pub const CERTIFIED: f64 = 1e-11;
+
+/// Inverse iterations of [`nearest_eigenvalue`].
+const INVERSE_ITERATIONS: usize = 60;
+
+/// The eigenvalue of `G + s C` nearest `guess`, independently of the QR
+/// iteration that produced the guess: inverse iteration at a fixed shift just
+/// beside `guess`, which converges to the eigenvalue nearest the shift (the
+/// infinite ones are never approached), then Newton's refinement from it when
+/// that converges (a simple root), else the iterate's residual-minimising
+/// value. Returned with its eigenvector when its backward error is within
+/// [`CERTIFIED`]: a repeated root (identical sub-circuits) is certified where
+/// Newton's bordered system is singular, and a QR value with no eigenvalue
+/// near it (round-off of a stiff pencil) is replaced by the eigenvalue that
+/// is there.
+fn nearest_eigenvalue(g: &Mat, c: &Mat, guess: Complex, spectral: f64) -> Option<(Complex, Vec<Complex>)> {
+    let n = g.rows;
+    let size = guess.abs().max(1e-9 * spectral).max(f64::MIN_POSITIVE);
+    let shift = guess + Complex::new(0.6, 0.8).scale(1e-7 * size);
+    let lu = Factors::of(&at(g, c, shift), n)?;
+    let apply_c = |x: &[Complex]| -> Vec<Complex> {
+        (0..n).map(|r| (0..n).fold(Complex::ZERO, |acc, col| acc + x[col].scale(c.a[r * n + col]))).collect()
+    };
+    let mut x: Vec<Complex> = (0..n).map(|k| Complex::new(1.0 + 0.1 * (k % 7) as f64, 0.01 * (k % 3) as f64)).collect();
+    let mut value = guess;
+    for _ in 0..INVERSE_ITERATIONS {
+        let y = lu.solve(&apply_c(&x))?;
+        let pivot = y[largest(&y)];
+        if pivot.abs() == 0.0 || !pivot.is_finite() {
+            return None;
+        }
+        // y = x / (shift - s) for an eigenvector x: theta from the largest entry.
+        let theta = pivot / x[largest(&y)];
+        x = y.iter().map(|z| *z / pivot).collect();
+        if theta.abs() == 0.0 || !theta.is_finite() {
+            return None;
+        }
+        // Every iteration runs: the value settles long before the vector does.
+        value = shift - Complex::ONE / theta;
+    }
+    // The value that minimises the residual of x: s = -(Cx)^H (Gx) / |Cx|^2.
+    let cx = apply_c(&x);
+    let gx: Vec<Complex> =
+        (0..n).map(|r| (0..n).fold(Complex::ZERO, |acc, col| acc + x[col].scale(g.a[r * n + col]))).collect();
+    let (num, den) = cx
+        .iter()
+        .zip(&gx)
+        .fold((Complex::ZERO, 0.0), |(num, den), (cv, gv)| (num + cv.conj() * *gv, den + cv.abs() * cv.abs()));
+    if den == 0.0 {
+        return None;
+    }
+    let iterated = value;
+    value = Complex::ZERO - num.scale(1.0 / den);
+    let norm = |m: &Mat| (0..n).map(|r| (0..n).map(|col| m.a[r * n + col].abs()).sum::<f64>()).fold(0.0, f64::max);
+    let (g_norm, c_norm) = (norm(g), norm(c));
+    // The backward error of (s, x): ||(G + s C) x|| / ((||G|| + |s| ||C||) ||x||).
+    let backward = |s: Complex, x: &[Complex]| -> f64 {
+        let residual = (0..n)
+            .map(|r| {
+                (0..n).fold(Complex::ZERO, |acc, col| {
+                    acc + x[col] * (Complex::new(g.a[r * n + col], 0.0) + s.scale(c.a[r * n + col]))
+                })
+            })
+            .map(|z| z.abs())
+            .fold(0.0, f64::max);
+        let x_norm = x.iter().map(|z| z.abs()).fold(0.0, f64::max);
+        residual / ((g_norm + s.abs() * c_norm) * x_norm)
+    };
+    let mut error = backward(value, &x);
+    // The iteration's own value where it does better (round-off in the quotient).
+    let iterated_error = backward(iterated, &x);
+    if iterated_error < error {
+        (value, error) = (iterated, iterated_error);
+    }
+    // Newton's refinement where it does better (a simple root); on a repeated
+    // root its bordered system is singular and it does not.
+    if let (Some(newton), Some(vector)) = refine(g, c, value, spectral)
+        && (newton - value).abs() <= 1e-6 * size
+    {
+        let newton_error = backward(newton, &vector);
+        if newton_error < error {
+            (value, x, error) = (newton, vector, newton_error);
+        }
+    }
+    (error <= CERTIFIED && value.is_finite()).then_some((value, x))
+}
+
 /// The nodes with the largest voltage in the mode `x` (at least half the largest).
 fn dominant(c: &Circuit, layout: &Layout, x: &[Complex]) -> Vec<(String, f64)> {
     let mut nodes: Vec<(String, f64)> = layout
@@ -454,8 +550,23 @@ fn roots(g: &Mat, c: &Mat, values: Vec<Complex>, node_names: Option<(&Circuit, &
                 .filter(|(k, _)| *k != i && Some(*k) != pair)
                 .all(|(_, other)| (*r - *other).abs() > own)
         });
+        // Where Newton did not converge or ran to another root: the eigenvalue
+        // inverse iteration finds nearest the QR value, if certified.
+        let (refined, vector) = match refined {
+            // Roots at the origin (floating nodes) are told apart below, by G's nullity.
+            None if refining && upper.abs() > ORIGIN_TOLERANCE * scale => {
+                match nearest_eigenvalue(g, c, upper, spectral) {
+                    Some((value, x)) => (Some(value), Some(x)),
+                    None => (None, vector),
+                }
+            }
+            refined => (refined, vector),
+        };
         let mut value = refined.unwrap_or(upper);
         if guess.im == 0.0 && value.im.abs() <= 1e-9 * value.abs() {
+            value.im = 0.0;
+        }
+        if value.im.abs() <= 1e-9 * value.abs() {
             value.im = 0.0;
         }
         let nodes = match (node_names, &vector) {
@@ -686,6 +797,68 @@ mod tests {
 
     fn close(a: f64, b: f64, rel: f64) -> bool {
         (a - b).abs() <= rel * a.abs().max(b.abs())
+    }
+
+    /// Four identical RC sections from one source and two identical RLC
+    /// tanks: a fourfold real root and a twofold complex pair.
+    fn repeated_sections() -> Circuit {
+        let mut c = Circuit::new();
+        let g = NodeId::GROUND;
+        let vin = c.node("in");
+        c.voltage_source("V1", vin, g, SourceValue::ac(1.0, 0.0)).unwrap();
+        for k in 1..=4 {
+            let node = c.node(&format!("rc{k}"));
+            c.resistor(&format!("R{k}"), vin, node, 49.9).unwrap();
+            c.capacitor(&format!("C{k}"), node, g, 470e-12).unwrap();
+        }
+        for k in 1..=2 {
+            let (a, b) = (c.node(&format!("t{k}a")), c.node(&format!("t{k}b")));
+            c.resistor(&format!("RT{k}"), vin, a, 10.0).unwrap();
+            c.inductor(&format!("LT{k}"), a, b, 1e-6).unwrap();
+            c.capacitor(&format!("CT{k}"), b, g, 1e-9).unwrap();
+        }
+        c
+    }
+
+    #[test]
+    fn repeated_roots_are_certified_by_inverse_iteration() {
+        let c = repeated_sections();
+        let result = pole_zero(&c, None).unwrap();
+        let rc = -1.0 / (49.9 * 470e-12);
+        // s^2 L C + s R C + 1 = 0.
+        let (l, cap, r): (f64, f64, f64) = (1e-6, 1e-9, 10.0);
+        let re = -r / (2.0 * l);
+        let im = (1.0 / (l * cap) - re * re).sqrt();
+        assert_eq!(result.poles.len(), 8, "{:?}", result.poles);
+        for pole in &result.poles {
+            assert!(pole.refined, "every root certified: {pole:?}");
+            let near_rc = (pole.value - Complex::new(rc, 0.0)).abs() <= 1e-9 * rc.abs();
+            let near_tank = (pole.value.re - re).abs() <= 1e-9 * im && (pole.value.im.abs() - im).abs() <= 1e-9 * im;
+            assert!(near_rc || near_tank, "{pole:?} against {rc} and {re} +/- {im}j");
+        }
+        assert_eq!(result.poles.iter().filter(|p| p.value.im == 0.0).count(), 4);
+    }
+
+    #[test]
+    fn a_qr_value_with_no_eigenvalue_near_it_is_replaced() {
+        let c = repeated_sections();
+        let c = crate::newton::linearized(&c).unwrap();
+        let layout = Layout::of(&c);
+        let (g, cm) = pencil(&c, &layout);
+        let rc = -1.0 / (49.9 * 470e-12);
+        // A spurious "unstable" value beside the real root, as round-off of a
+        // stiff pencil leaves one: inverse iteration finds the root that is there.
+        let spurious = Complex::new(-0.9 * rc * 0.05, 0.9 * rc.abs());
+        let spectral = 1e9;
+        let (value, _) = nearest_eigenvalue(&g, &cm, spurious, spectral).expect("an eigenvalue is certified");
+        let (l, cap, r): (f64, f64, f64) = (1e-6, 1e-9, 10.0);
+        let re = -r / (2.0 * l);
+        let im = (1.0 / (l * cap) - re * re).sqrt();
+        let candidates = [Complex::new(rc, 0.0), Complex::new(re, im), Complex::new(re, -im)];
+        let nearest = candidates.iter().fold(f64::INFINITY, |m, z| m.min((*z - spurious).abs()));
+        let found = candidates.iter().find(|z| (**z - value).abs() <= 1e-9 * z.abs()).expect("a true root");
+        assert!(((*found - spurious).abs() - nearest).abs() <= 1e-9 * nearest, "the nearest root: {value:?}");
+        assert!(value.re < 0.0);
     }
 
     #[test]

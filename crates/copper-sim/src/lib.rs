@@ -93,6 +93,7 @@ pub use models::{
     DiffampPins, LoadParams, MacroInstance, MacroModel, OpampParams, OpampPins, SourceOutput, SourceParams,
     rejection_pole,
 };
+pub use newton::{DcHint, current_hint, dc_hint, with_dc_hint};
 pub use noise::{
     NoiseContributor, NoiseInput, NoiseResult, NoiseSourceKind, NoiseSpec, NoiseTerm, integrate_psd, noise,
 };

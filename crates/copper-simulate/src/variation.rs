@@ -62,6 +62,10 @@ pub struct StepContext<'a> {
     pub fixed: &'a [&'a str],
     /// Per measure: whether its limits apply at this step (its `where` holds).
     pub covered: &'a [bool],
+    /// The operating-point hints of the step's nominal run and its
+    /// reference runs, which every run of the step starts from when its own
+    /// Newton solve from zero fails ([`copper_sim::DcHint`]).
+    pub hints: crate::run::StepHints,
 }
 
 /// Where a variable's nominal value comes from.
@@ -403,8 +407,19 @@ fn evaluate(
     x: &[f64],
 ) -> Result<Vec<MeasureValue>, String> {
     let varied = varied_params(context, params, variables, x)?;
-    let (step, _) =
-        run_step(context.design, context.bench, context.wiring, &varied, context.marks, context.covered, None)?;
+    let hints = &context.hints;
+    let (step, _) = copper_sim::with_dc_hint(hints.main.clone(), || {
+        run_step(
+            context.design,
+            context.bench,
+            context.wiring,
+            &varied,
+            context.marks,
+            context.covered,
+            None,
+            &hints.references,
+        )
+    })?;
     Ok(step.measures)
 }
 

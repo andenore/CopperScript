@@ -132,9 +132,8 @@ a phase error through the node's 1.6 pF (`ContactImbalance`, simulated
 coefficients):
 
 - phase error about 0.4 to 0.5 degrees per 100 ohm of HP-LP difference per MHz
-  (LP higher: 0.40 to 0.41 up to 100 kHz, 0.38 to 0.45 at 1 MHz; HP higher:
-  0.45 to 0.47 up to 100 kHz, 0.39 to 0.51 at 1 MHz; the 1 MHz coefficients
-  date from before 23 November 2026 and were not regenerated);
+  (LP higher: 0.40 to 0.41 up to 100 kHz, 0.44 to 0.50 at 1 MHz; HP higher:
+  0.45 to 0.47 up to 100 kHz, 0.50 to 0.53 at 1 MHz);
 - an LC contact that differs from the sense contacts costs 0.06 to 0.07 degrees
   per 100 ohm per MHz;
 - at 5 ohm m and 1 MHz a high HP contact also costs about 0.5 % of magnitude
@@ -280,7 +279,7 @@ CopperLib after review.
 | Current-channel noise | About 0.9 pA per root hertz, far below 15 uA in a 1 kHz detection bandwidth | Thermal noise of 20 kohm | estimated 0.9 pA/rtHz, simulated 4.0 pA/rtHz at 1 kHz referred to the current: 1.55 pA/rtHz the transimpedance stage, the rest the drive's own current noise, which cancels in the impedance; 98 dB SNR in 1 kHz (`MeasurementNoise`) |
 | Voltage-channel noise at the smallest signal | not estimated | | simulated 22 nV/rtHz at 1 kHz, 15 nV/rtHz above 10 kHz referred to the sense electrodes; 55 to 59 dB SNR for 0.6 mV in 1 kHz: the impedance's noise 0.12 % and 0.070 degrees RMS at 5 ohm m (`MeasurementNoise`, `noise(z1)`) |
 | Slew rate needed | 20 V/us | 3.1 V peak at 1 MHz | estimated 20 V/us; simulated: the pump output peaks at 2.59 V at 1 kHz but only 0.61 V at 1 MHz (the strays take the current there), so the largest slew needed is 3.8 V/us at 1 MHz, against 225 V/us; no harmonic from slewing (`Distortion`) |
-| Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.68 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`, rails from models of the regulators) |
+| Start-up | not estimated here (README.md: 0.8 s from the slowest coupling network) | | simulated: every ADC input within 1 mV 0.67 s after `ANA_EN`, inside the 1 s the battery budget allows (`Startup`, rails from models of the regulators) |
 | Guard loop stability | Unknown | The HC guard feeds the pump's own buffer output back to its input node through the pad capacitance | stable with the macro models: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair is 4.06 kHz with damping 0.27 in air, the mode behind the -42.5 kohm negative real part |
 
 ## Benches
@@ -371,30 +370,84 @@ With the default models every bench passes: `SoilSweep` 0.39 % and
 91.7 degrees, transimpedance 80.2 (71.6, 71.6 and 67.9 before), the others
 unchanged.
 
-With the vendor models on the final board (100 ohm into 1 nF): `LoopStability` pump 54.25, feedback buffer 64.58, receiver 58.23, gain 1 62.54, gain 10 72.5, gain 100 73.0, transimpedance 47.31 degrees and its poles pass; the drive buffer (43.3) and the sense buffer (41.5) fail; `LoopPeaking` gain 10 1.027, gain 100 1.026, receiver 1.056 pass, the drive buffer (1.331), the sense buffer (1.517) and the gain-1 driver (1.124 against 1.12) fail; `SenseCommonMode` 63.95 dB (limit 63), `SoilSweep` 0.35 % and 0.091 degrees and `StrayCapacitance` 0.88 % and 0.48 degrees pass; `CalibrationCard` and `GuardStability` were not rerun on the final board (measured, `--models vendor`, 23 November 2026).
+**Output snubbers (23 November 2026, the second change).** The drive buffer
+`U_DRV` and the gain-1 driver `U_B1` each have 33 ohm in series with 10 nF
+(C0G) from the output to ground (`R_SN_DRV` and `C_SN_DRV`, `R_SN_B1` and
+`C_SN_B1`). Each loop was isolated stand-alone and run in copper and in
+ngspice-46. The drive buffer: margin 43.30 degrees in both, closed-loop
+peaking 1.3316 in both; the bare vendor follower has 50.8 degrees and peaks
+1.14, with the pump's 10 kohm 51.3 and 1.14, and the LT5400's 2.75 pF on
+`DRV_BUF` takes it to 43.3 and 1.33 (with the model's output resistance at
+the 56 ohm the data sheet implies, 53.8 and 1.11: the model's 114 ohm is what
+makes the 2.75 pF cost so much). A resistor in series with the output is
+ruled out (R1 must see a source far below 0.01 % of 10 kohm), so the output
+gets a snubber; of those swept, 33 ohm into 10 nF gives 64.2 degrees and
+1.11 stand-alone. The gain-1 driver keeps its 100 ohm into 1 nF (PA1 may see
+at most 100 ohm) and gets the same snubber beside it: peaking 1.124 to 1.109,
+margin 62.3 degrees. What the snubbers cost, measured on the vendor models
+(the macro model has no output resistance, so with the default models the
+loops, the accuracy and the noise are unchanged):
 
-With the vendor models on the board as first changed (200 ohm into 470 pF on
-the gain-1 channel; measured, `--models vendor`):
+- bandwidth: the drive buffer's -3 dB point 179 MHz to 35.6 MHz, the gain-1
+  follower's 70.8 MHz to 29.7 MHz; the gain-1 ADC pin stays at 1.6 MHz (the
+  anti-alias pole); an untracked scratch bench, `FollowerBw`;
+- at 1 MHz: the drive buffer passes 100.8 % with -1.1 degrees (100.0 % and
+  -0.3 before), the gain-1 pin 85.6 % with -33.3 degrees (84.9 % and -32.5);
+  `SoilSweep`'s errors are the same to four digits (0.3497 % and
+  0.0906 degrees worst rated; the 1 MHz columns 0.022 % to 20.3 % and
+  0.0067 to 19.3 degrees, before and after);
+- noise: `MeasurementNoise` SNR at 1 MHz within 0.07 dB (the gain-1 channel's
+  noise 0.8 % higher, its signal 1.5 % higher);
+- supply current (default models, `SupplyCurrent`): the worst mean per
+  +/-4.5 V rail 52.28 mA to 55.06 mA (limit 70 mA), the peak 53.2 mA to
+  61.6 mA, `V3V3_ANA` 6.04 mA to 6.58 mA, the snubbers' 4 mA peak at the
+  nominal drive (37 ohm at 1 MHz) and more at 0.65 V.
 
-- pass: `LoopStability` pump 54.25 degrees, feedback buffer 64.58, receiver
-  58.23, gain-1 driver 60.78, gain 10 72.5, gain 100 73.0, transimpedance
-  47.31, and its poles (none in the right half-plane); `LoopPeaking` gain-1
-  driver 1.118 (limit 1.12), gain 10 1.027, gain 100 1.026, receiver 1.056;
-  `SoilSweep` 0.35 % and 0.091 degrees; `StrayCapacitance` 0.88 % and
-  0.48 degrees (all 10 limits);
-- still fail: the drive buffer (`LoopStability` 43.3 degrees, `LoopPeaking`
-  1.331) and the HP sense buffer (41.5 degrees, peaking 1.517), which the
-  change does not touch, for the reasons below;
-- not settled: `GuardStability.poles`, whose 607 MHz pair with damping
-  -0.067 (below) was found before the change and has not been refined or
-  rerun since;
-- do not finish: `CalibrationCard` now stops at its 10 kohm position with
-  0 ohm contacts (`R_CONTACT = 1 mohm`; no operating point), and the benches
-  listed at the end of this section were not rerun on the changed board.
+**Vendor results on the circuit as it is** (`copper sim --models vendor`,
+release build, every bench in one run on 12 threads, 23 November 2026;
+worst rated step):
 
-Not rerun with the vendor models on that board: `SenseCommonMode`,
-`PumpOutputImpedance`, `SupplyCurrent`, `DcOperatingPoint`, `PowerSide`,
-`ContactImbalance` and the benches that did not finish before.
+| Bench | Result | Status | Time |
+| --- | --- | --- | --- |
+| `SoilSweep` | 0.35 % and 0.091 degrees (limits 1 % and 1 degree) | pass | 72 s |
+| `CalibrationCard` | 0.47 % and 0.125 degrees | pass | 55 s |
+| `StrayCapacitance` | 0.88 % and 0.48 degrees | pass | 167 s |
+| `ContactImbalance` | 0.79 % and 0.82 degrees, all 192 steps | pass | 398 s |
+| `SenseCommonMode` | 63.95 dB (min 63 dB) | pass | 22 s |
+| `PumpOutputImpedance` | 7.19 Mohm at 1 kHz, guard tracking 1.041 | pass | 25 s |
+| `DcOperatingPoint` | pump node -18.1 mV (limit 50 mV), ADC inputs within 52.8 mV (limit 100 mV) | pass | 12 s |
+| `PowerSide` | `V_MID` 1.650 V, 3.3 V reference 3.300 V | pass | 15 s |
+| `SupplyCurrent` | 55.2 mA a rail idle, 58.2 mA mean driving (max 70 mA) | pass | 16 and 54 s |
+| `LoopStability` | margins: pump 54.25, feedback buffer 64.58, drive buffer 64.15, receiver 58.23, gain 1 62.30, gain 10 72.50, gain 100 73.00, transimpedance 47.31 degrees; poles stable; **sense buffer 41.50 degrees** (min 45) | fail | 23 to 25 s a loop, poles 75 s |
+| `LoopPeaking` | drive buffer 1.109, pump current 1.000, guard 0.999, receiver 1.056, gain 1 1.109, gain 10 1.027, gain 100 1.026, transimpedance 1.000; **sense buffer 1.517** (max 1.12) | fail | 22 s |
+| `GuardStability` | margins: pump 54.01, feedback buffer 69.08 degrees; **poles: one pair at 607 MHz with damping -0.067** (below) | fail | 34 to 36 s, poles 89 s |
+| `ResistorMatching` | 0.38 %, 0.094 degrees, drive current 1.1e-9 (limits 1 %, 1 degree, 0.5 %) | pass | 1078 s |
+| `ResistorWorstCase` | 0.40 %, 0.096 degrees, drive current 8.5e-10 | pass | 908 s |
+| `MeasurementNoise`, `SenseBufferTrade` | reported, no limits | - | 40 and 9 s |
+| `Startup` | no operating point at its first point (below) | does not run | gives up after 842 s |
+| `Distortion` | stops at 15.09 us of its first period (below) | does not finish | 569 s |
+
+The whole run takes 4788 s (80 minutes) and at most 1.4 GB. Every limit
+passes but three: the sense buffer's margin and peaking, which the snubbers
+do not touch (below; the options measured fail a limit or cost 44 mA), and
+`GuardStability.poles`. The run before this change (the binary of
+201ae83b) solved every vendor operating point through all
+aids to the split, 10 s or more each: `CalibrationCard` took 72 s,
+`ContactImbalance` stopped at its 116th step on the circuit before the
+board change, `ResistorMatching` and `ResistorWorstCase` were not run to the
+end (several hundred operating points at 10 to 67 s each), `Distortion`
+ran out of memory after 86 minutes and `GuardStability.poles` left 52 of its
+roots unrefined (plan, I3).
+
+**Sense buffer (not changed).** Isolated stand-alone with the real LP buffer
+and receiver, copper and ngspice-46 agree (41.55 degrees; peaking 1.5614 and
+1.5616). The options measured, none meeting both limits: 200 ohm to 1 kohm in
+series with each receiver input, margin 50.3 to 51.0 degrees (passes) and
+peaking about 1.30 (fails; in the analyzer 50.26 degrees and 1.296); with a
+10 ohm and 10 nF snubber on each sense buffer besides, 58.8 degrees and 1.15,
+but that loads each buffer with 18 ohm at 1 MHz under up to 0.8 V of common
+mode (44 mA); a larger guard resistor raises the peaking (100 ohm: 1.38,
+200 ohm: 1.69). Why it fails is under "The limits that failed" below.
 
 The evidence for the change, from the circuit before it (22 November 2026):
 accuracy, rejection and headroom passed with the vendor models (macro, then
@@ -409,7 +462,8 @@ against the data sheet's 10.8 mA); `DcOperatingPoint` and `PowerSide`
 within their limits; `ContactImbalance` 0.89 % and 0.91 degrees, then
 0.84 % and 0.70 degrees over the 115 steps that ran (below).
 
-The limits that failed with the vendor models on that circuit, and why. Each loop was also
+The limits that failed with the vendor models on that circuit (before the
+snubbers), and why. Each loop was also
 built as a stand-alone circuit (the amplifier with the board's feedback
 network, load and supplies; the soil at 800 ohm) and run in copper and in
 ngspice-46: the stand-alone margins reproduce the analyzer's (43.3, 41.6,
@@ -443,7 +497,8 @@ the vendor models in this circuit.
   fails), gain 10 and 100 39.0 and 39.3 (fail), transimpedance 22.7 (fail).
   So the gain stages and the transimpedance amplifier fail for the part's
   phase lag as well; the drive buffer fails only for the model's output
-  impedance.
+  impedance (into the LT5400's 2.75 pF on `DRV_BUF`), which its snubber now
+  damps (above).
 - `LoopStability` sense buffer (59.5 to 41.5 degrees at 386 MHz) and its
   `LoopPeaking` (1.07 to 1.52): the ADA4817 model's output network (8 ohm,
   5.6 nH, 1.3 pF) driving the AD8130's input and the guard. Stand-alone,
@@ -455,6 +510,11 @@ the vendor models in this circuit.
   (0.19 ohm at 10 MHz and 2.1 ohm at 100 MHz against Figure 28's 0.25 and 2)
   and its phase at the crossing (Figure 33), so this is taken as the part's
   (inferred: the data sheet gives no curve above 100 MHz to compare with).
+  Measured again stand-alone on 23 November 2026 with the real LP buffer and
+  receiver: copper 41.55 degrees and peaking 1.5614, ngspice-46 41.55 and
+  1.5616; the bare vendor follower has 52.7 degrees but a second crossing at
+  1.3 GHz and peaks 5.6, and 4 pF of load (the AD8130's input) takes it to
+  35 degrees. The options are listed above; none meets both limits.
 - `LoopStability.poles` and `GuardStability.poles`: copper's pole analysis was
   wrong here, and is fixed (plan, I3 follow-up). The right half-plane poles
   (4.6, 20.6 and 36 Hz, and others) were round-off of the QR iteration on the
@@ -468,10 +528,18 @@ the vendor models in this circuit.
   the vendor models (197 poles, none in the right half-plane; least damped
   5.41 MHz, damping 0.088, the transimpedance loop, and 16.4 Hz, damping
   0.166, the pump's DC servo). `GuardStability.poles` (electrodes in air)
-  still reports one pair at 607 MHz with damping -0.067, its mode spread over
-  four unrelated ADA4807 instances (U_G100, U_PMP, U_B1, U_TIA): probably the
-  same round-off on a root the seven identical instances repeat, but not
-  established (no transient was run for it).
+  reports one pair at 607 MHz with damping -0.067; it is real for the
+  models, not round-off (23 November 2026): inverse iteration certifies it
+  (backward error below 1e-11, as every one of the bench's 192 roots now),
+  a stand-alone deck of the two sense buffers and the receiver wired as the
+  bench wires them has it, and a 1 uA, 1 ns kick into `SNS_HP` grows from
+  1.9 mV to a 0.57 V limit cycle within 40 ns in copper's transient and in
+  ngspice-46's alike. The bench leaves the HP and LP guards and electrodes
+  unloaded (only HC's strays are in it); with the HP and LP strays that are
+  always there (20 pF to the guard, 100 pF guard to ground, as the other
+  benches have them) the stand-alone sense buffers are stable (least damped
+  549 MHz, damping 0.090). The bench is unchanged: whether the air case
+  should carry those strays is the owner's call.
 
 The options put to the owner (scratch variants of the circuit before the
 change; numbers from `--models vendor` unless marked macro):
@@ -503,22 +571,33 @@ change; numbers from `--models vendor` unless marked macro):
   the gain-1 driver to 28 and the drive buffer to 23, which Figure 23 does
   not support.
 
-Benches that did not finish with the vendor models on the circuit before the
-change (no limit judged; not rerun since):
+What does not run with the vendor models, and why (23 November 2026; the
+plan's I3 block has the solver side):
 
-- `ContactImbalance` stops at its 116th of 192 steps (800 ohm, 5.56 pF, the
-  LP contact 110 %): no operating point, also when solved part by part.
-- `Startup`: no operating point at its first step's start (electrodes in
-  air), where the rails are still 0 V: the unpowered ADA4817 models' internal
-  nodes do not converge.
-- `Distortion`: the shooting method keeps every step of a period for its
-  exact tangent, and the vendor circuit's steps are large: the whole run ran
-  out of memory after 86 minutes (an 11.7 MB allocation, the size of a dense
-  1209 by 1209 matrix), a two-thread run held 11.2 GB after 30 minutes, and
-  a single-thread run of two steps (1 kHz and 1 MHz, 11 kohm, 0.65 V) held
-  8.9 GB after 52 minutes; each was stopped.
-- `ResistorMatching` and `ResistorWorstCase` (several hundred operating
-  points at 12 to 67 s each) were not run to the end.
+- `Startup`: no operating point at its first point, where every rail is
+  still 0 V. The AD8130 model has none that means anything there (copper: a
+  singular system; ngspice-46: 3.5e13 A from its rails), and copper does not
+  solve the unpowered ADA4817 model either (Newton cycles between two
+  iterates in its supply-current mirror below about 1 V on its rails, under
+  every aid), which ngspice-46 does (19 mA quiescent, 7 uV out). The first
+  is the model's limit, the second copper's; neither is fixed. The run gives
+  up after 842 s.
+- `Distortion`: no longer out of memory (the shooting method kept the
+  factors of every step of a period, 11 GB on the vendor circuit; now at
+  most 512 MiB, the rest refactored when needed), but it does not finish.
+  The vendor circuit's transient reaches 15.09 us of the first 1 kHz period
+  after 569 s and stops there: Newton diverges at every step down to the
+  floor (around `U_FBB`, `U_BLP` and `U_TIA`). On a plain 60 us transient
+  of the same circuit from its operating point (a scratch bench) the solver
+  before this change had not stopped after 40 minutes (0.32 ns steps: 18 582
+  for the first 10 us in 570 s, agreeing with the new solver's to 2e-6
+  there), where the new one, with a retry on dense factors, stopped at
+  14.8 us. At 38 to 57 s a microsecond one 1 ms period takes 10 to 16 hours,
+  and the shooting method integrates several for each 1 kHz step (the
+  100 kHz and 1 MHz steps were not tried on their own). Not established: why
+  Newton diverges at 15 us (a restart with backward Euler after a failed
+  step, as SPICE does, and the dense retry were tried and dropped; each
+  stops there too).
 
 ## Board shape and layout notes for later
 

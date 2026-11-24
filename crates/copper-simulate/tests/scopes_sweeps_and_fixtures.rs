@@ -480,6 +480,44 @@ fn noise_of_a_diode_and_the_noise_figure_axes() {
 }
 
 #[test]
+fn hinted_steps_references_and_monte_carlo_runs_do_not_depend_on_threads() {
+    // A small-signal bench with steps, a reference run and Monte Carlo runs
+    // solves its first step alone and hints the other runs with its operating
+    // points (copper_sim::DcHint). The diode solves from zero, so the hints
+    // are never needed here, and every result is the same, bit for bit,
+    // whatever the thread count.
+    let bench_source = "bench Hinted for Analog {
+        param I_BIAS = 1mA;
+        replace J1 with source { out = J1.1; ref = GND; output = current; dc = I_BIAS; ac = 1uA; }
+        replace J2 with source { out = J2.1; ref = GND; dc = 0V; ac = 1V; }
+        analysis ac { from = 1kHz; to = 100kHz; points_per_decade = 5; }
+        step I_BIAS in 0.5mA, 1mA, 2mA;
+        reference QUARTER { I_BIAS = 0.25mA; }
+        tolerance RF = 1%;
+        montecarlo { runs = 6; seed = 3; distribution = gaussian; }
+        measure z_diode = mag(at(V(A), 30kHz)) / 1uA;
+        measure against_quarter = mag(at(V(A) / reference(V(A), QUARTER), 30kHz));
+        measure gain = mag(at(V(OUT) / V(IN), 30kHz)) { min = 1.9; max = 2.1; }
+    }";
+    let board = analog_project("hinted", &[("benches/hinted.copper", bench_source)]);
+    let design = compile(&board);
+    let serial = copper_simulate::parallel::with_jobs(1, || simulate(&board, &design, None).unwrap());
+    let parallel = copper_simulate::parallel::with_jobs(4, || simulate(&board, &design, None).unwrap());
+    let r = &serial[0];
+    assert_eq!(r.error, None);
+    assert_eq!(r.steps.len(), 3);
+    assert_eq!(serial, parallel);
+    // r_d = V_T / I plus the 10 ohm series resistance, and its ratio to the quarter current's.
+    let vt = copper_sim::devices::THERMAL_VOLTAGE;
+    let quarter = vt / (0.25e-3 + 10e-15) + 10.0;
+    for (k, amps) in [0.5e-3, 1e-3, 2e-3].into_iter().enumerate() {
+        let want = vt / (amps + 10e-15) + 10.0;
+        assert!(rel(value(r, k, "z_diode"), want) < 1e-4, "{} vs {want}", value(r, k, "z_diode"));
+        assert!(rel(value(r, k, "against_quarter"), want / quarter) < 1e-4, "{}", value(r, k, "against_quarter"));
+    }
+}
+
+#[test]
 fn harmonics_of_a_square_wave() {
     // A +-1 V square wave of 1 kHz (1 us edges): odd harmonics of 4 / (n pi);
     // thd over 2 to 9 is sqrt(1/9 + 1/25 + 1/49 + 1/81), to 11 adds 1/121.

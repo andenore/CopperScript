@@ -189,6 +189,10 @@ pub struct Lowered {
     pub models: Vec<ModelUse>,
     /// The temperature of the run, degrees Celsius (`param TEMP`, 27 degC without it).
     pub celsius: f64,
+    /// The operating-point hint in effect when the bench was lowered, which
+    /// its later solves at single frequencies (`at(x, f)`) use too, so that
+    /// they linearise at the same operating point as its sweep.
+    pub hint: Option<std::sync::Arc<copper_sim::DcHint>>,
 }
 
 /// The temperature of a run at `params`, degrees Celsius: `TEMP`, else 27 degC.
@@ -1100,6 +1104,7 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
         owners: b.owners,
         models,
         celsius: b.celsius,
+        hint: copper_sim::current_hint(),
     })
 }
 

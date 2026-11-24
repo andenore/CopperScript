@@ -13,7 +13,9 @@
 //    circuit").
 //  - Everything below is an assumption, stated here because the module gives no
 //    tolerance for it: resistors 1 % (thick film); C0G capacitors 5 % (C_BLK, C_TIA,
-//    C_CMP_N, C_CMP_P, the filter's C_F1 and C_F2, the anti-alias C_AA*); X7R
+//    C_CMP_N, C_CMP_P, the filter's C_F1 and C_F2, the anti-alias C_AA*, the gain
+//    stages' C_G1F and C_G2F, last in the list so that the Monte Carlo draws of the
+//    others stay as they were); X7R
 //    coupling capacitors 10 % (C_IN, C_NDC, C_CHP, C_CLP, C_B1, C_G1, C_G2); the 22 uF
 //    DC blocks 20 %; the filter inductor 10 %. Supply decoupling is left out (an AC
 //    short either way).
@@ -92,6 +94,8 @@ fixture MatchingTolerances for AnalogFrontEnd {
     tolerance C_G1G = 20%;
     tolerance C_G2G = 20%;
     tolerance L_F1 = 10%;
+    tolerance C_G1F = 5%;
+    tolerance C_G2F = 5%;
 
     reference CARD { R_TRANSFER = 1kohm; C_TRANSFER = 0.001pF; R_CONTACT = 1mohm; C_CONTACT = 0.001pF; }
     reference LOAD2 { R_TRANSFER = 2kohm; R_CONTACT = 14kohm; }

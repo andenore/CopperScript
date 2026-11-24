@@ -246,6 +246,13 @@ pub struct TranNoise {
 pub const STEADY_ITERATIONS: usize = 20;
 /// Krylov vectors of one GMRES solve of the shooting method at most.
 pub const STEADY_KRYLOV: usize = 60;
+/// Bytes of factored step Jacobians one period of the shooting method keeps
+/// for its tangent products ([`Integrator::linearise`]); the steps beyond
+/// are refactored at each product instead, from the same factors before
+/// them, which costs time, not results: a vendor model's circuit, whose
+/// factors the sparse LU often leaves dense (1209 unknowns: 11.7 MB a step),
+/// held 11 GB over one period before.
+pub const JACOBIAN_BUDGET: usize = 512 << 20;
 /// Periods the shooting method integrates at most, its fallback (settling period by period) included.
 pub const STEADY_SETTLE_PERIODS: usize = 400;
 /// Noise samples of a run at most (`(stop - start) / max_step`).
@@ -826,6 +833,8 @@ impl Integrator<'_> {
         // Accepted steps since the start or the last restart: the first two are backward Euler.
         let mut fresh = 0usize;
         let mut event_retries = 0;
+        // Whether this step's Newton solve was already retried on freshly ordered factors.
+        let mut reordered = false;
         let mut culprit: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
         loop {
             while bp < breakpoints.len() && breakpoints[bp] <= t + hmin {
@@ -895,10 +904,22 @@ impl Integrator<'_> {
                 Err(Failure::Diverged { nodes, elements }) => {
                     culprit = (nodes, elements);
                     run.stats.rejected_steps += 1;
-                    h /= 8.0;
+                    // The factors reuse a pivot order chosen at another
+                    // matrix; on a badly scaled one (a vendor model's 1 uohm
+                    // beside 1 Tohm) a solve in it can be too inaccurate for
+                    // Newton to converge. The same step once more on factors
+                    // ordered afresh, before a shorter one.
+                    if !reordered {
+                        reordered = true;
+                        solver.forget_factors();
+                    } else {
+                        reordered = false;
+                        h /= 8.0;
+                    }
                     continue;
                 }
             };
+            reordered = false;
             let x = solved.x;
             let control = timing::span(Phase::StepControl);
             let tolerance = Tolerance { mask: &self.mask, scale: &run.scale, reltol: self.reltol, noise: None };
@@ -1098,25 +1119,52 @@ impl Integrator<'_> {
         Ok((state, solved_steps))
     }
 
+    /// The factored Jacobian of step `k` of `trajectory`, from the factors of
+    /// the step before it (whose pivot order it reuses where it fits).
+    fn step_jacobian(
+        &self,
+        solver: &mut Solver,
+        start: &State,
+        trajectory: &[GridStep],
+        k: usize,
+        previous: Option<&StepJacobian>,
+    ) -> Result<StepJacobian, SimError> {
+        let step = &trajectory[k];
+        let prev = if k == 0 { start } else { &trajectory[k - 1].after };
+        let ctx = step_context(step, prev);
+        solver.jacobian_at(self.m, self.c, &ctx, &step.after.x, previous).map_err(|e| {
+            SimError::SteadyState(format!(
+                "the Jacobian of the period's step at {:e} s cannot be factored ({e:?})",
+                step.t
+            ))
+        })
+    }
+
     /// The factored Jacobians of the steps of `trajectory` (a period from
-    /// `start`, as integrated), each at its solution.
+    /// `start`, as integrated), each at its solution, kept while they fit in
+    /// `budget` bytes ([`JACOBIAN_BUDGET`]); the steps after that are `None` and refactored by
+    /// [`Integrator::tangent`] each time it needs them, from the same factors
+    /// before them, so the tangent is the same either way.
     fn linearise(
         &self,
         solver: &mut Solver,
         start: &State,
         trajectory: &[GridStep],
-    ) -> Result<Vec<StepJacobian>, SimError> {
-        let mut out: Vec<StepJacobian> = Vec::with_capacity(trajectory.len());
-        for (k, step) in trajectory.iter().enumerate() {
-            let prev = if k == 0 { start } else { &trajectory[k - 1].after };
-            let ctx = step_context(step, prev);
-            let jacobian = solver.jacobian_at(self.m, self.c, &ctx, &step.after.x, out.last()).map_err(|e| {
-                SimError::SteadyState(format!(
-                    "the Jacobian of the period's step at {:e} s cannot be factored ({e:?})",
-                    step.t
-                ))
-            })?;
-            out.push(jacobian);
+        budget: usize,
+    ) -> Result<Vec<Option<StepJacobian>>, SimError> {
+        let mut out: Vec<Option<StepJacobian>> = Vec::with_capacity(trajectory.len());
+        let mut bytes = 0;
+        let mut dropped: Option<StepJacobian> = None;
+        for k in 0..trajectory.len() {
+            let previous = out.last().and_then(Option::as_ref).or(dropped.as_ref());
+            let jacobian = self.step_jacobian(solver, start, trajectory, k, previous)?;
+            bytes += jacobian.bytes();
+            if bytes <= budget {
+                out.push(Some(jacobian));
+            } else {
+                out.push(None);
+                dropped = Some(jacobian);
+            }
         }
         Ok(out)
     }
@@ -1131,16 +1179,27 @@ impl Integrator<'_> {
     /// [`Integrator::advance`] carries them.
     fn tangent(
         &self,
+        solver: &mut Solver,
         start: &State,
         trajectory: &[GridStep],
-        jacobians: &[StepJacobian],
+        jacobians: &[Option<StepJacobian>],
         dx: Vec<f64>,
     ) -> Result<Vec<f64>, SimError> {
         let (c, m) = (self.c, self.m);
         let elements = c.elements().len();
         let charge = self.charge_tangent(&start.x, &dx, &vec![0.0; elements]);
         let mut d = Tangent { x: dx, dynamic: vec![0.0; elements], charge };
-        for (k, (step, jacobian)) in trajectory.iter().zip(jacobians).enumerate() {
+        // The factors of the last step not kept, refactored here as `linearise` made them.
+        let mut refactored: Option<StepJacobian> = None;
+        for (k, (step, kept)) in trajectory.iter().zip(jacobians).enumerate() {
+            if kept.is_none() {
+                let previous = match k {
+                    0 => None,
+                    _ => jacobians[k - 1].as_ref().or(refactored.as_ref()),
+                };
+                refactored = Some(self.step_jacobian(solver, start, trajectory, k, previous)?);
+            }
+            let jacobian = kept.as_ref().or(refactored.as_ref()).expect("kept or refactored above");
             let prev = if k == 0 { start } else { &trajectory[k - 1].after };
             let ctx = step_context(step, prev);
             let x = &step.after.x;
@@ -1629,7 +1688,7 @@ fn steady_run(
         let b: Vec<f64> = (0..state.len()).map(|j| -weight[j] * residual[j]).collect();
         let tolerance = (1e-5 * b.iter().map(|v| v * v).sum::<f64>().sqrt()).max(1e-2);
         // The monodromy matrix M applied exactly: the tangent map of the period's steps.
-        let jacobians = match integrator.linearise(solver, &start, &trajectory) {
+        let jacobians = match integrator.linearise(solver, &start, &trajectory, JACOBIAN_BUDGET) {
             Ok(jacobians) => jacobians,
             Err(error) => {
                 break Err(format!("the shooting method's Jacobian products failed: {}", error_detail(&error)));
@@ -1642,7 +1701,7 @@ fn steady_run(
                 dx[k] = v[j] / weight[j];
             }
             products += 1;
-            let out = integrator.tangent(&start, &trajectory, &jacobians, dx)?;
+            let out = integrator.tangent(solver, &start, &trajectory, &jacobians, dx)?;
             Ok(state.iter().enumerate().map(|(j, &(k, _))| weight[j] * out[k] - v[j]).collect())
         };
         let solved = gmres(apply, &b, tolerance, STEADY_KRYLOV);
@@ -1805,12 +1864,23 @@ mod tests {
         let start = integrator.restart(&dc.x, &dc.junction, &dc.switch_on, None);
         let (_, grid, _) = integrator.period(&mut solver, start.clone(), 0.0, &[period]).unwrap();
         assert!(grid.iter().any(|s| s.method == Method::Trapezoidal) && grid.len() > 20, "{} steps", grid.len());
-        let jacobians = integrator.linearise(&mut solver, &start, &grid).unwrap();
+        let jacobians = integrator.linearise(&mut solver, &start, &grid, JACOBIAN_BUDGET).unwrap();
+        assert!(jacobians.iter().all(Option::is_some), "a small circuit keeps every step's factors");
+        // With no room to keep them, every step is refactored at each product: the same tangent.
+        let none_kept = integrator.linearise(&mut solver, &start, &grid, 0).unwrap();
+        assert!(none_kept.iter().all(Option::is_none));
+        let half: usize = jacobians.iter().take(grid.len() / 2).flatten().map(StepJacobian::bytes).sum();
+        let some_kept = integrator.linearise(&mut solver, &start, &grid, half).unwrap();
+        assert_eq!(some_kept.iter().filter(|j| j.is_some()).count(), grid.len() / 2);
         let mut worst: f64 = 0.0;
         for (j, &(k, _)) in mask.iter().enumerate() {
             let mut dx = vec![0.0; m.layout.size()];
             dx[k] = 1.0;
-            let exact = integrator.tangent(&start, &grid, &jacobians, dx).unwrap();
+            let exact = integrator.tangent(&mut solver, &start, &grid, &jacobians, dx.clone()).unwrap();
+            let refactored = integrator.tangent(&mut solver, &start, &grid, &none_kept, dx.clone()).unwrap();
+            assert_eq!(refactored, exact, "refactored at each product, bit for bit");
+            let partly = integrator.tangent(&mut solver, &start, &grid, &some_kept, dx).unwrap();
+            assert_eq!(partly, exact, "partly kept, bit for bit");
             let e = if matches!(m.layout.unknowns[k], Unknown::Node(_)) { 1e-4 } else { 1e-6 };
             let mut shifted = |sign: f64| {
                 let mut x = dc.x.clone();

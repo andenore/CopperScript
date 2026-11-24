@@ -142,7 +142,7 @@ sees no back-power path through them.
 3. **Program the DDS after the rails are up.** The AD9833 shares the switched
    3.3 V with the front end; write its registers after `ANA_EN` rises and its
    supply has settled, and start sampling about 1 s after `ANA_EN` rises (every
-   ADC input is within 1 mV of its final value 0.68 s after it, `Startup`; see
+   ADC input is within 1 mV of its final value 0.67 s after it, `Startup`; see
    [Power cycling](#power-cycling)).
 4. **Gain range.** At 1.3 kohm m the gain-10 channel is past its linear range;
    the firmware uses gain 1 there ([SoilSweep above the rated range](#soilsweep-above-the-rated-range)).
@@ -160,12 +160,12 @@ names.
 | Stage | Parts and values | Why |
 | --- | --- | --- |
 | Reconstruction filter | `C_F1` 270 pF, `L_F1` 22 uH, `C_F2` 270 pF, `R_TERM` 200 ohm | 3rd-order Butterworth, 3 MHz, between the AD9833's own 200 ohm and `R_TERM`. The termination halves the DDS's 0.3 V peak open-circuit amplitude to 0.15 V peak, so no separate divider is needed. About 54 dB down at the 24 MHz image. Its phase does not matter: the current is measured. |
-| Drive buffer | `C_IN` 1 uF, `R_INB` 10 kohm (16 Hz), `U_DRV` ADA4807 follower | The pump's R1 must see a source far below 0.01 % of 10 kohm. |
+| Drive buffer | `C_IN` 1 uF, `R_INB` 10 kohm (16 Hz), `U_DRV` ADA4807 follower; `R_SN_DRV` 33 ohm with `C_SN_DRV` 10 nF (C0G) from its output to ground | The pump's R1 must see a source far below 0.01 % of 10 kohm, so the follower has no series resistor. The snubber damps its closed-loop peak instead, which the vendor model needs (SPEC.md, "Vendor models"); it loads the output with 37 ohm at 1 MHz, about 4 mA peak at the nominal drive. |
 | Improved Howland pump | `U_PMP`, `U_FBB` ADA4807; `RN_HOW` LT5400-1 (four 10 kohm, 0.0125 % matched); `R_SET` 10 kohm 0.1 %; `C_CMP_N`, `C_CMP_P` 2.2 pF across R4 and R2; `C_NDC` 4.7 uF in series with R3 | `I = V(DRV_BUF) / R_SET` = 15 uA peak. Equal capacitors across R4 and R2 keep the bridge balanced. `C_NDC` gives the pump unity DC gain, so offsets cannot walk the regulated node to a rail (see [DC path](#dc-path)). |
 | Blocking and HC guard | `C_BLK` 100 nF (C0G or film); `U_FBB`'s output drives `GUARD_HC` through `R_GHC` 49.9 ohm | No DC through the soil. The guard driver is the pump's own feedback buffer; 49.9 ohm isolates its 120 pF guard load (with 0 ohm the guard tracking peaks to 376 %). |
 | Sense buffers | `C_CHP`, `C_CLP` 4.7 nF; `R_BHP`, `R_BLP` 33 Mohm (0.15 s, 1 Hz); `U_BHP`, `U_BLP` ADA4817 followers; each drives its guard through 49.9 ohm | FET input, lowest input capacitance on the board (1.3 pF). This capacitance, not the guard, limits dry-soil accuracy (see [Results](#results)). |
 | Differential receiver | `U_DIF` AD8130, gain 1 (FB to OUT, REF to ground) | High input impedance on both inputs and 80 dB minimum CMRR at 2 MHz. |
-| ADC drivers | `U_B1` gain 1, `U_G10` gain 10.09 (9.09 k / 1 k, `C_G1G` 22 uF for unity DC gain), `U_G100` another gain 10.09 on `V_10`; `C_G1F`, `C_G2F` 2.2 pF (C0G) across each 9.09 k; all ADA4807 on 0 V / `V3V3_ANA` (the switched 3.3 V); inputs AC-coupled with 1 uF and biased at `V_MID` through 47 kohm (3.4 Hz), 1 kohm series into each input | Powered from 0 V and at most the MCU's 3.3 V, no output can leave the ADC's range in any condition, saturation included. Each ADC input has its own channel; no analog switch. The 2.2 pF give each gain-10 stage's loop phase lead (8 MHz with 9.09 k), for the margin the vendor model needs (SPEC.md, "Vendor models"); they also make 8 MHz the stage's closed-loop pole: 5.8 MHz to -3 dB, 98.5 % and -9.3 degrees at 1 MHz (an untracked scratch bench, `ChannelCosts`). |
+| ADC drivers | `U_B1` gain 1, `U_G10` gain 10.09 (9.09 k / 1 k, `C_G1G` 22 uF for unity DC gain), `U_G100` another gain 10.09 on `V_10`; `C_G1F`, `C_G2F` 2.2 pF (C0G) across each 9.09 k; all ADA4807 on 0 V / `V3V3_ANA` (the switched 3.3 V); inputs AC-coupled with 1 uF and biased at `V_MID` through 47 kohm (3.4 Hz), 1 kohm series into each input; `R_SN_B1` 33 ohm with `C_SN_B1` 10 nF (C0G) from `U_B1`'s output to ground | Powered from 0 V and at most the MCU's 3.3 V, no output can leave the ADC's range in any condition, saturation included. Each ADC input has its own channel; no analog switch. The gain-1 follower's snubber damps its closed-loop peak for the vendor model, as the drive buffer's does. The 2.2 pF give each gain-10 stage's loop phase lead (8 MHz with 9.09 k), for the margin the vendor model needs (SPEC.md, "Vendor models"); they also make 8 MHz the stage's closed-loop pole: 5.8 MHz to -3 dB, 98.5 % and -9.3 degrees at 1 MHz (an untracked scratch bench, `ChannelCosts`). |
 | Transimpedance amplifier | `U_TIA` ADA4807 on 0 V / `V3V3_ANA`, `R_TIA` 20 kohm 0.1 %, `C_TIA` 10 pF (`C_FB_TIA`); non-inverting input at `V_MID` | LC sits at `V_MID` (no DC current: every other electrode is capacitor-coupled). 0.3 V peak at 15 uA. 10 pF gives a 0.8 MHz pole and no peaking against 21 pF at LC; it was 1.5 pF (5.3 MHz) until the vendor model's margin needed more (SPEC.md, "Vendor models"). The cost is at 1 MHz: the stage passes 62.5 % with 52 degrees of lag, and with its anti-alias RC the channel 61.9 % with 60.7 degrees (1.5 pF: 98.6 % and 19.7 degrees; `ChannelCosts`), so `I_MON` carries at most 0.19 V peak at 1 MHz instead of 0.30 V (`MeasurementNoise`). Calibration removes the response, not the lost signal. |
 | ADC interface | 100 ohm into 1 nF at `V_MON_1`; 49.9 ohm into 470 pF at `V_MON_10`, `V_MON_100`, `I_MON` | Anti-alias poles 1.59 MHz on the gain-1 channel and 6.8 MHz on the other three; the capacitors are the charge reservoirs for 2.5-cycle sampling. The gain-1 network filters the follower's own closed-loop peak at the pin, which the vendor model needs (SPEC.md, "Vendor models"); it was 49.9 ohm into 470 pF like the others. The cost is at 1 MHz: the gain-1 channel passes 84.7 % with -32.8 degrees (-3 dB at 1.59 MHz), the gain-10 channel 97.5 % with -18.2 degrees and the gain-100 channel 96.1 % with -28.0 degrees (with 49.9 ohm and without the 2.2 pF: 98.9 % and -9.1, 98.9 % and -11.8, 98.8 % and -15.2 degrees; `ChannelCosts`, 800 ohm soil, ADC pin against the receiver output). Calibration removes each channel's own response. Source impedance at the pin: 49.9 ohm plus the amplifier's closed-loop output impedance on `V_MON_10`, `V_MON_100` and `I_MON`, below the 100 ohm the STM32G474 needs with 2.5-cycle sampling; 100 ohm plus it on `V_MON_1`, at that limit. |
 | Decoupling | 100 nF at every supply pin (role `decoupling`), 10 uF bulk on VP and VN | ADA4817 data sheet p. 17. |
@@ -192,26 +192,27 @@ delivers, from the rail that sources it:
 
 | Rail | Idle (operating point) | Driving 1 MHz, 0.3 V DDS, dry / moist soil | Driving 1 MHz, 0.65 V DDS, dry soil |
 | --- | --- | --- | --- |
-| +4.5 V (`I(POS)`), mean | 51.80 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
-| -4.5 V (`-I(NEG)`), mean | 51.81 mA | 52.02 / 51.89 mA | 52.28 mA (peak 53.2 mA) |
-| `V3V3_ANA`, mean | 3.66 mA | 5.57 / 5.10 mA | 6.04 mA |
+| +4.5 V (`I(POS)`), mean | 51.80 mA | 53.30 / 53.17 mA | 55.06 mA (peak 61.6 mA) |
+| -4.5 V (`-I(NEG)`), mean | 51.81 mA | 53.31 / 53.18 mA | 55.07 mA (peak 61.6 mA) |
+| `V3V3_ANA`, mean | 3.66 mA | 5.81 / 5.21 mA | 6.58 mA |
 | `V_MID` | -4.7 uA (the ADC drivers' and TIA's bias currents flow back into the REF2033) | | |
 
 What the simulation confirms and corrects:
 
 - **+/-4.5 V: confirmed.** Idle, the simulated current is the sum of the
   typical quiescent currents to 1 uA (the outputs carry almost no DC). The
-  signal current at 1 MHz, the worst frequency, is 0.09 to 0.22 mA at the
-  nominal drive and 0.48 mA at the top of the DDS range, a quarter of the
-  "under 2 mA" estimate: each rail carries only the half-waves its outputs
-  source. The typical load with signal is therefore 52.0 mA, the maximum
-  (data-sheet maximum quiescent currents, not simulated) about 57.4 mA, both
-  inside the 70 mA the rails are sized for (the bench's limit).
+  signal current at 1 MHz, the worst frequency, is 1.4 to 1.5 mA at the
+  nominal drive and 3.3 mA at the top of the DDS range, most of it the drive
+  buffer's snubber (33 ohm and 10 nF; 0.09 to 0.22 mA and 0.48 mA without
+  it): each rail carries only the half-waves its outputs source. The typical
+  load with signal is therefore 53.3 mA, the maximum (data-sheet maximum
+  quiescent currents, not simulated) about 60.2 mA, both inside the 70 mA the
+  rails are sized for (the bench's limit).
 - **`V3V3_ANA`: corrected for 1 MHz.** The idle 3.66 mA matches the hand
   value (4 x 0.915 mA), but driving 1 MHz the four ADC-side amplifiers source
-  1.4 to 1.9 mA more at the nominal drive (2.4 mA at 0.65 V): each drives
+  1.6 to 2.2 mA more at the nominal drive (2.9 mA at 0.65 V): each drives
   470 pF (339 ohm at 1 MHz) through 49.9 ohm, the gain-1 driver 1 nF through
-  100 ohm, besides its feedback network. The
+  100 ohm and its snubber, besides its feedback network. The
   single-supply amplifiers sink into ground, so only the sourcing half-waves
   reach the rail. The 470 pF take a tenth of that current at 100 kHz and a
   thousandth at 1 kHz (not simulated). The battery budget below keeps 3.7 mA:
@@ -225,11 +226,11 @@ What the simulation confirms and corrects:
   150 mA, TPS7A3001 OUT 200 mA, REF2033 VBIAS 20 mA). VP's total, every load
   on it in `PowerSide`, is 52.17 mA at DC (the front end's 51.8 mA, the
   REF2033's 0.36 mA, the LDO's divider); the front end's worst share is a
-  mean of 52.28 mA and a peak of 53.2 mA (`SupplyCurrent`), inside 70 mA.
+  mean of 55.06 mA and a peak of 61.6 mA (`SupplyCurrent`), inside 70 mA.
   V3V3_ANA has no budget: its only feed, FB_ANA, declares no rated current.
   VPOS_F and VNEG_F are declared at a 70 mA drop across the 1 ohm
-  post-filters (5.27 V, -5.17 V), where the simulated 52.3 mA gives 5.29 V
-  and -5.19 V, so the declared values are conservative by 18 mV.
+  post-filters (5.27 V, -5.17 V), where the simulated 55.1 mA gives 5.28 V
+  and -5.18 V, so the declared values are conservative by 15 mV.
 
 The first version used eight
 ADA4817s and drew 165 mA per rail. 51.8 mA misses the battery target of about
@@ -243,7 +244,7 @@ battery budget with these currents is under
 | Sense buffers (2) | ADA4817, 19 mA each | Needed. They set the sense nodes' capacitance and the sense path's common-mode rejection. The candidate at a fifth of the current, the OPA810 (3.7 mA, FET input, 70 MHz), would bring the rails to 21.2 mA typical / 24.1 mA maximum, but `SenseBufferTrade` shows its 2 pF input doubling the moist-soil error (100 ohm m, eps_r 25: 0.76 % / 0.13 deg against 0.38 % / 0.11 deg) and raising the dry-soil error (1 kohm m: 2.8 % / 7.9 deg against 1.8 % / 4.9 deg), and its CMRR falls to about 42 dB at 1 MHz (its Figure 7-50). With two units the path's 63 dB at 1 MHz would rest on how well two parts' common-mode errors match, which no data sheet bounds (a 10 % mismatch leaves about 62 dB; hand estimate). |
 | Receiver | AD8130, 10.8 mA | Needed: both inputs high impedance and 80 dB minimum CMRR at 2 MHz; no lower-power receiver with a guaranteed CMRR at MHz was found. |
 | Pump `U_PMP`, `U_FBB` | ADA4807, 1 mA each | The pump's output impedance at 1 MHz is set by the strays on HC (87 kohm, `PumpOutputImpedance`), not by gain-bandwidth, and the current is measured. `LoopPeaking` pump_current 5.3 % peaking. The rail-to-rail input also removes the ADA4817's +VS - 2.8 V input limit from the pump node. |
-| Drive buffer | ADA4807, 1 mA | Unity gain at 1 MHz; 1.8 % peaking. |
+| Drive buffer | ADA4807, 1 mA | Unity gain at 1 MHz; 2.2 % peaking with the macro model, which has no output resistance, so its snubber changes nothing there (SPEC.md, "Vendor models", for the vendor model). |
 | ADC drivers (gain 1, 10, 10) | ADA4807 on `V3V3_ANA`, 0.9 mA each | 5.8 MHz closed-loop bandwidth at gain 10 with the 2.2 pF across 9.09 kohm (23 MHz without); the 9.3 degrees it costs at 1 MHz (3.0 without) are calibrated out (the errors below are identical on all gain channels). |
 | Transimpedance | ADA4807 on `V3V3_ANA`, 0.9 mA | Bipolar input current (1.6 uA max) flows through `R_TIA` only: 32 mV of DC. No peaking with 10 pF; the 0.8 MHz bandwidth it gives costs signal at 1 MHz (see the circuit table above). |
 
@@ -309,9 +310,9 @@ capacitor then charges:
 
 The slowest is 155 ms. Five time constants, 0.8 s after the rails and `V_MID`
 are up, leave under 1 % of the step (simulated: every ADC input within 1 mV
-after 0.68 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
+after 0.67 s, the gain-100 channel last; `Startup`), which the I/Q demodulation over whole
 periods of a 1 kHz or faster signal rejects further: a reading is valid about
-1 s after switching the rails on (firmware rule 3; the simulated 0.68 s
+1 s after switching the rails on (firmware rule 3; the simulated 0.67 s
 includes the rails' soft-start, from models of the regulators). The shorter time constants change the
 bench results by at most 0.1 percentage points; `PumpOutputImpedance` at 1 kHz
 falls from 29 Mohm to 6.2 Mohm, still four times its limit.
@@ -627,26 +628,28 @@ contact difference `dR`. Coefficients in degrees per 100 ohm of difference per
 MHz, from the steps whose phase error is under 10 degrees (at 10 kHz and
 100 kHz from contacts at least 279 ohm off, where the small base error no
 longer matters); the last column is the usable frequency times `dR` from the
-first table:
+first table. Precisely: contacts too high only (105 % to 1000 %), every
+permittivity; per step the phase error less that of the step with equal
+contacts in the same soil (at 1 MHz the signed phase), per 100 ohm of
+`dR = (F - 1) x 6.98 x R_TRANSFER` and per MHz; the last column at eps_r 25,
+the highest swept frequency of the plotted error within 1 % and 1 degree
+times `dR`, where that is neither the whole band nor none (regenerated from
+the results; the table before the changes of 23 November 2026 came out the
+same this way but for three cells, 0.45 where it now gives 0.44 to 0.46 and
+0.058 and 0.065 where it gives ranges):
 
 | Contact too high | Soil | 10 kHz | 100 kHz | 1 MHz | Usable to x dR |
 | --- | --- | --- | --- | --- | --- |
-| HP (phase negative) | 5 ohm m | 0.45 to 0.46 | 0.45 to 0.46 | 0.39 to 0.44 | 198 to 200 kHz kohm |
+| HP (phase negative) | 5 ohm m | 0.45 to 0.46 | 0.45 to 0.46 | 0.51 to 0.53 | 198 to 200 kHz kohm |
 | HP | 100 ohm m | 0.45 to 0.47 | 0.45 to 0.46 | 0.50 to 0.51 | 198 to 199 kHz kohm |
-| LP (phase positive) | 5 ohm m | 0.41 | 0.41 | 0.38 to 0.42 | 198 to 224 kHz kohm |
-| LP | 100 ohm m | 0.40 to 0.41 | 0.40 to 0.41 | 0.45 | 198 to 223 kHz kohm |
+| LP (phase positive) | 5 ohm m | 0.41 | 0.41 | 0.47 to 0.50 | 198 to 224 kHz kohm |
+| LP | 100 ohm m | 0.40 to 0.41 | 0.40 to 0.41 | 0.44 to 0.47 | 198 to 223 kHz kohm |
 | LC (phase positive) | 5 ohm m | 0.065 | 0.065 | 0.067 | 1.41 MHz kohm |
-| LC | 100 ohm m | 0.058 | 0.058 | 0.065 | 1.57 to 1.59 MHz kohm |
-
-The coefficients were read before the changes of 23 November 2026 (SPEC.md,
-"Vendor models") and not regenerated. The 10 kHz and 100 kHz errors they come
-from did not move at the precision shown; the 1 MHz ones did (the table
-above), so the 1 MHz column, the 5 ohm m rows most, is out of date. The last
-column's 198 kHz kohm for LP at 5 ohm m is the new 708 kHz reading at 200 %.
+| LC | 100 ohm m | 0.058 | 0.058 to 0.059 | 0.063 to 0.066 | 1.57 to 1.59 MHz kohm |
 
 The hand estimate `7 x 2 pi f x dR x 1.6 pF`, 0.40 degrees per 100 ohm per
-MHz, holds for a high LP contact (0.40 to 0.41 up to 100 kHz, 0.38 to 0.45 at
-1 MHz). A high HP contact costs about 15 % more, because the HP contact also
+MHz, holds for a high LP contact up to 100 kHz (0.40 to 0.41; at 1 MHz 0.44
+to 0.50, where the channels' own lags add). A high HP contact costs about 15 % more, because the HP contact also
 forms a pole against the sense voltage itself: the factor is the common-mode
 ratio plus one, 8, which gives 0.46. For the LC contact the estimate does not
 apply: with equal sense contacts the raised common mode cancels between HP and
@@ -980,10 +983,10 @@ estimated 50 us, and the AD9833's unprogrammed output steps to an estimated
 
 | Electrodes | Settled within 1 mV: gain 1 / 10 / 100 / current | ADC inputs linear from (gain 100) | Pump output, lowest / highest | Pump node settled within 1 mV |
 | --- | --- | --- | --- | --- |
-| in air | 356 / 470 / 668 / 11 ms | 165 ms | -1.82 V / 2.22 V | 73 ms |
+| in air | 356 / 470 / 669 / 11 ms | 165 ms | -1.82 V / 2.22 V | 73 ms |
 | 5 ohm m | 355 / 472 / 667 / 578 ms | 165 ms | -1.82 V / 2.15 V | 716 ms |
-| 100 ohm m | 355 / 473 / 672 / 364 ms | 161 ms | -1.53 V / 2.06 V | 449 ms |
-| 1.3 kohm m | 385 / 477 / 675 / 131 ms | 168 ms | -0.39 V / 1.45 V | 80 ms |
+| 100 ohm m | 355 / 473 / 667 / 364 ms | 162 ms | -1.53 V / 2.06 V | 449 ms |
+| 1.3 kohm m | 385 / 477 / 668 / 129 ms | 168 ms | -0.39 V / 1.46 V | 80 ms |
 
 - **Rails.** The regulator models start the rails earlier than the estimated
   ramps did (each LDO enables as its input, rising with the converters'
@@ -998,8 +1001,8 @@ estimated 50 us, and the AD9833's unprogrammed output steps to an estimated
   converters' switching ripple (the models are averaged) and their loops'
   transients.
 - **Settling.** Every ADC input is within 1 mV (about one LSB) of its final
-  value 0.68 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
-  firmware rule 3 and the battery budget allow, with 0.32 s to spare (the
+  value 0.67 s after `ANA_EN` rises, in air or in soil: inside the 1 s that
+  firmware rule 3 and the battery budget allow, with 0.33 s to spare (the
   limit of the bench). With the estimated ramps it was 0.66 s; the later
   `V_MID` adds up to 9 ms, and 30 ms to the current channel at 5 ohm m. The
   hand estimate was 0.8 s from the slowest network (155 ms x 5). The slowest
@@ -1109,15 +1112,15 @@ control shortens some of them (the 1.3 kohm m runs).
 
 | Drive | Soil (drive impedance) | Drive current, fundamental | THD of the drive current | Pump output peak | Headroom to clipping (4.42 V) | Slew needed (2 pi f x peak) |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 kHz, 0.3 V (nominal) | 1.3 kohm m (160 kohm) | 14.7 uA | below the floor (0.0009 % shown, 4e-6 % with a five times shorter step) | 2.59 V | 1.83 V | 0.016 V/us |
+| 1 kHz, 0.3 V (nominal) | 1.3 kohm m (160 kohm) | 14.7 uA | below the floor (0.0008 % shown, 4e-6 % with a five times shorter step) | 2.59 V | 1.83 V | 0.016 V/us |
 | 1 kHz, 0.3 V | 100 ohm m (12 kohm) | 14.8 uA | below the floor (0.00001 % shown) | 0.34 V | 4.08 V | 0.002 V/us |
 | 1 kHz, 0.65 V (DDS maximum) | 1.3 kohm m | 28.3 uA | **9.5 %** (H3 8.8 %) | 4.42 V, clipped | 0 | 0.028 V/us |
-| 100 kHz, 0.3 V | 1.3 kohm m | 13.5 uA | below the floor (0.0010 % shown) | 2.37 V | 2.05 V | 1.5 V/us |
+| 100 kHz, 0.3 V | 1.3 kohm m | 13.5 uA | below the floor (0.0011 % shown) | 2.37 V | 2.05 V | 1.5 V/us |
 | 100 kHz, 0.3 V | 100 ohm m | 14.8 uA | below the floor (0.00001 % shown) | 0.34 V | 4.08 V | 0.21 V/us |
 | 100 kHz, 0.65 V | 1.3 kohm m | 27.1 uA | **5.6 %** (H3 4.8 %) | 4.42 V, clipped | 0 | 2.8 V/us |
 | 1 MHz, 0.3 V | 1.3 kohm m | 5.9 uA | below the floor (0.0012 % shown) | 0.61 V | 3.81 V | 3.8 V/us |
 | 1 MHz, 0.3 V | 100 ohm m | 15.3 uA | 0.00016 % | 0.33 V | 4.09 V | 2.1 V/us |
-| 1 MHz, 0.65 V | 1.3 kohm m | 12.8 uA | below the floor (0.0020 % shown) | 1.31 V | 3.11 V | 8.2 V/us |
+| 1 MHz, 0.65 V | 1.3 kohm m | 12.8 uA | below the floor (0.0018 % shown) | 1.31 V | 3.11 V | 8.2 V/us |
 
 - **At the nominal drive nothing clips or slews.** The drive current's THD is
   below the integration floor at every frequency and load but one (1 MHz into
@@ -1158,7 +1161,7 @@ control shortens some of them (the 1.3 kohm m runs).
 | Transimpedance phase lag at 1 MHz | 7 deg (8 MHz) | 52 deg (0.8 MHz with 10 pF since 23 November 2026; 10.7 deg with the 1.5 pF before), 60.7 deg for the current channel with its anti-alias RC (`ChannelCosts`); the impedance before calibration 27.6 to 27.7 deg on the rated soils (`SoilSweep`; the gain-1 channel's 32.8 deg subtract), 0 after |
 | Current-channel noise | 0.9 pA/rtHz | 4.0 pA/rtHz referred to the current at 1 kHz; 1.55 pA/rtHz of it the transimpedance stage, 85 % of the power the drive's own current noise, which cancels in the impedance (`MeasurementNoise`) |
 | Slew rate needed | 20 V/us | 3.8 V/us at 1 MHz into 1.3 kohm m (0.61 V peak at the pump output: the strays take the current there), 2.59 V peak at 1 kHz; ADA4807 225 V/us, no harmonic from slewing (`Distortion`) |
-| Start-up | 0.8 s from the slowest network | 0.68 s to 1 mV on every ADC input (`Startup`, rails from models of the regulators) |
+| Start-up | 0.8 s from the slowest network | 0.67 s to 1 mV on every ADC input (`Startup`, rails from models of the regulators) |
 | Guard loop stability | unknown | stable: no pole in the right half-plane with the electrodes in air (`GuardStability`) or in soil (`LoopStability`); the least damped pair, 4.06 kHz with damping 0.27 in air, is the guard and pump mode behind the -42.5 kohm negative real part, which therefore does not oscillate |
 | Card within 1 % and 1 deg | required, with 47 kohm contacts on every position | 47 kohm is not soil-like: 27 to 34 % and 3.8 to 5.3 deg at 1 MHz (CalibrationCard). With soil-like contacts (270 ohm on 39 ohm, 6.8 kohm on 1 kohm) at most 0.52 % and 0.22 deg (CalibrationCard) |
 | Amplifier supply | about 10 V total | ADA4817 5 to 10 V, abs. max 10.6 V; +/-4.5 V fits. ADA4807 2.7 to 11 V |
@@ -1193,7 +1196,9 @@ control shortens some of them (the 1.3 kohm m runs).
   the rated range is not a combined worst case (SPEC.md, "Usable range").
 - The benches run built-in macro models, fitted to data-sheet tables and
   figures; the amplifiers' vendor models run with `copper sim --models vendor`
-  (SPEC.md, "Vendor models"), where two loops still fail. CMRR is a single
+  (SPEC.md, "Vendor models"), where the sense buffer's loop and
+  `GuardStability.poles` (electrodes in air) still fail and `Startup` and
+  `Distortion` do not finish. CMRR is a single
   corner fit; the AD8130's feedback pair has no input model; the ADA4807 has
   no output resistance, so the default run does not show what the gain-1
   driver's 100 ohm and 1 nF change (its margin is 49.2 degrees with either
@@ -1432,7 +1437,7 @@ applied below. Self-discharge of a few percent per month is not included either.
 
 The duty-cycle rows add 1 s per cycle on top of the 5 s measurement. That second
 covers the wake from Standby (2.46 mA, Table 35), HSE and PLL start, rail
-soft-start, front-end settling (0.68 s simulated from `ANA_EN` to every ADC
+soft-start, front-end settling (0.67 s simulated from `ANA_EN` to every ADC
 input within 1 mV, `Startup`, the rails' soft-start included; most of that
 second) and storing the result. The sleep current is only about 1.7 % of the duty-cycled average, so
 measurement time dominates battery life. Shortening the measurement, or

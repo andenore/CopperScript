@@ -19,8 +19,8 @@
 //   through 49.9 ohm into 470 pF (anti-alias pole 6.8 MHz), the gain-1 driver through
 //   100 ohm into 1 nF (1.59 MHz).
 // Supply current, typical / maximum: +/-4.5 V rails 51.8 / 56.9 mA each, V3V3_ANA
-// 3.7 / 4.0 mA idle; simulated with typical parts while driving 1 MHz, up to 52.3 mA
-// and 6.0 mA (../README.md, "Supply current"; benches/supply_current.copper). Coupling time constants are at most
+// 3.7 / 4.0 mA idle; simulated with typical parts while driving 1 MHz, up to 55.1 mA
+// and 6.6 mA (../README.md, "Supply current"; benches/supply_current.copper). Coupling time constants are at most
 // 155 ms (4.7 nF x 33 Mohm), so a reading is valid about 0.8 s after the rails and
 // V_MID come up (../README.md, "Power cycling").
 module AnalogFrontEnd {
@@ -54,6 +54,10 @@ module AnalogFrontEnd {
     component C_IN: CAPACITOR { value = 1uF; }
     component R_INB: RESISTOR { value = 10kohm; }
     component U_DRV: p.ADA4807_1ARJZ;   // unity buffer: the pump's R1 needs a low source impedance
+    // Output snubber of the follower: damps its closed-loop peak (the vendor model's,
+    // with the LT5400's 2.75 pF on DRV_BUF) without a series resistor before R1.
+    component R_SN_DRV: RESISTOR { value = 33ohm; }
+    component C_SN_DRV: CAPACITOR { value = 10nF; }  // C0G
 
     // ---- Improved Howland current pump: I = V(DRV_BUF) / R_SET = 15 uA peak ----
     component RN_HOW: p.LT5400AIMS8E_1;   // R1 DRV_BUF-PFB, R2 HC_FB-PFB, R3 NFB-N_DC, R4 DRIVE-NFB
@@ -93,6 +97,8 @@ module AnalogFrontEnd {
     component R_B1B: RESISTOR { value = 47kohm; }
     component R_B1S: RESISTOR { value = 1kohm; }
     component U_B1: p.ADA4807_1ARJZ;
+    component R_SN_B1: RESISTOR { value = 33ohm; }   // output snubber, as R_SN_DRV
+    component C_SN_B1: CAPACITOR { value = 10nF; }   // C0G
     component C_G1: CAPACITOR { value = 1uF; }
     component R_G1B: RESISTOR { value = 47kohm; }
     component R_G1S: RESISTOR { value = 1kohm; }
@@ -152,7 +158,8 @@ module AnalogFrontEnd {
     net DDS_OUT { port.DDS_OUT; C_F1.1; L_F1.1; }
     net DDS_FILT { L_F1.2; C_F2.1; R_TERM.1; C_IN.1; }
     net DRV_IN { C_IN.2; R_INB.1; U_DRV.INP; }
-    net DRV_BUF { U_DRV.OUT; U_DRV.INN; RN_HOW.R1A; }
+    net DRV_BUF { U_DRV.OUT; U_DRV.INN; RN_HOW.R1A; R_SN_DRV.1; }
+    net SN_DRV { R_SN_DRV.2; C_SN_DRV.1; }
     net PFB { RN_HOW.R1B; RN_HOW.R2B; U_PMP.INP; C_CMP_P.2; }
     net HC_FB { U_FBB.OUT; U_FBB.INN; RN_HOW.R2A; C_CMP_P.1; R_GHC.1; }
     net NFB { RN_HOW.R3A; RN_HOW.R4B; U_PMP.INN; C_CMP_N.2; }
@@ -176,7 +183,8 @@ module AnalogFrontEnd {
     // ---- ADC drivers ----
     net B1_C { C_B1.2; R_B1B.1; R_B1S.1; }
     net B1_IN { R_B1S.2; U_B1.INP; }
-    net V_1 { U_B1.OUT; U_B1.INN; R_AA1.1; }
+    net V_1 { U_B1.OUT; U_B1.INN; R_AA1.1; R_SN_B1.1; }
+    net SN_B1 { R_SN_B1.2; C_SN_B1.1; }
     net G1_C { C_G1.2; R_G1B.1; R_G1S.1; }
     net G1_IN { R_G1S.2; U_G10.INP; }
     net G1_FB { U_G10.INN; R_G1F.2; R_G1G.1; C_G1F.2; }
@@ -217,7 +225,7 @@ module AnalogFrontEnd {
         C_F1.2; C_F2.2; R_TERM.2; R_INB.2; C_NDC.2; RN_HOW.EP;
         R_BHP.2; R_BLP.2; U_DIF.REF;
         U_B1.VN; U_G10.VN; U_G100.VN; U_TIA.VN; C_G1G.2; C_G2G.2;
-        C_AA1.2; C_AA10.2; C_AA100.2; C_AAI.2;
+        C_AA1.2; C_AA10.2; C_AA100.2; C_AAI.2; C_SN_DRV.2; C_SN_B1.2;
         C_BULK_P.2; C_BULK_N.2;
         C_DRV_P.2; C_DRV_N.2; C_PMP_P.2; C_PMP_N.2; C_FBB_P.2; C_FBB_N.2; C_BHP_P.2; C_BHP_N.2;
         C_BLP_P.2; C_BLP_N.2; C_DIF_P.2; C_DIF_N.2; C_B1_P.2; C_G10_P.2; C_G100_P.2; C_TIA_P.2;

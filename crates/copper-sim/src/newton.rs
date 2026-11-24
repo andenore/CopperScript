@@ -67,6 +67,27 @@
 //! pseudo-transient continuation on their own but not together. The split
 //! runs only where every aid failed, so no operating point that solved
 //! before changes.
+//!
+//! Every aid runs on a solver of its own, so that what it returns depends
+//! only on the circuit, never on what was tried before it; the caller's
+//! solver is then factored afresh at the solution (a transient run goes on
+//! with it). A solve may run under a hint ([`with_dc_hint`], [`DcHint`]):
+//! the operating points of related circuits (the first step of a bench, a
+//! Monte Carlo run's nominal circuit) and the aid that solved them. Only when
+//! Newton from zero fails does a hinted solve try Newton from each of the
+//! hint's points, then continuation from the hint's circuit ([`Aid::Continuation`]),
+//! then the hint's aid (per part, for the split), then the other aids; a
+//! circuit that solves from zero ignores its hint. The vendor
+//! front end of the impedance analyzer, which every aid but the split fails,
+//! solves in about 0.2 s from a neighbouring step's point instead of 10 s.
+//!
+//! The small-signal analyses solve the operating point of a circuit for its
+//! linearisation ([`linearized_at_point`]). The last [`REMEMBERED`]
+//! linearisations are remembered process-wide, by circuit and hint: a bench
+//! step's sweep, its single-frequency solves (`at(x, f)` between samples)
+//! and reference runs that repeat across steps solve one circuit several
+//! times. Solving again would give the same result, so it does not matter
+//! which thread solved it first.
 
 use crate::behavioral::{Control, Output};
 use crate::circuit::{Circuit, ElementKind, NodeId, SourceValue};
@@ -181,6 +202,8 @@ pub(crate) struct Model {
     pub needed: Vec<bool>,
     /// Distinguishes models, for the solver's cache of the fixed stamps.
     pub id: u64,
+    /// Whether the op-amp transient limits are in the model.
+    pub opamp_limits: bool,
 }
 
 impl Model {
@@ -299,6 +322,7 @@ impl Model {
             fixed,
             needed,
             id,
+            opamp_limits,
         })
     }
 
@@ -980,6 +1004,11 @@ impl Solver {
         rhs
     }
 
+    /// Drop the factors, so that the next solve orders its pivots afresh.
+    pub(crate) fn forget_factors(&mut self) {
+        self.cache = None;
+    }
+
     /// The matrix to stamp an `n x n` system into.
     fn matrix(&mut self, n: usize) -> &mut SparseMatrix<f64> {
         if self.matrix.as_ref().is_none_or(|a| a.size() != n) {
@@ -1219,6 +1248,14 @@ impl Solver {
 pub(crate) struct StepJacobian(Factors);
 
 impl StepJacobian {
+    /// The memory its factors take, bytes (about).
+    pub fn bytes(&self) -> usize {
+        match &self.0 {
+            Factors::Sparse(lu) => lu.factor_entries() * 16,
+            Factors::Dense(lu) => lu.matrix().len() * 8,
+        }
+    }
+
     /// Solve the Jacobian against `b`.
     pub fn solve(&self, b: &[f64]) -> Option<Vec<f64>> {
         match &self.0 {
@@ -1418,7 +1455,7 @@ fn junction_current_converged(params: &crate::devices::DiodeParams, v: f64, lin:
 }
 
 /// A converged operating point with its switch states.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DcPoint {
     pub x: Vec<f64>,
     pub junction: Vec<f64>,
@@ -1429,6 +1466,87 @@ fn no_convergence(at: AnalysisPoint, nodes: Vec<String>, elements: Vec<String>, 
     SimError::NoConvergence { at, nodes, elements, detail: detail.to_string() }
 }
 
+/// Which step of [`dc_point`] solved an operating point.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Aid {
+    /// Newton from zero.
+    Newton,
+    /// Newton from the hint's operating point.
+    Seed,
+    /// From the hint's circuit and point, its element values moved to the
+    /// circuit's step by step ([`continuation`]).
+    Continuation,
+    /// gmin stepping.
+    Gmin,
+    /// Pseudo-transient continuation.
+    PseudoTransient,
+    /// Source stepping.
+    Source,
+    /// Part by part ([`by_blocks`]), with the aid that solved each part.
+    Blocks(Vec<Aid>),
+}
+
+/// What operating-point solves learned, to start a related one from (the
+/// next step of a bench, a Monte Carlo run, a worst-case corner): operating
+/// points of related circuits, the aid that solved the first, and the circuit
+/// the first point is of. A solve under a hint ([`with_dc_hint`]) first tries
+/// Newton from zero as without one; only when that fails does it try Newton
+/// from each of the hint's points in turn, then continuation from the hint's
+/// circuit (its element values moved to the circuit's), then the hint's aid,
+/// then the other aids in their usual order. Every attempt starts from a fresh
+/// solver, so its result depends only on the circuit and the hint, never on
+/// what was tried before it or on which thread ran it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DcHint {
+    pub(crate) points: Vec<DcPoint>,
+    pub(crate) aid: Aid,
+    pub(crate) circuit: Option<std::sync::Arc<Circuit>>,
+}
+
+impl DcHint {
+    /// The points of `first`, then those of `second`, with `first`'s aid
+    /// (`second`'s when there is no `first`).
+    pub fn join(
+        first: Option<std::sync::Arc<DcHint>>,
+        second: Option<std::sync::Arc<DcHint>>,
+    ) -> Option<std::sync::Arc<DcHint>> {
+        match (first, second) {
+            (Some(a), Some(b)) => {
+                let mut points = a.points.clone();
+                points.extend(b.points.iter().filter(|p| !a.points.contains(p)).cloned());
+                let circuit = a.circuit.clone().or_else(|| b.circuit.clone());
+                Some(std::sync::Arc::new(DcHint { points, aid: a.aid.clone(), circuit }))
+            }
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+thread_local! {
+    /// The hint of the solves on this thread ([`with_dc_hint`]).
+    static HINT: std::cell::RefCell<Option<std::sync::Arc<DcHint>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `hint` as the operating-point hint of every solve it makes on
+/// this thread (see [`DcHint`]); the previous hint is restored afterwards.
+pub fn with_dc_hint<R>(hint: Option<std::sync::Arc<DcHint>>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::sync::Arc<DcHint>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            HINT.with(|h| *h.borrow_mut() = previous);
+        }
+    }
+    let previous = HINT.with(|h| std::mem::replace(&mut *h.borrow_mut(), hint));
+    let _restore = Restore(previous);
+    f()
+}
+
+/// The hint in effect on this thread ([`with_dc_hint`]).
+pub fn current_hint() -> Option<std::sync::Arc<DcHint>> {
+    HINT.with(|h| h.borrow().clone())
+}
+
 /// The operating point of `m` with sources at `time` (`None`: their DC values).
 pub(crate) fn dc_point(
     m: &Model,
@@ -1437,6 +1555,17 @@ pub(crate) fn dc_point(
     time: Option<f64>,
     at: AnalysisPoint,
 ) -> Result<DcPoint, SimError> {
+    dc_point_aided(m, c, solver, time, at).map(|(point, _)| point)
+}
+
+/// [`dc_point`], with the aid that solved it.
+pub(crate) fn dc_point_aided(
+    m: &Model,
+    c: &Circuit,
+    solver: &mut Solver,
+    time: Option<f64>,
+    at: AnalysisPoint,
+) -> Result<(DcPoint, Aid), SimError> {
     let n = m.layout.size();
     let elements = c.elements().len();
     let mut switch_on = vec![false; elements];
@@ -1451,6 +1580,7 @@ pub(crate) fn dc_point(
         LuError::NonFinite => SimError::NonFinite(at),
         e => SimError::Singular { at, causes: diagnose(c, &m.layout, true, e) },
     };
+    let hint = current_hint();
     for _ in 0..=20 {
         let base = Context {
             time,
@@ -1463,18 +1593,15 @@ pub(crate) fn dc_point(
             prev: None,
             switch_on: &switch_on,
         };
-        let point = match solver.newton(m, c, &base, &zeros, &no_junction, 100) {
-            Ok(point) => point,
+        let first = solver.newton(m, c, &base, &zeros, &no_junction, 100);
+        let (point, aid) = match first {
+            Ok(point) => (point, Aid::Newton),
             // A behavioural law can make the linearised matrix singular at a
             // far-off iterate; that is a convergence problem, so the aids run.
             Err(Failure::Singular(e)) if m.laws.is_empty() => return Err(singular(e)),
-            Err(Failure::Singular(_) | Failure::Diverged { .. }) => match gmin_stepping(m, c, solver, &base)
-                .or_else(|| if m.laws.is_empty() { None } else { pseudo_transient(m, c, solver, &base) })
-            {
-                Some(point) => point,
-                None => source_stepping(m, c, solver, &base)
-                    .or_else(|failure| by_blocks(m, c, solver, &base, at).ok_or(failure))
-                    .map_err(|failure| match failure {
+            Err(failure) => {
+                let (point, aid) =
+                    aided(m, c, &base, at, hint.as_deref(), failure).map_err(|failure| match failure {
                         Failure::Singular(e) => singular(e),
                         Failure::Diverged { nodes, elements } => no_convergence(
                             at,
@@ -1482,8 +1609,15 @@ pub(crate) fn dc_point(
                             elements,
                             "Newton iteration, gmin stepping and source stepping all failed",
                         ),
-                    })?,
-            },
+                    })?;
+                // The aids ran on solvers of their own; the caller's still holds
+                // the factors of Newton's failed iterates from zero, whose pivot
+                // order a later solve (the first steps of a transient run) would
+                // reuse. Factored afresh at the solution instead.
+                *solver = Solver::default();
+                let polished = solver.newton(m, c, &base, &point.x, &point.junction, 100);
+                (polished.unwrap_or(point), aid)
+            }
         };
         // Switch states consistent with the solution?
         let mut changed = false;
@@ -1495,12 +1629,169 @@ pub(crate) fn dc_point(
             changed |= next[s] != switch_on[s];
         }
         if !changed {
-            return Ok(DcPoint { x: point.x, junction: point.junction, switch_on });
+            return Ok((DcPoint { x: point.x, junction: point.junction, switch_on }, aid));
         }
         switch_on = next;
     }
     let names = m.switches.iter().map(|&s| c.elements()[s].name().to_string()).collect();
     Err(no_convergence(at, Vec::new(), names, "the switch states do not settle"))
+}
+
+/// The aids of [`dc_point`] after Newton from zero failed with `failure`:
+/// Newton from the hint's point, the hint's aid, then gmin stepping,
+/// pseudo-transient continuation (law elements only), source stepping and
+/// the split into parts, each on a fresh solver. The failure returned is
+/// source stepping's, as before hints.
+fn aided(
+    m: &Model,
+    c: &Circuit,
+    base: &Context,
+    at: AnalysisPoint,
+    hint: Option<&DcHint>,
+    failure: Failure,
+) -> Result<(Converged, Aid), Failure> {
+    let n = m.layout.size();
+    let fits = |point: &DcPoint| {
+        point.x.len() == n && point.junction.len() == m.slots && point.switch_on.as_slice() == base.switch_on
+    };
+    for point in hint.map(|hint| hint.points.as_slice()).unwrap_or_default() {
+        if fits(point) {
+            let seeded = Solver::default().newton(m, c, base, &point.x, &point.junction, 100);
+            if let Ok(point) = seeded {
+                return Ok((point, Aid::Seed));
+            }
+        }
+    }
+    if let Some(hint) = hint
+        && let (Some(from), Some(point)) = (hint.circuit.as_deref(), hint.points.first())
+        && fits(point)
+        && let Some(point) = continuation(m, c, base, from, point)
+    {
+        return Ok((point, Aid::Continuation));
+    }
+    let try_aid = |aid: &Aid| -> Option<Result<(Converged, Aid), Failure>> {
+        match aid {
+            Aid::Gmin => gmin_stepping(m, c, &mut Solver::default(), base).map(|p| Ok((p, Aid::Gmin))),
+            Aid::PseudoTransient if !m.laws.is_empty() => {
+                pseudo_transient(m, c, &mut Solver::default(), base).map(|p| Ok((p, Aid::PseudoTransient)))
+            }
+            Aid::Source => Some(source_stepping(m, c, &mut Solver::default(), base).map(|p| (p, Aid::Source))),
+            Aid::Blocks(parts) => by_blocks(m, c, base, at, parts).map(|(p, parts)| Ok((p, Aid::Blocks(parts)))),
+            _ => None,
+        }
+    };
+    let hinted = hint.map(|hint| &hint.aid).filter(|aid| !matches!(aid, Aid::Newton | Aid::Seed));
+    if let Some(aid) = hinted
+        && let Some(Ok(solved)) = try_aid(aid)
+    {
+        return Ok(solved);
+    }
+    let tried = |aid: &Aid| hinted.is_some_and(|h| std::mem::discriminant(h) == std::mem::discriminant(aid));
+    let mut last = failure;
+    for aid in [Aid::Gmin, Aid::PseudoTransient, Aid::Source, Aid::Blocks(Vec::new())] {
+        if tried(&aid) {
+            continue;
+        }
+        match try_aid(&aid) {
+            Some(Ok(solved)) => return Ok(solved),
+            Some(Err(failure)) => last = failure,
+            None => {}
+        }
+    }
+    Err(last)
+}
+
+/// `to` with its element values moved from `from`'s by the fraction `t`:
+/// resistances, controlled-source gains and independent sources' DC values
+/// interpolated linearly, everything else `to`'s. `None` unless the two
+/// circuits have the same nodes and the same elements in the same order,
+/// differing only in those values (a Monte Carlo run of a circuit, another
+/// step of a bench).
+fn blend(from: &Circuit, to: &Circuit, t: f64) -> Option<Circuit> {
+    if from.node_count() != to.node_count() || from.elements().len() != to.elements().len() {
+        return None;
+    }
+    let mix = |a: f64, b: f64| a + t * (b - a);
+    let mut out = to.clone();
+    for (i, (a, b)) in from.elements().iter().zip(to.elements()).enumerate() {
+        if a.name() != b.name() {
+            return None;
+        }
+        out.elements[i].kind = match (a.kind(), b.kind()) {
+            (ElementKind::Resistor { ohms: r0, .. }, ElementKind::Resistor { a: p, b: q, ohms: r1 }) => {
+                ElementKind::Resistor { a: *p, b: *q, ohms: mix(*r0, *r1) }
+            }
+            (ElementKind::VoltageSource { value: v0, .. }, ElementKind::VoltageSource { plus, minus, value }) => {
+                ElementKind::VoltageSource {
+                    plus: *plus,
+                    minus: *minus,
+                    value: SourceValue { dc: mix(v0.dc, value.dc), ..*value },
+                }
+            }
+            (ElementKind::CurrentSource { value: v0, .. }, ElementKind::CurrentSource { from: f, to: q, value }) => {
+                ElementKind::CurrentSource {
+                    from: *f,
+                    to: *q,
+                    value: SourceValue { dc: mix(v0.dc, value.dc), ..*value },
+                }
+            }
+            (ElementKind::Vcvs { gain: g0, .. }, ElementKind::Vcvs { plus, minus, cp, cn, gain }) => {
+                ElementKind::Vcvs { plus: *plus, minus: *minus, cp: *cp, cn: *cn, gain: mix(*g0, *gain) }
+            }
+            (ElementKind::Vccs { gm: g0, .. }, ElementKind::Vccs { from: f, to: q, cp, cn, gm }) => {
+                ElementKind::Vccs { from: *f, to: *q, cp: *cp, cn: *cn, gm: mix(*g0, *gm) }
+            }
+            (ElementKind::Cccs { gain: g0, .. }, ElementKind::Cccs { from: f, to: q, control, gain }) => {
+                ElementKind::Cccs { from: *f, to: *q, control: *control, gain: mix(*g0, *gain) }
+            }
+            (ElementKind::Ccvs { ohms: g0, .. }, ElementKind::Ccvs { plus, minus, control, ohms }) => {
+                ElementKind::Ccvs { plus: *plus, minus: *minus, control: *control, ohms: mix(*g0, *ohms) }
+            }
+            (ElementKind::Capacitor { .. }, ElementKind::Capacitor { .. })
+            | (ElementKind::Inductor { .. }, ElementKind::Inductor { .. })
+            | (ElementKind::Coupling { .. }, ElementKind::Coupling { .. }) => b.kind().clone(),
+            (x, y) if x == y => y.clone(),
+            _ => return None,
+        };
+        if std::mem::discriminant(a.kind()) != std::mem::discriminant(b.kind()) || a.kind().nodes() != b.kind().nodes()
+        {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// The operating point of `c` (model `m`) by continuation from the solved
+/// circuit `from` at `start`: Newton on the circuits between them
+/// ([`blend`]), each from the solution of the one before, the step in the
+/// values divided by four on a failure (giving up below 1e-4 of the way) and
+/// doubled (to a quarter of the way at most) on a success, then Newton on `c`
+/// itself.
+fn continuation(m: &Model, c: &Circuit, base: &Context, from: &Circuit, start: &DcPoint) -> Option<Converged> {
+    let (mut x, mut junction) = (start.x.clone(), start.junction.clone());
+    let (mut t, mut step) = (0.0f64, 0.25f64);
+    while t < 1.0 {
+        let next = (t + step).min(1.0);
+        let blended = blend(from, c, next)?;
+        let bm = Model::new(&blended, m.opamp_limits).ok()?;
+        if bm.layout.unknowns != m.layout.unknowns || bm.slots != m.slots {
+            return None;
+        }
+        match Solver::default().newton(&bm, &blended, base, &x, &junction, 100) {
+            Ok(point) => {
+                (x, junction) = (point.x, point.junction);
+                t = next;
+                step = (step * 2.0).min(0.25);
+            }
+            Err(_) => {
+                step /= 4.0;
+                if step < 1e-4 {
+                    return None;
+                }
+            }
+        }
+    }
+    Solver::default().newton(m, c, base, &x, &junction, 100).ok()
 }
 
 fn gmin_stepping(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context) -> Option<Converged> {
@@ -1632,8 +1923,17 @@ pub(crate) fn dc_blocks(c: &Circuit) -> (Vec<Option<usize>>, usize) {
 /// The operating point solved part by part (module docs): each part with a
 /// nonlinear element in a copy of `c` whose other elements carry nothing and
 /// whose other nodes are held to ground, the parts' solutions together the
-/// start of a Newton solve of the whole circuit.
-fn by_blocks(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context, at: AnalysisPoint) -> Option<Converged> {
+/// start of a Newton solve of the whole circuit (on a fresh solver). `hints`
+/// are the aids that solved the parts last time, in part order: each part's
+/// solve tries its own first ([`DcHint`]). Returns the point and the aid that
+/// solved each part.
+fn by_blocks(
+    m: &Model,
+    c: &Circuit,
+    base: &Context,
+    at: AnalysisPoint,
+    hints: &[Aid],
+) -> Option<(Converged, Vec<Aid>)> {
     if SPLITTING.with(|s| s.get()) {
         return None;
     }
@@ -1668,7 +1968,8 @@ fn by_blocks(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context, at: An
     let _reset = Reset;
     let mut x = vec![0.0; m.layout.size()];
     let mut junction = vec![0.0; m.slots];
-    for &k in &nonlinear {
+    let mut aids = Vec::with_capacity(nonlinear.len());
+    for (i, &k) in nonlinear.iter().enumerate() {
         let mut sub = c.clone();
         let mut kept = vec![false; c.elements().len()];
         for (i, e) in c.elements().iter().enumerate() {
@@ -1690,7 +1991,11 @@ fn by_blocks(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context, at: An
             }
         }
         let sm = Model::new(&sub, false).ok()?;
-        let point = dc_point(&sm, &sub, &mut Solver::default(), base.time, at).ok()?;
+        let hint =
+            hints.get(i).map(|aid| std::sync::Arc::new(DcHint { points: Vec::new(), aid: aid.clone(), circuit: None }));
+        let (point, aid) =
+            with_dc_hint(hint, || dc_point_aided(&sm, &sub, &mut Solver::default(), base.time, at)).ok()?;
+        aids.push(aid);
         for (r, unknown) in m.layout.unknowns.iter().enumerate() {
             let from = match *unknown {
                 Unknown::Node(n) if part[n.index()] == Some(k) => sm.layout.node_row[n.index()],
@@ -1712,7 +2017,7 @@ fn by_blocks(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context, at: An
             }
         }
     }
-    solver.newton(m, c, base, &x, &junction, 100).ok()
+    Solver::default().newton(m, c, base, &x, &junction, 100).ok().map(|point| (point, aids))
 }
 
 fn source_stepping(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context) -> Result<Converged, Failure> {
@@ -1778,10 +2083,64 @@ pub(crate) fn linearized(c: &Circuit) -> Result<Circuit, SimError> {
     Ok(linearized_at_point(c)?.0)
 }
 
+/// The linearisation of one circuit under one hint ([`linearized_at_point`]).
+type Linearization = Result<std::sync::Arc<(Circuit, Vec<f64>, std::sync::Arc<DcHint>)>, SimError>;
+
+/// One entry of [`LINEARIZATIONS`]: the circuit, the hint it was solved
+/// under, and its linearisation once solved.
+type Remembered =
+    (std::sync::Arc<Circuit>, Option<std::sync::Arc<DcHint>>, std::sync::Arc<std::sync::OnceLock<Linearization>>);
+
+/// How many linearisations [`LINEARIZATIONS`] keeps, most recently used first.
+const REMEMBERED: usize = 32;
+
+/// The linearisations solved last, process-wide: the small-signal analyses of
+/// one bench step (its sweep, the frequencies `at(x, f)` solves alone, its
+/// reference runs, which often repeat across steps) solve the same circuit
+/// several times. A circuit equal to a remembered one under an equal hint
+/// gets the remembered result, which is the one solving it again would give:
+/// the solve depends only on the circuit and the hint, so the results do not
+/// depend on which thread solved it first.
+static LINEARIZATIONS: std::sync::Mutex<Vec<Remembered>> = std::sync::Mutex::new(Vec::new());
+
+/// The remembered linearisation of `c` under the current hint, solved first if needed.
+fn remembered_linearization(c: &Circuit) -> Linearization {
+    let hint = current_hint();
+    let cell = {
+        let mut kept = LINEARIZATIONS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let found = kept.iter().position(|(circuit, h, _)| **circuit == *c && *h == hint);
+        let entry = match found {
+            Some(k) => kept.remove(k),
+            None => (std::sync::Arc::new(c.clone()), hint.clone(), std::sync::Arc::new(std::sync::OnceLock::new())),
+        };
+        let cell = entry.2.clone();
+        kept.insert(0, entry);
+        kept.truncate(REMEMBERED);
+        cell
+    };
+    cell.get_or_init(|| solve_linearization(c).map(std::sync::Arc::new)).clone()
+}
+
+/// The hint the operating point of `c` leaves (see [`DcHint`]): its point and
+/// the aid that solved it, under the current hint, for the solves of a
+/// related circuit ([`with_dc_hint`]). `None` for a linear circuit and when
+/// the operating point does not solve.
+pub fn dc_hint(c: &Circuit) -> Option<std::sync::Arc<DcHint>> {
+    if !c.is_nonlinear() {
+        return None;
+    }
+    remembered_linearization(c).ok().map(|solved| solved.2.clone())
+}
+
 /// [`linearized`], with the operating point's bias of every nonlinear
 /// element: a diode junction's current without its `G_MIN` part (A, anode
 /// to cathode), a switch's state (1 on, 0 off); zero for other elements.
 pub(crate) fn linearized_at_point(c: &Circuit) -> Result<(Circuit, Vec<f64>), SimError> {
+    remembered_linearization(c).map(|solved| (solved.0.clone(), solved.1.clone()))
+}
+
+/// The linearisation [`linearized_at_point`] remembers, with the operating point's hint.
+fn solve_linearization(c: &Circuit) -> Result<(Circuit, Vec<f64>, std::sync::Arc<DcHint>), SimError> {
     let m = Model::new(c, false)?;
     let mut solver = Solver::default();
     // Nodes that are certainly floating at DC (an electrode reached through
@@ -1792,8 +2151,9 @@ pub(crate) fn linearized_at_point(c: &Circuit) -> Result<(Circuit, Vec<f64>), Si
     // other nodes and every element outside the floating groups solve as
     // without the holds. The small-signal circuit itself has no holds.
     let floating = crate::diagnose::certainly_floating_at_dc(c, &m.layout);
-    let point = if floating.is_empty() {
-        dc_point(&m, c, &mut solver, None, AnalysisPoint::OperatingPoint)?
+    let (point, aid, solved) = if floating.is_empty() {
+        let (point, aid) = dc_point_aided(&m, c, &mut solver, None, AnalysisPoint::OperatingPoint)?;
+        (point, aid, c.clone())
     } else {
         let mut held = c.clone();
         for node in floating {
@@ -1801,7 +2161,8 @@ pub(crate) fn linearized_at_point(c: &Circuit) -> Result<(Circuit, Vec<f64>), Si
         }
         let mh = Model::new(&held, false)?;
         debug_assert_eq!(mh.layout.unknowns, m.layout.unknowns, "holds add no unknowns");
-        dc_point(&mh, &held, &mut solver, None, AnalysisPoint::OperatingPoint)?
+        let (point, aid) = dc_point_aided(&mh, &held, &mut solver, None, AnalysisPoint::OperatingPoint)?;
+        (point, aid, held)
     };
     let mut out = c.clone();
     let mut bias = vec![0.0; c.elements().len()];
@@ -1840,7 +2201,8 @@ pub(crate) fn linearized_at_point(c: &Circuit) -> Result<(Circuit, Vec<f64>), Si
             _ => {}
         }
     }
-    Ok((out, bias))
+    let hint = std::sync::Arc::new(DcHint { points: vec![point], aid, circuit: Some(std::sync::Arc::new(solved)) });
+    Ok((out, bias, hint))
 }
 
 /// The operating point of `m` starting from `guess` (the previous point of a
@@ -1957,15 +2319,191 @@ mod tests {
             prev: None,
             switch_on: &switch_on,
         };
-        let split = by_blocks(&m, &c, &mut Solver::default(), &base, AnalysisPoint::OperatingPoint)
+        let (split, aids) = by_blocks(&m, &c, &base, AnalysisPoint::OperatingPoint, &[])
             .expect("two nonlinear parts are solved one by one");
+        assert_eq!(aids, vec![Aid::Newton, Aid::Newton], "each part solves from zero");
         for (k, (p, q)) in whole.x.iter().zip(&split.x).enumerate() {
             assert!((p - q).abs() <= 1e-9 * p.abs().max(1.0), "unknown {k}: {p} against {q}");
         }
         // Not inside itself: a part is never split again.
         SPLITTING.with(|s| s.set(true));
-        assert!(by_blocks(&m, &c, &mut Solver::default(), &base, AnalysisPoint::OperatingPoint).is_none());
+        assert!(by_blocks(&m, &c, &base, AnalysisPoint::OperatingPoint, &[]).is_none());
         SPLITTING.with(|s| s.set(false));
+    }
+
+    /// A law that has no value below 0.5 V (`1 mA sqrt(v - 0.5)` from `a` to
+    /// ground, fed from `volts` through 1 kohm): Newton from zero and every aid,
+    /// which all start from zero, meet its NaN.
+    fn root_law(volts: f64) -> Circuit {
+        use crate::behavioral::{BinaryOp, Expr, Func, Law};
+        let mut c = Circuit::new();
+        let (s, a) = (c.node("s"), c.node("a"));
+        c.voltage_source("VS", s, NodeId::GROUND, SourceValue::dc(volts)).unwrap();
+        c.resistor("RS", s, a, 1e3).unwrap();
+        let shifted = Expr::Binary(BinaryOp::Sub, Box::new(Expr::Var(0)), Box::new(Expr::Const(0.5)));
+        let current =
+            Expr::Binary(BinaryOp::Mul, Box::new(Expr::Const(1e-3)), Box::new(Expr::Call(Func::Sqrt, vec![shifted])));
+        let law = Law::expression(Output::Current, vec![Control::Voltage(a, NodeId::GROUND)], current);
+        c.law("J", a, NodeId::GROUND, law).unwrap();
+        c
+    }
+
+    fn solve_hinted(c: &Circuit, hint: Option<std::sync::Arc<DcHint>>) -> Result<(DcPoint, Aid), SimError> {
+        let m = Model::new(c, false).unwrap();
+        with_dc_hint(hint, || dc_point_aided(&m, c, &mut Solver::default(), None, AnalysisPoint::OperatingPoint))
+    }
+
+    #[test]
+    fn a_hint_starts_newton_from_a_related_operating_point() {
+        // No aid solves the law from zero.
+        assert!(solve_hinted(&root_law(5.0), None).is_err());
+        // The point of a related circuit (4.9 V instead of 5 V) as the hint.
+        let near = DcPoint { x: vec![4.9, 2.1, -0.0028], junction: vec![2.1], switch_on: vec![false; 3] };
+        let hint = std::sync::Arc::new(DcHint { points: vec![near], aid: Aid::Seed, circuit: None });
+        let (point, aid) = solve_hinted(&root_law(5.0), Some(hint.clone())).expect("Newton from the hint converges");
+        assert_eq!(aid, Aid::Seed);
+        // (5 - v) / 1 kohm = 1 mA sqrt(v - 0.5): v - 0.5 = w^2 with w^2 + w - 4.5 = 0.
+        let w = (-1.0 + (1.0f64 + 18.0).sqrt()) / 2.0;
+        assert!((point.x[1] - (0.5 + w * w)).abs() < 1e-9, "{:?}", point.x);
+        // The same hint gives the same point, bit for bit, whatever was solved before.
+        let mut warm = Solver::default();
+        let m = Model::new(&root_law(4.0), false).unwrap();
+        let _ = with_dc_hint(Some(hint.clone()), || {
+            dc_point_aided(&m, &root_law(4.0), &mut warm, None, AnalysisPoint::OperatingPoint)
+        });
+        let (again, _) = solve_hinted(&root_law(5.0), Some(hint)).unwrap();
+        assert_eq!(again, point);
+        // A hint whose point does not fit the circuit is not used.
+        let wrong = DcPoint { x: vec![1.0; 5], junction: vec![2.1], switch_on: vec![false; 3] };
+        let hint = std::sync::Arc::new(DcHint { points: vec![wrong], aid: Aid::Gmin, circuit: None });
+        assert!(solve_hinted(&root_law(5.0), Some(hint)).is_err());
+        // A circuit that solves from zero ignores the hint.
+        let (c, _) = two_stage_circuit();
+        let plain = solve_hinted(&c, None).unwrap();
+        let hint = std::sync::Arc::new(DcHint { points: Vec::new(), aid: Aid::Source, circuit: None });
+        assert_eq!(solve_hinted(&c, Some(hint)).unwrap(), plain);
+        assert_eq!(plain.1, Aid::Newton);
+    }
+
+    /// Some other point of the two-stage circuit's layout, for joined hints.
+    fn two_stage_point() -> DcPoint {
+        let (c, _) = two_stage_circuit();
+        let m = Model::new(&c, false).unwrap();
+        DcPoint {
+            x: vec![0.5; m.layout.size()],
+            junction: vec![0.5; m.slots],
+            switch_on: vec![false; c.elements().len()],
+        }
+    }
+
+    #[test]
+    fn continuation_from_the_hints_circuit_solves_where_newton_from_its_point_does_not() {
+        // The law's operating point at 100 V is v = 90.51 V. From there Newton
+        // on the 1 V circuit (root at 0.77 V) overshoots below 0.5 V, where
+        // the law has no value; moving the source from 100 V to 1 V step by
+        // step does not.
+        let far = root_law(100.0);
+        let (point, _) = solve_hinted(&far, None).unwrap_or_else(|_| {
+            let seed = DcPoint { x: vec![100.0, 90.5, -0.0095], junction: vec![90.5], switch_on: vec![false; 3] };
+            let hint = std::sync::Arc::new(DcHint { points: vec![seed], aid: Aid::Seed, circuit: None });
+            solve_hinted(&far, Some(hint)).expect("Newton from a point near the root")
+        });
+        assert!((point.x[1] - 90.51).abs() < 0.01, "{:?}", point.x);
+        let near = root_law(1.0);
+        let seed_only = std::sync::Arc::new(DcHint { points: vec![point.clone()], aid: Aid::Seed, circuit: None });
+        assert!(solve_hinted(&near, Some(seed_only)).is_err(), "Newton from the 100 V point does not converge");
+        let hint = std::sync::Arc::new(DcHint {
+            points: vec![point],
+            aid: Aid::Seed,
+            circuit: Some(std::sync::Arc::new(far)),
+        });
+        let (solved, aid) = solve_hinted(&near, Some(hint)).expect("continuation from the 100 V circuit");
+        assert_eq!(aid, Aid::Continuation);
+        // (1 - v) / 1 kohm = 1 mA sqrt(v - 0.5): w^2 + w - 0.5 = 0 with v = 0.5 + w^2.
+        let w = (-1.0 + 3.0f64.sqrt()) / 2.0;
+        assert!((solved.x[1] - (0.5 + w * w)).abs() < 1e-9, "{:?}", solved.x);
+        // Circuits that differ in more than values do not blend.
+        let (other, _) = two_stage_circuit();
+        assert!(blend(&root_law(100.0), &other, 0.5).is_none());
+        let half = blend(&root_law(100.0), &root_law(1.0), 0.5).unwrap();
+        assert!(matches!(half.elements()[0].kind(), ElementKind::VoltageSource { value, .. } if value.dc == 50.5));
+    }
+
+    #[test]
+    fn freshly_ordered_factors_solve_the_same_newton_iteration() {
+        // The factors a diverging transient step is retried on, ordered
+        // afresh (`forget_factors`), solve the same system as the sparse
+        // factors in their reused order.
+        let (c, _) = two_stage_circuit();
+        let m = Model::new(&c, false).unwrap();
+        let switch_on = vec![false; c.elements().len()];
+        let base = Context {
+            time: None,
+            left: true,
+            method: Method::Dc,
+            h: 0.0,
+            source_scale: 1.0,
+            gmin: 0.0,
+            anchor: None,
+            prev: None,
+            switch_on: &switch_on,
+        };
+        let zeros = vec![0.0; m.layout.size()];
+        let junction = vec![0.0; m.slots];
+        let mut solver = Solver::default();
+        let sparse = solver.newton(&m, &c, &base, &zeros, &junction, 100).unwrap();
+        let before = solver.factorizations;
+        solver.forget_factors();
+        let reordered = solver.newton(&m, &c, &base, &sparse.x, &sparse.junction, 100).unwrap();
+        assert!(solver.factorizations > before, "factored afresh");
+        for (a, b) in sparse.x.iter().zip(&reordered.x) {
+            assert!((a - b).abs() <= 1e-9 * a.abs().max(1e-3));
+        }
+    }
+
+    #[test]
+    fn hints_nest_and_restore() {
+        let outer = std::sync::Arc::new(DcHint { points: Vec::new(), aid: Aid::Gmin, circuit: None });
+        let inner = std::sync::Arc::new(DcHint { points: Vec::new(), aid: Aid::Source, circuit: None });
+        with_dc_hint(Some(outer.clone()), || {
+            assert_eq!(current_hint(), Some(outer.clone()));
+            with_dc_hint(Some(inner.clone()), || assert_eq!(current_hint(), Some(inner.clone())));
+            with_dc_hint(None, || assert_eq!(current_hint(), None));
+            assert_eq!(current_hint(), Some(outer.clone()));
+        });
+        assert_eq!(current_hint(), None);
+    }
+
+    #[test]
+    fn a_linearisation_is_remembered_per_circuit_and_hint() {
+        let (c, _) = two_stage_circuit();
+        let first = remembered_linearization(&c).unwrap();
+        let second = remembered_linearization(&c).unwrap();
+        // The same solve (unless another test pushed it out meanwhile), and the same values.
+        assert_eq!(first, second);
+        let solved = solve_linearization(&c).unwrap();
+        assert_eq!((solved.0, solved.1, solved.2), (first.0.clone(), first.1.clone(), first.2.clone()));
+        assert_eq!(first.2.aid, Aid::Newton);
+        let hint = dc_hint(&c).expect("a nonlinear circuit leaves a hint");
+        assert_eq!(hint.points, first.2.points);
+        assert_eq!(hint.points.len(), 1);
+        // Joined hints try the points of both, the first's aid first.
+        let other = std::sync::Arc::new(DcHint { points: vec![two_stage_point()], aid: Aid::Source, circuit: None });
+        let joined = DcHint::join(Some(hint.clone()), Some(other.clone())).unwrap();
+        assert_eq!(joined.points.len(), 2);
+        assert_eq!(joined.aid, Aid::Newton);
+        assert_eq!(DcHint::join(None, Some(other.clone())), Some(other));
+        assert_eq!(DcHint::join(None, None), None);
+        // Under a hint the circuit is solved again (here to the same point: it solves from zero).
+        let other = with_dc_hint(
+            Some(std::sync::Arc::new(DcHint { points: Vec::new(), aid: Aid::Gmin, circuit: None })),
+            || remembered_linearization(&c).unwrap(),
+        );
+        assert_eq!(other.0, first.0);
+        let mut linear = Circuit::new();
+        let n = linear.node("n");
+        linear.resistor("R", n, NodeId::GROUND, 1.0).unwrap();
+        assert!(dc_hint(&linear).is_none());
     }
 
     #[test]
