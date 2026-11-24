@@ -1,16 +1,18 @@
 # CopperScript overview deck
 
-A 31-slide introduction to CopperScript: the idea (engineering intent belongs in
+A 33-slide introduction to CopperScript: the idea (engineering intent belongs in
 source), how the language works (dependencies imported by URL, library context,
 peripheral selection, modules, differential pairs and skew matching for a
 four-lane CSI-2 link and serpentine length tuning, antenna synthesis, vendor
 models, build settings and panels), how to build and route a board and find the
 cause of a routing failure with copper issues and copper view, how CopperScript
-works with KiCad, how the design helps an AI agent make good decisions (compared
-with GUI EDA such as KiCad and Altium and with netlist-as-code tools, and mapped
-to the mistakes agents typically make), the features included today and what the
-results do not claim. Language features are shown with the schematic or layout
-they produce. Every slide has speaker notes.
+works with KiCad, the review views CopperReview generates (schematic, power
+topology, bus topology) and its assembly mode for a manual build, how the design
+helps an AI agent make good decisions (compared with GUI EDA such as KiCad and
+Altium and with netlist-as-code tools, and mapped to the mistakes agents
+typically make), the features included today and what the results do not claim.
+Language features are shown with the schematic or layout they produce. Every
+slide has speaker notes.
 
 - [copperscript-overview.pdf](copperscript-overview.pdf): one slide per page,
   readable on GitHub.
@@ -59,8 +61,10 @@ Every figure is from the repository or a run of the current compiler on
 | 15, panels | `examples/panel`, built with the commands of its README (two `route-board` runs, `panelize`, `fill`, `drc`: 0 violations), then `copper plot` and `copper render` (`assets/panel.png`). |
 | 18, finding the cause | `copper issues` and `copper view --issue X1` on a failed `route-board` run of a four-lane CSI-2 test board (two CopperLib `csi2-dphy-x4-cabline-ca` ports), abridged; `assets/copper-view-escape.png` is that view rasterized. That board is not stored. |
 | 25, `copper check --json` | `examples/invalid_board/board.copper`, two of its findings. |
-| 28, analysis | The simulation and EMI figures of the project website (`site/assets/simulation-noise.json`, `site/assets/emi/`) and the antenna figure (`site/assets/antenna-synthesis.json`). |
-| 29, asset tracker | The website's recorded showcase (`site/assets/snapshot.json`); `assets/asset-tracker-top.png` is `site/assets/routing-top.svg` rasterized. |
+| 26, review views | CopperReview on the compiled IR of `examples/full_vertical` (`--electrical-ir`), the Schematic, Power and Buses views maximized, fading off; `assets/review-schematic.png`, `review-power.png` and `review-buses.png` are crops of those screens. |
+| 27, assembly mode | `site/assets/review/review-assembly.jpg`, the website's capture of CopperReview Assembly mode with the CopperAssetTracker showcase and its `assembly.lock`. |
+| 30, analysis | The simulation and EMI figures of the project website (`site/assets/simulation-noise.json`, `site/assets/emi/`) and the antenna figure (`site/assets/antenna-synthesis.json`). |
+| 31, asset tracker | The website's recorded showcase (`site/assets/snapshot.json`); `assets/asset-tracker-top.png` is `site/assets/routing-top.svg` rasterized. |
 
 The comparison on page 21 is a simplified summary by approach, not a feature audit of
 each tool; its speaker notes say so.

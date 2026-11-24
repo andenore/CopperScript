@@ -718,13 +718,42 @@ body.show-notes .notes{display:block}
 </div>
 <aside>Real output from the repository’s invalid-board example, trimmed to two of its twelve findings. The first is a rating violation the compiler found because the part declares its voltage range. The second shows how CopperScript separates mistakes from decisions: a pin left open must be marked no_connect with a reason, otherwise it is reported. Findings can also carry machine-applicable fixes, which an agent applies only when the source still holds the original text.</aside>
 </section>
+<section id="review-views" class="paper2">
+<p class="eyebrow">25 / GENERATED REVIEW VIEWS</p>
+<h2 class="title">One design, three views for review.</h2>
+<p class="lead" style="width:1600px; margin-bottom:32px">CopperReview draws all three from the compiled design. Nothing is drawn by hand, so the views never drift from the source.</p>
+<div class="cards cards-3" style="gap:40px">
+<div><p class="code-label">SCHEMATIC</p><img src="assets/review-schematic.png" alt="CopperReview generated schematic sheet of the full-vertical example: the STM32 MCU with the debug header, GNSS, nRF, accelerometer, USB-C controller and CAN transceiver, buses drawn as named nets" style="box-sizing:border-box; width:528px; height:320px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8; background:#FBF9F4"><p class="small" style="margin-top:16px">Sheets generated from the IR. Passives fold onto the pins they serve, and buses read as named nets.</p></div>
+<div><p class="code-label">POWER TOPOLOGY</p><img src="assets/review-power.png" alt="CopperReview power topology of the full-vertical example: the USB-C input V5 feeding a 3.3 V regulator and its loads, and a modem switch, buck and 3.8 V rail feeding the modem, SIM and level shifter" style="box-sizing:border-box; width:528px; height:320px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8; background:#FBF9F4"><p class="small" style="margin-top:16px">Every rail from source to load, with voltages and enables. Pick a declared power state to see what is off.</p></div>
+<div><p class="code-label">BUS TOPOLOGY</p><img src="assets/review-buses.png" alt="CopperReview bus topology of the full-vertical example: the MCU with each configured peripheral as a named bus, I2C to the accelerometer, UARTs to the modem, GNSS, nRF and debug header, USB through a filter to the modem, and CAN to the transceiver" style="box-sizing:border-box; width:528px; height:320px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8; background:#FBF9F4"><p class="small" style="margin-top:16px">Each configured peripheral as a named bus, with its signal nets, pins and the datasheets behind them.</p></div>
+</div>
+<aside>CopperReview turns one compiled design into the views a reviewer needs, all from the electrical IR: no layout is required and nothing is drawn by hand. The pure schematic gives generated sheets, with passives folded onto the pins they serve and buses as named nets. The power topology shows every rail from its source through regulators and switches to its loads, with voltages and enables, and a declared power state such as SLEEP marks the rails that are off. The bus topology shows each configured peripheral as a named bus between devices, with its signal nets, pins and datasheet references. Selecting a part or net in one view selects it in the others and on the board, and notes attached to any of them export for the next agent run. All three pictures are the full-vertical example.</aside>
+</section>
+<section id="review-assembly">
+<p class="eyebrow">26 / ASSEMBLY MODE</p>
+<h2 class="title">Guided manual pick-and-place.</h2>
+<div class="cols" style="grid-template-columns:1000px 1fr; gap:48px">
+<img src="assets/review-assembly.jpg" alt="CopperReview Assembly mode on CopperAssetTracker: the board drawn realistically, the two Molex connectors of the current line outlined with pin 1 ringed and labelled, the build plan by pass on the left and the now-placing panel on the right with manufacturer, MPN, supplier link and Mark placed" style="box-sizing:border-box; width:1000px; height:625px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<div>
+<p class="lead" style="margin-bottom:24px">From the board and its <span style="color:#A4472A">assembly.lock</span>:</p>
+<ul style="font-size:26px; line-height:1.45; color:#4D5550; padding-left:30px; margin:0">
+<li>A plan in passes: one side’s SMD, the other side, through-hole, then parts to inspect only</li>
+<li>One line per identical part; its parts outlined, pin 1 ringed, the board flipped for the back</li>
+<li>Manufacturer, MPN and supplier for the part in hand</li>
+<li>Space marks a line placed, I inspected; progress saves and exports</li>
+</ul>
+<p class="small" style="margin-top:24px">Ticks record what was done at the bench; they do not verify placement, orientation or solder joints.</p>
+</div>
+</div>
+<aside>CopperReview’s Assembly mode walks a manual build of the board part by part. It works from the board alone, but is meant to be used with the project’s assembly.lock, which adds manufacturer, MPN, supplier and how each part reaches the board: hand-fitted, fitted by the assembler and only inspected, or not fitted. The plan is ordered for the bench: surface-mount parts on the side with fewer hand-placed parts first, then the other side, then through-hole, then assembler-fitted and not-fitted parts, small bodies first within a pass. The current line’s parts are outlined with pin 1 ringed and labelled, the board turns over for back-side lines, and keyboard shortcuts mark lines placed or inspected. The screenshot is the CopperAssetTracker showcase with its assembly.lock, on the through-hole line: two Molex connectors. Progress is a record, not a check.</aside>
+</section>
 <section id="review-loop">
-<p class="eyebrow">25 / PEOPLE STAY IN THE LOOP</p>
+<p class="eyebrow">27 / PEOPLE STAY IN THE LOOP</p>
 <h2 class="title">Humans review; the next run listens.</h2>
 <div class="cols">
 <div>
 <h3 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:44px; font-weight:600; line-height:1.15; margin-bottom:24px">CopperReview in the browser</h3>
-<p class="lead">Schematic, layout, 3D, EMI and assembly views of the compiled board, running the same compiler as WebAssembly. Select parts, nets or a region, write what should improve, cite issue ids, and export a review the next LLM-assisted run can read.</p>
+<p class="lead">Schematic, power and bus topology, layout, 3D, EMI and assembly views of the compiled board, running the same compiler as WebAssembly. Select parts, nets or a region, write what should improve, cite issue ids, and export a review the next LLM-assisted run can read.</p>
 <p class="small" style="margin-top:24px">The viewer is read-only: notes never edit the board or its constraints.</p>
 </div>
 <div>
@@ -741,7 +770,7 @@ body.show-notes .notes{display:block}
 <aside>Agents do not replace engineering review. CopperReview lets a person inspect the board and leave notes tied to components, nets, regions and issue ids; the export feeds the next agent run. Ownership rules tell an agent where a change belongs: algorithms in CopperScript, reusable definitions in libraries, board composition and evidence in the board repository.</aside>
 </section>
 <section id="features" class="paper2">
-<p class="eyebrow">26 / INCLUDED TODAY</p>
+<p class="eyebrow">28 / INCLUDED TODAY</p>
 <h2 class="title">One compiler, from source to fab files.</h2>
 <div class="cards cards-4" style="gap:20px">
 <div class="card" style="padding:26px 28px"><h3>Electrical checks</h3><p class="body">Ratings, power states, buses, open pins</p></div>
@@ -760,7 +789,7 @@ body.show-notes .notes{display:block}
 <aside>Twelve capabilities in one Rust binary. Electrical checks cover ratings, output conflicts, power-state back-power, I²C pull-ups and unmarked pins. Libraries are versioned and locked by hash. Mechanics have a browser editor that writes source. Placement and routing are a bounded, experimental pipeline with grouped diagnostics. Hard macros, antenna synthesis, circuit simulation and EMI screening are built in. Zone fill, DRC, Gerber and drill plotting are native, with CAM read-back; KiCad is optional, as an independent cross-check and an export target. Panels, a language server, a VS Code extension and the CopperReview viewer complete it.</aside>
 </section>
 <section id="analysis" class="dark">
-<p class="eyebrow">27 / ANALYSIS IN THE COMPILER</p>
+<p class="eyebrow">29 / ANALYSIS IN THE COMPILER</p>
 <h2 class="title">Real numbers from the examples.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">CIRCUIT SIMULATION</p><div class="stat"><p class="big">66.8 nV/√Hz</p><p class="label">preamp output noise at 1 kHz. The bench’s own hand estimate: about 67. Five benches, with a 200-board Monte Carlo, in about 0.1 s.</p></div></div>
@@ -772,7 +801,7 @@ body.show-notes .notes{display:block}
 <aside>These numbers come from running the current compiler on the repository examples. The noise bench matches the engineer’s hand calculation written in the bench file. The EMI comparison shows what an input filter does, though the filtered example also declares a 2 A operating point instead of the current-limit worst case, so it is not the filter alone. The antenna example shows synthesis moving a textbook quarter-wave guess, which resonates 12 % high, onto the band.</aside>
 </section>
 <section id="tracker">
-<p class="eyebrow">28 / A REAL DESIGN</p>
+<p class="eyebrow">30 / A REAL DESIGN</p>
 <h2 class="title">The asset tracker, routed natively.</h2>
 <div class="cols" style="grid-template-columns:600px 1fr; gap:72px">
 <img src="assets/asset-tracker-top.png" alt="Top copper of CopperAssetTracker rendered from its native Gerber plot, with tracks and exposed copper in gold" style="width:600px; height:480px; object-fit:contain; border-radius:12px">
@@ -789,7 +818,7 @@ body.show-notes .notes{display:block}
 <aside>The showcase board from the 7 November 2026 routing review. The current source was routed with the standard pipeline, filled, checked by the native DRC with zero violations and zero unconnected items, and its Gerbers were read back against the netlist with no shorts or opens. The picture is the native plot, not a render. It remains a review candidate: RF and USB requirement checks, supplier availability, assembly review and prototype validation are open, and 12 electrical-requirement checks remain blocked.</aside>
 </section>
 <section id="limits">
-<p class="eyebrow">29 / WHAT IT DOES NOT CLAIM</p>
+<p class="eyebrow">31 / WHAT IT DOES NOT CLAIM</p>
 <h2 class="title">Evidence, not approval.</h2>
 <table class="spec">
 <tr><th style="width:34%">Result</th><th style="width:66%">What it does not establish</th></tr>
@@ -804,7 +833,7 @@ body.show-notes .notes{display:block}
 <aside>Every result has a scope, and the project states it. A prototype, lab measurements and compliance testing are still required. For an agent this matters a lot: it cannot mistake a clean check for a finished product, because reports name what they did not check and missing evidence remains visible.</aside>
 </section>
 <section id="start" class="dark">
-<p class="eyebrow">30 / GET STARTED</p>
+<p class="eyebrow">32 / GET STARTED</p>
 <h2 class="title">Start with a small circuit.</h2>
 <div class="cols-wide">
 <p class="code">git clone https://github.com/andenore/CopperScript<br>cd CopperScript<br>cargo install --locked --path crates/copper<br><br><span class="c"># orient, then check and compile</span><br>copper agent-guide<br>copper check examples/valid_board/board.copper<br><br><span class="c"># simulate a low-noise preamp</span><br>copper sim examples/simulation/preamp/board.copper</p>

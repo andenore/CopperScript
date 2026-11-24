@@ -1,0 +1,18 @@
+<section id="review-assembly">
+<p class="eyebrow">26 / ASSEMBLY MODE</p>
+<h2 class="title">Guided manual pick-and-place.</h2>
+<div class="cols" style="grid-template-columns:1000px 1fr; gap:48px">
+<img src="assets/review-assembly.jpg" alt="CopperReview Assembly mode on CopperAssetTracker: the board drawn realistically, the two Molex connectors of the current line outlined with pin 1 ringed and labelled, the build plan by pass on the left and the now-placing panel on the right with manufacturer, MPN, supplier link and Mark placed" style="box-sizing:border-box; width:1000px; height:625px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<div>
+<p class="lead" style="margin-bottom:24px">From the board and its <span style="color:#A4472A">assembly.lock</span>:</p>
+<ul style="font-size:26px; line-height:1.45; color:#4D5550; padding-left:30px; margin:0">
+<li>A plan in passes: one side’s SMD, the other side, through-hole, then parts to inspect only</li>
+<li>One line per identical part; its parts outlined, pin 1 ringed, the board flipped for the back</li>
+<li>Manufacturer, MPN and supplier for the part in hand</li>
+<li>Space marks a line placed, I inspected; progress saves and exports</li>
+</ul>
+<p class="small" style="margin-top:24px">Ticks record what was done at the bench; they do not verify placement, orientation or solder joints.</p>
+</div>
+</div>
+<aside>CopperReview’s Assembly mode walks a manual build of the board part by part. It works from the board alone, but is meant to be used with the project’s assembly.lock, which adds manufacturer, MPN, supplier and how each part reaches the board: hand-fitted, fitted by the assembler and only inspected, or not fitted. The plan is ordered for the bench: surface-mount parts on the side with fewer hand-placed parts first, then the other side, then through-hole, then assembler-fitted and not-fitted parts, small bodies first within a pass. The current line’s parts are outlined with pin 1 ringed and labelled, the board turns over for back-side lines, and keyboard shortcuts mark lines placed or inspected. The screenshot is the CopperAssetTracker showcase with its assembly.lock, on the through-hole line: two Molex connectors. Progress is a record, not a check.</aside>
+</section>
