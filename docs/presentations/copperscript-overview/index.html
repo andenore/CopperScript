@@ -421,32 +421,34 @@ body.show-notes .notes{display:block}
 <section id="part-code">
 <p class="eyebrow">04 / FACTS AND RELATIONSHIPS</p>
 <h2 class="title">Parts hold facts; boards hold intent.</h2>
-<div class="cols">
+<div class="cols" style="grid-template-columns:640px 1fr; gap:56px">
 <div>
-<p class="code-label">library: part definition</p>
-<p class="code"><span class="k">part</span> BME280 {<br>&#160;&#160;&#160;&#160;category = <span class="s">"sensor.environmental"</span>;<br>&#160;&#160;&#160;&#160;<span class="k">pin</span> VDD {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;number = <span class="s">"1"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;domains = <span class="s">"power"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_min = <span class="v">1.71V</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_max = <span class="v">3.6V</span>;<br>&#160;&#160;&#160;&#160;}<br>}</p>
-<p class="small" style="margin-top:24px">Ratings come from the datasheet, with units. Put 5 V on this pin and the compiler says <i>“5 V exceeds the pin maximum 3.6 V”</i>, with the line.</p>
+<p class="code-label">library: part definition (abridged)</p>
+<p class="code"><span class="k">part</span> OPAMP_LOW_NOISE {<br>&#160;&#160;&#160;&#160;<span class="k">pin</span> VP { domains = <span class="s">"power"</span>; … }<br>&#160;&#160;&#160;&#160;<span class="k">sim</span> opamp { gbw = <span class="v">18MHz</span>; … }<br>}</p>
+<p class="code-label" style="margin-top:28px">board: component</p>
+<p class="code"><span class="k">component</span> C_VP: <span class="t">CAPACITOR</span> {<br>&#160;&#160;&#160;&#160;value = <span class="v">100nF</span>; role = decoupling;<br>&#160;&#160;&#160;&#160;decouples = U1.VP; }</p>
 </div>
 <div>
-<p class="code-label">board: component</p>
-<p class="code"><span class="k">component</span> C_MCU: <span class="t">CAPACITOR</span> {<br>&#160;&#160;&#160;&#160;value = <span class="v">100nF</span>;<br>&#160;&#160;&#160;&#160;role = decoupling;<br>&#160;&#160;&#160;&#160;decouples = <span class="s">"U_MCU.VDD"</span>;<br>}</p>
-<p class="small" style="margin-top:24px">A relationship, not just a value. The pin association survives compilation and steers decoupling placement and how the capacitor feeds the pin.</p>
+<img src="assets/schematic-decoupling.png" alt="CopperReview schematic of the low-noise preamp: the op-amp U1 with folded capacitor markers on its VP and VN supply pins, and the side panel for C_VP showing decouples U1.VP and role decoupling" style="box-sizing:border-box; width:968px; height:384px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:24px">The relationship survives compilation. CopperReview’s generated schematic folds C_VP onto the pin it protects (“C×1” on U1.VP) and lists <i>decouples U1.VP</i>; the same fact informs decoupling placement.</p>
 </div>
 </div>
-<aside>Two layers of information. Library parts hold facts copied from datasheets, with units and source provenance. Board components hold relationships: this capacitor decouples that pin. Both survive compilation into the intermediate representation, so checks, placement and routing can act on them. The excerpts are shortened; the component is from the CopperAssetTracker board.</aside>
+<aside>Two layers of information. Library parts hold facts with units: pin domains and directions, ratings where the datasheet gives them, and simulation figures; this example part’s figures are illustrative, as its file says. Board components hold relationships: this capacitor decouples that supply pin. The picture is CopperReview’s schematic of the low-noise preamp example, generated from the compiled IR: the decoupling capacitors are folded onto the supply pins they serve, and selecting C_VP shows the declared relationship. The part excerpt is abridged; the component is the example’s own declaration.</aside>
 </section>
 <section id="physical" class="paper2">
 <p class="eyebrow">05 / PHYSICAL INTENT</p>
 <h2 class="title">Mechanics live in the same file.</h2>
-<div class="cols-wide">
-<p class="code"><span class="k">mechanical</span> {<br>&#160;&#160;&#160;&#160;outline rectangle {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;width = <span class="v">40mm</span>; height = <span class="v">30mm</span>;<br>&#160;&#160;&#160;&#160;}<br>&#160;&#160;&#160;&#160;hole H1 {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;position = (<span class="v">3mm</span>, <span class="v">3mm</span>); diameter = <span class="v">2.2mm</span>;<br>&#160;&#160;&#160;&#160;}<br>}<br><span class="k">constraint</span> fixed_placement(R_ANCHOR) {<br>&#160;&#160;&#160;&#160;x = <span class="v">7mm</span>; y = <span class="v">8mm</span>; side = front;<br>}<br><span class="k">constraint</span> antenna(ANT1.FEED) {<br>&#160;&#160;&#160;&#160;bands = <span class="s">"2400 MHz-2483.5 MHz"</span>;<br>&#160;&#160;&#160;&#160;ground = GND;<br>}</p>
-<div class="cards" style="grid-template-columns:1fr; gap:20px">
-<div class="card" style="padding:28px 32px"><h3>Board shape and fit</h3><p class="body">Outlines, curves, cutouts, holes, keepouts, component heights and datums.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Placement and routing</h3><p class="body">Fixed poses, regions, groups, widths, clearances, pairs and length matching.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Synthesized copper</h3><p class="body">Declare a band and a region; a full-wave model tunes the antenna trace.</p></div>
+<div class="cols" style="grid-template-columns:1fr 720px; gap:56px">
+<div>
+<p class="code"><span class="k">mechanical</span> {<br>&#160;&#160;&#160;&#160;outline rounded_rectangle { width = <span class="v">40mm</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;height = <span class="v">30mm</span>; corner_radius = <span class="v">3mm</span>; }<br>&#160;&#160;&#160;&#160;slot MOUNT { start = (<span class="v">17mm</span>, <span class="v">10mm</span>);<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;end = (<span class="v">23mm</span>, <span class="v">10mm</span>); width = <span class="v">1.5mm</span>; }<br>&#160;&#160;&#160;&#160;hole H1 { position = (<span class="v">5mm</span>, <span class="v">25mm</span>);<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;diameter = <span class="v">2mm</span>; }<br>}<br><span class="k">constraint</span> fixed_placement(R1) {<br>&#160;&#160;&#160;&#160;x = <span class="v">8mm</span>; y = <span class="v">10mm</span>; rotation = <span class="v">0</span>; side = front;<br>}</p>
+<p class="small" style="margin-top:24px">Outlines, curves, cutouts, slots, holes, keepouts, heights and datums; placement and routing rules sit beside them.</p>
+</div>
+<div>
+<img src="assets/mechanics.png" alt="The routed mechanical-curves example from its native plot: a 40 by 30 mm board with 3 mm rounded corners, a 1.5 mm slot with both tracks routed around it, a 2 mm mounting hole and two fixed resistors" style="width:720px; height:553px; object-fit:contain; border-radius:12px">
+<p class="small" style="margin-top:12px">The example after route-board: both nets pass either side of the slot.</p>
 </div>
 </div>
-<aside>Physical intent is source too. The mechanical block defines the board; constraints pin placement and routing rules. The antenna constraint is a good example of intent over geometry: you declare the band, the ground and the region, and the compiler synthesizes the trace and its matching network on a full-wave model of your board. A browser-based mechanical editor writes changes back to the source.</aside>
+<aside>From the mechanical curves example. The source defines a rounded outline, a slot and a mounting hole, and fixes two resistors. The picture is that board after the standard route-board pipeline, drawn by copper render from its native Gerber plot; the slot and hole come from the plotted drill file, which copper render does not draw, so they were added at the drill file’s coordinates. Both tracks keep clear of the slot. A browser-based mechanical editor writes geometry changes back to the source.</aside>
 </section>
 <section id="deps-url">
 <p class="eyebrow">06 / DEPENDENCIES</p>
@@ -475,33 +477,29 @@ body.show-notes .notes{display:block}
 <section id="peripherals">
 <p class="eyebrow">08 / PERIPHERAL SELECTION</p>
 <h2 class="title">Choose pins; the compiler checks the mux.</h2>
-<div class="cols-wide">
-<p class="code"><span class="c">// library: the MCU’s device (excerpt)</span><br><span class="k">peripheral</span> I2C1: <span class="t">i2c</span> {<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SDA: open_drain;<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SCL: open_drain;<br>}<br><span class="k">mux</span> PB7: I2C1.SDA { selector = <span class="s">"AF6"</span>; }<br><span class="k">mux</span> PB6: I2C1.SCL { selector = <span class="s">"AF6"</span>; }<br><br><span class="c">// board: select the peripheral’s pins</span><br><span class="k">configure</span> U1.I2C1 <span class="k">as</span> SENSOR_BUS {<br>&#160;&#160;&#160;&#160;SDA = PB7;<br>&#160;&#160;&#160;&#160;SCL = PB6;<br>}</p>
+<div class="cols" style="grid-template-columns:1fr 880px; gap:56px">
 <div>
-<p class="lead" style="margin-bottom:28px">The choice lowers to the selector, AF6, in the IR. ERC then checks:</p>
-<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
-<li>every required signal is assigned</li>
-<li>the pin exists on this package and can carry it</li>
-<li>no pin or peripheral is used twice</li>
-<li>drive types are electrically compatible</li>
-<li>shared resources are not set two ways</li>
-</ul>
+<p class="code"><span class="c">// library: the MCU’s device (excerpt)</span><br><span class="k">peripheral</span> I2C2: <span class="t">i2c</span> {<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SDA: open_drain;<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SCL: open_drain;<br>}<br><span class="k">mux</span> PA6: I2C2.SDA { selector = <span class="s">"AF8"</span>; }<br><br><span class="c">// board</span><br><span class="k">configure</span> U_MCU.I2C2 <span class="k">as</span> MOTION_I2C {<br>&#160;&#160;&#160;&#160;SDA = PA6; SCL = PA7;<br>}</p>
+<p class="small" style="margin-top:24px">ERC checks required signals, the package’s pins, double use, drive types and shared resources.</p>
+</div>
+<div>
+<img src="assets/buses-peripherals.png" alt="CopperReview buses view of the full-vertical example: the STM32 MCU with each configured peripheral as a named bus, MOTION_I2C to the LIS2DW12 accelerometer, UARTs to the modem, GNSS, nRF and debug header, CAN and USB, and the side panel showing I2C_SCL on PA7 and I2C_SDA on PA6 with the datasheet references" style="box-sizing:border-box; width:880px; height:528px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:12px">CopperReview’s bus view of the full-vertical example, generated from its IR.</p>
 </div>
 </div>
-<aside>A device describes the silicon once: its pads, power domains, peripherals and which pads each peripheral signal can use. A package part bonds its pins to those pads. On the board, configure picks the pins for one peripheral; it does not connect anything, nets still do that. The compiler lowers the choice to the concrete alternate-function selector and reports a missing signal, an impossible mux, a pin used twice, an electrical mismatch or a conflicting shared resource. Modes that firmware switches at run time are declared as firmware_managed.</aside>
+<aside>A device describes the silicon once: pads, power domains, peripherals and which pads each signal can use. On the board, configure picks the pins for one peripheral; nets still make the connections. The picture is CopperReview’s bus view of the full-vertical example, whose MCU configures seven peripherals: each is a named bus, and MOTION_I2C shows its SCL on PA7 and SDA on PA6, with the datasheets the facts came from. The code is abridged; the pin assignment matches that example. ERC reports a missing signal, an impossible mux, a pin used twice, an electrical mismatch or a conflicting shared resource.</aside>
 </section>
 <section id="modules-power" class="paper2">
 <p class="eyebrow">09 / MODULES AND POWER STATES</p>
-<h2 class="title">Reusable circuits with typed boundaries.</h2>
-<div class="cols-wide">
-<p class="code"><span class="k">module</span> Supply3V3 {<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VIN: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VOUT: power_out;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> GND: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> U1: <span class="t">REGULATOR_3V3</span>;<br>&#160;&#160;&#160;&#160;<span class="k">net</span> VOUT { port.VOUT; U1.OUT; }<br>&#160;&#160;&#160;&#160;<span class="c">// … VIN and GND likewise</span><br>}<br><br><span class="c">// board</span><br><span class="k">module</span> PWR: <span class="t">power.Supply3V3</span>;<br><span class="k">net</span> V3V3 { PWR.VOUT; }<br><span class="k">power_state</span> STANDBY { VBUS = on; V3V3 = off; }</p>
-<div class="cards" style="grid-template-columns:1fr; gap:20px">
-<div class="card" style="padding:28px 32px"><h3>Typed ports</h3><p class="body">Every port sits on exactly one internal net, and the parent must connect it.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Simulated on its own</h3><p class="body">A bench can target a module and stand in for the board around it.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Power states</h3><p class="body"><span style="color:#A4472A">copper power-check</span> warns when a powered rail could feed an unpowered one.</p></div>
+<h2 class="title">Reusable circuits and declared power states.</h2>
+<div class="cols" style="grid-template-columns:600px 1fr; gap:56px">
+<p class="code"><span class="k">module</span> AnalogFrontEnd {<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VP: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VN: power_in;<br>&#160;&#160;&#160;&#160;<span class="c">// pump, buffers, receiver …</span><br>}<br><br><span class="c">// board</span><br><span class="k">module</span> AFE: <span class="t">AnalogFrontEnd</span>;<br><span class="k">net</span> VP { U_LDOP.OUT; AFE.VP; … }<br><span class="k">power_state</span> SLEEP {<br>&#160;&#160;&#160;&#160;VP = off; … }</p>
+<div>
+<img src="assets/power-states.png" alt="CopperReview power view of the impedance analyzer in the SLEEP state: the regulator chain VPOS_RAW, VPOS_F, U_LDOP and VP with rails marked declared off, and the panel for VP showing aliases VP and AFE/VP, source U_LDOP.OUT and VP off in SLEEP" style="box-sizing:border-box; width:1008px; height:506px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:12px">The impedance analyzer in SLEEP: VP is declared off, and the module sees it as AFE/VP. <span style="color:#A4472A">copper power-check</span> checks every state for back-power.</p>
 </div>
 </div>
-<aside>Modules package a circuit with typed ports and are imported by URL like parts. Their internal names are kept in the IR, and board constraints can still reach inside, for example fixed_placement(PWR/U1). The soil impedance analyzer example simulates its analog front end as a module, with seventeen benches. Named power states list which rails are on, and power-check analyses each scenario, including possible back-power into an unpowered domain.</aside>
+<aside>The soil impedance analyzer example keeps its analog front end in a module with typed ports, instantiated once on the board; seventeen simulation benches target the module alone. The board declares power states such as MEASURE and SLEEP. The picture is CopperReview’s power view of that board with SLEEP selected: the positive analog rail VP and its regulator chain are declared off, and the selected rail shows its alias AFE/VP across the module boundary and its source pin. power-check analyses each declared state, including possible back-power into an unpowered domain. The code is abridged from the example.</aside>
 </section>
 <section id="csi2-lanes">
 <p class="eyebrow">10 / DIFFERENTIAL PAIRS AND SKEW</p>
@@ -519,8 +517,26 @@ body.show-notes .notes{display:block}
 </div>
 <aside>Signal-integrity intent for a MIPI CSI-2 D-PHY link with a clock and four data lanes. Each pair gets a differential routing rule: partner, width and gap, its own skew budget, differential and single-ended impedance targets, the layers it may use and a layer group that keeps clock and data on the same layers. One length_match group holds all ten nets to 0.5 mm. The output on the right is copper si-check on a four-lane fixture with a six-layer stack-up, abridged: all five pairs screen at 99.7 ohm differential and 51.9 ohm single-ended, inside their targets. During routing, intra-pair skew is compensated first, then each lane of the group is tuned towards the longest; tuning_style chooses bumps or serpentines, and tuning_group bends adjacent lanes together. Skew and length misses are reported as review warnings rather than silently accepted. Impedance screening is an estimate from the declared stack-up, not a field-solver sign-off.</aside>
 </section>
+<section id="serpentine">
+<p class="eyebrow">11 / LENGTH MATCHING, ROUTED</p>
+<h2 class="title">Serpentines that keep the pair coupled.</h2>
+<div class="cols" style="grid-template-columns:1fr 1fr; gap:32px">
+<div><p class="code-label">without the length_match group</p><img src="assets/serpentine-before.png" alt="Two routed differential pairs of different length, straight, before length matching" style="width:816px; height:320px; object-fit:contain; border-radius:12px"></div>
+<div><p class="code-label">with length_match and tuning_style = "serpentine"</p><img src="assets/serpentine-after.png" alt="The same two pairs after length matching: the shorter lower pair gained a four-leg serpentine, both members bending together" style="width:816px; height:320px; object-fit:contain; border-radius:12px"></div>
+</div>
+<div class="cols" style="grid-template-columns:1fr 1fr; gap:32px; margin-top:28px">
+<p class="code" style="padding:28px 36px"><span class="k">constraint</span> routing(LANE_B_P) { …<br>&#160;&#160;&#160;&#160;tuning_style = <span class="s">"serpentine"</span>;<br>&#160;&#160;&#160;&#160;tuning_amplitude_limit = <span class="v">1mm</span>; }<br><span class="k">constraint</span> length_match(LANE_A_P, LANE_A_N,<br>&#160;&#160;&#160;&#160;LANE_B_P, LANE_B_N) { max_skew = <span class="v">0.1mm</span>; }</p>
+<div class="cards" style="grid-template-columns:1fr 1fr; gap:24px 28px">
+<div class="stat"><p class="big" style="font-size:52px">4.0 → 0 mm</p><p class="label">group skew, tuned</p></div>
+<div class="stat"><p class="big" style="font-size:52px">4 legs</p><p class="label">up to 0.91 mm high</p></div>
+<div class="stat"><p class="big" style="font-size:52px">0 mm</p><p class="label">pair skew: both members bend</p></div>
+<div class="stat"><p class="big" style="font-size:52px">0</p><p class="label">DRC violations</p></div>
+</div>
+</div>
+<aside>A real route-board run of a two-lane fixture modelled on the router’s own serpentine test: two 0.2/0.2 mm differential pairs between pads at the pair pitch, one lane 28 mm and the other 24 mm. Without the length_match group they route straight. With it, and tuning_style set to serpentine, the router reports the group as tuned: lane B gained 4.000 mm in a four-leg serpentine with legs up to 0.91 mm high, the group skew went from 4.000 mm to zero, and because both members of the pair bend together their own skew is unchanged. The native DRC passed. Both pictures are copper render drawings of the native plots. The routing rule is abridged; the full source is in the deck’s sources/serpentine-lanes folder.</aside>
+</section>
 <section id="antenna" class="dark">
-<p class="eyebrow">11 / ANTENNA SYNTHESIS</p>
+<p class="eyebrow">12 / ANTENNA SYNTHESIS</p>
 <h2 class="title">Declare the band. Synthesize the copper.</h2>
 <div class="cols" style="grid-template-columns:740px 1fr; gap:56px">
 <div>
@@ -532,7 +548,7 @@ body.show-notes .notes{display:block}
 <aside>From the antenna synthesis example. You reserve a board-edge region, name the ground and the band. copper synthesize-antenna tunes the trace on a pinned pure-Rust full-wave FDTD model of this board, polishes height and length, fits an L-section match and verifies the result on a fine mesh, then prints the geometry and digest to paste into the source. The first-order quarter-wave template resonates at 2.72 GHz; the synthesized monopole resonates at 2.37 GHz and stays better than −12.3 dB across the band once matched, with 0.85 nH series and 2.54 pF shunt and 86 % radiation efficiency. The figure is drawn from the recorded synthesis data on the project website. It is simulation evidence for one model: the enclosure, cables and nearby parts are not in it, so bench tuning and testing remain.</aside>
 </section>
 <section id="models-url">
-<p class="eyebrow">12 / VENDOR MODELS</p>
+<p class="eyebrow">13 / VENDOR MODELS</p>
 <h2 class="title">Vendor models by URL, checked by hash.</h2>
 <div class="cols-wide">
 <p class="code"><span class="k">part</span> OPA810_VENDOR {<br>&#160;&#160;&#160;&#160;<span class="k">sim spice</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;source = <span class="s">"https://www.ti.com/lit/zip/SBOMB73"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;sha256 = <span class="v">"bee7ec13…905c4a0a0"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;member = <span class="s">"opa810_a.lib"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;subckt = <span class="s">"OPA810"</span>; dialect = pspice;<br>&#160;&#160;&#160;&#160;}<br>}<br><br><span class="k">part</span> Widget {<br>&#160;&#160;&#160;&#160;model = <span class="s">"https://vendor.example/models/Widget.step"</span>;<br>&#160;&#160;&#160;&#160;model_sha256 = <span class="v">"…"</span>;<br>&#160;&#160;&#160;&#160;model_redistributable = false;<br>}</p>
@@ -549,20 +565,22 @@ body.show-notes .notes{display:block}
 <aside>The first part is the repository’s OPA810 example: TI’s PSpice model archive pinned by URL and SHA-256, with the file and subcircuit inside it named. The second shows the 3D model fields from the 3D models guide, abridged. Vendor files are often licensed for your own designs but not for redistribution, so the compiler fetches them only on request, checks every byte against the declared hash, and keeps them out of exports unless the part marks them redistributable. The simulator can run the vendor model or the built-in macro model and compare the two.</aside>
 </section>
 <section id="panel-build" class="paper2">
-<p class="eyebrow">13 / BUILD SETTINGS AND PANELS</p>
+<p class="eyebrow">14 / BUILD SETTINGS AND PANELS</p>
 <h2 class="title">Fab settings and panels are source too.</h2>
-<div class="cols-wide">
-<p class="code"><span class="k">board</span> Example {<br>&#160;&#160;&#160;&#160;<span class="k">build</span> {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;fab_profile = <span class="s">"jlcpcb-six-layer"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;routing { effort = balanced; time_budget = <span class="v">600s</span>; }<br>&#160;&#160;&#160;&#160;}<br>}<br><br><span class="k">panel</span> ExamplePanel {<br>&#160;&#160;&#160;&#160;spacing = <span class="v">2 mm</span>; fiducials = <span class="v">3</span>;<br>&#160;&#160;&#160;&#160;mouse_bite = { drill = <span class="v">0.5 mm</span>; pitch = <span class="v">0.75 mm</span>; };<br>&#160;&#160;&#160;&#160;<span class="k">board</span> MONO { source = <span class="s">"…/board.copper"</span>; … }<br>&#160;&#160;&#160;&#160;<span class="k">tab</span> mono_top { board = MONO; side = top; at = <span class="v">8 mm</span>; }<br>}</p>
-<div class="cards" style="grid-template-columns:1fr; gap:20px">
-<div class="card" style="padding:28px 32px"><h3>Settings in the board</h3><p class="body">The build block feeds route-board and copper build; the command line still overrides it.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>One panel board</h3><p class="body"><span style="color:#A4472A">copper panelize</span> writes rails, tabs, mouse bites and fiducials as one board.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Checked like any board</h3><p class="body">Native fill and DRC run on it unchanged; a fab preset checks the fab’s rules.</p></div>
+<div class="cols" style="grid-template-columns:1fr 820px; gap:56px">
+<div>
+<p class="code"><span class="k">panel</span> ExamplePanel {<br>&#160;&#160;&#160;&#160;spacing = <span class="v">2 mm</span>; fiducials = <span class="v">3</span>;<br>&#160;&#160;&#160;&#160;rails = { top = <span class="v">5 mm</span>; bottom = <span class="v">5 mm</span>; };<br>&#160;&#160;&#160;&#160;mouse_bite = { drill = <span class="v">0.5 mm</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;pitch = <span class="v">0.75 mm</span>; inset = <span class="v">0.25 mm</span>; };<br>&#160;&#160;&#160;&#160;<span class="k">board</span> MONO { … at = (<span class="v">0 mm</span>, <span class="v">0 mm</span>); }<br>&#160;&#160;&#160;&#160;<span class="k">board</span> IFA { … at = (<span class="v">42 mm</span>, <span class="v">0 mm</span>); }<br>&#160;&#160;&#160;&#160;<span class="k">tab</span> mono_top { board = MONO;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;side = top; at = <span class="v">8 mm</span>; }<br>}</p>
+<p class="small" style="margin-top:24px">A board’s <i>build</i> block keeps its fab profile and routing settings in source; the command line still overrides it.</p>
+</div>
+<div>
+<img src="assets/panel.png" alt="The example panel from its native plot: the monopole and inverted-F antenna boards side by side with top and bottom rails, routed slots, five tabs with mouse bites and three fiducials" style="width:820px; height:453px; object-fit:contain; border-radius:12px">
+<p class="small" style="margin-top:12px">examples/panel after copper panelize, fill and DRC (0 violations): one board for the whole panel.</p>
 </div>
 </div>
-<aside>Two smaller features that remove hidden state. A board’s build block keeps its fab profile, placement and routing settings in source instead of a Makefile; precedence is command line, then source, then compiler default. A panel document places already-routed boards with rails, tabs, mouse bites, fiducials and tooling holes, and copper panelize writes one KiCad board for the whole panel, so the native fill, DRC and plotter run on it unchanged. A fab preset fills in the fab’s values and checks the panel against its rules. Both excerpts are abridged from the language reference and the panel example.</aside>
+<aside>The panel example places the two routed antenna boards on one fabrication panel with rails, tabs, mouse bites, fiducials and a tooling hole. copper panelize writes one KiCad board for the panel, so the native fill, DRC and plotter run on it unchanged; here the DRC reported zero violations and zero unconnected items, with the open antenna ends excused by the panel report. Every inside corner of the routed outline comes out rounded to the cutter radius. A board’s build block keeps the fab profile, placement and routing settings in source. The code is abridged from examples/panel/panel.copper.</aside>
 </section>
 <section id="pipeline">
-<p class="eyebrow">14 / FROM SOURCE TO COPPER</p>
+<p class="eyebrow">15 / FROM SOURCE TO COPPER</p>
 <h2 class="title">Every transformation stays inspectable.</h2>
 <div class="flow">
 <div class="step"><h3>Describe</h3><p class="body">Parts, nets, supplies and constraints in .copper</p><p class="out">source + lock</p></div>
@@ -580,7 +598,7 @@ body.show-notes .notes{display:block}
 <aside>The whole flow runs from one source. Each step writes a report a person or an agent can read: compiled IR, simulation results, route reports, DRC and CAM read-back. Outputs record hashes of their inputs, so stale evidence is detected rather than reused. KiCad remains available as an independent cross-check and export target.</aside>
 </section>
 <section id="build-route">
-<p class="eyebrow">15 / BUILD AND ROUTE A BOARD</p>
+<p class="eyebrow">16 / BUILD AND ROUTE A BOARD</p>
 <h2 class="title">Four commands from source to fab files.</h2>
 <div class="cards" style="grid-template-columns:1fr 1fr; gap:24px">
 <div class="card" style="padding:30px 32px"><p class="num">1 · CHECK</p><p class="cmd" style="margin-top:0; margin-bottom:12px">copper check board.copper --locked</p><p class="body">Electrical rules and ratings; every imported package verified against copper.lock.</p></div>
@@ -592,7 +610,7 @@ body.show-notes .notes{display:block}
 <aside>How to build and route a board. Check first. Then copper build runs the standard pipeline: copper check, route-board, a native zone refill, the native design-rule check and a completion gate, writing everything into a fresh run directory with a run.json that records the inputs and outputs by hash. If something fails, copper issues groups the causes and copper view draws them; fix the source and build again. Finally export-manufacturing writes the fabrication files and refuses a run that failed or whose sources have changed. Projects with a Makefile wrap step two as make route.</aside>
 </section>
 <section id="view-issues" class="paper2">
-<p class="eyebrow">16 / FINDING THE CAUSE</p>
+<p class="eyebrow">17 / FINDING THE CAUSE</p>
 <h2 class="title">copper issues names it. copper view shows it.</h2>
 <div class="cols" style="grid-template-columns:1fr 812px; gap:56px">
 <div>
@@ -604,7 +622,7 @@ body.show-notes .notes{display:block}
 <aside>A real failure: a quick four-lane CSI-2 test board between two CopperLib camera connectors, routed with the standard pipeline. copper issues turned the run’s findings into 19 grouped issues, each with an id, a cause and a window. X1 says the two connectors’ pins escape in an order that makes 21 net pairs cross on one layer and names the nets to move; C1 says the planned crossing is impossible on the layers allowed. copper view --issue X1 draws that window per copper layer, rings every pad of the issue and colours each lane, so the escape order of both connectors can be compared at a glance; its legend lists the pads with coordinates. The same commands frame a net, a pad, a component or any window; --filled shows the saved zone fills, placement trials that were rejected show the pose that was kept, and --reference overlays a manufacturer’s layout aligned on the package pads, which is how blocked package exits are compared with the reference design. Output abridged. The fix belongs in placement or the source, and the agent never needs a one-off script to see it.</aside>
 </section>
 <section id="kicad-interop">
-<p class="eyebrow">17 / WORKS WITH KICAD</p>
+<p class="eyebrow">18 / WORKS WITH KICAD</p>
 <h2 class="title">KiCad stays in the loop.</h2>
 <p class="lead" style="width:1500px; margin-bottom:40px">CopperScript is the source; KiCad is an export target, a library source and an independent check. Finish, review or hand over a design in KiCad at any point.</p>
 <div class="cards cards-3">
@@ -618,7 +636,7 @@ body.show-notes .notes{display:block}
 <aside>CopperScript does not replace KiCad. Every PCB-producing command writes a complete KiCad project with its own footprint library, so the board opens in KiCad without setup, and copper export-kicad writes a KiCad 8 schematic as a derived artifact. Footprints and 3D models come from KiCad’s official repositories pinned by commit. copper build can verify with KiCad 10 instead of the native filler and DRC, and copper compare-cam compares the native and KiCad plots. copper view --reference overlays a reference KiCad board aligned on the package pads, which is how blocked package exits are compared with a manufacturer’s layout. There is no Altium integration, and the KiCad board importer of the old Python implementation has not been ported.</aside>
 </section>
 <section id="ai-statement" class="accent">
-<p class="eyebrow">18 / WHY IT SUITS AI AGENTS</p>
+<p class="eyebrow">19 / WHY IT SUITS AI AGENTS</p>
 <div class="spacer"></div>
 <p class="statement fade" style="width:1560px">An agent makes good decisions when every decision gets fast, located and honest feedback.</p>
 <div class="spacer"></div>
@@ -626,7 +644,7 @@ body.show-notes .notes{display:block}
 <aside>This is the central claim about AI. Language models are good at writing structured text and at reacting to precise feedback. They are bad at guessing facts they cannot see and at judging their own work. CopperScript is built around that: give the agent text to write, facts to retrieve instead of guess, and checks that answer quickly, point at the exact line and never pretend a missing input passed.</aside>
 </section>
 <section id="compare">
-<p class="eyebrow">19 / COMPARED WITH OTHER WAYS</p>
+<p class="eyebrow">20 / COMPARED WITH OTHER WAYS</p>
 <h2 class="title">What an agent works with in each approach.</h2>
 <table class="spec">
 <tr><th style="width:17%">The agent needs</th><th style="width:27%">GUI EDA: KiCad, Altium</th><th style="width:26%">Netlist as code, e.g. SKiDL</th><th style="width:30%">CopperScript</th></tr>
@@ -641,7 +659,7 @@ body.show-notes .notes{display:block}
 <aside>A fair comparison from the point of view of an AI agent. Graphical tools such as KiCad and Altium are mature and excellent for an expert who places and routes by hand; an agent, though, has to drive a GUI or edit drawing files whose meaning is geometry, and most of the engineering intent lives outside the design. Netlist-as-code tools such as SKiDL give the agent text to write, but mostly for connectivity, and the layout still happens in a GUI. CopperScript puts connectivity and intent in one typed source, answers with machine-readable findings, and runs layout as a bounded pipeline that reports why it failed. Its router is experimental; the GUI tools remain better for interactive layout, and CopperScript exports to KiCad so the two can be combined.</aside>
 </section>
 <section id="failure-modes" class="paper2">
-<p class="eyebrow">20 / WHERE AGENTS GO WRONG</p>
+<p class="eyebrow">21 / WHERE AGENTS GO WRONG</p>
 <h2 class="title">Each common mistake meets a check.</h2>
 <table class="spec">
 <tr><th style="width:40%">The agent…</th><th style="width:60%">What catches it in CopperScript</th></tr>
@@ -655,7 +673,7 @@ body.show-notes .notes{display:block}
 <aside>This is the goal of the project in one table: improve an LLM’s ability to produce a good board by closing off the ways it typically goes wrong. Language models invent plausible part data, so parts come from pinned libraries with cited sources and missing facts stay visible. They connect the right nets but ignore why, so intent such as decoupling targets and pin roles is part of the source and checked. They cannot look at a layout, so issues and views give them located causes, text legends and pictures. They over-trust a clean result, so every report names its limits. They patch symptoms, so the project’s rules send fixes into generic algorithms compared with manufacturer reference layouts. And they lose track of state, so every input and output is hashed and old evidence is refused.</aside>
 </section>
 <section id="loop" class="dark">
-<p class="eyebrow">21 / THE AGENT LOOP</p>
+<p class="eyebrow">22 / THE AGENT LOOP</p>
 <h2 class="title">Retrieve, write, check, fix. Repeat.</h2>
 <div class="flow">
 <div class="step"><h3>Orient</h3><p class="body">A guide bundled with the compiler, one topic at a time</p><p class="out">agent-guide</p></div>
@@ -673,7 +691,7 @@ body.show-notes .notes{display:block}
 <aside>The loop in commands. copper agent-guide gives a short bootstrap and topics such as syntax, libraries, verification, iteration and simulation. copper library search and inspect retrieve only the contracts the task needs. copper check --json returns located findings with machine-applicable fixes. copper explain describes a diagnostic code, copper query answers questions about the compiled design, and copper issues and copper view group routing failures and draw them.</aside>
 </section>
 <section id="agent-choices">
-<p class="eyebrow">22 / DESIGNED FOR GOOD DECISIONS</p>
+<p class="eyebrow">23 / DESIGNED FOR GOOD DECISIONS</p>
 <h2 class="title">Six choices that keep an agent honest.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">01</p><h3>Text, not clicks</h3><p class="body">The agent writes source it can diff and explain. No GUI to drive, no hidden state.</p></div>
@@ -686,7 +704,7 @@ body.show-notes .notes{display:block}
 <aside>Six design choices. One: text instead of a GUI, so the agent’s work is reviewable. Two: retrieval from pinned, versioned libraries, so it does not invent part data; facts the source does not give stay explicitly unresolved. Three: units and roles, so many wrong decisions fail to compile. Four: compact, located, machine-readable diagnostics, so the agent spends its context on the problem. Five: no silent passes; screening results and missing evidence stay visible. Six: when routing fails, the project improves the generic algorithm by comparing with manufacturer reference layouts, rather than adding board-specific patches.</aside>
 </section>
 <section id="check-example" class="paper2">
-<p class="eyebrow">23 / WHAT THE AGENT SEES</p>
+<p class="eyebrow">24 / WHAT THE AGENT SEES</p>
 <h2 class="title">copper check --json, on a broken board.</h2>
 <div class="cols">
 <p class="code">{ <span class="s">"code"</span>: <span class="v">"SUPPLY_VOLTAGE_HIGH"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"error"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1.VDD"</span>,<br>&#160;&#160;<span class="s">"message"</span>: <span class="v">"5 V exceeds the pin</span><br><span class="v">&#160;&#160;&#160;&#160;maximum 3.6 V"</span>,<br>&#160;&#160;<span class="s">"location"</span>: { <span class="s">"line"</span>: 15 } }<br><br>{ <span class="s">"code"</span>: <span class="v">"UNMARKED_PIN"</span>,<br>&#160;&#160;<span class="s">"severity"</span>: <span class="v">"warning"</span>,<br>&#160;&#160;<span class="s">"subject"</span>: <span class="v">"U1"</span>,<br>&#160;&#160;<span class="s">"hint"</span>: <span class="v">"connect them, or declare</span><br><span class="v">&#160;&#160;&#160;&#160;intent with no_connect</span><br><span class="v">&#160;&#160;&#160;&#160;U1.PA0, U1.TX { reason }"</span> }</p>
@@ -701,7 +719,7 @@ body.show-notes .notes{display:block}
 <aside>Real output from the repository’s invalid-board example, trimmed to two of its twelve findings. The first is a rating violation the compiler found because the part declares its voltage range. The second shows how CopperScript separates mistakes from decisions: a pin left open must be marked no_connect with a reason, otherwise it is reported. Findings can also carry machine-applicable fixes, which an agent applies only when the source still holds the original text.</aside>
 </section>
 <section id="review-loop">
-<p class="eyebrow">24 / PEOPLE STAY IN THE LOOP</p>
+<p class="eyebrow">25 / PEOPLE STAY IN THE LOOP</p>
 <h2 class="title">Humans review; the next run listens.</h2>
 <div class="cols">
 <div>
@@ -723,7 +741,7 @@ body.show-notes .notes{display:block}
 <aside>Agents do not replace engineering review. CopperReview lets a person inspect the board and leave notes tied to components, nets, regions and issue ids; the export feeds the next agent run. Ownership rules tell an agent where a change belongs: algorithms in CopperScript, reusable definitions in libraries, board composition and evidence in the board repository.</aside>
 </section>
 <section id="features" class="paper2">
-<p class="eyebrow">25 / INCLUDED TODAY</p>
+<p class="eyebrow">26 / INCLUDED TODAY</p>
 <h2 class="title">One compiler, from source to fab files.</h2>
 <div class="cards cards-4" style="gap:20px">
 <div class="card" style="padding:26px 28px"><h3>Electrical checks</h3><p class="body">Ratings, power states, buses, open pins</p></div>
@@ -742,7 +760,7 @@ body.show-notes .notes{display:block}
 <aside>Twelve capabilities in one Rust binary. Electrical checks cover ratings, output conflicts, power-state back-power, I²C pull-ups and unmarked pins. Libraries are versioned and locked by hash. Mechanics have a browser editor that writes source. Placement and routing are a bounded, experimental pipeline with grouped diagnostics. Hard macros, antenna synthesis, circuit simulation and EMI screening are built in. Zone fill, DRC, Gerber and drill plotting are native, with CAM read-back; KiCad is optional, as an independent cross-check and an export target. Panels, a language server, a VS Code extension and the CopperReview viewer complete it.</aside>
 </section>
 <section id="analysis" class="dark">
-<p class="eyebrow">26 / ANALYSIS IN THE COMPILER</p>
+<p class="eyebrow">27 / ANALYSIS IN THE COMPILER</p>
 <h2 class="title">Real numbers from the examples.</h2>
 <div class="cards cards-3">
 <div class="card"><p class="num">CIRCUIT SIMULATION</p><div class="stat"><p class="big">66.8 nV/√Hz</p><p class="label">preamp output noise at 1 kHz. The bench’s own hand estimate: about 67. Five benches, with a 200-board Monte Carlo, in about 0.1 s.</p></div></div>
@@ -754,7 +772,7 @@ body.show-notes .notes{display:block}
 <aside>These numbers come from running the current compiler on the repository examples. The noise bench matches the engineer’s hand calculation written in the bench file. The EMI comparison shows what an input filter does, though the filtered example also declares a 2 A operating point instead of the current-limit worst case, so it is not the filter alone. The antenna example shows synthesis moving a textbook quarter-wave guess, which resonates 12 % high, onto the band.</aside>
 </section>
 <section id="tracker">
-<p class="eyebrow">27 / A REAL DESIGN</p>
+<p class="eyebrow">28 / A REAL DESIGN</p>
 <h2 class="title">The asset tracker, routed natively.</h2>
 <div class="cols" style="grid-template-columns:600px 1fr; gap:72px">
 <img src="assets/asset-tracker-top.png" alt="Top copper of CopperAssetTracker rendered from its native Gerber plot, with tracks and exposed copper in gold" style="width:600px; height:480px; object-fit:contain; border-radius:12px">
@@ -771,7 +789,7 @@ body.show-notes .notes{display:block}
 <aside>The showcase board from the 7 November 2026 routing review. The current source was routed with the standard pipeline, filled, checked by the native DRC with zero violations and zero unconnected items, and its Gerbers were read back against the netlist with no shorts or opens. The picture is the native plot, not a render. It remains a review candidate: RF and USB requirement checks, supplier availability, assembly review and prototype validation are open, and 12 electrical-requirement checks remain blocked.</aside>
 </section>
 <section id="limits">
-<p class="eyebrow">28 / WHAT IT DOES NOT CLAIM</p>
+<p class="eyebrow">29 / WHAT IT DOES NOT CLAIM</p>
 <h2 class="title">Evidence, not approval.</h2>
 <table class="spec">
 <tr><th style="width:34%">Result</th><th style="width:66%">What it does not establish</th></tr>
@@ -786,7 +804,7 @@ body.show-notes .notes{display:block}
 <aside>Every result has a scope, and the project states it. A prototype, lab measurements and compliance testing are still required. For an agent this matters a lot: it cannot mistake a clean check for a finished product, because reports name what they did not check and missing evidence remains visible.</aside>
 </section>
 <section id="start" class="dark">
-<p class="eyebrow">29 / GET STARTED</p>
+<p class="eyebrow">30 / GET STARTED</p>
 <h2 class="title">Start with a small circuit.</h2>
 <div class="cols-wide">
 <p class="code">git clone https://github.com/andenore/CopperScript<br>cd CopperScript<br>cargo install --locked --path crates/copper<br><br><span class="c"># orient, then check and compile</span><br>copper agent-guide<br>copper check examples/valid_board/board.copper<br><br><span class="c"># simulate a low-noise preamp</span><br>copper sim examples/simulation/preamp/board.copper</p>

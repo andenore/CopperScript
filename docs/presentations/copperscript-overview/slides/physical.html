@@ -1,13 +1,15 @@
 <section id="physical" class="paper2">
 <p class="eyebrow">05 / PHYSICAL INTENT</p>
 <h2 class="title">Mechanics live in the same file.</h2>
-<div class="cols-wide">
-<p class="code"><span class="k">mechanical</span> {<br>&#160;&#160;&#160;&#160;outline rectangle {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;width = <span class="v">40mm</span>; height = <span class="v">30mm</span>;<br>&#160;&#160;&#160;&#160;}<br>&#160;&#160;&#160;&#160;hole H1 {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;position = (<span class="v">3mm</span>, <span class="v">3mm</span>); diameter = <span class="v">2.2mm</span>;<br>&#160;&#160;&#160;&#160;}<br>}<br><span class="k">constraint</span> fixed_placement(R_ANCHOR) {<br>&#160;&#160;&#160;&#160;x = <span class="v">7mm</span>; y = <span class="v">8mm</span>; side = front;<br>}<br><span class="k">constraint</span> antenna(ANT1.FEED) {<br>&#160;&#160;&#160;&#160;bands = <span class="s">"2400 MHz-2483.5 MHz"</span>;<br>&#160;&#160;&#160;&#160;ground = GND;<br>}</p>
-<div class="cards" style="grid-template-columns:1fr; gap:20px">
-<div class="card" style="padding:28px 32px"><h3>Board shape and fit</h3><p class="body">Outlines, curves, cutouts, holes, keepouts, component heights and datums.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Placement and routing</h3><p class="body">Fixed poses, regions, groups, widths, clearances, pairs and length matching.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Synthesized copper</h3><p class="body">Declare a band and a region; a full-wave model tunes the antenna trace.</p></div>
+<div class="cols" style="grid-template-columns:1fr 720px; gap:56px">
+<div>
+<p class="code"><span class="k">mechanical</span> {<br>&#160;&#160;&#160;&#160;outline rounded_rectangle { width = <span class="v">40mm</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;height = <span class="v">30mm</span>; corner_radius = <span class="v">3mm</span>; }<br>&#160;&#160;&#160;&#160;slot MOUNT { start = (<span class="v">17mm</span>, <span class="v">10mm</span>);<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;end = (<span class="v">23mm</span>, <span class="v">10mm</span>); width = <span class="v">1.5mm</span>; }<br>&#160;&#160;&#160;&#160;hole H1 { position = (<span class="v">5mm</span>, <span class="v">25mm</span>);<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;diameter = <span class="v">2mm</span>; }<br>}<br><span class="k">constraint</span> fixed_placement(R1) {<br>&#160;&#160;&#160;&#160;x = <span class="v">8mm</span>; y = <span class="v">10mm</span>; rotation = <span class="v">0</span>; side = front;<br>}</p>
+<p class="small" style="margin-top:24px">Outlines, curves, cutouts, slots, holes, keepouts, heights and datums; placement and routing rules sit beside them.</p>
+</div>
+<div>
+<img src="assets/mechanics.png" alt="The routed mechanical-curves example from its native plot: a 40 by 30 mm board with 3 mm rounded corners, a 1.5 mm slot with both tracks routed around it, a 2 mm mounting hole and two fixed resistors" style="width:720px; height:553px; object-fit:contain; border-radius:12px">
+<p class="small" style="margin-top:12px">The example after route-board: both nets pass either side of the slot.</p>
 </div>
 </div>
-<aside>Physical intent is source too. The mechanical block defines the board; constraints pin placement and routing rules. The antenna constraint is a good example of intent over geometry: you declare the band, the ground and the region, and the compiler synthesizes the trace and its matching network on a full-wave model of your board. A browser-based mechanical editor writes changes back to the source.</aside>
+<aside>From the mechanical curves example. The source defines a rounded outline, a slot and a mounting hole, and fixes two resistors. The picture is that board after the standard route-board pipeline, drawn by copper render from its native Gerber plot; the slot and hole come from the plotted drill file, which copper render does not draw, so they were added at the drill file’s coordinates. Both tracks keep clear of the slot. A browser-based mechanical editor writes geometry changes back to the source.</aside>
 </section>

@@ -1,13 +1,12 @@
 <section id="modules-power" class="paper2">
 <p class="eyebrow">09 / MODULES AND POWER STATES</p>
-<h2 class="title">Reusable circuits with typed boundaries.</h2>
-<div class="cols-wide">
-<p class="code"><span class="k">module</span> Supply3V3 {<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VIN: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VOUT: power_out;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> GND: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">component</span> U1: <span class="t">REGULATOR_3V3</span>;<br>&#160;&#160;&#160;&#160;<span class="k">net</span> VOUT { port.VOUT; U1.OUT; }<br>&#160;&#160;&#160;&#160;<span class="c">// … VIN and GND likewise</span><br>}<br><br><span class="c">// board</span><br><span class="k">module</span> PWR: <span class="t">power.Supply3V3</span>;<br><span class="k">net</span> V3V3 { PWR.VOUT; }<br><span class="k">power_state</span> STANDBY { VBUS = on; V3V3 = off; }</p>
-<div class="cards" style="grid-template-columns:1fr; gap:20px">
-<div class="card" style="padding:28px 32px"><h3>Typed ports</h3><p class="body">Every port sits on exactly one internal net, and the parent must connect it.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:120ms"><h3>Simulated on its own</h3><p class="body">A bench can target a module and stand in for the board around it.</p></div>
-<div class="card" style="padding:28px 32px; animation-delay:240ms"><h3>Power states</h3><p class="body"><span style="color:#A4472A">copper power-check</span> warns when a powered rail could feed an unpowered one.</p></div>
+<h2 class="title">Reusable circuits and declared power states.</h2>
+<div class="cols" style="grid-template-columns:600px 1fr; gap:56px">
+<p class="code"><span class="k">module</span> AnalogFrontEnd {<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VP: power_in;<br>&#160;&#160;&#160;&#160;<span class="k">port</span> VN: power_in;<br>&#160;&#160;&#160;&#160;<span class="c">// pump, buffers, receiver …</span><br>}<br><br><span class="c">// board</span><br><span class="k">module</span> AFE: <span class="t">AnalogFrontEnd</span>;<br><span class="k">net</span> VP { U_LDOP.OUT; AFE.VP; … }<br><span class="k">power_state</span> SLEEP {<br>&#160;&#160;&#160;&#160;VP = off; … }</p>
+<div>
+<img src="assets/power-states.png" alt="CopperReview power view of the impedance analyzer in the SLEEP state: the regulator chain VPOS_RAW, VPOS_F, U_LDOP and VP with rails marked declared off, and the panel for VP showing aliases VP and AFE/VP, source U_LDOP.OUT and VP off in SLEEP" style="box-sizing:border-box; width:1008px; height:506px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:12px">The impedance analyzer in SLEEP: VP is declared off, and the module sees it as AFE/VP. <span style="color:#A4472A">copper power-check</span> checks every state for back-power.</p>
 </div>
 </div>
-<aside>Modules package a circuit with typed ports and are imported by URL like parts. Their internal names are kept in the IR, and board constraints can still reach inside, for example fixed_placement(PWR/U1). The soil impedance analyzer example simulates its analog front end as a module, with seventeen benches. Named power states list which rails are on, and power-check analyses each scenario, including possible back-power into an unpowered domain.</aside>
+<aside>The soil impedance analyzer example keeps its analog front end in a module with typed ports, instantiated once on the board; seventeen simulation benches target the module alone. The board declares power states such as MEASURE and SLEEP. The picture is CopperReview’s power view of that board with SLEEP selected: the positive analog rail VP and its regulator chain are declared off, and the selected rail shows its alias AFE/VP across the module boundary and its source pin. power-check analyses each declared state, including possible back-power into an unpowered domain. The code is abridged from the example.</aside>
 </section>

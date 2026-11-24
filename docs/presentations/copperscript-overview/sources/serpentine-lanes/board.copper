@@ -1,0 +1,23 @@
+// Two differential lanes of different length in one length_match group, tuned with serpentines.
+// Pair lands at the pair pitch stand in for a PHY and a connector; not a circuit.
+board SerpentineLanes {
+    use library "tiny";
+    component U1: RESISTOR { footprint = "footprints/PairLand.kicad_mod"; }
+    component J1: RESISTOR { footprint = "footprints/PairLand.kicad_mod"; }
+    net LANE_A_N { U1.1; J1.1; }
+    net LANE_A_P { U1.2; J1.2; }
+    constraint fixed_placement(U1) { x = 5.0mm; y = 6.0mm; rotation = 0; side = front; }
+    constraint fixed_placement(J1) { x = 33.0mm; y = 6.0mm; rotation = 0; side = front; }
+    component U2: RESISTOR { footprint = "footprints/PairLand.kicad_mod"; }
+    component J2: RESISTOR { footprint = "footprints/PairLand.kicad_mod"; }
+    net LANE_B_N { U2.1; J2.1; }
+    net LANE_B_P { U2.2; J2.2; }
+    constraint fixed_placement(U2) { x = 5.0mm; y = 14.0mm; rotation = 0; side = front; }
+    constraint fixed_placement(J2) { x = 29.0mm; y = 14.0mm; rotation = 0; side = front; }
+    mechanical { outline rectangle { width = 40mm; height = 20mm; } }
+    constraint routing(LANE_A_P) { kind = differential; partner = LANE_A_N; width = 0.2mm; pair_gap = 0.2mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.05mm; tuning_amplitude_limit = 1mm; tuning_style = "serpentine"; }
+    constraint routing(LANE_A_N) { kind = differential; partner = LANE_A_P; width = 0.2mm; pair_gap = 0.2mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.05mm; tuning_amplitude_limit = 1mm; tuning_style = "serpentine"; }
+    constraint routing(LANE_B_P) { kind = differential; partner = LANE_B_N; width = 0.2mm; pair_gap = 0.2mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.05mm; tuning_amplitude_limit = 1mm; tuning_style = "serpentine"; }
+    constraint routing(LANE_B_N) { kind = differential; partner = LANE_B_P; width = 0.2mm; pair_gap = 0.2mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.05mm; tuning_amplitude_limit = 1mm; tuning_style = "serpentine"; }
+    constraint length_match(LANE_A_P, LANE_A_N, LANE_B_P, LANE_B_N) { id = "lanes"; max_skew = 0.1mm; }
+}

@@ -1,18 +1,15 @@
 <section id="peripherals">
 <p class="eyebrow">08 / PERIPHERAL SELECTION</p>
 <h2 class="title">Choose pins; the compiler checks the mux.</h2>
-<div class="cols-wide">
-<p class="code"><span class="c">// library: the MCU’s device (excerpt)</span><br><span class="k">peripheral</span> I2C1: <span class="t">i2c</span> {<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SDA: open_drain;<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SCL: open_drain;<br>}<br><span class="k">mux</span> PB7: I2C1.SDA { selector = <span class="s">"AF6"</span>; }<br><span class="k">mux</span> PB6: I2C1.SCL { selector = <span class="s">"AF6"</span>; }<br><br><span class="c">// board: select the peripheral’s pins</span><br><span class="k">configure</span> U1.I2C1 <span class="k">as</span> SENSOR_BUS {<br>&#160;&#160;&#160;&#160;SDA = PB7;<br>&#160;&#160;&#160;&#160;SCL = PB6;<br>}</p>
+<div class="cols" style="grid-template-columns:1fr 880px; gap:56px">
 <div>
-<p class="lead" style="margin-bottom:28px">The choice lowers to the selector, AF6, in the IR. ERC then checks:</p>
-<ul style="font-size:28px; line-height:1.5; color:#4D5550; padding-left:32px; margin:0">
-<li>every required signal is assigned</li>
-<li>the pin exists on this package and can carry it</li>
-<li>no pin or peripheral is used twice</li>
-<li>drive types are electrically compatible</li>
-<li>shared resources are not set two ways</li>
-</ul>
+<p class="code"><span class="c">// library: the MCU’s device (excerpt)</span><br><span class="k">peripheral</span> I2C2: <span class="t">i2c</span> {<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SDA: open_drain;<br>&#160;&#160;&#160;&#160;<span class="k">signal</span> SCL: open_drain;<br>}<br><span class="k">mux</span> PA6: I2C2.SDA { selector = <span class="s">"AF8"</span>; }<br><br><span class="c">// board</span><br><span class="k">configure</span> U_MCU.I2C2 <span class="k">as</span> MOTION_I2C {<br>&#160;&#160;&#160;&#160;SDA = PA6; SCL = PA7;<br>}</p>
+<p class="small" style="margin-top:24px">ERC checks required signals, the package’s pins, double use, drive types and shared resources.</p>
+</div>
+<div>
+<img src="assets/buses-peripherals.png" alt="CopperReview buses view of the full-vertical example: the STM32 MCU with each configured peripheral as a named bus, MOTION_I2C to the LIS2DW12 accelerometer, UARTs to the modem, GNSS, nRF and debug header, CAN and USB, and the side panel showing I2C_SCL on PA7 and I2C_SDA on PA6 with the datasheet references" style="box-sizing:border-box; width:880px; height:528px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:12px">CopperReview’s bus view of the full-vertical example, generated from its IR.</p>
 </div>
 </div>
-<aside>A device describes the silicon once: its pads, power domains, peripherals and which pads each peripheral signal can use. A package part bonds its pins to those pads. On the board, configure picks the pins for one peripheral; it does not connect anything, nets still do that. The compiler lowers the choice to the concrete alternate-function selector and reports a missing signal, an impossible mux, a pin used twice, an electrical mismatch or a conflicting shared resource. Modes that firmware switches at run time are declared as firmware_managed.</aside>
+<aside>A device describes the silicon once: pads, power domains, peripherals and which pads each signal can use. On the board, configure picks the pins for one peripheral; nets still make the connections. The picture is CopperReview’s bus view of the full-vertical example, whose MCU configures seven peripherals: each is a named bus, and MOTION_I2C shows its SCL on PA7 and SDA on PA6, with the datasheets the facts came from. The code is abridged; the pin assignment matches that example. ERC reports a missing signal, an impossible mux, a pin used twice, an electrical mismatch or a conflicting shared resource.</aside>
 </section>

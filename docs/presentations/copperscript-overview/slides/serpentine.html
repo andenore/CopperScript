@@ -1,0 +1,18 @@
+<section id="serpentine">
+<p class="eyebrow">11 / LENGTH MATCHING, ROUTED</p>
+<h2 class="title">Serpentines that keep the pair coupled.</h2>
+<div class="cols" style="grid-template-columns:1fr 1fr; gap:32px">
+<div><p class="code-label">without the length_match group</p><img src="assets/serpentine-before.png" alt="Two routed differential pairs of different length, straight, before length matching" style="width:816px; height:320px; object-fit:contain; border-radius:12px"></div>
+<div><p class="code-label">with length_match and tuning_style = "serpentine"</p><img src="assets/serpentine-after.png" alt="The same two pairs after length matching: the shorter lower pair gained a four-leg serpentine, both members bending together" style="width:816px; height:320px; object-fit:contain; border-radius:12px"></div>
+</div>
+<div class="cols" style="grid-template-columns:1fr 1fr; gap:32px; margin-top:28px">
+<p class="code" style="padding:28px 36px"><span class="k">constraint</span> routing(LANE_B_P) { …<br>&#160;&#160;&#160;&#160;tuning_style = <span class="s">"serpentine"</span>;<br>&#160;&#160;&#160;&#160;tuning_amplitude_limit = <span class="v">1mm</span>; }<br><span class="k">constraint</span> length_match(LANE_A_P, LANE_A_N,<br>&#160;&#160;&#160;&#160;LANE_B_P, LANE_B_N) { max_skew = <span class="v">0.1mm</span>; }</p>
+<div class="cards" style="grid-template-columns:1fr 1fr; gap:24px 28px">
+<div class="stat"><p class="big" style="font-size:52px">4.0 → 0 mm</p><p class="label">group skew, tuned</p></div>
+<div class="stat"><p class="big" style="font-size:52px">4 legs</p><p class="label">up to 0.91 mm high</p></div>
+<div class="stat"><p class="big" style="font-size:52px">0 mm</p><p class="label">pair skew: both members bend</p></div>
+<div class="stat"><p class="big" style="font-size:52px">0</p><p class="label">DRC violations</p></div>
+</div>
+</div>
+<aside>A real route-board run of a two-lane fixture modelled on the router’s own serpentine test: two 0.2/0.2 mm differential pairs between pads at the pair pitch, one lane 28 mm and the other 24 mm. Without the length_match group they route straight. With it, and tuning_style set to serpentine, the router reports the group as tuned: lane B gained 4.000 mm in a four-leg serpentine with legs up to 0.91 mm high, the group skew went from 4.000 mm to zero, and because both members of the pair bend together their own skew is unchanged. The native DRC passed. Both pictures are copper render drawings of the native plots. The routing rule is abridged; the full source is in the deck’s sources/serpentine-lanes folder.</aside>
+</section>

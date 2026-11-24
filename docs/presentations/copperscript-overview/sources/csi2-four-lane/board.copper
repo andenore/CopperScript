@@ -1,0 +1,67 @@
+// Four-lane CSI-2 (D-PHY) skew-matching demonstration: 0402 pads stand in for the PHY balls; not a circuit.
+board Csi2FourLane {
+    use library "tiny";
+    component TX_CLK: RESISTOR { footprint = "0402"; }
+    component RX_CLK: RESISTOR { footprint = "0402"; }
+    component TX_D0: RESISTOR { footprint = "0402"; }
+    component RX_D0: RESISTOR { footprint = "0402"; }
+    component TX_D1: RESISTOR { footprint = "0402"; }
+    component RX_D1: RESISTOR { footprint = "0402"; }
+    component TX_D2: RESISTOR { footprint = "0402"; }
+    component RX_D2: RESISTOR { footprint = "0402"; }
+    component TX_D3: RESISTOR { footprint = "0402"; }
+    component RX_D3: RESISTOR { footprint = "0402"; }
+    net CSI_CLK_P { TX_CLK.1; RX_CLK.1; }
+    net CSI_CLK_N { TX_CLK.2; RX_CLK.2; }
+    net CSI_D0_P { TX_D0.1; RX_D0.1; }
+    net CSI_D0_N { TX_D0.2; RX_D0.2; }
+    net CSI_D1_P { TX_D1.1; RX_D1.1; }
+    net CSI_D1_N { TX_D1.2; RX_D1.2; }
+    net CSI_D2_P { TX_D2.1; RX_D2.1; }
+    net CSI_D2_N { TX_D2.2; RX_D2.2; }
+    net CSI_D3_P { TX_D3.1; RX_D3.1; }
+    net CSI_D3_N { TX_D3.2; RX_D3.2; }
+    component R_GND1: RESISTOR { footprint = "0402"; }
+    component R_GND2: RESISTOR { footprint = "0402"; }
+    net GND { R_GND1.1; R_GND2.1; R_GND1.2; R_GND2.2; }
+    mechanical {
+        outline rectangle { width = 50mm; height = 34mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric P1 { thickness = 0.1mm; er = 4.1; material = "3313"; }
+            copper In1.Cu { thickness = 0.0175mm; }
+            dielectric C1 { thickness = 0.55mm; er = 4.6; }
+            copper In2.Cu { thickness = 0.0175mm; }
+            dielectric P2 { thickness = 0.1mm; er = 4.1; }
+            copper In3.Cu { thickness = 0.0175mm; }
+            dielectric C2 { thickness = 0.55mm; er = 4.6; }
+            copper In4.Cu { thickness = 0.0175mm; }
+            dielectric P3 { thickness = 0.1mm; er = 4.1; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; }
+    constraint fixed_placement(TX_CLK) { x = 8mm; y = 9mm; rotation = 90; side = front; }
+    constraint fixed_placement(RX_CLK) { x = 42mm; y = 5mm; rotation = 90; side = front; }
+    constraint fixed_placement(TX_D0) { x = 8mm; y = 13mm; rotation = 90; side = front; }
+    constraint fixed_placement(RX_D0) { x = 42mm; y = 11mm; rotation = 90; side = front; }
+    constraint fixed_placement(TX_D1) { x = 8mm; y = 17mm; rotation = 90; side = front; }
+    constraint fixed_placement(RX_D1) { x = 42mm; y = 17mm; rotation = 90; side = front; }
+    constraint fixed_placement(TX_D2) { x = 8mm; y = 21mm; rotation = 90; side = front; }
+    constraint fixed_placement(RX_D2) { x = 42mm; y = 23mm; rotation = 90; side = front; }
+    constraint fixed_placement(TX_D3) { x = 8mm; y = 25mm; rotation = 90; side = front; }
+    constraint fixed_placement(RX_D3) { x = 42mm; y = 29mm; rotation = 90; side = front; }
+    constraint fixed_placement(R_GND1) { x = 25mm; y = 31mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_GND2) { x = 30mm; y = 31mm; rotation = 0; side = front; }
+    constraint routing(CSI_CLK_P) { kind = differential; partner = CSI_CLK_N; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_CLK_N) { kind = differential; partner = CSI_CLK_P; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D0_P) { kind = differential; partner = CSI_D0_N; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D0_N) { kind = differential; partner = CSI_D0_P; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D1_P) { kind = differential; partner = CSI_D1_N; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D1_N) { kind = differential; partner = CSI_D1_P; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D2_P) { kind = differential; partner = CSI_D2_N; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D2_N) { kind = differential; partner = CSI_D2_P; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D3_P) { kind = differential; partner = CSI_D3_N; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CSI_D3_N) { kind = differential; partner = CSI_D3_P; width = 0.14mm; pair_gap = 0.26mm; clearance = 0.15mm; allowed_layers = "F.Cu"; max_vias = 0; max_skew = 0.1mm; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint length_match(CSI_CLK_P, CSI_CLK_N, CSI_D0_P, CSI_D0_N, CSI_D1_P, CSI_D1_N, CSI_D2_P, CSI_D2_N, CSI_D3_P, CSI_D3_N) { id = "csi-lanes"; max_skew = 0.5mm; }
+}

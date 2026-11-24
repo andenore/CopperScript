@@ -1,17 +1,17 @@
 <section id="part-code">
 <p class="eyebrow">04 / FACTS AND RELATIONSHIPS</p>
 <h2 class="title">Parts hold facts; boards hold intent.</h2>
-<div class="cols">
+<div class="cols" style="grid-template-columns:640px 1fr; gap:56px">
 <div>
-<p class="code-label">library: part definition</p>
-<p class="code"><span class="k">part</span> BME280 {<br>&#160;&#160;&#160;&#160;category = <span class="s">"sensor.environmental"</span>;<br>&#160;&#160;&#160;&#160;<span class="k">pin</span> VDD {<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;number = <span class="s">"1"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;domains = <span class="s">"power"</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_min = <span class="v">1.71V</span>;<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;voltage_max = <span class="v">3.6V</span>;<br>&#160;&#160;&#160;&#160;}<br>}</p>
-<p class="small" style="margin-top:24px">Ratings come from the datasheet, with units. Put 5 V on this pin and the compiler says <i>“5 V exceeds the pin maximum 3.6 V”</i>, with the line.</p>
+<p class="code-label">library: part definition (abridged)</p>
+<p class="code"><span class="k">part</span> OPAMP_LOW_NOISE {<br>&#160;&#160;&#160;&#160;<span class="k">pin</span> VP { domains = <span class="s">"power"</span>; … }<br>&#160;&#160;&#160;&#160;<span class="k">sim</span> opamp { gbw = <span class="v">18MHz</span>; … }<br>}</p>
+<p class="code-label" style="margin-top:28px">board: component</p>
+<p class="code"><span class="k">component</span> C_VP: <span class="t">CAPACITOR</span> {<br>&#160;&#160;&#160;&#160;value = <span class="v">100nF</span>; role = decoupling;<br>&#160;&#160;&#160;&#160;decouples = U1.VP; }</p>
 </div>
 <div>
-<p class="code-label">board: component</p>
-<p class="code"><span class="k">component</span> C_MCU: <span class="t">CAPACITOR</span> {<br>&#160;&#160;&#160;&#160;value = <span class="v">100nF</span>;<br>&#160;&#160;&#160;&#160;role = decoupling;<br>&#160;&#160;&#160;&#160;decouples = <span class="s">"U_MCU.VDD"</span>;<br>}</p>
-<p class="small" style="margin-top:24px">A relationship, not just a value. The pin association survives compilation and steers decoupling placement and how the capacitor feeds the pin.</p>
+<img src="assets/schematic-decoupling.png" alt="CopperReview schematic of the low-noise preamp: the op-amp U1 with folded capacitor markers on its VP and VN supply pins, and the side panel for C_VP showing decouples U1.VP and role decoupling" style="box-sizing:border-box; width:968px; height:384px; object-fit:contain; border-radius:12px; border:1px solid #CFC8B8">
+<p class="small" style="margin-top:24px">The relationship survives compilation. CopperReview’s generated schematic folds C_VP onto the pin it protects (“C×1” on U1.VP) and lists <i>decouples U1.VP</i>; the same fact informs decoupling placement.</p>
 </div>
 </div>
-<aside>Two layers of information. Library parts hold facts copied from datasheets, with units and source provenance. Board components hold relationships: this capacitor decouples that pin. Both survive compilation into the intermediate representation, so checks, placement and routing can act on them. The excerpts are shortened; the component is from the CopperAssetTracker board.</aside>
+<aside>Two layers of information. Library parts hold facts with units: pin domains and directions, ratings where the datasheet gives them, and simulation figures; this example part’s figures are illustrative, as its file says. Board components hold relationships: this capacitor decouples that supply pin. The picture is CopperReview’s schematic of the low-noise preamp example, generated from the compiled IR: the decoupling capacitors are folded onto the supply pins they serve, and selecting C_VP shows the declared relationship. The part excerpt is abridged; the component is the example’s own declaration.</aside>
 </section>
