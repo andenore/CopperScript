@@ -324,25 +324,52 @@ pub fn extract(
     let mut reasons = Vec::new();
     let mut patches_nm = Vec::new();
     let mut approximations = Vec::new();
+    // Build every mesh first and admit the series by its estimated cost: the refined mesh costs several times the
+    // standard one, so the budget is split by estimate, not evenly. When the series does not fit but the standard
+    // mesh does, the standard mesh runs alone (convergence then not established).
+    let mut regions = Vec::new();
     for mesh in 0..options.meshes {
-        let (mut region, patches) = region(model, board, input, options, if mesh == 0 { 1.0 } else { 1.0 / 1.5 })?;
+        let (region, patches) = region(model, board, input, options, if mesh == 0 { 1.0 } else { 1.0 / 1.5 })?;
+        regions.push((mesh, region, patches));
+    }
+    let cost = |r: &RegionModel| r.estimate().seconds.max(0.0) * r.ports.len() as f64;
+    let remaining = options.budget_seconds - started.elapsed().as_secs_f64();
+    let total: f64 = regions.iter().map(|(_, r, _)| cost(r)).sum();
+    if regions.len() == 2 && total > remaining && cost(&regions[0].1) <= remaining {
+        reasons.push(format!(
+            "refined mesh skipped: the two-mesh series is estimated at {total:.0} s with {remaining:.0} s of the budget left; single mesh: convergence not established"
+        ));
+        regions.truncate(1);
+    }
+    let meshes_run = regions.len();
+    let total: f64 = regions.iter().map(|(_, r, _)| cost(r)).sum();
+    if remaining <= 0.0 || total > remaining {
+        return Err(Error::Budget(format!(
+            "external FDTD shared budget insufficient: {meshes_run} mesh(es) estimated at {total:.0} s with {remaining:.0} s left; no columns run; no partial matrix is usable"
+        )));
+    }
+    let later_costs: Vec<f64> =
+        (0..meshes_run).map(|m| regions[m + 1..].iter().map(|(_, r, _)| cost(r)).sum()).collect();
+    for (index, (mesh, mut region, patches)) in regions.into_iter().enumerate() {
         let n = region.ports.len();
         approximations.extend(region.approximations.iter().cloned());
         approximations.extend(region.flags.iter().cloned());
         if region.flags.iter().any(|f| f == "nets_merged_below_floor") {
             reasons.push(format!("mesh {mesh}: copper edges from different nets were merged below the mesh floor; native isolation is not qualified"));
         }
-        let remaining = options.budget_seconds - started.elapsed().as_secs_f64();
-        if remaining <= 0.0 || region.estimate().seconds * n as f64 > remaining {
-            return Err(Error::Budget(format!(
-                "external FDTD shared budget exhausted or insufficient for {n} columns; {} columns completed; no partial matrix is usable",
-                runs.len()
-            )));
-        }
+        let column_cost = region.estimate().seconds.max(0.0);
         let mut columns = Vec::new();
         for column in 0..n {
-            region.spec.budget.max_seconds = (options.budget_seconds - started.elapsed().as_secs_f64())
-                / ((n - column) * (options.meshes - mesh)) as f64;
+            // This column's share of what is left: its estimate over the estimate of every column still to run.
+            let remaining = options.budget_seconds - started.elapsed().as_secs_f64();
+            let left = column_cost * (n - column) as f64 + later_costs[index];
+            let share = if left > 0.0 {
+                column_cost / left
+            } else {
+                let later_columns = if index + 1 < meshes_run { n } else { 0 };
+                1.0 / ((n - column) + later_columns) as f64
+            };
+            region.spec.budget.max_seconds = remaining * share;
             if region.spec.budget.max_seconds <= 0.0 {
                 return Err(Error::Budget(format!(
                     "external FDTD shared budget exhausted; {} columns completed; no partial matrix is usable",
@@ -411,7 +438,8 @@ pub fn extract(
     }
     if options.meshes == 1 {
         reasons.push("single mesh: convergence not established".to_owned());
-    } else if difference > 5.0 {
+    } else if meshes_run == 2 && difference > 5.0 {
+        // (A skipped refined mesh already gave its reason.)
         reasons.push(format!("full matrix changes by {difference:.2}% between meshes (limit 5%)"));
     }
     reasons.sort();
@@ -422,7 +450,7 @@ pub fn extract(
         frequencies_hz: chosen.freqs.clone(),
         labels: chosen.names.clone(),
         impedance_ohm,
-        mesh_difference_pct: (options.meshes == 2).then_some(difference),
+        mesh_difference_pct: (meshes_run == 2).then_some(difference),
         runs,
         status_reasons: reasons,
         patches_nm,

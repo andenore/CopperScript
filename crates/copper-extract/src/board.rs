@@ -1073,6 +1073,20 @@ pub fn build_layout(
         ports.labels[ports.port.1],
         if external { "external rail/return contour" } else { "the switch is the port" }
     ));
+    if external {
+        // The external contour admitted every net of the board (and the floating-metal namespace) as a candidate;
+        // report only the nets whose copper reached the window, and never the internal namespace.
+        let present: BTreeSet<&str> = layout
+            .layers
+            .iter()
+            .flat_map(|l| l.conductors.iter().map(|c| c.net.as_str()))
+            .chain(layout.vias.iter().map(|v| v.net.as_str()))
+            .collect();
+        if present.contains(floating.as_str()) {
+            notes.push("copper with no net in the window is modelled as floating metal".to_owned());
+        }
+        nets.retain(|n| *n != floating && (loop_nets.contains(n) || present.contains(n.as_str())));
+    }
     let other_nets: Vec<String> = nets.difference(&loop_nets).cloned().collect();
     Ok(BoardLayout {
         layout,

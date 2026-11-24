@@ -677,14 +677,26 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
             // No extraction: no picture and no placeholder.
             missing("")
         } else {
+            // A buck cell's loop is keyed by its controller; a buck-boost cell's loops by `<controller>:<kind>`.
+            let loop_prefix = format!("{cell}:");
+            let of_cell = |name: &str| name == cell || name.starts_with(&loop_prefix);
             let drawn = input
                 .extracted
                 .iter()
-                .find(|(name, _)| name == cell)
-                .and_then(|(name, result)| crate::emi_current::panel(name, result));
+                .filter(|(name, _)| of_cell(name))
+                .find_map(|(name, result)| crate::emi_current::panel(name, result));
             match drawn {
                 Some(panel) => Thumb::Picture(copper_report::emi_current::current_thumbnail(&panel, i)),
-                None => Thumb::Missing(format!("no current density: no result (copper explain EMI-EXTRACT:{cell})")),
+                None => {
+                    let check = input
+                        .report
+                        .coverage
+                        .iter()
+                        .filter_map(|c| c.check.strip_prefix("EMI-EXTRACT:"))
+                        .find(|name| of_cell(name))
+                        .unwrap_or(cell);
+                    Thumb::Missing(format!("no current density: no result (copper explain EMI-EXTRACT:{check})"))
+                }
             }
         };
         thumbnails.push(CellThumbnails {

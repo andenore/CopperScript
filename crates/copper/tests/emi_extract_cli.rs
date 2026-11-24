@@ -15,6 +15,7 @@ fn routed_buck_boost_extracts_two_passive_contours_without_conducted_substitutio
     std::fs::create_dir_all(&directory).unwrap();
     let state_path = directory.join("external.state.json");
     let plot_path = directory.join("currents.svg");
+    let summary_path = directory.join("summary.svg");
     let state = copper_state::StateDocument::new(
         "pcbir.physical:PhysicalBoard",
         copper_json::Object::new(),
@@ -36,6 +37,8 @@ fn routed_buck_boost_extracts_two_passive_contours_without_conducted_substitutio
         "2000",
         "--plot-current",
         plot_path.to_str().unwrap(),
+        "--plot-summary",
+        summary_path.to_str().unwrap(),
         "--json",
     ]);
     assert_eq!(output.status.code(), Some(0), "{}\n{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
@@ -68,6 +71,10 @@ fn routed_buck_boost_extracts_two_passive_contours_without_conducted_substitutio
     assert!(!stdout(&output).contains("extracted_connection"));
     let plot = std::fs::read_to_string(&plot_path).unwrap();
     assert!(plot.contains("U1:input") && plot.contains("U1:output"));
+    // The summary page of the buck-boost cell draws a loop's current map (keyed `U1:<kind>`, not `U1`).
+    let summary = std::fs::read_to_string(&summary_path).unwrap();
+    assert!(!summary.contains("no current density"), "the summary has no current-density thumbnail");
+    std::fs::remove_file(summary_path).unwrap();
     std::fs::remove_file(plot_path).unwrap();
     std::fs::remove_file(state_path).unwrap();
     std::fs::remove_dir(directory).unwrap();

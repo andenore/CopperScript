@@ -643,9 +643,11 @@ pub fn extract_hot_loop_with_progress(
     }
     flags.sort();
     flags.dedup();
-    // Via currents of the standard mesh (it kept the branch currents).
+    // Via currents of the standard mesh (it kept the branch currents). A buck loop reports its hot-loop port (port 0)
+    // only; an external contact network reports each port, any of which `select_port` can pick.
+    let observed_ports = if input.external_contour.is_some() { layout.port_labels.len() } else { 1 };
     let mut port_observations = Vec::new();
-    for port in 0..layout.port_labels.len() {
+    for port in 0..observed_ports {
         let mut via_currents = Vec::new();
         let mut net_names: Vec<&str> = layout.layout.vias.iter().map(|v| v.net.as_str()).collect();
         net_names.sort_unstable();

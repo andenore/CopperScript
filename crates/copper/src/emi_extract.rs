@@ -722,13 +722,37 @@ pub fn apply(
             }
         };
         let requested_contact = input.pads.get(1).cloned();
+        // The joint input/output network when it can be built; otherwise this loop's contour alone, with the coupling
+        // to the other loop reported as not evaluated.
+        let mut joint_declined: Option<String> = None;
         if external && let Some(peer) = external_inputs.iter().find(|p| p.cell == cell && p.loop_kind != id.kind) {
             let (mut primary, secondary) =
                 if id.kind == LoopKind::Input { (input.clone(), peer) } else { (peer.clone(), &input) };
             primary.external_peer = secondary.external_contour.clone();
             primary.polygon_mm.extend(secondary.polygon_mm.iter().copied());
-            input = primary;
+            match primary.external_network() {
+                Ok(_) => input = primary,
+                Err(error) => {
+                    let _ = writeln!(
+                        progress,
+                        "extract: loop {}: joint input/output network declined ({error}); extracting this loop alone",
+                        id.key()
+                    );
+                    joint_declined = Some(error.to_string());
+                }
+            }
         }
+        let coupling_not_evaluated = |scope: &mut Object| {
+            if let Some(why) = &joint_declined {
+                put(
+                    scope,
+                    "inter_loop_coupling",
+                    Value::from(format!(
+                        "not_evaluated: the joint input/output network was declined ({why}); this loop's contour alone"
+                    )),
+                );
+            }
+        };
         let network = match input.external_network() {
             Ok(network) => network,
             Err(error) => {
@@ -749,6 +773,7 @@ pub fn apply(
         if let Some(network) = &network {
             let Value::Object(mut scope) = network.scope_value() else { unreachable!() };
             put(&mut scope, "loop_id", id.to_value());
+            coupling_not_evaluated(&mut scope);
             if options.ideal_capacitors {
                 put(
                     &mut scope,
@@ -845,6 +870,7 @@ pub fn apply(
                     if network.contours.len() == 2 {
                         put(&mut scope, "inter_loop_coupling", Value::from("evaluated_in_joint_matrix"));
                     }
+                    coupling_not_evaluated(&mut scope);
                     if options.ideal_capacitors {
                         put(
                             &mut scope,
@@ -947,7 +973,7 @@ fn not_used(result: &HotLoopExtraction) -> Option<String> {
     if result.status == "error" {
         let first = result.topology_mismatches.first().map_or(String::new(), |m| format!(" (first: {m})"));
         return Some(format!(
-            "the mesh does not have the copper's connectivity: {} mismatch(es) between the copper pieces and the meshed network{first}; {} unresolved gap(s); the numbers are not the board's, so the connection inductances of EMI-CONDUCTED stay the estimates; `--extract-budget N` (more filaments, up to 20000) gives the mesher room to refine them",
+            "the mesh does not have the copper's connectivity: {} mismatch(es) between the copper pieces and the meshed network{first}; {} unresolved gap(s); the numbers are not the board's, so the connection inductances of EMI-CONDUCTED stay the estimates; `--extract-budget N` (more filaments, up to 32768) gives the mesher room to refine them",
             result.topology_mismatches.len(),
             result.unresolved_gap_count
         ));
