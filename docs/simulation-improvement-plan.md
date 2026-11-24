@@ -777,17 +777,14 @@ margin (41.5 degrees) and peaking (1.517) still fail (taken as the part's;
 the options above each fail a limit or cost 44 mA), and
 `GuardStability.poles` fails for a real 607 MHz pair of the sense buffers
 with the HP and LP electrodes unloaded (stable with their strays; the bench
-is the owner's call); `Startup` (no operating point with the rails at 0 V:
-the AD8130 model's limit and copper's on the unpowered ADA4817) and
-`Distortion` (the transient's pace on the vendor circuit, and Newton
-diverging at 15 us) do not finish; 51 simulated pins stay unrated. Also
+is the owner's call); `Startup` does not run (no operating point with the
+rails at 0 V: both amplifier models' limit, I10); `Distortion` runs since
+I10; 51 simulated pins stay unrated. Also
 open: the proposed macro changes (I3 above and `output_resistance = 56ohm`,
 pending the owner's macro decision); the ADA4807 macro block's `gbw`
 180 MHz and `second_pole` 300 MHz, which do not reproduce Figure 23 (part
 file); the drive buffer's low-frequency Tian difference in ngspice; the
-vendor circuit's factorisations (the sparse LU often leaves its matrix to
-the dense one, 11.7 MB of factors for 1209 unknowns), 84 % of
-`ResistorMatching`'s time; the LTC6268 block in CopperLib; the two AC
+LTC6268 block in CopperLib; the two AC
 differences of the I3 ngspice comparison; a committable deck that fails
 without the split.
 
@@ -1408,9 +1405,10 @@ all 9 steps; the whole run takes 3337 s where it took 4701 s and stopped in
 `Distortion`; no limited measure changes its verdict, and the limited
 values move by at most 2e-5 relative, apart from `current_error`, a 1e-9
 quantity that moves by up to 13 % of itself. The vendor `Distortion` values
-are not judged yet: THD reaches 37 % on the gain-1 channel at steps where
-`pump_headroom` is negative, which looks like the intended clipping steps
-but has no reference run.
+follow the default models' step for step (SPEC.md, "Vendor models"): high
+THD only at the two 0.65 V overdrive steps, where the pump clips; the
+gain-1 channel reaches 37 % there against 9.5 %, not checked against
+another simulator.
 
 Open:
 
@@ -1422,8 +1420,6 @@ Open:
   are defined. A diagnostic that names the parts whose supply pins sit at
   0 V when an operating point fails is not built.
 - The I6 leftovers above: not started.
-- SPEC's "Vendor models" table and the I3 "Open" paragraph predate this and
-  need a refresh from this vendor run.
 
 ### I11. Mixed signal (proposal)
 

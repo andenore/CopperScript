@@ -404,8 +404,8 @@ loops, the accuracy and the noise are unchanged):
   nominal drive (37 ohm at 1 MHz) and more at 0.65 V.
 
 **Vendor results on the circuit as it is** (`copper sim --models vendor`,
-release build, every bench in one run on 12 threads, 23 November 2026;
-worst rated step):
+release build, every bench in one run on 12 threads, 23 and 24 November
+2026; worst rated step):
 
 | Bench | Result | Status | Time |
 | --- | --- | --- | --- |
@@ -424,20 +424,24 @@ worst rated step):
 | `ResistorMatching` | 0.38 %, 0.094 degrees, drive current 1.1e-9 (limits 1 %, 1 degree, 0.5 %) | pass | 1078 s |
 | `ResistorWorstCase` | 0.40 %, 0.096 degrees, drive current 8.5e-10 | pass | 908 s |
 | `MeasurementNoise`, `SenseBufferTrade` | reported, no limits | - | 40 and 9 s |
-| `Startup` | no operating point at its first point (below) | does not run | gives up after 842 s |
-| `Distortion` | stops at 15.09 us of its first period (below) | does not finish | 569 s |
+| `Startup` | no operating point at its first point (below) | does not run | gives up after 19 s (24 November) |
+| `Distortion` | all 9 steps; THD below 0.02 % at the nominal drive except the 1 kHz dry-soil step (gain 1 0.09 %, gain 10 1.9 %), up to 37 % at the two 0.65 V overdrive steps (below) | no limits | 2549 s (24 November) |
 
-The whole run takes 4788 s (80 minutes) and at most 1.4 GB. Every limit
-passes but three: the sense buffer's margin and peaking, which the snubbers
-do not touch (below; the options measured fail a limit or cost 44 mA), and
-`GuardStability.poles`. The run before this change (the binary of
-201ae83b) solved every vendor operating point through all
-aids to the split, 10 s or more each: `CalibrationCard` took 72 s,
-`ContactImbalance` stopped at its 116th step on the circuit before the
-board change, `ResistorMatching` and `ResistorWorstCase` were not run to the
-end (several hundred operating points at 10 to 67 s each), `Distortion`
-ran out of memory after 86 minutes and `GuardStability.poles` left 52 of its
-roots unrefined (plan, I3).
+The values are those of the run of 24 November 2026 (the solver of
+35ee34e5), which moved no limited value by more than 2e-5 of itself; the
+times are those of 23 November except where marked. That run takes 3337 s
+(56 minutes) with `Distortion` running to its end, where the one before took
+4788 s and stopped in it; the solver's own timing gives `ResistorMatching`
+490 s and `ResistorWorstCase` 629 s (not measured again in the whole run).
+Every limit passes but three: the sense buffer's margin and peaking, which
+the snubbers do not touch (below; the options measured fail a limit or cost
+44 mA), and `GuardStability.poles`. The binary of 201ae83b solved every
+vendor operating point through all aids to the split, 10 s or more each:
+`CalibrationCard` took 72 s, `ContactImbalance` stopped at its 116th step
+on the circuit before the board change, `ResistorMatching` and
+`ResistorWorstCase` were not run to the end, `Distortion` ran out of memory
+after 86 minutes and `GuardStability.poles` left 52 of its roots unrefined
+(plan, I3).
 
 **Sense buffer (not changed).** Isolated stand-alone with the real LP buffer
 and receiver, copper and ngspice-46 agree (41.55 degrees; peaking 1.5614 and
@@ -571,33 +575,33 @@ change; numbers from `--models vendor` unless marked macro):
   the gain-1 driver to 28 and the drive buffer to 23, which Figure 23 does
   not support.
 
-What does not run with the vendor models, and why (23 November 2026; the
-plan's I3 block has the solver side):
+What does not run with the vendor models, and why (24 November 2026; the
+plan's I3 and I10 blocks have the solver side):
 
 - `Startup`: no operating point at its first point, where every rail is
-  still 0 V. The AD8130 model has none that means anything there (copper: a
-  singular system; ngspice-46: 3.5e13 A from its rails), and copper does not
-  solve the unpowered ADA4817 model either (Newton cycles between two
-  iterates in its supply-current mirror below about 1 V on its rails, under
-  every aid), which ngspice-46 does (19 mA quiescent, 7 uV out). The first
-  is the model's limit, the second copper's; neither is fixed. The run gives
-  up after 842 s.
-- `Distortion`: no longer out of memory (the shooting method kept the
-  factors of every step of a period, 11 GB on the vendor circuit; now at
-  most 512 MiB, the rest refactored when needed), but it does not finish.
-  The vendor circuit's transient reaches 15.09 us of the first 1 kHz period
-  after 569 s and stops there: Newton diverges at every step down to the
-  floor (around `U_FBB`, `U_BLP` and `U_TIA`). On a plain 60 us transient
-  of the same circuit from its operating point (a scratch bench) the solver
-  before this change had not stopped after 40 minutes (0.32 ns steps: 18 582
-  for the first 10 us in 570 s, agreeing with the new solver's to 2e-6
-  there), where the new one, with a retry on dense factors, stopped at
-  14.8 us. At 38 to 57 s a microsecond one 1 ms period takes 10 to 16 hours,
-  and the shooting method integrates several for each 1 kHz step (the
-  100 kHz and 1 MHz steps were not tried on their own). Not established: why
-  Newton diverges at 15 us (a restart with backward Euler after a failed
-  step, as SPICE does, and the dense retry were tried and dropped; each
-  stops there too).
+  still 0 V. Neither amplifier model means anything there: the AD8130's
+  system is singular (ngspice-46: 3.5e13 A from its rails), and the
+  unpowered ADA4817's only solution, which ngspice-46 finds, forward biases
+  its input clamps by 1.86 V and puts 1.7e17 A through them; copper's
+  matrix goes singular on the way to it. This is the models' limit, not a
+  solver gap. A start-up bench on vendor models has to begin where they
+  are defined, at the regulators' undervoltage lockout; that bench is not
+  written. The run gives up after 19 s.
+
+`Distortion` runs since 24 November 2026 (it stopped at 15.09 us before:
+a gain node inside the ADA4807 model is fixed only to the rounding of its
+inputs, and Newton now accepts that; plan, I10). Its values against the
+default models', per step (1 kHz, 100 kHz, 1 MHz; each dry soil at 0.3 V,
+dry soil at 0.65 V, 800 ohm at 0.3 V):
+
+- drive current THD at the 0.65 V steps 9.2 % and 2.0 % (default 9.5 % and
+  5.6 %), the pump clipping as intended (headroom -29 mV and 57 mV;
+  default -0.7 mV and -0.9 mV); at every other step below 0.004 % in both;
+- the gain-1 channel at the 0.65 V steps 37 % and 28 % (default 9.5 % and
+  4.6 %, the current's own): the vendor follower distorts there itself.
+  Not checked against another simulator;
+- the gain-10 channel 29 % and 26 % there (default 26 % and 23 %), and
+  1.9 % at the 1 kHz dry-soil step at 0.3 V (default 2.1 %).
 
 ## Board shape and layout notes for later
 
