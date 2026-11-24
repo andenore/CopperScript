@@ -916,7 +916,154 @@ F5 of the first plan, unchanged in scope. Proposed order inside it:
 2. `use layout;` proven on the Howland pump, which routes today.
 3. The analyzer once it is placed and routed.
 
-The `use layout` syntax is still a proposal.
+Steps 1 and 2 built on 24 November 2026; step 2 on a routed copy of the
+Howland pump in a test, not on the example itself (below); step 3 not
+started.
+
+- Field solver (`copper_extract::capacitance`): a 2-D electrostatic solution
+  of one cross-section, finite volumes on a tensor grid graded geometrically
+  from every conductor edge and dielectric interface, conductors of any
+  thickness (zero included) in horizontal slabs of their own permittivity,
+  a grounded or mirror box, solved directly by banded Cholesky (no iteration
+  tolerance; charges by Gauss's law on the grid, so the matrix is symmetric
+  to 1e-15). The edge cells' error is first order in their size (four times
+  finer leaves 0.26 of it), so each solve is done at the finest cell and at
+  its half and extrapolated, `2 Q(h/2) - Q(h)`, which leaves the grading's
+  error. Chosen over a 3-D panel method because the board's layered
+  dielectric (air over FR-4) is exact in it without a layered Green's
+  function; what it cannot see is the third dimension (below).
+- Against closed forms (`tests/capacitance.rs`, zero-thickness strips), the
+  default mesh (finest cell 1/20 of the smallest feature, growth 1.15):
+  parallel plates in two slabs 1.5e-13; a wide strip over a plane
+  (homogeneous, `w/h` 10, 30, 100, Hammerstad, 0.03 %) +0.20 to +0.24 %;
+  microstrip on er 4.3 (`w/h` 0.25 to 10, Hammerstad and Jensen, 0.2 %)
+  +0.12 to +0.26 %; edge-coupled strips between two planes (Cohn, exact) even
+  and odd mode +0.10 to +0.20 %, their mutual capacitance +0.29 to +0.61 %
+  (the weak one, gap = plane spacing, worst); two coplanar strips without
+  ground (conformal map, exact) +0.18 to +0.20 %. Bounds in the tests 0.5 %
+  and 1 % (mutual). The solver overestimates, always. The board uses a
+  coarser mesh (`BOARD_MESH`: growth 1.3, coarsest cell 1/10 of the cut,
+  nothing below 2 um), a fifteenth of the time on a board cut: on the same
+  cases at most 0.77 % (capacitance) and 2.2 % (mutual), bounds 1 % and 3 %.
+  Not in the closed forms and printed by the test: 35 um copper raises a
+  0.25 mm microstrip on 0.2 mm by 3.9 %, a 20 um mask of er 3.5 over it by
+  16 % in all.
+- Board assembly, 2.5-D (`copper_extract::parasitics`): the routed board
+  exported and filled as `copper_extract::board` does; every track, pad and
+  via ring cut across at stations at most 0.5 mm apart, each cut the board's
+  cross-section 2.5 mm to either side (all copper it crosses on every layer,
+  the declared stack-up walked with each copper layer's thickness, 2.5 mm of
+  air above and below, a grounded box), the station's copper at 1 V and every
+  other piece at 0 V: the charges are the partial capacitances of that piece,
+  summed over the pieces of two nets the capacitance between them. Pairs seen
+  from both sides count half from each, fills (no stations) in full from the
+  other side; overlapping fills of two nets on two layers add a parallel
+  plate where no other fill lies between; tracks crossing at more than 45
+  degrees on two layers add `eps w_a' w_b' / (d sin theta)` with
+  Hammerstad's fringe widths, unless a fill shields them (an estimate, no
+  closed form). Distinct cuts are solved once (a straight run is one), in
+  parallel, deterministic in key order. For every net that is not a supply's,
+  a network: a node per pad, via, fill piece and track end (T-junctions
+  split), a branch per track piece with `rho l / (w t)` and the TEM
+  self-inductance `[C_0^-1]_00 / c^2` of its middle cut in vacuum (other
+  signal copper floating, fills and supply nets the return; the partial
+  inductance of the bar where more than half the field reaches the box),
+  chains merged in series and their capacitance shared between the ends,
+  dead ends folded. Refused: a net whose pads are not joined by copper (it
+  names the pad groups), copper of two nets overlapping on one layer.
+- Assembly test (`tests/parasitics.rs`): two 0.25 mm tracks 0.45 mm apart on
+  `F.Cu` over a plane on `In1.Cu` (0.2 mm, er 4.3), routed 10 mm and 20 mm
+  long; the difference per millimetre against the 2-D cut of the middle:
+  0.0852 pF/mm to the plane and 0.0107 pF/mm between the tracks, both within
+  0.004 % of the cut; resistance 1.966 mohm/mm, exactly `rho / (w t)`;
+  inductance 0.3379 nH/mm against the cut's 0.3398 (0.6 %; the station that
+  gives it sits at a piece's middle), 11 % below a zero-thickness lone strip
+  (the 35 um copper). 2.5 % of the track's capacitance reaches the box and is
+  reported, not inserted. An unrouted net is refused with its pads.
+- Syntax: `use layout;`, a bench (or fixture) statement beside the existing
+  `use library "..."`, which it parallels: what the bench is built from, not
+  what it does; no name, because the layout is the board's (one routed board
+  per run). The routed board comes from the command line, `copper sim BOARD
+  --layout RUN` (the run's `final-board.state.json`, what `route-board
+  --checkpoint-dir` writes and `emi-check --run` reads), not from the source:
+  the source has no layout and a run directory is not a source fact. A
+  misspelling is `PAR011` with the suggestion (`use layot;`). New codes:
+  `SIM118` a bench that uses layout with no routed board (no `--layout`, or
+  none in RUN): the bench is not run, never run on the schematic alone;
+  `SIM119` a routed board that is not this design's (placements or pad nets
+  differ, as `emi-check --run` checks) or cannot be extracted; `SIM120` a
+  bench of a module on its own. Language reference "Layout parasitics", the
+  diagnostics table, `copper sim --help`, completion and hover (the `use`
+  item of `sim_reference::BENCH_STATEMENTS`), `--watch` takes `--layout`.
+- Insertion (`copper_simulate::layout`): each pin of a networked net on the
+  node of its pad, the branches as R and L in series, the capacitances
+  between the nodes of two nets (supply and ground nets one node); the net's
+  name stays the node of its first pin's pad. Elements on nets the bench does
+  not simulate are left out (nothing floats). The bench runs twice; its
+  measures, plots and limits are the run with the layout, and it carries the
+  schematic's measures (`layout` in `sim-results.json`, schema page "Layout",
+  additive), the text table a line per measure (`layout z_out_1mhz: 112.1
+  kohm schematic, 40.87 kohm with layout (-63.5 %)`) and the five largest
+  capacitances and series nets, the page a Layout section. Test
+  (`copper-simulate/tests/layout_parasitics.rs`): an RC with a hand-written
+  layout (two nodes on VOUT, 0.5 ohm and 20 nH between, 3 pF and 1 pF) equals
+  the nodal solution of the same circuit by hand within 1e-9 at 1 kHz, 1 MHz
+  and 10 MHz; a bench without `use layout;` is bit-identical with and without
+  a layout given; `SIM118`, `SIM119`, `SIM120`, `PAR011`.
+- The Howland pump does not route in this worktree: `route-board` stops at
+  `PKG011` (the KiCad footprint package is not in the offline cache), and
+  with `--allow-proxy-footprints` physicalisation stops at `C_U1P: decoupling
+  requires two connected lands` (the proxy lands of the `tiny` capacitor do
+  not satisfy the decoupling check). `use layout;` is therefore not added to
+  the example's benches (they would fail with `SIM118` in every checkout
+  without a routed board). Instead `crates/copper/tests/sim_layout_cli.rs`
+  builds a routed copy: the example's source and benches, proxy footprints, a
+  four-layer stack-up (0.2 mm of er 4.3 from `F.Cu` to a ground plane on
+  `In1.Cu`), fixed placements, its six signal nets hand-routed in 0.25 mm on
+  `F.Cu` (BUF on `B.Cu` under LOAD, two vias), the supply nets left as pads,
+  and `use layout;` in `output_impedance.copper` and `stability.copper`.
+  With the release binary (`--layout run`, output
+  `out-final` beside the fixture): 279 stations, 66 distinct cuts, 2.2 s of
+  extraction (48.9 s with the default mesh); 15 branches (R and L), 44
+  capacitances. Largest: PFB to GND 2.86 pF, DRIVE 2.13 pF, LOAD 1.83 pF, BUF
+  1.82 pF, NFB 1.57 pF; series BUF 21.2 mm, 41.7 mohm, 11 nH; 0.597 pF reaches
+  no copper within the cut and is left out; no crossing estimated (BUF's
+  `B.Cu` leg crosses LOAD under the plane, which shields it). What the layout
+  changes: output impedance at 1 MHz 112.1 kohm to 40.87 kohm (-63.5 %),
+  which fails the bench's 100 kohm limit (the load node's 1.83 pF alone is
+  87 kohm at 1 MHz, and the capacitance on PFB and NFB unbalances the bridge
+  above that); at 1 kHz 5.927 to 5.867 Mohm (-1.0 %). The pump's loop at
+  100 ohm: phase margin 20.25 to 13.82 degrees (below the bench's 15) and
+  crossover 67.5 to 46.1 MHz, from the feedback nodes' pole (R3 parallel R4,
+  5 kohm, with 1.57 pF on NFB is about 20 MHz); the buffer loop barely
+  moves (90.0 to 89.9 degrees, crossover 400 to 413 MHz). The pole-zero
+  bench turns unstable: two right-half-plane poles at 1.67 and 3.15 GHz at
+  BUF, the follower's 11 nH of track against the pad and input capacitance,
+  undamped because the tracks are lossless and the macro model's output has
+  no resistance; not established as a property of the board (Open). Flatness,
+  noise, matching and the step do not use layout and are unchanged. The test
+  checks the refusals too: without `--layout` (`SIM118`, the bench without
+  layout still passes), the same board unrouted (`SIM119`, DRIVE's pads in
+  two pieces), the routed board of `examples/emi_return_path` (`SIM119`, not
+  this design's), a run with no state file (`SIM118`).
+- Decision 6: the seven examples with a release binary built before the
+  changes and after: every file of every `--out` is byte-identical
+  (`sim-results.json`, CSVs, pages; 7191 measure values and statuses by the
+  comparison script), none of them uses
+  layout.
+
+Open: the analyzer (step 3, needs its layout); the Howland pump's own routed
+board (PKG011 here; the proxy path's decoupling check); solder mask (outer
+layers low by up to about 12 %); 3-D effects of the 2.5-D cuts (track ends,
+corners, the field between a track end and a pad beyond it, crossings only
+estimated), checked against no 3-D solver and not against the full-wave
+crate; mutual inductance, skin effect, dielectric loss, via barrels (ideal
+nodes) and the supply nets' own copper (one node each, so no rail
+impedance); the lossless parasitics ring with amplifier models that have no
+output resistance, so results above a few hundred megahertz are not
+established (the poles above); SPEC.md's guard and mask-coupling figures
+for the analyzer are not checked against extracted values yet; the bench
+pages plot the run with the layout only, not the schematic curves beside it.
 
 ### I6. Solver robustness
 
@@ -1206,6 +1353,37 @@ Built only when a part in use needs it, in this order:
 - `TM1`, `TM2`, `BEX`, `BEXV`, `TCV` away from `TNOM`.
 
 BSIM and encrypted files stay out of scope.
+
+### I10. Solver gaps on vendor models
+
+Found in I3 and its follow-ups; none is covered by an earlier phase.
+
+- The operating point of an unpowered vendor amplifier: copper's Newton
+  cycles on the ADA4817's supply mirror with every rail at 0 V, ngspice-46
+  solves it. `Startup` cannot run on vendor models until this is fixed.
+- The sparse LU refuses many vendor matrices and falls back to the dense
+  one: 84 % of `ResistorMatching`'s time.
+- Why Newton diverges 15 us into `Distortion` on vendor models, at every
+  step size.
+- A steady-state method for circuits whose models force steps far shorter
+  than the period (harmonic balance, or shooting with fewer stored steps),
+  if the two items above do not make `Distortion` runnable.
+- Left from I6: a regulator's sinking side is unbounded; the op-amp
+  transient current limit can run away; switch event times are not in the
+  shooting sensitivity.
+
+Acceptance: `Startup` reaches its first operating point on vendor models,
+with a self-written deck that fails before the fix; the tolerance benches'
+vendor run time stated before and after; the `Distortion` divergence
+explained, fixed or not.
+
+### I11. Mixed signal (proposal)
+
+Not designed. The analyzer's benches drive the analog module with ideal
+sources and treat the ADC as a source-impedance rule. A sampled ADC input
+(switched capacitor, acquisition time, quantisation) and a DDS source with
+its DAC steps would let a bench measure what the firmware will see. Scope
+and syntax to be proposed before anything is built.
 
 ## Suggested first three
 

@@ -144,6 +144,10 @@ pub const COMMANDS: &[Command] = &[
                 help: "for parts that declare a built-in block and a sim spice block for one unit: default runs the built-in macro model, vendor the sim spice model (its file must be cached), macro built-in models only (a part with only a sim spice model is SIM107)",
             },
             Opt {
+                flag: "--layout RUN",
+                help: "the routed board for the benches that say use layout; (RUN/final-board.state.json, as route-board --checkpoint-dir writes it): they run on the schematic alone and with the board's extracted capacitance, track resistance and inductance; without it they are not run (SIM118), a board of another design or not fully routed is refused (SIM119)",
+            },
+            Opt {
                 flag: "--check-model PART",
                 help: "instead of the benches, run the standard bench set on PART of the board's library (by qualified or plain name): its macro model against the values its block declares, beside its vendor model; exit 1 when a figure is out of tolerance or a model does not load or converge",
             },

@@ -390,6 +390,40 @@ measure's `steps[].value` is then the worst run's.
 | `benches[].timing.factorizations.refactored` | int | Sparse in a kept ordering. |
 | `benches[].timing.factorizations.dense` | int | Dense (singular or nearly singular systems). |
 
+### Layout
+
+Only on a bench that says `use layout;` and ran with `copper sim --layout RUN`
+([language reference](language-reference.md#layout-parasitics)); every other
+bench has no `layout` key. The bench's own `steps`, `measures` and `plots` are
+the run with the layout.
+
+| Path | Type | Meaning |
+| --- | --- | --- |
+| `benches[].layout` | object | The parasitics the bench ran with, and its schematic-only run. |
+| `benches[].layout.source` | string | The routed board file (`RUN/final-board.state.json`). |
+| `benches[].layout.elements` | object | What the extraction holds. |
+| `benches[].layout.elements.resistors` | int | Track resistances (one per merged branch). |
+| `benches[].layout.elements.inductors` | int | Track inductances (one per merged branch). |
+| `benches[].layout.elements.capacitors` | int | Capacitances between nodes of two nets. Elements on nets the bench does not simulate are left out of its circuit. |
+| `benches[].layout.contributors` | array | The largest extracted values: up to five net-to-net capacitances, largest first, then up to five nets' series copper, largest inductance first. |
+| `benches[].layout.contributors[].kind` | string | `capacitance` or `series`. |
+| `benches[].layout.contributors[].nets` | array | The two nets (`capacitance`) or the net (`series`). |
+| `benches[].layout.contributors[].nets[]` | string | A net. |
+| `benches[].layout.contributors[].value` | float | F, or H (the net's total track inductance) for `series`. |
+| `benches[].layout.contributors[].unit` | string | `F` or `H`. |
+| `benches[].layout.contributors[].text` | string | The same in words, with the track length and resistance for `series`. |
+| `benches[].layout.flags` | array | `assumed_stackup`, `assumed_copper_thickness`, `inductance_without_return`. |
+| `benches[].layout.flags[]` | string | One flag. |
+| `benches[].layout.notes` | array | What the extraction left out or assumed, and its size and time. |
+| `benches[].layout.notes[]` | string | One note. |
+| `benches[].layout.schematic` | object | The bench on the schematic alone. |
+| `benches[].layout.schematic.error` | string or null | Why it could not be solved. |
+| `benches[].layout.schematic.measures` | array | One entry per measure, in measure order. |
+| `benches[].layout.schematic.measures[].name` | string | The measure. |
+| `benches[].layout.schematic.measures[].steps` | array | One entry per step. |
+| `benches[].layout.schematic.measures[].steps[].value` | float or null | Its value without the layout. |
+| `benches[].layout.schematic.measures[].steps[].pass` | bool or null | Whether that value is within the limits. |
+
 ## Added within v1
 
 New optional fields, for the checks that take simulation results as
@@ -425,6 +459,9 @@ Added in plan I4 (simulation improvement plan), still under v1:
 
 Nothing else in the document changed; the measure values of the examples are
 identical.
+
+Added in plan I5, still under v1: `benches[].layout` ([Layout](#layout)), on
+benches that use layout only. Nothing else changed.
 
 ## Changes from `copperscript-sim/v0.1`
 

@@ -229,15 +229,36 @@ impl Parser {
                     keyword_location,
                     true,
                 )?));
+            } else if keyword == "use"
+                && matches!(kind, DocumentKind::Bench | DocumentKind::Fixture)
+                && self.current().kind == TokenKind::Identifier
+                && self.current().text == "layout"
+            {
+                // `use layout;`: the routed board's parasitics (a bench or fixture statement, no name).
+                self.advance();
+                self.expect_symbol(";")?;
+                declarations
+                    .push(Declaration::Bench(BenchStatement::UseLayout(UseLayoutDecl { location: keyword_location })));
             } else if keyword == "use" {
-                let import_kind = self.name("'library'")?;
+                let bench = matches!(kind, DocumentKind::Bench | DocumentKind::Fixture);
+                let import_kind = self.name(if bench { "'library' or 'layout'" } else { "'library'" })?;
+                if bench && import_kind != "library" {
+                    let hint = close_match(&import_kind, &["library", "layout"])
+                        .map_or(String::new(), |near| format!(" (did you mean {}?)", repr(&near)));
+                    return Err(self.error_at(
+                        "PAR011",
+                        format!("expected 'library' or 'layout', found {}{hint}", repr(&import_kind)),
+                        self.previous(1),
+                    ));
+                }
                 let import_name = self.expect(TokenKind::String, &format!("{import_kind} name"))?.text;
                 if import_kind == "library" {
                     libraries.push(import_name);
                 } else {
+                    let expected = if bench { "'library' or 'layout'" } else { "'library'" };
                     return Err(self.error_at(
                         "PAR011",
-                        format!("expected 'library', found {}", repr(&import_kind)),
+                        format!("expected {expected}, found {}", repr(&import_kind)),
                         self.previous(2),
                     ));
                 }

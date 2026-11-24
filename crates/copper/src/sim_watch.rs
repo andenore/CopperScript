@@ -19,7 +19,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
-use copper_simulate::{BenchRun, ModelChoice, SimulateError, failed, simulate_matching, write_outputs_from};
+use copper_simulate::{
+    BenchRun, ModelChoice, SimulateError, failed, simulate_matching_with_layout, write_outputs_from,
+};
 
 /// How often the files are checked.
 pub const POLL: Duration = Duration::from_millis(300);
@@ -99,6 +101,8 @@ pub struct Watch {
     pub choice: ModelChoice,
     pub locked: bool,
     pub offline: bool,
+    /// `--layout RUN`: the routed board for the benches that use layout, read again on every run.
+    pub layout: Option<String>,
     /// Stop after this many runs (the first included); `None` runs until interrupted.
     pub runs: Option<usize>,
 }
@@ -171,17 +175,20 @@ fn run_once(
         None => true,
         Some(files) => files.contains(&copper_lang::paths::resolve(Path::new(bench.location.filename.as_ref()))),
     };
-    let runs = match simulate_matching(&watch.board, &design, watch.only.as_deref(), &keep, watch.choice) {
-        Ok(runs) => runs,
-        Err(SimulateError::Compile(failure)) => {
-            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
-            return 2;
-        }
-        Err(SimulateError::NoBench(message)) => {
-            let _ = text::print(err, &format!("SIM ERROR: {message}"));
-            return 2;
-        }
-    };
+    let layout = crate::sim_layout::input(&watch.board, &design, watch.only.as_deref(), watch.layout.as_deref(), out);
+    let runs =
+        match simulate_matching_with_layout(&watch.board, &design, watch.only.as_deref(), &keep, watch.choice, &layout)
+        {
+            Ok(runs) => runs,
+            Err(SimulateError::Compile(failure)) => {
+                let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
+                return 2;
+            }
+            Err(SimulateError::NoBench(message)) => {
+                let _ = text::print(err, &format!("SIM ERROR: {message}"));
+                return 2;
+            }
+        };
     let _ = out.write_all(copper_simulate::results::text_table(&runs).as_bytes());
     // The latest run of every bench, in run order of the first run.
     if files.is_none() {

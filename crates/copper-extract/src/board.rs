@@ -201,7 +201,7 @@ fn corner_radius(pad: &Pad) -> f64 {
     }
 }
 
-fn pad_shape(pad: &Pad, max_error: f64) -> Shapes {
+pub(crate) fn pad_shape(pad: &Pad, max_error: f64) -> Shapes {
     let (w, h) = match pad.shape {
         PadShape::Circle => (pad.width as f64, pad.width as f64),
         _ => (pad.width as f64, pad.height as f64),
@@ -210,7 +210,7 @@ fn pad_shape(pad: &Pad, max_error: f64) -> Shapes {
 }
 
 /// Whether the pad has copper on `layer` (a non-plated pad no larger than its hole has none), as the filler decides.
-fn flashes(pad: &Pad, layer: usize) -> bool {
+pub(crate) fn flashes(pad: &Pad, layer: usize) -> bool {
     pad.layers.has(Layer::Copper(layer))
         && !(pad.kind == PadKind::NonPlated
             && matches!(pad.shape, PadShape::Circle | PadShape::Oval)
@@ -225,7 +225,7 @@ fn overlaps(a: (i64, i64, i64, i64), w: [i64; 4]) -> bool {
     a.0 <= w[2] && a.2 >= w[0] && a.1 <= w[3] && a.3 >= w[1]
 }
 
-fn copper_thickness_m(board: &PhysicalBoard, layer: copper_physical::CopperLayer) -> Option<f64> {
+pub(crate) fn copper_thickness_m(board: &PhysicalBoard, layer: copper_physical::CopperLayer) -> Option<f64> {
     board
         .stackup
         .physical_layers

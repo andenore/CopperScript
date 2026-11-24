@@ -15,12 +15,12 @@ use std::path::{Path, PathBuf};
 use copper_json::text;
 use copper_lang::compiler::{LoadError, load_design};
 use copper_simulate::check_model::{CheckOptions, check_part, find_part};
-use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with, write_outputs_from};
+use copper_simulate::{ModelChoice, SimulateError, failed, simulate_with_layout, write_outputs_from};
 
 use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--models {default,macro,vendor}] [--check-model PART] [--supply VOLTS] [--tie PIN=ROLE] [--no-tran] [--tran-budget SECONDS] [--timing] [--watch] [--locked] [--offline] board";
+const USAGE: &str = "usage: copper sim [-h] [--bench BENCH] [--out OUT] [--jobs N] [--models {default,macro,vendor}] [--layout RUN] [--check-model PART] [--supply VOLTS] [--tie PIN=ROLE] [--no-tran] [--tran-budget SECONDS] [--timing] [--watch] [--locked] [--offline] board";
 
 /// Where the files go without `--out`.
 const DEFAULT_OUT: &str = "build/sim";
@@ -41,6 +41,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--out"),
         value("--jobs"),
         value("--models"),
+        value("--layout"),
         value("--check-model"),
         value("--supply"),
         value("--tie"),
@@ -101,6 +102,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
              (spectrum(x): windowed, window = blackman_harris, hann, flat_top or rectangular) with the integration \
              floor shaded, written to BENCH.spectrum.csv, and spur, sfdr, sinad and snr measure it (SIM113). \
              step P from a to b by s; (or points n;) steps a range (SIM115). \
+             A bench that says use layout; runs twice, on the schematic alone and with the parasitics of the routed \
+             board of --layout RUN (the run's final-board.state.json, as route-board --checkpoint-dir writes it): \
+             the capacitance between nets and to planes from 2-D field solutions of the board's cross-sections, and \
+             the resistance and inductance of the tracks between the pads they join; its measures and limits are \
+             the run with the layout, the schematic's values beside them, with the largest extracted values. \
+             Without --layout such a bench is not run (SIM118); a routed board of another design, or one that is not \
+             fully routed, is refused (SIM119). \
              --check-model PART runs a standard bench set on a part of the board's library instead of the benches \
              (amplifiers: supply current, open-loop gain, gain-bandwidth, phase margin, follower bandwidth, voltage \
              noise, slew rate, common-mode and supply rejection; regulators and references: quiescent current, output \
@@ -170,8 +178,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if check.is_none() && check_only {
         return usage_error(err, "--supply, --tie, --no-tran and --tran-budget belong to --check-model");
     }
-    if check.is_some() && (parsed.value("--bench").is_some() || parsed.value("--models").is_some()) {
-        return usage_error(err, "--check-model runs the part's own bench set; it takes no --bench or --models");
+    if check.is_some()
+        && (parsed.value("--bench").is_some()
+            || parsed.value("--models").is_some()
+            || parsed.value("--layout").is_some())
+    {
+        return usage_error(
+            err,
+            "--check-model runs the part's own bench set; it takes no --bench, --models or --layout",
+        );
     }
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let timing = parsed.flag("--timing") || std::env::var("COPPER_SIM_TIMING").is_ok_and(|v| !v.is_empty() && v != "0");
@@ -193,6 +208,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             choice,
             locked,
             offline,
+            layout: parsed.value("--layout").map(pypath::display),
             // A bounded watch, for tests: COPPER_SIM_WATCH_RUNS=N stops after N runs.
             runs: std::env::var("COPPER_SIM_WATCH_RUNS").ok().and_then(|n| n.parse().ok()),
         };
@@ -210,7 +226,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             CheckOptions { supply, ties, skip_transient: parsed.flag("--no-tran"), transient_seconds: budget };
         return check_model(&design, &name, &options, out, err);
     }
-    let runs = match simulate_with(&board_path, &design, parsed.value("--bench"), choice) {
+    let layout = crate::sim_layout::input(&board_path, &design, parsed.value("--bench"), parsed.value("--layout"), out);
+    let runs = match simulate_with_layout(&board_path, &design, parsed.value("--bench"), choice, &layout) {
         Ok(runs) => runs,
         Err(SimulateError::Compile(failure)) => {
             let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));

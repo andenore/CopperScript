@@ -3551,6 +3551,7 @@ bench CurrentFlatness for HowlandPump {
 | Statement | Meaning and checks |
 | --- | --- |
 | `use library "..."` | Parts for bench components, besides the board's. Package imports are not supported in benches yet (`SIM031`). |
+| `use layout;` | Runs the bench with the parasitics of the routed board as well as without them ([Layout parasitics](#layout-parasitics); `SIM118`-`SIM120`). |
 | `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
 | `param TEMP = 85degC;` | The temperature of the run (27 degC without it), steppable like any param ([Temperature](#temperature); `SIM110`). |
 | `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). A capacitor of 0 F (bench or board, also a stepped or param value) is absent: no element, its pins open, so a fixture can hold an optional stray that a bench sets to 0 F. |
@@ -3629,7 +3630,7 @@ bench MeasurementNoise for HowlandPump using LoadedPump {
 
 (`examples/simulation/howland_pump/benches/`.) A fixture is a document of
 its own in `benches/`, `fixture NAME for TARGET { ... }`, holding bench setup
-that several benches share: `use library`, `param`, `component`, `net`,
+that several benches share: `use library`, `use layout`, `param`, `component`, `net`,
 `supply`, `model`, `replace`, `ignore`, `let`, `reference`, `ic` and
 `tolerance`. It is not a bench and is not run; `analysis`, `step`,
 `measure`, `plot`, `montecarlo` and `worstcase` belong in the bench
@@ -4542,6 +4543,67 @@ positive feedback found unstable, and transfer functions of stiff circuits
 (1 fF to 10 uF, 1 mohm to 1 Gohm, coupled inductors, capacitor loops) rebuilt
 from their poles and zeros within `7e-4` of the AC analysis.
 
+### Layout parasitics
+
+```copper
+bench OutputImpedance for HowlandPump {
+    use layout;
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0V; }
+    ...
+}
+```
+
+```console
+copper route-board board.copper --checkpoint-dir build/run
+copper sim board.copper --layout build/run
+```
+
+`use layout;` in a bench (or a fixture it uses) adds what the routed board
+adds to the circuit. `copper sim --layout RUN` reads the run's
+`final-board.state.json` (the routed board `route-board --checkpoint-dir`
+writes, as `emi-check --run` reads it), checks that it is this design's,
+fills its zones and extracts from its copper and stack-up:
+
+- the capacitance between every two nets and from every net to the planes:
+  each track, pad and via ring is cut across at stations at most 0.5 mm
+  apart, and the board's cross-section along each cut (all copper the cut
+  crosses, on every layer, in the declared dielectric with air above and
+  below) is solved as a 2-D electrostatic field; tracks that cross on two
+  layers add an overlap estimate, overlapping pours a parallel plate;
+- for every net that is not a supply's, the resistance and inductance of its
+  tracks between the pads they join: a network of the routed copper (a node
+  per pad, via, pour and track end, chains merged), each track's DC
+  resistance and its TEM self-inductance from the same cut in vacuum.
+
+The bench then runs twice, on the schematic alone and with the layout. Each
+component pin is on the node of its pad and `V(NET)` reads the pad of the
+net's first pin that the board has; supply and ground nets are one node.
+The measures, plots and limits are the run with the layout. The text table
+adds, per measure, the schematic value beside the value with the layout
+(`layout z_out_1mhz: 112.1 kohm schematic, 40.87 kohm with layout (-63.5 %)`)
+and the largest extracted capacitances; the results JSON has a `layout`
+object on the bench (`docs/sim-results-schema.md`), and the bench page a
+Layout section.
+
+A bench that uses layout never runs on the schematic alone: without
+`--layout` it is not run (`SIM118`), as when the run has no routed board;
+a routed board that places other components or joins pads to other nets than
+the design, or that leaves a net's pads apart, is refused (`SIM119`). A bench
+of a module on its own cannot use the board's layout (`SIM120`). Benches
+without `use layout;` run exactly as before, with or without `--layout`.
+
+Not modelled: solder mask (outer-layer capacitance is low by up to about
+12 %), end and corner fields of the 2-D cuts, mutual inductance, skin effect
+and via barrels (vias are ideal nodes); capacitance whose field reaches no
+copper within 2.5 mm of its own is reported and left out. The tracks are
+lossless apart from their DC resistance (no skin effect, no dielectric loss),
+so with amplifier models that have no output resistance their inductance and
+capacitance can ring far above the amplifiers' bandwidth: results of a bench
+with layout above a few hundred megahertz (a pole at gigahertz) are not
+established. The method and its
+accuracy against closed forms are in `crates/copper-extract/src/parasitics.rs`
+and `crates/copper-extract/tests/capacitance.rs`.
+
 ### Running benches
 
 ```console
@@ -4724,6 +4786,9 @@ components that form a loop of voltage sources.
 | `SIM115` | stepped ranges: no `by` or `points`, equal ends, a spacing that is not positive, more than 1000 values, `points` outside 2 to 1000 |
 | `SIM116` | an amplifier's `gbw_tempco` or `slew_rate_tempco` that leaves its parameter at or below zero at the bench temperature (when the bench runs) |
 | `SIM117` | `datasheet FIGURE { ... }`: an unknown figure, a key other than `min`, `typ`, `max`, none of them, values that decrease, a figure twice, a `typ` for a figure the block declares, an entry in a `sim spice` block or a kind without data-sheet figures |
+| `SIM118` | `use layout;` without a routed board: no `--layout`, or a `--layout RUN` that holds no `final-board.state.json` (when the bench runs) |
+| `SIM119` | `use layout;` with a routed board that is not the design's (other components, pads on other nets) or cannot be extracted (a net's pads not joined by copper, copper of two nets overlapping) |
+| `SIM120` | `use layout;` in a bench of a module on its own |
 
 ## KiCad schematic export
 
