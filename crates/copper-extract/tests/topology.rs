@@ -12,6 +12,43 @@ use copper_extract::network::SolveError;
 const MM: i64 = 1_000_000;
 const T: f64 = 35e-6;
 
+#[test]
+fn width_refinement_really_subdivides_a_narrow_current_path() {
+    let mut layout = Layout::new([-MM, -MM, 3 * MM, MM]);
+    let top = layout.add_layer("F.Cu", 0.0, T);
+    layout.add_rect(top, "S", [0, 0, 2 * MM, 200_000]);
+    layout.layers[top].conductors[0].on_loop = true;
+    let a = layout.add_terminal_rect("a", top, "S", [0, 0, 100_000, 200_000]);
+    let b = layout.add_terminal_rect("b", top, "S", [1_900_000, 0, 2 * MM, 200_000]);
+    layout.add_port("p", a, b);
+    let cut = |across, loop_cell_nm| {
+        let spec = MeshSpec { across, loop_cell_nm, coarsen: false, max_filaments: 6000, ..Default::default() };
+        let m = mesh(&layout, &spec).unwrap();
+        assert!(m.stats.topology.mismatches.is_empty());
+        assert_eq!(m.stats.unresolved_gap_count, 0);
+        // A cross-section away from both equipotential terminal patches.
+        let widths: Vec<_> = m
+            .network
+            .branches
+            .iter()
+            .filter_map(|branch| {
+                let bar = branch.bar;
+                (bar.axis == copper_extract::partial::Axis::X
+                    && bar.centre[0] - bar.length / 2.0 <= 0.001_013
+                    && bar.centre[0] + bar.length / 2.0 > 0.001_013)
+                    .then_some(bar.width)
+            })
+            .collect();
+        assert!((widths.iter().sum::<f64>() / 200e-6 - 1.0).abs() < 0.01);
+        widths.len()
+    };
+    let four = cut(4, 25_000);
+    let five = cut(5, 25_000);
+    let clipped = cut(5, 50_000);
+    assert!(five > four, "five requested cells must refine the current path: {four} -> {five}");
+    assert_eq!(clipped, four, "the older floor hides this refinement");
+}
+
 /// Two copper rectangles of one net on one layer, `slot` apart, with a port between a patch of each.
 fn two_rectangles(slot: i64) -> Layout {
     let mut layout = Layout::new([0, 0, 12 * MM, 6 * MM]);
@@ -187,6 +224,18 @@ fn resolved_slots_report_their_refinement_and_no_unresolved_gap() {
         assert!(m.stats.topology.mismatches.is_empty(), "slot {slot_um} um: {:?}", m.stats.topology);
         assert_eq!((m.stats.topology.copper_components, m.stats.topology.mesh_components), (2, 2));
     }
+}
+
+#[test]
+fn finer_local_repair_resolves_a_small_slot_without_shorting_it() {
+    let layout = two_rectangles(60_000);
+    assert!(mesh(&layout, &MeshSpec::default()).unwrap().stats.unresolved_gap_count > 0);
+    let spec = MeshSpec { defect_cell_nm: 25_000, ..MeshSpec::default() };
+    let m = mesh(&layout, &spec).unwrap();
+    assert!(m.stats.topology.mismatches.is_empty());
+    assert_eq!((m.stats.topology.copper_components, m.stats.topology.mesh_components), (2, 2));
+    assert_eq!(m.stats.unresolved_gap_count, 0, "{:?}", m.stats.unresolved_gaps);
+    assert!(matches!(extract(&layout, &spec, &[1e3], false), Err(Error::Solve(SolveError::PortDisconnected(0)))));
 }
 
 /// Eight blocks of one net in a row, 0.137 mm apart, 4 mm wide; the port is across the first gap (a terminal in each of

@@ -3,10 +3,11 @@
 //! `measures.extract` and an `extract:` line, with an `EMI-EXTRACT:<cell>` coverage entry. Never part of the default
 //! run: it fills the board's zones and solves a dense system, which takes seconds to minutes.
 
+use copper_drc::emi::loop_model::{LoopId, LoopKind};
 use copper_drc::emi::{EmiCheckReport, EmiFinding, ExtractedConnections, emi_check_with_connections};
 use copper_drc::{Coverage, CoverageStatus};
 use copper_extract::board::{BoardModel, board_model};
-use copper_extract::hotloop::{HotLoopExtraction, HotLoopOptions, extract_hot_loop};
+use copper_extract::hotloop::{HotLoopExtraction, HotLoopOptions, extract_hot_loop_with_progress};
 use copper_fullwave::hotloop::{HotLoopInput, find_switch_pad};
 use copper_json::{Object, Value};
 use copper_lang::emi::EmiModel;
@@ -22,10 +23,13 @@ pub struct Options {
     pub margin_mm: Option<f64>,
     /// Fine pitch, millimetres (`--extract-cell`).
     pub cell_mm: Option<f64>,
+    /// Requested cells across loop copper in the standard mesh (`--extract-width-cells`).
+    pub width_cells: Option<usize>,
     /// One mesh only: no second mesh, so no numerical sensitivity.
     pub single_mesh: bool,
     /// Between the pad centres, without the bar across the switch.
     pub no_switch_bar: bool,
+    pub ideal_capacitors: bool,
     /// Also run the independent reference solver and compare it with the extraction (`--extract-reference`).
     pub reference: bool,
     /// Keep the current distribution of each hot loop (for `--plot-current`); it is not part of the report.
@@ -136,6 +140,28 @@ fn result_value(
     put(&mut o, "convergence", convergence_value(r));
     put(&mut o, "reference", reference_value(r));
     put(&mut o, "port_labels", strings(&r.port_labels));
+    if r.flags.iter().any(|f| f == "external_contact_network") {
+        put(&mut o, "scalar_port_index", Value::from(r.selected_port as i64));
+        put(
+            &mut o,
+            "scalar_boundary",
+            Value::from(
+                "unit current at scalar_port_index, all other port currents zero; not aggregate converter impedance",
+            ),
+        );
+        put(
+            &mut o,
+            "resistance_matrix_ohm",
+            r.meshes.first().map_or(Value::Null, |m| {
+                Value::Array(
+                    m.resistance_matrix_ohm
+                        .iter()
+                        .map(|f| Value::Array(f.iter().map(|row| floats(row, 9)).collect()))
+                        .collect(),
+                )
+            }),
+        );
+    }
     put(&mut o, "not_used_in_conducted", not_used(r).map_or(Value::Null, Value::from));
     put(
         &mut o,
@@ -190,6 +216,9 @@ fn result_value(
             put(&mut mo, "role", Value::from(m.role));
             put(&mut mo, "fine_pitch_mm", Value::from(round(m.cell_nm as f64 * 1e-6, 3)));
             put(&mut mo, "coarse_pitch_mm", Value::from(round(m.coarse_nm as f64 * 1e-6, 3)));
+            put(&mut mo, "loop_width_cells", Value::from(m.width_cells as i64));
+            put(&mut mo, "defect_cell_floor_mm", Value::from(round(m.defect_cell_nm as f64 * 1e-6, 6)));
+            put(&mut mo, "loop_cell_floor_mm", Value::from(round(m.loop_cell_nm as f64 * 1e-6, 6)));
             put(&mut mo, "filaments", Value::from(m.filaments as i64));
             put(&mut mo, "nodes", Value::from(m.nodes as i64));
             put(&mut mo, "loops", Value::from(m.loops as i64));
@@ -562,10 +591,13 @@ fn number(value: Option<&Value>) -> Option<f64> {
 }
 
 fn attach(finding: &mut EmiFinding, result: &HotLoopExtraction, mesh: &HotLoopOptions) {
-    let closed = number(finding.measures.get("loop_inductance_nh"));
+    let external = result.flags.iter().any(|f| f == "external_rail_return_contour");
+    let closed = (!external).then(|| number(finding.measures.get("loop_inductance_nh"))).flatten();
     let fullwave =
         finding.measures.get("fullwave").and_then(Value::as_object).and_then(|f| number(f.get("inductance_nh")));
-    let cross = cross_check(result, finding.measures.get("fullwave").and_then(Value::as_object));
+    let fullwave = if external { None } else { fullwave };
+    let cross =
+        if external { None } else { cross_check(result, finding.measures.get("fullwave").and_then(Value::as_object)) };
     let mut value = result_value(result, closed, fullwave, mesh);
     let mut text = text_line(result, closed, fullwave);
     if let (Value::Object(o), Some(c)) = (&mut value, &cross) {
@@ -586,6 +618,20 @@ pub fn apply(
     progress: &mut dyn std::io::Write,
 ) -> Vec<(String, HotLoopExtraction)> {
     let mut maps: Vec<(String, HotLoopExtraction)> = Vec::new();
+    let external_inputs: Vec<HotLoopInput> = report
+        .findings
+        .iter()
+        .filter(|f| f.finding.code == "EMI-HOT-LOOP")
+        .filter(|f| {
+            report.cells.iter().any(|c| {
+                Some(&c.controller) == f.cell.as_ref()
+                    && c.value.get("topology").and_then(Value::as_str) == Some("buck_boost")
+            })
+        })
+        .filter_map(|f| HotLoopInput::from_finding(f, "buck_boost").ok())
+        .collect();
+    let mut joint_results: std::collections::BTreeMap<String, Result<HotLoopExtraction, String>> =
+        std::collections::BTreeMap::new();
     let topologies: Vec<(String, String)> = report
         .cells
         .iter()
@@ -608,6 +654,9 @@ pub fn apply(
     if let Some(n) = options.budget_filaments {
         hot.mesh.max_filaments = n;
     }
+    if let Some(n) = options.width_cells {
+        hot.mesh.across = n;
+    }
     if let Some(mm) = options.margin_mm {
         hot.board.margin_nm = (mm * 1e6).round() as i64;
     }
@@ -628,15 +677,26 @@ pub fn apply(
         seen += 1;
         let Some(cell) = finding.cell.clone() else { continue };
         let topology = topologies.iter().find(|(c, _)| *c == cell).map(|(_, t)| t.clone()).unwrap_or_default();
-        let loop_name = finding.measures.get("loop").and_then(Value::as_str).map(str::to_owned);
+        let id = match LoopId::from_finding(finding) {
+            Ok(id) => id,
+            Err(detail) => {
+                new_coverage.push(Coverage {
+                    check: format!("EMI-EXTRACT:{cell}"),
+                    status: CoverageStatus::Failed,
+                    required: false,
+                    detail,
+                });
+                continue;
+            }
+        };
         let key = |status, detail: String| {
-            let name =
-                loop_name.as_deref().map_or(cell.clone(), |l| format!("{cell}:{}", l.split(' ').next().unwrap_or(l)));
+            let name = id.key();
             Coverage { check: format!("EMI-EXTRACT:{name}"), status, required: false, detail }
         };
-        if loop_name.is_some() || !(topology == "buck" || topology.is_empty()) {
+        let external = topology == "buck_boost" && id.kind != LoopKind::Standard;
+        if !external && (id.kind != LoopKind::Standard || !(topology == "buck" || topology.is_empty())) {
             new_coverage.push(key(
-                CoverageStatus::NotApplicable,
+                CoverageStatus::Unsupported,
                 format!(
                     "the hot-loop extraction is defined for buck cells (asynchronous and synchronous); this loop belongs to a {} cell",
                     if topology.is_empty() { "cell of unknown topology".to_owned() } else { topology.clone() }
@@ -644,18 +704,67 @@ pub fn apply(
             ));
             continue;
         }
-        let input = match HotLoopInput::from_finding(finding, &topology) {
+        let mut input = match HotLoopInput::from_finding(finding, &topology) {
             Ok(mut input) => {
-                if let Some((_, nets)) = switch_nets.iter().find(|(c, _)| *c == cell) {
+                if !external && let Some((_, nets)) = switch_nets.iter().find(|(c, _)| *c == cell) {
                     input.switch_pad = find_switch_pad(board, &input, nets);
                 }
                 input
             }
             Err(error) => {
-                new_coverage.push(key(CoverageStatus::Failed, error.to_string()));
+                let status = if matches!(error, copper_fullwave::Error::NotSupported(_)) {
+                    CoverageStatus::Unsupported
+                } else {
+                    CoverageStatus::Failed
+                };
+                new_coverage.push(key(status, error.to_string()));
                 continue;
             }
         };
+        let requested_contact = input.pads.get(1).cloned();
+        if external && let Some(peer) = external_inputs.iter().find(|p| p.cell == cell && p.loop_kind != id.kind) {
+            let (mut primary, secondary) =
+                if id.kind == LoopKind::Input { (input.clone(), peer) } else { (peer.clone(), &input) };
+            primary.external_peer = secondary.external_contour.clone();
+            primary.polygon_mm.extend(secondary.polygon_mm.iter().copied());
+            input = primary;
+        }
+        let network = match input.external_network() {
+            Ok(network) => network,
+            Err(error) => {
+                new_coverage.push(key(CoverageStatus::Unsupported, error.to_string()));
+                continue;
+            }
+        };
+        let reported_port = network
+            .as_ref()
+            .and_then(|n| {
+                n.ports.iter().position(|&(a, _)| {
+                    requested_contact
+                        .as_ref()
+                        .is_some_and(|p| p.0 == n.contacts[a].component && p.1 == n.contacts[a].pad)
+                })
+            })
+            .unwrap_or(0);
+        if let Some(network) = &network {
+            let Value::Object(mut scope) = network.scope_value() else { unreachable!() };
+            put(&mut scope, "loop_id", id.to_value());
+            if options.ideal_capacitors {
+                put(
+                    &mut scope,
+                    "capacitor_boundary",
+                    Value::from(
+                        "explicit ideal terminal shorts: no capacitor body conductor, magnetic field, ESR or ESL",
+                    ),
+                );
+                put(
+                    &mut scope,
+                    "other_loop_boundary",
+                    Value::from("selected capacitors ideally shorted; other components open"),
+                );
+            }
+            finding.measures.insert("extract_scope".to_owned(), Value::Object(scope));
+        }
         let model_ref = model_fill.get_or_insert_with(|| {
             let _ = writeln!(progress, "extract: exporting the board and filling its zones natively");
             board_model(board)
@@ -667,7 +776,7 @@ pub fn apply(
                 continue;
             }
         };
-        let _ = writeln!(progress, "extract: cell {cell}, filament budget {}", hot.mesh.max_filaments);
+        let _ = writeln!(progress, "extract: loop {}, filament budget {}", id.key(), hot.mesh.max_filaments);
         // The other capacitors of the cell's input network that hang on the hot node get a port each.
         let others: Vec<String> = model
             .cells
@@ -682,10 +791,95 @@ pub fn apply(
             })
             .unwrap_or_default();
         let mut hot_cell = hot.clone();
-        hot_cell.board.capacitor_ports = others;
-        match extract_hot_loop(model_ref, board, &input, &hot_cell) {
+        if !external {
+            hot_cell.board.capacitor_ports = others;
+        }
+        if external {
+            hot_cell.board.switch_bar = false;
+            hot_cell.board.ideal_capacitors = options.ideal_capacitors;
+        }
+        let mut solve = || {
+            extract_hot_loop_with_progress(model_ref, board, &input, &hot_cell, |role, stage| {
+                use copper_extract::extract::Progress;
+                match stage {
+                    Progress::Meshed { filaments, topology_mismatches, unresolved_gaps, .. } => {
+                        let _ = writeln!(
+                            progress,
+                            "extract: {cell}, {role}: {filaments} filaments, {topology_mismatches} topology mismatches, {unresolved_gaps} unresolved gaps"
+                        );
+                    }
+                    Progress::Assembled { loops, seconds } => {
+                        let _ = writeln!(
+                            progress,
+                            "extract: {cell}, {role}: assembled {loops} loop equations in {seconds:.1} s"
+                        );
+                    }
+                    Progress::Solved { frequency_hz, seconds } => {
+                        let frequency = copper_units::Decimal::parse(&frequency_hz.to_string())
+                            .ok()
+                            .and_then(|f| {
+                                copper_units::Quantity::from_base(copper_units::Dimension::Frequency, f, "MHz").ok()
+                            })
+                            .map(|f| f.to_string())
+                            .unwrap_or_else(|| format!("{frequency_hz} Hz"));
+                        let _ = writeln!(progress, "extract: {cell}, {role}: solved {frequency} in {seconds:.1} s");
+                    }
+                }
+            })
+        };
+        let result = if input.external_peer.is_some() {
+            joint_results
+                .entry(cell.clone())
+                .or_insert_with(&mut solve)
+                .clone()
+                .and_then(|r| r.select_port(reported_port))
+        } else {
+            solve()
+        };
+        match result {
             Ok(result) => {
                 attach(finding, &result, &hot);
+                if let Some(network) = &network {
+                    let Value::Object(mut scope) = network.scope_value() else { unreachable!() };
+                    put(&mut scope, "loop_id", id.to_value());
+                    if network.contours.len() == 2 {
+                        put(&mut scope, "inter_loop_coupling", Value::from("evaluated_in_joint_matrix"));
+                    }
+                    if options.ideal_capacitors {
+                        put(
+                            &mut scope,
+                            "other_loop_boundary",
+                            Value::from("selected capacitors ideally shorted; other components open"),
+                        );
+                        put(
+                            &mut scope,
+                            "capacitor_boundary",
+                            Value::from(
+                                "explicit ideal terminal shorts: no capacitor body conductor, magnetic field, ESR or ESL",
+                            ),
+                        );
+                    }
+                    put(&mut scope, "reported_port", Value::from(reported_port as i64));
+                    put(
+                        &mut scope,
+                        "scalar_and_current_map",
+                        Value::from(
+                            "unit current at reported_port; all other port currents zero; no aggregate converter impedance",
+                        ),
+                    );
+                    put(&mut scope, "executed", Value::Bool(true));
+                    put(&mut scope, "usable", Value::Bool(result.status == "ok"));
+                    put(
+                        &mut scope,
+                        "reason_code",
+                        Value::from(if result.status == "ok" {
+                            "passive_only"
+                        } else {
+                            "passive_result_not_qualified"
+                        }),
+                    );
+                    finding.measures.insert("extract_scope".to_owned(), Value::Object(scope));
+                }
                 match connections_of(&cell, &result) {
                     Some(connections) => extracted.push(connections),
                     None => {
@@ -696,13 +890,16 @@ pub fn apply(
                         );
                     }
                 }
-                let closed = number(finding.measures.get("loop_inductance_nh"));
+                let closed = (!external).then(|| number(finding.measures.get("loop_inductance_nh"))).flatten();
                 let fullwave = finding
                     .measures
                     .get("fullwave")
                     .and_then(Value::as_object)
                     .and_then(|f| number(f.get("inductance_nh")));
-                let cross = cross_check(&result, finding.measures.get("fullwave").and_then(Value::as_object))
+                let fullwave = if external { None } else { fullwave };
+                let cross = (!external)
+                    .then(|| cross_check(&result, finding.measures.get("fullwave").and_then(Value::as_object)))
+                    .flatten()
                     .map_or(String::new(), |c| format!(" {}", c.statement));
                 new_coverage.push(key(
                     CoverageStatus::Executed,
@@ -714,7 +911,7 @@ pub fn apply(
                     ),
                 ));
                 if result.currents.is_some() {
-                    maps.push((cell.clone(), result));
+                    maps.push((id.key(), result));
                 }
             }
             Err(error) => new_coverage.push(key(CoverageStatus::Failed, error)),
@@ -744,6 +941,9 @@ fn connections_of(cell: &str, result: &HotLoopExtraction) -> Option<ExtractedCon
 
 /// Why the extraction's matrix is not used in `EMI-CONDUCTED` (`None`: it is used).
 fn not_used(result: &HotLoopExtraction) -> Option<String> {
+    if result.flags.iter().any(|f| f == "external_rail_return_contour") {
+        return Some("passive external contour only: no converter waveform, package termination or buck conducted-model substitution".to_owned());
+    }
     if result.status == "error" {
         let first = result.topology_mismatches.first().map_or(String::new(), |m| format!(" (first: {m})"));
         return Some(format!(
@@ -877,6 +1077,9 @@ mod tests {
 
     fn extraction(single: bool) -> HotLoopExtraction {
         let mesh = |role, l: f64| copper_extract::hotloop::MeshRun {
+            width_cells: 2,
+            defect_cell_nm: 50_000,
+            loop_cell_nm: 50_000,
             role,
             cell_nm: 340_000,
             coarse_nm: 1_690_000,
@@ -903,6 +1106,8 @@ mod tests {
             solve_seconds: 1.0,
         };
         HotLoopExtraction {
+            selected_port: 0,
+            port_observations: Vec::new(),
             cell: "U1".to_owned(),
             frequencies_hz: vec![1e6, 1e7, 1e8],
             inductance_nh: vec![4.2, 4.0, 3.95],

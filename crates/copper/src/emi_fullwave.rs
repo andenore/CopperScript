@@ -5,6 +5,7 @@
 
 use std::io::Write;
 
+use copper_drc::emi::loop_model::{LoopId, LoopKind};
 use copper_drc::emi::{EmiCheckReport, EmiFinding};
 use copper_drc::{Coverage, CoverageStatus};
 use copper_fullwave::hotloop::{
@@ -23,6 +24,9 @@ pub struct Options {
     pub budget_seconds: Option<f64>,
     /// Window margin around the loop, millimetres.
     pub margin_mm: Option<f64>,
+    /// Explicit external capacitor PEC fixture height, millimetres.
+    pub capacitor_height_mm: Option<f64>,
+    pub source_height_mm: Option<f64>,
     /// Run one mesh only (no convergence estimate).
     pub single_mesh: bool,
     /// Pours from the zone outlines minus clearances instead of the native fill.
@@ -210,6 +214,7 @@ fn cover(report: &mut EmiCheckReport, cell: &str, status: CoverageStatus, detail
 
 /// Run the full-wave extraction for every `EMI-HOT-LOOP` finding of `report`.
 pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Options, progress: &mut dyn Write) {
+    apply_external(board, report, options, progress);
     let topologies: Vec<(String, String)> = report
         .cells
         .iter()
@@ -234,15 +239,33 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
         seen_loops += 1;
         let Some(cell) = finding.cell.clone() else { continue };
         let topology = topologies.iter().find(|(c, _)| *c == cell).map(|(_, t)| t.clone()).unwrap_or_default();
-        let loop_name = finding.measures.get("loop").and_then(Value::as_str).map(str::to_owned);
+        if topology == "buck_boost" {
+            continue;
+        }
+        let id = match LoopId::from_finding(finding) {
+            Ok(id) => id,
+            Err(detail) => {
+                new_coverage.push(Coverage {
+                    check: format!("EMI-FULLWAVE:{cell}"),
+                    status: CoverageStatus::Failed,
+                    required: false,
+                    detail,
+                });
+                continue;
+            }
+        };
         let key = |status, detail: String| {
-            let name =
-                loop_name.as_deref().map_or(cell.clone(), |l| format!("{cell}:{}", l.split(' ').next().unwrap_or(l)));
+            let name = id.key();
             Coverage { check: format!("EMI-FULLWAVE:{name}"), status, required: false, detail }
         };
-        if loop_name.is_some() || !(topology == "buck" || topology.is_empty()) {
+        if options.capacitor_height_mm.is_some() || options.source_height_mm.is_some() {
+            new_coverage.push(key(CoverageStatus::Unsupported,
+                "elevated full-wave fixtures apply only to the external buck-boost network; the buck fixture was not changed".to_owned()));
+            continue;
+        }
+        if id.kind != LoopKind::Standard || !(topology == "buck" || topology.is_empty()) {
             new_coverage.push(key(
-                CoverageStatus::NotApplicable,
+                CoverageStatus::Unsupported,
                 format!(
                     "the full-wave hot-loop extraction is defined for buck cells (asynchronous and synchronous); this loop belongs to a {} cell",
                     if topology.is_empty() { "cell of unknown topology".to_owned() } else { topology.clone() }
@@ -295,7 +318,7 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
                 ));
             }
             Err(copper_fullwave::Error::NotSupported(reason)) => {
-                new_coverage.push(key(CoverageStatus::NotApplicable, reason));
+                new_coverage.push(key(CoverageStatus::Unsupported, reason));
             }
             Err(copper_fullwave::Error::BudgetExceeded(partial)) => {
                 finding.measures.insert("fullwave".to_owned(), exceeded_value(&partial));
@@ -315,6 +338,253 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
         );
     }
     report.coverage.extend(new_coverage);
+}
+
+/// External networks use native validated geometry and their own report contract;
+/// neither the buck port builder nor its calibrated sensitivity floor applies.
+fn apply_external(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Options, progress: &mut dyn Write) {
+    use copper_extract::{board::board_model, fullwave};
+    let cells: Vec<_> = report
+        .cells
+        .iter()
+        .filter(|c| c.value.get("topology").and_then(Value::as_str) == Some("buck_boost"))
+        .map(|c| c.controller.clone())
+        .collect();
+    let inputs: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.finding.code == "EMI-HOT-LOOP" && f.cell.as_ref().is_some_and(|c| cells.contains(c)))
+        .map(|f| (f.cell.clone().expect("cell"), HotLoopInput::from_finding(f, "buck_boost")))
+        .collect();
+    let mut filled = None;
+    let mut results: std::collections::BTreeMap<String, std::result::Result<fullwave::Result, copper_fullwave::Error>> =
+        std::collections::BTreeMap::new();
+    let mut coverage = Vec::new();
+    for finding in report
+        .findings
+        .iter_mut()
+        .filter(|f| f.finding.code == "EMI-HOT-LOOP" && f.cell.as_ref().is_some_and(|c| cells.contains(c)))
+    {
+        let cell = finding.cell.clone().expect("cell");
+        let id = match LoopId::from_finding(finding) {
+            Ok(id) => id,
+            Err(error) => {
+                coverage.push(Coverage {
+                    check: format!("EMI-FULLWAVE:{cell}"),
+                    status: CoverageStatus::Failed,
+                    required: false,
+                    detail: error,
+                });
+                continue;
+            }
+        };
+        let key = format!("EMI-FULLWAVE:{}", id.key());
+        let mut input = match HotLoopInput::from_finding(finding, "buck_boost") {
+            Ok(input) => input,
+            Err(error) => {
+                coverage.push(Coverage {
+                    check: key,
+                    status: CoverageStatus::Unsupported,
+                    required: false,
+                    detail: error.to_string(),
+                });
+                continue;
+            }
+        };
+        let requested = input.pads[1].clone();
+        if let Some(peer) =
+            inputs.iter().filter_map(|(_, r)| r.as_ref().ok()).find(|p| p.cell == cell && p.loop_kind != id.kind)
+        {
+            let (mut primary, secondary) =
+                if id.kind == LoopKind::Input { (input.clone(), peer) } else { (peer.clone(), &input) };
+            primary.external_peer = secondary.external_contour.clone();
+            primary.polygon_mm.extend(secondary.polygon_mm.iter().copied());
+            input = primary;
+        }
+        let network = match input.external_network() {
+            Ok(Some(n)) => n,
+            other => {
+                coverage.push(Coverage {
+                    check: key,
+                    status: CoverageStatus::Unsupported,
+                    required: false,
+                    detail: format!("no validated external network: {other:?}"),
+                });
+                continue;
+            }
+        };
+        let port = network
+            .ports
+            .iter()
+            .position(|&(a, _)| network.contacts[a].component == requested.0 && network.contacts[a].pad == requested.1)
+            .expect("requested rail contact");
+        let Value::Object(mut scope) = network.scope_value() else { unreachable!() };
+        scope.insert("loop_id".to_owned(), id.to_value());
+        scope.insert("model".to_owned(), Value::from("external_gap_ports_fdtd/v1"));
+        scope.insert("source_boundary".to_owned(),Value::from(if options.source_height_mm.is_some() {
+            "explicit elevated gap and rectangular PEC terminal posts; includes fixture fields; package parasitics unknown"
+        } else { "contained rectangular contact patches with an explicit in-plane source gap; no package straps; includes gap fields, unlike PEEC partial inductance" }));
+        scope.insert("source_fixture_height_mm".to_owned(), options.source_height_mm.map_or(Value::Null, Value::from));
+        scope.insert("voltage_convention".to_owned(), Value::from("average over transverse lumped-element columns"));
+        scope.insert("reported_port".to_owned(), Value::from(port as i64));
+        scope.insert("capacitor_fixture".to_owned(), Value::from(if options.capacitor_height_mm.is_some() {
+            "explicit raised PEC fixture; terminal posts and bridge fields included; capacitor ESR/ESL and dielectric excluded"
+        } else { "checked coplanar copper fixture" }));
+        scope.insert(
+            "capacitor_fixture_height_mm".to_owned(),
+            options.capacitor_height_mm.map_or(Value::Null, Value::from),
+        );
+        scope.insert(
+            "budget_scope".to_owned(),
+            Value::from("shared across every port column and mesh of this controller"),
+        );
+        let result = results.entry(cell.clone()).or_insert_with(|| {
+            let model = filled
+                .get_or_insert_with(|| board_model(board))
+                .as_ref()
+                .map_err(|e| copper_fullwave::Error::Invalid(e.clone()))?;
+            let _ = writeln!(
+                progress,
+                "full-wave: external network {cell}, {} columns, shared time budget",
+                network.ports.len()
+            );
+            fullwave::extract(
+                model,
+                board,
+                &input,
+                &fullwave::Options {
+                    margin_nm: (options.margin_mm.unwrap_or(3.0) * 1e6).round() as i64,
+                    cell_nm: if options.fidelity == copper_fullwave::spec::Fidelity::Fine { 100_000 } else { 200_000 },
+                    meshes: if options.single_mesh { 1 } else { 2 },
+                    budget_seconds: options.budget_seconds.unwrap_or(300.0),
+                    capacitor_height_nm: options.capacitor_height_mm.map(|h| (h * 1e6).round() as i64),
+                    source_height_nm: options.source_height_mm.map(|h| (h * 1e6).round() as i64),
+                    ..fullwave::Options::default()
+                },
+            )
+        });
+        match result {
+            Ok(result) => {
+                if network.contours.len() == 2 {
+                    scope.insert("inter_loop_coupling".to_owned(), Value::from("evaluated_in_joint_matrix"));
+                }
+                scope.insert("executed".to_owned(), Value::Bool(true));
+                scope.insert("usable".to_owned(), Value::Bool(result.status_reasons.is_empty()));
+                let mut value = Object::new();
+                value.insert(
+                    "status".to_owned(),
+                    Value::from(if result.status_reasons.is_empty() { "ok" } else { "indicative" }),
+                );
+                value.insert(
+                    "status_reasons".to_owned(),
+                    Value::Array(result.status_reasons.iter().map(|s| Value::from(s.as_str())).collect()),
+                );
+                value.insert(
+                    "frequencies_hz".to_owned(),
+                    Value::Array(result.frequencies_hz.iter().copied().map(Value::from).collect()),
+                );
+                value.insert(
+                    "port_labels".to_owned(),
+                    Value::Array(result.labels.iter().map(|s| Value::from(s.as_str())).collect()),
+                );
+                value.insert(
+                    "impedance_ohm".to_owned(),
+                    Value::Array(
+                        result
+                            .impedance_ohm
+                            .iter()
+                            .map(|m| {
+                                Value::Array(
+                                    m.iter()
+                                        .map(|r| {
+                                            Value::Array(
+                                                r.iter()
+                                                    .map(|z| Value::Array(z.iter().copied().map(Value::from).collect()))
+                                                    .collect(),
+                                            )
+                                        })
+                                        .collect(),
+                                )
+                            })
+                            .collect(),
+                    ),
+                );
+                value.insert(
+                    "mesh_difference_pct".to_owned(),
+                    result.mesh_difference_pct.map_or(Value::Null, Value::from),
+                );
+                value.insert("seconds".to_owned(), Value::from(result.seconds));
+                value.insert("columns_executed".to_owned(), Value::from(result.runs.len() as i64));
+                value.insert(
+                    "approximations".to_owned(),
+                    Value::Array(result.approximations.iter().map(|s| Value::from(s.as_str())).collect()),
+                );
+                value.insert(
+                    "runs".to_owned(),
+                    Value::Array(
+                        result
+                            .runs
+                            .iter()
+                            .map(|r| {
+                                let mut run = Object::new();
+                                run.insert("port".to_owned(), Value::from(r.excited as i64));
+                                run.insert("cells".to_owned(), Value::from(r.cells as i64));
+                                run.insert("steps".to_owned(), Value::from(r.steps as i64));
+                                run.insert("seconds".to_owned(), Value::from(r.seconds));
+                                run.insert("energy_converged".to_owned(), Value::Bool(r.converged));
+                                run.insert("stopped_by_fit".to_owned(), Value::Bool(r.stopped_by_fit));
+                                run.insert(
+                                    "warnings".to_owned(),
+                                    Value::Array(r.warnings.iter().map(|s| Value::from(s.as_str())).collect()),
+                                );
+                                Value::Object(run)
+                            })
+                            .collect(),
+                    ),
+                );
+                value.insert(
+                    "source_patches_nm".to_owned(),
+                    Value::Array(
+                        result
+                            .patches_nm
+                            .iter()
+                            .map(|(a, b)| {
+                                Value::Array(vec![
+                                    Value::Array(a.iter().copied().map(Value::from).collect()),
+                                    Value::Array(b.iter().copied().map(Value::from).collect()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                );
+                finding.measures.insert("fullwave_external".to_owned(), Value::Object(value));
+                let detail = format!(
+                    "external FDTD matrix: {} ports, {} runs; reported port {port}; {}",
+                    result.labels.len(),
+                    result.runs.len(),
+                    if result.status_reasons.is_empty() {
+                        "converged for this explicit source-gap model".to_owned()
+                    } else {
+                        result.status_reasons.join("; ")
+                    }
+                );
+                finding.measures.insert("fullwave_text".to_owned(), Value::from(detail.as_str()));
+                coverage.push(Coverage { check: key, status: CoverageStatus::Executed, required: false, detail });
+            }
+            Err(error) => coverage.push(Coverage {
+                check: key,
+                status: if matches!(error, copper_fullwave::Error::NotSupported(_)) {
+                    CoverageStatus::Unsupported
+                } else {
+                    CoverageStatus::Failed
+                },
+                required: false,
+                detail: error.to_string(),
+            }),
+        }
+        finding.measures.insert("fullwave_scope".to_owned(), Value::Object(scope));
+    }
+    report.coverage.extend(coverage);
 }
 
 fn attach(finding: &mut EmiFinding, result: &HotLoopResult) {

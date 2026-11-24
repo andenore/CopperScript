@@ -90,6 +90,16 @@ pub fn panel(cell: &str, result: &HotLoopExtraction) -> Option<CurrentPanel> {
         .collect();
     Some(CurrentPanel {
         cell: cell.to_owned(),
+        excitation: if result.flags.iter().any(|f| f == "external_contact_network") {
+            Some(format!(
+                "{} (port {}; other port currents zero)",
+                result.port_labels[result.selected_port], result.selected_port
+            ))
+        } else if result.flags.iter().any(|f| f == "external_rail_return_contour") {
+            Some("the external rail/return port".to_owned())
+        } else {
+            None
+        },
         frequency_hz: map.frequency_hz,
         window: map.window_mm,
         layers,

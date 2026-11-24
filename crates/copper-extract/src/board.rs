@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use copper_cam::board::{Layer, Pad, PadKind, PadShape, TrackPath};
 use copper_cam::geometry::flatten_arc;
 use copper_cam::poly::{self, Shapes};
+use copper_drc::emi::loop_model::ClosureKind;
 use copper_fullwave::hotloop::HotLoopInput;
 use copper_pcb::board::PhysicalBoard;
 
@@ -57,34 +58,33 @@ pub struct LoopPorts {
 /// The port and shorts of a buck hot loop, as `copper-fullwave` places them: the port across the high-side switch
 /// (hot-supply pad to switch pad), the capacitor and the catch diode (or the low-side switch) shorted.
 pub fn loop_ports(input: &HotLoopInput) -> Result<LoopPorts, String> {
-    let n = input.pads.len();
+    let layout = input.peec_port_layout().map_err(|e| e.to_string())?;
     let mut pads = input.pads.clone();
     let mut labels = input.labels.clone();
-    type Closing = ((usize, usize), Vec<(usize, usize)>, Vec<String>);
-    let (port, shorts, closures): Closing = match n {
-        6 => (
-            (1, 2),
-            vec![(3, 4), (5, 0)],
-            vec![format!("catch diode {}", pads[3].0), format!("input capacitor {}", input.capacitor)],
-        ),
-        4 if input.switch_pad.is_some() => {
-            let sw = input.switch_pad.clone().expect("checked");
-            labels.push(format!("switch {}.{}", sw.0, sw.1));
-            pads.push(sw);
-            (
-                (1, 4),
-                vec![(4, 2), (3, 0)],
-                vec![
-                    "low-side switch (hot return to switch pad)".to_owned(),
-                    format!("input capacitor {}", input.capacitor),
-                ],
-            )
-        }
-        4 => ((1, 2), vec![(3, 0)], vec![format!("input capacitor {}", input.capacitor)]),
-        _ => return Err(format!("a hot loop of {n} pads has no port definition (a buck loop has 4 or 6)")),
-    };
-    let legs = if n == 6 { vec![(0, 1), (2, 3), (4, 5)] } else { vec![(0, 1), (2, 3)] };
-    Ok(LoopPorts { pads, labels, port, shorts, closures, legs })
+    if let Some(network) = input.external_network().map_err(|e| e.to_string())? {
+        pads = network.contacts.into_iter().map(|p| (p.component, p.pad)).collect();
+        labels = pads.iter().map(|(c, p)| format!("{c}.{p}")).collect();
+    }
+    if layout.append_switch_pad {
+        let sw = input.switch_pad.clone().expect("validated switch pad");
+        labels.push(format!("switch {}.{}", sw.0, sw.1));
+        pads.push(sw);
+    }
+    let shorts = layout.closures.iter().map(|c| c.terminals).collect();
+    let closures = layout
+        .closures
+        .iter()
+        .map(|c| match c.kind {
+            ClosureKind::Capacitor => format!(
+                "{}capacitor {}",
+                if input.external_contour.is_some() { "selected " } else { "input " },
+                pads[c.terminals.0].0
+            ),
+            ClosureKind::CatchDiode => format!("catch diode {}", pads[c.terminals.0].0),
+            ClosureKind::LowSideSwitch => "low-side switch (hot return to switch pad)".to_owned(),
+        })
+        .collect();
+    Ok(LoopPorts { pads, labels, port: layout.port, shorts, closures, legs: layout.legs })
 }
 
 /// What the caller chooses.
@@ -109,11 +109,20 @@ pub struct BoardOptions {
     /// Without this, a capacitor with an unconnected terminal makes the port disconnected (an error). Every such bar is
     /// listed in [`BoardLayout::synthesized_legs`]: the capacitor's connection is then not the board's copper.
     pub connection_legs: bool,
+    /// Explicit external-PCB boundary: ideal capacitor terminal shorts, with
+    /// no conductor or field contribution through the capacitor body.
+    pub ideal_capacitors: bool,
 }
 
 impl Default for BoardOptions {
     fn default() -> Self {
-        BoardOptions { margin_nm: 3_000_000, switch_bar: true, capacitor_ports: Vec::new(), connection_legs: false }
+        BoardOptions {
+            margin_nm: 3_000_000,
+            switch_bar: true,
+            capacitor_ports: Vec::new(),
+            connection_legs: false,
+            ideal_capacitors: false,
+        }
     }
 }
 
@@ -236,6 +245,31 @@ pub fn build_layout(
     cell_nm: i64,
     coarse_nm: i64,
 ) -> Result<BoardLayout, String> {
+    let network = input.external_network().map_err(|e| e.to_string())?;
+    let external = network.is_some();
+    if external {
+        // The CAM reader currently retains through-barrel geometry only. Do
+        // not silently extend a source blind/buried via through every layer.
+        let first = board.stackup.copper_layers.first();
+        let last = board.stackup.copper_layers.last();
+        if board.vias.iter().chain(board.hard_macros.iter().flat_map(|m| &m.vias)).any(|v| {
+            !((Some(&v.from_layer) == first && Some(&v.to_layer) == last)
+                || (Some(&v.to_layer) == first && Some(&v.from_layer) == last))
+        }) {
+            return Err("external extraction requires through vias: the source includes a blind/buried span that the CAM reader does not retain".to_owned());
+        }
+        let expected = loop_ports(input)?;
+        if ports.pads != expected.pads
+            || ports.port != expected.port
+            || ports.shorts != expected.shorts
+            || ports.legs != expected.legs
+        {
+            return Err("external contour ports differ from the validated contract".to_owned());
+        }
+        if !options.capacitor_ports.is_empty() || options.connection_legs {
+            return Err("external contour supports one selected capacitor and no synthetic connection legs".to_owned());
+        }
+    }
     let cam = &model.cam;
     let max_error = 5_000.0;
     let stack = copper_fullwave::stack::stack(board).map_err(|e| e.to_string())?;
@@ -266,13 +300,30 @@ pub fn build_layout(
     // Terminals' pads in the cam board.
     let find_pads = |component: &str, number: &str| -> Vec<(&copper_cam::board::Footprint, &Pad)> {
         let alt = copper_pcb::kicad_pcb::kicad_reference(component);
-        cam.pads().filter(|(f, p)| (f.reference == component || f.reference == alt) && p.number == number).collect()
+        cam.pads()
+            .filter(|(f, p)| {
+                (f.reference == component || f.reference == alt)
+                    && p.number == number
+                    && (!external || p.layers.copper.iter().any(|layer| *layer))
+            })
+            .collect()
     };
     let mut terminal_pads: Vec<Vec<&Pad>> = Vec::new();
     for (component, number) in &ports.pads {
         let found = find_pads(component, number);
         if found.is_empty() {
             return Err(format!("pad {component}.{number} of the loop is not on the exported board"));
+        }
+        if let Some(contour) = &network
+            && (found.len() != contour.occurrence_count(component, number)
+                || found[0].1.layers.copper.iter().filter(|layer| **layer).count() != 1
+                || found.iter().any(|(_, p)| {
+                    p.kind != PadKind::Smd || p.layers.copper != found[0].1.layers.copper || p.net != found[0].1.net
+                }))
+        {
+            return Err(format!(
+                "external contour pad {component}.{number} requires a matching SMD occurrence count on one layer and net; ambiguous or through-hole contacts are unsupported"
+            ));
         }
         terminal_pads.push(found.into_iter().map(|(_, p)| p).collect());
     }
@@ -316,6 +367,20 @@ pub fn build_layout(
         }
     }
     let loop_nets = nets.clone();
+    // Unassigned native metal remains an electrically floating conductor. This
+    // namespace does not connect disjoint pieces; the mesh uses geometric
+    // connectivity. Overlap with any assigned net is still rejected below.
+    let floating = "__copper_extract_unassigned_native_metal__".to_owned();
+    if external {
+        // Retain neighbouring copper in the window, with all other components open.
+        nets.extend(cam.pads().filter_map(|(_, p)| p.net.clone()));
+        nets.extend(cam.tracks.iter().filter_map(|t| t.net.clone()));
+        nets.extend(cam.vias.iter().filter_map(|v| v.net.clone()));
+        if nets.contains(&floating) {
+            return Err("reserved floating-metal net name is already in use".to_owned());
+        }
+        nets.insert(floating.clone());
+    }
     for fill in &model.fills {
         let zone = &cam.zones[fill.zone];
         let reaches = fill.shapes.iter().any(|s| overlaps(poly::bounds(s), window));
@@ -326,7 +391,7 @@ pub fn build_layout(
     // Zone fills are cut to a corridor: the loop polygon (the traced path through the loop's pads and vias) grown by
     // the margin, so that a long loop does not mesh the whole rectangle of its bounding box. The planes under and
     // beside the loop are therefore finite; the flag `plane_corridor` says so.
-    let corridor: Option<Shapes> = (input.polygon_mm.len() >= 3).then(|| {
+    let corridor: Option<Shapes> = (!external && input.polygon_mm.len() >= 3).then(|| {
         let points: Vec<(f64, f64)> = input.polygon_mm.iter().map(|p| (p[0] * 1e6, p[1] * 1e6)).collect();
         let mut area = poly::polygon(&points);
         for pads in &terminal_pads {
@@ -409,7 +474,10 @@ pub fn build_layout(
         }
     };
     for track in &cam.tracks {
-        let Some(net) = track.net.as_ref().filter(|n| nets.contains(*n)) else { continue };
+        let Some(net) = track.net.as_ref().or_else(|| external.then_some(&floating)).filter(|n| nets.contains(*n))
+        else {
+            continue;
+        };
         let points: Vec<(f64, f64)> = match &track.path {
             TrackPath::Line { start, end } => vec![(start.x as f64, start.y as f64), (end.x as f64, end.y as f64)],
             TrackPath::Arc { start, mid, end } => flatten_arc(*start, *mid, *end, max_error),
@@ -424,11 +492,20 @@ pub fn build_layout(
                 track_hints(track.layer, pair[0], pair[1], track.width as f64, &mut hints);
             }
         }
-        layout.layers[track.layer].conductors.push(Conductor { net: net.clone(), shapes, on_loop: false });
+        // External native current paths need width-based resolution even when
+        // the surrounding window is coarsened to its budget. Connectivity-only
+        // repairs cannot resolve their high-frequency current redistribution.
+        layout.layers[track.layer].conductors.push(Conductor {
+            net: net.clone(),
+            shapes,
+            on_loop: external && loop_nets.contains(net),
+        });
     }
     let n_layers = cam.copper_count();
     for (_, pad) in cam.pads() {
-        let Some(net) = pad.net.as_ref().filter(|n| nets.contains(*n)) else { continue };
+        let Some(net) = pad.net.as_ref().or_else(|| external.then_some(&floating)).filter(|n| nets.contains(*n)) else {
+            continue;
+        };
         let shape = pad_shape(pad, max_error);
         if bounds_of(&shape).is_none_or(|b| !overlaps(b, window)) {
             continue;
@@ -469,7 +546,9 @@ pub fn build_layout(
         }
     }
     for via in &cam.vias {
-        let Some(net) = via.net.as_ref().filter(|n| nets.contains(*n)) else { continue };
+        let Some(net) = via.net.as_ref().or_else(|| external.then_some(&floating)).filter(|n| nets.contains(*n)) else {
+            continue;
+        };
         if via.center.x < window[0] || via.center.x > window[2] || via.center.y < window[1] || via.center.y > window[3]
         {
             continue;
@@ -510,7 +589,13 @@ pub fn build_layout(
         for pad in pads {
             region.extend(pad_shape(pad, max_error));
         }
-        pad_regions.push(poly::union(&region));
+        let region = poly::union(&region);
+        if external && region.len() != 1 {
+            return Err(format!(
+                "external contour pad {component}.{number} has disconnected same-number copper lands; no equipotential contact was inferred"
+            ));
+        }
+        pad_regions.push(region);
         pad_layers.push(layer);
     }
     let mm_bounds = |shapes: &Shapes| -> [f64; 4] {
@@ -527,6 +612,67 @@ pub fn build_layout(
         });
     }
     let centre = |k: usize| (terminal_pads[k][0].center.x as f64, terminal_pads[k][0].center.y as f64);
+    if external {
+        let net = |k: usize| terminal_pads[k][0].net.as_deref().unwrap_or_default();
+        if pad_layers.iter().any(|l| *l != pad_layers[0])
+            || net(0).is_empty()
+            || net(2).is_empty()
+            || net(0) != net(1)
+            || net(2) != net(3)
+            || net(0) == net(2)
+        {
+            return Err("external contour requires two distinct rail/return nets and all contacts on one copper layer"
+                .to_owned());
+        }
+        if let Some(network) = &network {
+            let index = |pad: &copper_drc::emi::loop_model::LoopPad| {
+                network.contacts.iter().position(|p| p == pad).expect("network contact")
+            };
+            let mut rails = Vec::new();
+            for contour in &network.contours {
+                let rail = net(index(&contour.pads[1]));
+                if rail == net(2) || rails.contains(&rail) || contour.groups[2].iter().any(|p| net(index(p)) != net(2))
+                {
+                    return Err(
+                        "joint network requires distinct input/output rails and one native return net".to_owned()
+                    );
+                }
+                rails.push(rail);
+            }
+        }
+        // Check the native copper BEFORE adding the capacitor closure or port patches.
+        // Net-name equality alone, plane outlines and package-internal groups are not paths.
+        let mut pieces = CopperPieces::of_layout(&layout);
+        for &(a, b) in &ports.legs {
+            if net(a) != net(b) {
+                return Err(format!(
+                    "external contour contacts {} and {} have different nets",
+                    ports.labels[a], ports.labels[b]
+                ));
+            }
+            if !pieces.connected(pad_layers[a], net(a), centre(a), pad_layers[b], net(b), centre(b)) {
+                return Err(format!(
+                    "external contour: native copper does not connect {}.{} to {}.{} within the extraction window; no synthetic leg was added",
+                    ports.pads[a].0, ports.pads[a].1, ports.pads[b].0, ports.pads[b].1
+                ));
+            }
+        }
+        // Different-net intersections cannot be treated as insulated crossing conductors.
+        for layer in &layout.layers {
+            let mut per_net: BTreeMap<&str, Shapes> = BTreeMap::new();
+            for c in &layer.conductors {
+                per_net.entry(&c.net).or_default().extend(c.shapes.clone());
+            }
+            let merged: Vec<_> = per_net.into_iter().map(|(net, shapes)| (net, poly::union(&shapes))).collect();
+            for (i, (net, shapes)) in merged.iter().enumerate() {
+                for (other, other_shapes) in &merged[..i] {
+                    if !poly::intersection(shapes, other_shapes).is_empty() {
+                        return Err(format!("external contour: overlapping native copper of nets {net} and {other}"));
+                    }
+                }
+            }
+        }
+    }
     let bar_width = |a: usize, b: usize| {
         let (pa, pb) = (terminal_pads[a][0], terminal_pads[b][0]);
         (pa.width.min(pa.height).min(pb.width.min(pb.height)) as f64).clamp(200_000.0, 1_000_000.0)
@@ -538,6 +684,9 @@ pub fn build_layout(
     // copper, so it is part of the net's union.
     let n = input.pads.len();
     for &(a, b) in &ports.legs {
+        if external {
+            continue;
+        }
         let (from, to) = (&input.labels[a], &input.labels[(a + 1) % n]);
         let routed = input.legs.iter().any(|l| &l.from == from && &l.to == to && l.kind == "traced");
         if routed {
@@ -598,12 +747,39 @@ pub fn build_layout(
     };
     for (k, &(a, b)) in ports.shorts.iter().enumerate() {
         let label = ports.closures.get(k).map_or("component", String::as_str);
+        if external && options.ideal_capacitors {
+            let start = layout.terminals.len();
+            for pad in [a, b] {
+                layout.terminals.push(Terminal {
+                    name: format!("{} ideal capacitor boundary", ports.labels[pad]),
+                    layer: pad_layers[pad],
+                    net: terminal_pads[pad][0].net.clone().expect("checked"),
+                    region: pad_regions[pad].clone(),
+                });
+            }
+            layout.shorts.push(vec![start, start + 1]);
+            notes.push(format!("{label}: explicit ideal terminal short; capacitor body current path and its magnetic field excluded, no copper fixture added"));
+            continue;
+        }
         let (bar, width) = between(a, b);
         if pad_layers[a] != pad_layers[b] || bar.is_empty() {
             return Err(format!(
                 "{label}: the pads {} and {} have no copper space between them on one layer",
                 ports.labels[a], ports.labels[b]
             ));
+        }
+        if external {
+            for conductor in &layout.layers[pad_layers[a]].conductors {
+                let overlap = poly::intersection(&bar, &conductor.shapes);
+                if !overlap.is_empty() {
+                    return Err(format!(
+                        "external contour capacitor closure overlaps existing copper between its pads: {label}, net {}, intersection {:?} nm, area {:.6} mm2",
+                        conductor.net,
+                        bounds_of(&overlap),
+                        overlap.iter().map(|shape| poly::shape_area(shape)).sum::<f64>() * 1e-12
+                    ));
+                }
+            }
         }
         // The bar is of the net of pad a (it touches that pad, so the copper is one piece) and meets pad b at a contact.
         let net = terminal_pads[a][0].net.clone().expect("checked");
@@ -623,7 +799,29 @@ pub fn build_layout(
     // the flux of the gap, as the closed form and the full-wave port do), or, without the bar, between patches of
     // the two pads facing each other.
     let (pa, pb) = ports.port;
-    if options.switch_bar && pad_layers[pa] == pad_layers[pb] {
+    let mut port_labels = vec!["hot loop".to_owned()];
+    if let Some(contour) = network.as_ref().filter(|c| c.multi_contact()) {
+        // One terminal per physical contact, reused by every incident port. A
+        // reference terminal sets the voltage basis; it does not short pins.
+        let mut terms = BTreeMap::new();
+        for &(a, b) in &contour.ports {
+            for pad in [a, b] {
+                terms.entry(pad).or_insert_with(|| {
+                    layout.terminals.push(Terminal {
+                        name: format!("{} contact", ports.labels[pad]),
+                        layer: pad_layers[pad],
+                        net: terminal_pads[pad][0].net.clone().expect("checked"),
+                        region: pad_regions[pad].clone(),
+                    });
+                    layout.terminals.len() - 1
+                });
+            }
+            layout.add_port(&format!("{} to {}", ports.labels[a], ports.labels[b]), terms[&a], terms[&b]);
+        }
+        port_labels = layout.ports.iter().map(|p| p.name.clone()).collect();
+        flags.push("external_contact_network".to_owned());
+        notes.push("independent whole-pad contacts; each column injects one ampere at its positive contact and withdraws it at the reference return, with all other port currents zero; no package or inter-contact conductor is synthesized; scalar values and current maps describe the reported port only, not a terminated converter".to_owned());
+    } else if !external && options.switch_bar && pad_layers[pa] == pad_layers[pb] {
         let (bar, width) = between(pa, pb);
         if bar.is_empty() {
             return Err("the switch's pads touch: no space for the port".to_owned());
@@ -693,12 +891,12 @@ pub fn build_layout(
             terms.push(layout.terminals.len() - 1);
         }
         layout.add_port("hot loop", terms[0], terms[1]);
-        notes.push(
-            "the port is between the facing sides of the two switch pads; the gap between the pads is not in the extracted path"
-                .to_owned(),
-        );
+        notes.push(if external {
+            "external rail-to-power-return port at facing pad patches; no switch, package path or gap conductor is synthesized".to_owned()
+        } else {
+            "the port is between the facing sides of the two switch pads; the gap between the pads is not in the extracted path".to_owned()
+        });
     }
-    let mut port_labels = vec!["hot loop".to_owned()];
     let mut synthesized_legs: Vec<SynthesizedLeg> = Vec::new();
     let mut unconnected: Vec<UnconnectedCapacitor> = Vec::new();
     if !options.capacitor_ports.is_empty() {
@@ -851,12 +1049,29 @@ pub fn build_layout(
         "components: capacitor and diode are copper bars between their pad centres and the switch is the port (no ESL, ESR, package, die or bond wires)".to_owned(),
         "copper of nets other than those listed in `nets`, and everything outside the window".to_owned(),
     ];
+    if external {
+        flags.push("external_rail_return_contour".to_owned());
+        not_modelled[0] = "copper outside the extraction window; no plane-corridor shortcut".to_owned();
+        not_modelled[3] = "selected capacitor replaced by a copper closure (no ESR/ESL); controller/package, other capacitors, inductor and load are open component boundaries".to_owned();
+        not_modelled[4] = "inter-loop port matrix, converter excitation, switching emissions and compliance; none inferred from passive impedance".to_owned();
+        if input.external_peer.is_some() {
+            flags.push("external_joint_network".to_owned());
+            not_modelled[3] = "both selected capacitors replaced by copper fixtures; package, other capacitors, inductor and load are open component boundaries".to_owned();
+            not_modelled[4] = "package termination, converter excitation, switching emissions and compliance; none inferred from passive impedance".to_owned();
+        }
+        if options.ideal_capacitors {
+            flags.push("ideal_capacitor_terminal_shorts".to_owned());
+            not_modelled[3] = "selected capacitor terminals ideally shorted; capacitor body current path, its magnetic field, ESR and ESL excluded; package, other capacitors, inductor and load open".to_owned();
+        }
+    }
     if !stack.declared {
         not_modelled.push("the real stack-up (undeclared: layers spread over the board thickness)".to_owned());
     }
     notes.push(format!(
-        "port: {} to {} (the switch is the port)",
-        ports.labels[ports.port.0], ports.labels[ports.port.1]
+        "port: {} to {} ({})",
+        ports.labels[ports.port.0],
+        ports.labels[ports.port.1],
+        if external { "external rail/return contour" } else { "the switch is the port" }
     ));
     let other_nets: Vec<String> = nets.difference(&loop_nets).cloned().collect();
     Ok(BoardLayout {

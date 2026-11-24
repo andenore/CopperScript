@@ -700,12 +700,20 @@ pub const COMMANDS: &[Command] = &[
                 help: "with --fullwave: window margin around the loop in millimetres (default: 5, at least ten dielectric heights)",
             },
             Opt {
+                flag: "--fullwave-capacitor-height MM",
+                help: "with --fullwave: explicit raised PEC capacitor fixture height for external buck-boost networks; includes fixture fields, excludes component ESR/ESL and dielectric",
+            },
+            Opt {
+                flag: "--fullwave-source-height MM",
+                help: "with --fullwave: explicitly elevated controller source gaps with PEC terminal posts for buck-boost; a fixture assumption, not a package model",
+            },
+            Opt {
                 flag: "--extract",
-                help: "add, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element (PEEC) extraction of the real filled copper: zone fills made natively, tracks, pads and vias, the stack-up's heights, the capacitor and diode as copper bars between their pads and the switch as the port (measures.extract with numerical_sensitivity_pct from two meshes, parameter_assumptions and not_modelled, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values; seconds to minutes, never part of the default run; screening evidence",
+                help: "add passive PCB interconnect L and R at 1, 10 and 100 MHz from native filled copper; buck uses its hot-loop boundary, buck-boost uses a joint input/output contact network; three meshes assess every matrix entry. Inspect measures.extract, extract_scope and coverage for assumptions and usability. Does not supply converter excitation or emissions prediction; never part of the default run",
             },
             Opt {
                 flag: "--extract-budget FILAMENTS",
-                help: "with --extract: the most filaments of the dense inductance matrix (default: 2400, which is some three seconds per frequency in an optimised build); a larger mesh is coarsened by 1.3 until it fits (flag coarsened, status indicative)",
+                help: "with --extract: filament budget (default 9000, maximum 32768); the maximum needs 8.6 GB for the inductance matrix alone, plus workspace. Background pitch coarsens to fit; connectivity and matrix convergence must still pass",
             },
             Opt {
                 flag: "--extract-margin EXTRACT_MARGIN",
@@ -715,7 +723,15 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--extract-cell EXTRACT_CELL",
                 help: "with --extract: the fine mesh pitch in millimetres (default: 0.2; the coarse pitch is five times it)",
             },
+            Opt {
+                flag: "--extract-width-cells N",
+                help: "with --extract: request 4 to 16 cells across loop copper in the standard mesh; buck defaults to 2, external buck-boost to 4. External coarser meshes reduce this request. Inspect loop_width_cells and loop_cell_floor_mm for the actual requested resolution and its floor",
+            },
             Opt { flag: "--extract-single-mesh", help: "with --extract: one mesh only (no numerical sensitivity)" },
+            Opt {
+                flag: "--extract-ideal-capacitors",
+                help: "with --extract: external buck-boost PCB only, ideal capacitor terminal shorts; excludes capacitor body path, magnetic field, ESR and ESL",
+            },
             Opt {
                 flag: "--extract-no-switch-bar",
                 help: "with --extract: put the port between the facing sides of the switch pads instead of in a gap in a copper bar across the switch (the gap between the pads is then not in the extracted path)",

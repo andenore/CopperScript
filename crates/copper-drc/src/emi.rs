@@ -49,9 +49,12 @@ mod cable;
 mod conducted;
 pub mod defaults;
 mod field;
+pub mod loop_model;
 mod mode_conversion;
 pub mod return_path;
 pub mod signal;
+
+use loop_model::{LoopId, LoopKind, LoopPad};
 
 /// The `schema` of [`EmiCheckReport::json`].
 pub const SCHEMA: &str = "copperscript-emi-check/v0.1";
@@ -545,7 +548,7 @@ impl<'a> Layout<'a> {
         footprint
             .pads
             .iter()
-            .filter(|pad| pad.number == number)
+            .filter(|pad| pad.number == number && pad.kind.is_electrical())
             .map(|pad| {
                 let at = transformed_local_point(placement, pad.position);
                 let raw = placed_pad_shape(at, pad, placement);
@@ -1396,6 +1399,8 @@ struct LoopCandidate {
     /// The capacitor declares `decouples` of a hot-supply pin.
     declared: bool,
     labels: Vec<String>,
+    pads: Vec<LoopPad>,
+    terminal_groups: Vec<Vec<LoopPad>>,
     /// The loop polygon: the traced path where it exists, else the pad centres.
     points: Vec<P2>,
     /// Nominal trace width at each pad, for the pad-centre version.
@@ -1429,23 +1434,10 @@ impl LoopCandidate {
     }
 }
 
-/// Which loop of a cell is analysed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LoopKind {
-    /// The topology's single hot loop (buck, boost).
-    Standard,
-    /// Four-switch buck-boost, buck leg: capacitor on the hot supply -> hot supply pad -> hot return pad.
-    Input,
-    /// Four-switch buck-boost, boost leg: capacitor on the output net -> output pin pad -> hot return pad.
-    Output,
-}
-
 struct LoopSpec {
     kind: LoopKind,
     /// `input loop` or `output loop` for a cell with two loops.
     name: Option<&'static str>,
-    /// Coverage and check suffix of a cell with two loops.
-    key: Option<&'static str>,
     capacitors: Vec<HotCapacitor>,
     nets: Vec<String>,
     output_pins: Vec<Endpoint>,
@@ -1769,6 +1761,13 @@ fn build_candidate(
         capacitor: capacitor.component.clone(),
         declared: capacitor.declared,
         labels: labels.clone(),
+        pads: chosen.iter().map(|p| LoopPad { component: p.component.clone(), pad: p.number.clone() }).collect(),
+        terminal_groups: pads
+            .iter()
+            .map(|group| {
+                group.iter().map(|p| LoopPad { component: p.component.clone(), pad: p.number.clone() }).collect()
+            })
+            .collect(),
         points: points.clone(),
         widths,
         pad_points: points,
@@ -2015,7 +2014,6 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
         let input = LoopSpec {
             kind: LoopKind::Input,
             name: Some("input loop"),
-            key: Some("input"),
             capacitors: cell.hot_capacitors.clone(),
             nets,
             output_pins: Vec::new(),
@@ -2029,7 +2027,6 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
                 let output = LoopSpec {
                     kind: LoopKind::Output,
                     name: Some("output loop"),
-                    key: Some("output"),
                     capacitors: stage.capacitors,
                     nets,
                     output_pins: stage.pins,
@@ -2050,7 +2047,6 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
     let standard = LoopSpec {
         kind: LoopKind::Standard,
         name: None,
-        key: None,
         capacitors: cell.hot_capacitors.clone(),
         nets,
         output_pins: Vec::new(),
@@ -2059,10 +2055,8 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
 }
 
 fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
-    let check = match spec.key {
-        Some(key) => format!("EMI-HOT-LOOP:{}:{key}", cell.controller),
-        None => format!("EMI-HOT-LOOP:{}", cell.controller),
-    };
+    let id = LoopId { controller: cell.controller.clone(), kind: spec.kind };
+    let check = format!("EMI-HOT-LOOP:{}", id.key());
     let what = spec.name.map_or(String::new(), |name| format!("{name}: "));
     if spec.capacitors.is_empty() {
         let reason = match spec.kind {
@@ -2217,6 +2211,32 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
     if let Some(name) = spec.name {
         put(&mut finding.measures, "loop", Value::from(name));
     }
+    put(&mut finding.measures, "loop_id", id.to_value());
+    put(&mut finding.measures, "loop_pads", Value::Array(best.pads.iter().map(LoopPad::to_value).collect()));
+    put(
+        &mut finding.measures,
+        "loop_terminal_groups",
+        Value::Array(
+            best.terminal_groups
+                .iter()
+                .map(|group| Value::Array(group.iter().map(LoopPad::to_value).collect()))
+                .collect(),
+        ),
+    );
+    put(
+        &mut finding.measures,
+        "loop_capacitors",
+        strings(&spec.capacitors.iter().map(|c| c.component.clone()).collect::<Vec<_>>()),
+    );
+    put(
+        &mut finding.measures,
+        "loop_terminal_provenance",
+        Value::from(if spec.kind == LoopKind::Output {
+            "output rail inferred from VOUT-prefixed pins; return from declared hot-return pins"
+        } else {
+            "declared hot-supply and hot-return pins"
+        }),
+    );
     put(&mut finding.measures, "loop_capacitor", Value::from(best.capacitor.as_str()));
     put(&mut finding.measures, "capacitor_selection", Value::from(selection));
     put(&mut finding.measures, "loop_area_mm2", num(best.area * 1e6, 4));
@@ -2398,8 +2418,17 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
     let drive = drive_of(cx.layout.view, cell);
     let scenario = loop_scenario(cx.layout.view, cell, &drive);
     record_scenario(&mut finding, &scenario, cell);
-    radiated_estimate(cx, cell, best, &check, &drive, &scenario, &mut finding);
-    ringing_estimate(cx, cell, best, &check, &scenario, &mut finding);
+    if cell.topology == Some(Topology::BuckBoost) {
+        let reason = "four-switch buck-boost current waveform is uncharacterized: current_peak metadata alone does not establish instantaneous peak current, switching mode, contact sharing or input/output phase; radiated and ringing predictions require a bound waveform";
+        for tier in ["radiated", "ringing"] {
+            cx.cover(format!("{check}:{tier}"), CoverageStatus::NotApplicable, reason.to_owned());
+        }
+        push_input(&mut finding, reason.to_owned());
+        finding.finding.message.push_str(&format!("; {}", scenario.describe(&cell.controller)));
+    } else {
+        radiated_estimate(cx, cell, best, &check, &drive, &scenario, &mut finding);
+        ringing_estimate(cx, cell, best, &check, &scenario, &mut finding);
+    }
     finding.cell = Some(cell.controller.clone());
     cx.findings.push(finding);
 }
@@ -2471,6 +2500,9 @@ impl LoopScenario {
     /// The current of the largest commutation (turn-off of the high-side switch, `I_out + dI/2`) for a declared
     /// point, else the current limit: the one current the ringing and the near-field map use.
     fn headline_current(&self) -> Option<f64> {
+        if self.topology == Some(Topology::BuckBoost) {
+            return None;
+        }
         match self.declared_point() {
             Some(point) => Some(point.peak()),
             None => self.limit,
@@ -2479,6 +2511,9 @@ impl LoopScenario {
 
     /// The scenario tags.
     fn tags(&self) -> Vec<&'static str> {
+        if self.topology == Some(Topology::BuckBoost) {
+            return vec!["uncharacterized_switch_current", "current_limit_metadata_only"];
+        }
         let mut tags =
             vec![if self.declared() { "scenario_declared_operating_point" } else { "scenario_current_limit" }];
         tags.push(if self.declared() { "declared_operating_point" } else { "worst_case_current" });
@@ -2496,6 +2531,12 @@ impl LoopScenario {
 
     /// One sentence naming the scenario and its current.
     fn describe(&self, controller: &str) -> String {
+        if self.topology == Some(Topology::BuckBoost) {
+            return format!(
+                "current_peak metadata is an unqualified current-limit proxy, not a guaranteed instantaneous peak; {}",
+                self.why_not_declared(controller)
+            );
+        }
         match (self.declared_point(), self.limit) {
             (Some(p), _) => {
                 format!(
@@ -2611,7 +2652,9 @@ fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &Swi
     for tag in scenario.tags() {
         add_tag(finding, tag);
     }
-    put(&mut finding.measures, "scenario", Value::from(scenario.kind.name()));
+    let uncharacterized = cell.topology == Some(Topology::BuckBoost);
+    let scenario_name = if uncharacterized { "uncharacterized" } else { scenario.kind.name() };
+    put(&mut finding.measures, "scenario", Value::from(scenario_name));
     let mut operating = Object::new();
     put(&mut operating, "status", Value::from(scenario.status));
     put(&mut operating, "how_to_declare", scenario.how_to_declare(&cell.controller).map_or(Value::Null, Value::from));
@@ -2639,8 +2682,14 @@ fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &Swi
     }
     put(&mut finding.measures, "operating_point", Value::Object(operating));
     let mut current = Object::new();
-    put(&mut current, "scenario", Value::from(scenario.kind.name()));
-    let (waveform, field_basis, ring_basis) = if scenario.declared() {
+    put(&mut current, "scenario", Value::from(scenario_name));
+    let (waveform, field_basis, ring_basis) = if uncharacterized {
+        (
+            "unspecified",
+            "no bound switching waveform; current_peak is unqualified limit metadata",
+            "no bound switching waveform; current_peak is unqualified limit metadata",
+        )
+    } else if scenario.declared() {
         (
             "ramp_on_pedestal",
             "I_out + dI/2, the peak of the high-side switch current (the largest current the hot loop carries); the near-field map is a static |H| of this current",

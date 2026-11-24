@@ -25,6 +25,52 @@ fn stdout(output: &Output) -> String {
 const BOARD: &str = "examples/emi_buck/board.copper";
 
 #[test]
+fn unrouted_buck_boost_reports_missing_copper_in_both_solvers() {
+    let output = copper(&[
+        "emi-check",
+        "examples/emi_buck_boost/board.copper",
+        "--allow-proxy-footprints",
+        "--fullwave",
+        "--extract",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    let report = copper_json::parse(&stdout(&output)).expect("report");
+    let coverage = report.get("coverage").and_then(Value::as_array).unwrap();
+    for tier in ["FULLWAVE", "EXTRACT"] {
+        for kind in ["input", "output"] {
+            let key = format!("EMI-{tier}:U1:{kind}");
+            let entries: Vec<_> =
+                coverage.iter().filter(|c| c.get("check").and_then(Value::as_str) == Some(key.as_str())).collect();
+            assert_eq!(entries.len(), 1, "{key}");
+            assert_eq!(entries[0].get("status").and_then(Value::as_str), Some("failed"));
+            if tier == "EXTRACT" {
+                assert!(
+                    entries[0]
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap()
+                        .contains("native copper does not connect")
+                );
+            }
+        }
+    }
+    let hot: Vec<_> = report
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .collect();
+    assert_eq!(hot.len(), 2);
+    for finding in hot {
+        let measures = finding.get("measures").unwrap();
+        assert!(measures.get("loop_id").is_some());
+        assert!(measures.get("fullwave").is_none() && measures.get("extract").is_none());
+    }
+}
+
+#[test]
 fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
     let help = stdout(&copper(&["emi-check", "--help"]));
     for option in [
@@ -32,6 +78,8 @@ fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
         "--fullwave-fidelity",
         "--fullwave-budget",
         "--fullwave-margin",
+        "--fullwave-capacitor-height",
+        "--fullwave-source-height",
         "--fullwave-single-mesh",
         "--fullwave-zone-outline",
     ] {
@@ -41,6 +89,8 @@ fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
         ["emi-check", BOARD, "--fullwave-fidelity", "fine"],
         ["emi-check", BOARD, "--fullwave-budget", "10"],
         ["emi-check", BOARD, "--fullwave-margin", "5"],
+        ["emi-check", BOARD, "--fullwave-capacitor-height", "0.5"],
+        ["emi-check", BOARD, "--fullwave-source-height", "0.5"],
     ] {
         assert_eq!(copper(&arguments).status.code(), Some(2), "{arguments:?}");
     }
@@ -48,6 +98,12 @@ fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave-zone-outline"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-fidelity", "medium"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-budget", "-3"]).status.code(), Some(2));
+    for height in ["0", "-1", "NaN", "inf"] {
+        assert_eq!(
+            copper(&["emi-check", BOARD, "--fullwave", "--fullwave-capacitor-height", height]).status.code(),
+            Some(2)
+        );
+    }
 }
 
 #[test]

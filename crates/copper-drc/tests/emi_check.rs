@@ -429,6 +429,19 @@ fn a_buck_boost_cell_has_an_input_and_an_output_loop() {
     assert!(input.finding.message.contains("input loop") && output.finding.message.contains("output loop"));
     assert_eq!(text(input, "loop_capacitor"), "CIN");
     assert_eq!(text(output, "loop_capacitor"), "COUT");
+    for (finding, kind) in [(input, "input"), (output, "output")] {
+        let id = finding.measures.get("loop_id").expect("structured identity");
+        assert_eq!(id.get("controller").and_then(Value::as_str), Some("U1"));
+        assert_eq!(id.get("kind").and_then(Value::as_str), Some(kind));
+        let physical = finding.measures.get("loop_pads").and_then(Value::as_array).unwrap();
+        assert_eq!(physical.len(), 4);
+        assert_eq!(
+            physical[0].get("component").and_then(Value::as_str),
+            Some(if kind == "input" { "CIN" } else { "COUT" })
+        );
+        assert_eq!(physical[1].get("component").and_then(Value::as_str), Some("U1"));
+        assert_eq!(physical[1].get("pad").and_then(Value::as_str), Some(if kind == "input" { "3" } else { "4" }));
+    }
     assert_eq!(input.finding.nets, ["VIN", "GND"]);
     assert_eq!(output.finding.nets, ["VOUT", "GND"]);
     let pads = |f: &EmiFinding| -> Vec<String> {
@@ -447,11 +460,11 @@ fn a_buck_boost_cell_has_an_input_and_an_output_loop() {
     assert!((measure(input, "loop_area_mm2") - 7.44).abs() < 0.01, "{}", measure(input, "loop_area_mm2"));
     // Output quadrilateral (34.5,24) (32.5,28.73) (32.5,30) (36.5,24): 7.27 mm2.
     assert!((measure(output, "loop_area_mm2") - 7.27).abs() < 0.01, "{}", measure(output, "loop_area_mm2"));
-    assert!(input.estimate.is_some() && output.estimate.is_some());
+    assert!(input.estimate.is_none() && output.estimate.is_none());
     let status = |check: &str| report.coverage.iter().find(|c| c.check == check).map(|c| c.status);
     assert_eq!(status("EMI-HOT-LOOP:U1:input"), Some(CoverageStatus::Executed));
     assert_eq!(status("EMI-HOT-LOOP:U1:output"), Some(CoverageStatus::Executed));
-    assert_eq!(status("EMI-HOT-LOOP:U1:output:radiated"), Some(CoverageStatus::Executed));
+    assert_eq!(status("EMI-HOT-LOOP:U1:output:radiated"), Some(CoverageStatus::NotApplicable));
     // Both switch nodes SW1 and SW2 are reported.
     assert_eq!(find(&report, "EMI-SWITCH-NODE").len(), 2);
     assert!(input.tags.contains(&"placement_estimate".to_owned()));
@@ -464,13 +477,15 @@ fn a_non_buck_cell_is_never_told_to_declare_a_load_current() {
     let loops = find(&report, "EMI-HOT-LOOP");
     assert_eq!(loops.len(), 2);
     for hot in loops {
-        assert_eq!(text(hot, "scenario"), "current_limit");
+        assert_eq!(text(hot, "scenario"), "uncharacterized");
         let message = &hot.finding.message;
         assert!(message.contains("buck stage only") && message.contains("this cell is a buck_boost"), "{message}");
         assert!(!message.contains("declare load_current"), "{message}");
         assert_eq!(operating_point(hot).get("how_to_declare"), Some(&Value::Null));
         assert_eq!(operating_point(hot).get("topology").and_then(Value::as_str), Some("buck_boost"));
-        assert!(hot.tags.contains(&"scenario_current_limit".to_owned()), "{:?}", hot.tags);
+        assert!(hot.tags.contains(&"current_limit_metadata_only".to_owned()), "{:?}", hot.tags);
+        assert!(!hot.tags.contains(&"worst_case_current".to_owned()));
+        assert_eq!(hot.measures.get("loop_current").unwrap().get("field_amplitude_a"), Some(&Value::Null));
         assert!(!text_lines(hot).iter().any(|l| l.contains("declare load_current")), "{:?}", text_lines(hot));
     }
 }

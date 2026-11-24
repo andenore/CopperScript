@@ -4,6 +4,7 @@
 use std::time::Instant;
 
 use ems::csx::primitives::{BoxShape, LinPoly, Polygon};
+use ems::csx::properties::{ProbeBox, ProbeType};
 use ems::csx::{ContinuousStructure, Material, Primitive, Property};
 use ems::engine::RunLimits;
 use ems::prelude::*;
@@ -253,6 +254,30 @@ pub fn static_inductance(freqs: &[f64], z: &[Complex64], f_res: f64, lo: f64, hi
 }
 
 impl RegionModel {
+    fn voltage_paths(&self, port: usize) -> Vec<([f64; 3], [f64; 3])> {
+        let p = &self.ports[port];
+        let transverse: Vec<_> = (0..3).filter(|k| *k != p.axis).collect();
+        let coordinates = |k: usize| {
+            self.axes[k]
+                .lines
+                .iter()
+                .copied()
+                .filter(|x| *x >= p.start[k].min(p.stop[k]) - 1e-9 && *x <= p.start[k].max(p.stop[k]) + 1e-9)
+                .collect::<Vec<_>>()
+        };
+        let mut paths = Vec::new();
+        for a in coordinates(transverse[0]) {
+            for b in coordinates(transverse[1]) {
+                let (mut start, mut stop) = (p.start, p.stop);
+                for (k, value) in [(transverse[0], a), (transverse[1], b)] {
+                    start[k] = value;
+                    stop[k] = value;
+                }
+                paths.push((start, stop));
+            }
+        }
+        paths
+    }
     /// The analysis frequencies: 181 points over the band.
     pub fn frequencies(&self) -> Vec<f64> {
         let (lo, hi) = self.spec.band_hz;
@@ -313,6 +338,11 @@ impl RegionModel {
                 )
                 .map_err(err)?;
         }
+        for post in &self.component_posts {
+            model
+                .add_primitive(pec, Primitive::new(BoxShape::new(post.start, post.stop)).with_priority(30))
+                .map_err(err)?;
+        }
         let mut ports = Vec::new();
         for (i, p) in self.ports.iter().enumerate() {
             let axis = match p.axis {
@@ -325,6 +355,13 @@ impl RegionModel {
                 port = port.excite(1.0);
             }
             ports.push(port.add_to(&mut model).map_err(|e| Error::Solver(e.to_string()))?);
+            if self.spec.distributed_port_voltage {
+                for (column, (start, stop)) in self.voltage_paths(i).into_iter().enumerate() {
+                    let name = format!("port_average_{i}_{column}");
+                    let property = model.add_property(Property::probe(name, ProbeBox::new(ProbeType::Voltage)));
+                    model.add_primitive(property, Primitive::new(BoxShape::new(start, stop))).map_err(err)?;
+                }
+            }
         }
         Ok((model, ports))
     }
@@ -523,11 +560,33 @@ impl RegionModel {
             results.lumped_current(&props.element.0).ok_or_else(|| Error::Solver("no element current".to_owned()))?;
         let p = &self.ports[excited];
         let sign = if p.stop[p.axis] >= p.start[p.axis] { -1.0 } else { 1.0 };
+        let mut voltage = v.scalar().unwrap_or(&[]).to_vec();
+        if self.spec.distributed_port_voltage {
+            let count = self.voltage_paths(excited).len();
+            if count == 0 {
+                return Err(Error::Invalid("port has no transverse voltage columns".to_owned()));
+            }
+            voltage.fill(0.0);
+            for column in 0..count {
+                let record = results
+                    .probe(&format!("port_average_{excited}_{column}"))
+                    .ok_or_else(|| Error::Solver("missing distributed port voltage".to_owned()))?;
+                let values =
+                    record.scalar().ok_or_else(|| Error::Solver("non-scalar distributed voltage".to_owned()))?;
+                if values.len() != voltage.len() || record.times().first() != v.times().first() || record.dt() != v.dt()
+                {
+                    return Err(Error::Solver("distributed voltage records do not share a time base".to_owned()));
+                }
+                for (sum, sample) in voltage.iter_mut().zip(values) {
+                    *sum += sample / count as f64;
+                }
+            }
+        }
         Ok(Record {
             dt: v.dt(),
             t0_v: v.times().first().copied().unwrap_or(0.0),
             t0_i: i.times().first().copied().unwrap_or(0.0),
-            v: v.scalar().unwrap_or(&[]).to_vec(),
+            v: voltage,
             i: i.scalar().unwrap_or(&[]).iter().map(|x| x * sign).collect(),
         })
     }

@@ -18,7 +18,7 @@ use indexmap::IndexMap;
 use crate::geom::{self, Pt, nm_to_mm};
 use crate::mesh::{AxisMesh, AxisPlan, Line, Rank, axis_mesh};
 use crate::spec::{
-    Bridge, Error, ExtraTrace, Fidelity, NetTreatment, PortKind, PortSpec, RegionSpec, Result, Terminal,
+    Bridge, Error, ExtraTrace, Fidelity, NetTreatment, PortKind, PortSpec, RaisedBridge, RegionSpec, Result, Terminal,
 };
 use crate::stack::{Stack, stack};
 
@@ -57,6 +57,13 @@ pub struct Wire {
     pub z_bottom: f64,
     /// Barrel radius (drill/2): the wire itself is a line, this is for antipads and reports.
     pub radius: f64,
+}
+
+/// Declared PEC component terminal post, in millimetres.
+#[derive(Clone, Debug)]
+pub struct MetalBlock {
+    pub start: [f64; 3],
+    pub stop: [f64; 3],
 }
 
 /// A port with its box in the model, millimetres.
@@ -120,6 +127,7 @@ pub struct Estimate {
 /// A region of a board as a solver model.
 #[derive(Clone, Debug)]
 pub struct RegionModel {
+    pub component_posts: Vec<MetalBlock>,
     pub spec: RegionSpec,
     pub stack: Stack,
     /// Window plus margin, millimetres.
@@ -1028,6 +1036,7 @@ impl RegionModel {
                 PortKind::ToPlane { top, .. } => vec![top.clone()],
             })
             .chain(spec.bridges.iter().flat_map(|br| [br.a.clone(), br.b.clone()]))
+            .chain(spec.raised_bridges.iter().flat_map(|br| [br.a.clone(), br.b.clone()]))
             .filter_map(|t| match t {
                 Terminal::Pad { component, pad } => Some((component, pad)),
                 Terminal::Rect { .. } => None,
@@ -1198,6 +1207,10 @@ impl RegionModel {
         for bridge in &spec.bridges {
             b.add_bridge(board, bridge, &pads)?;
         }
+        let mut component_posts = Vec::new();
+        for bridge in &spec.raised_bridges {
+            component_posts.extend(b.add_raised_bridge(board, bridge, &pads)?);
+        }
         // Zones last: they are cut around the copper of other nets that exists by now.
         let foreign: Vec<(CopperLayer, String, Vec<Pt>)> =
             b.sheets.iter().filter(|s| s.kind != "zone").map(|s| (s.layer, s.net.clone(), s.ring.clone())).collect();
@@ -1231,17 +1244,63 @@ impl RegionModel {
         let obstacles: Vec<(CopperLayer, &str, &[Pt])> = b
             .sheets
             .iter()
-            .filter(|s| s.kind != "zone" && s.kind != "polygon")
+            .filter(|s| {
+                s.kind != "zone" && s.kind != "polygon" && b.stack.z(s.layer).is_some_and(|z| (z - s.z).abs() < 1e-9)
+            })
             .map(|s| (s.layer, s.net.as_str(), s.ring.as_slice()))
             .collect();
         for p in &spec.ports {
-            let (resolved, port_straps, port_posts) = resolve_port(p, &pads, &b.stack, &b.inset, b.region, &obstacles)?;
+            let (mut resolved, port_straps, port_posts) = resolve_port(
+                p,
+                &pads,
+                &b.stack,
+                &b.inset,
+                b.region,
+                if p.elevation_nm.is_some() { &[] } else { &obstacles },
+            )?;
+            if let Some(height_nm) = p.elevation_nm {
+                let PortKind::Gap { from, to } = &p.kind else {
+                    return Err(Error::NotSupported("elevated sources require facing gap terminals".to_owned()));
+                };
+                if height_nm <= 0 || !port_straps.is_empty() {
+                    return Err(Error::NotSupported(
+                        "elevated sources require a positive explicit height and facing terminals without straps"
+                            .to_owned(),
+                    ));
+                }
+                for terminal in [from, to] {
+                    let (layer, ring, _) = terminal_info(terminal, &pads, &b.stack, None, b.region)?;
+                    let rect = geom::bbox(&ring).ok_or_else(|| Error::Invalid("empty source terminal".to_owned()))?;
+                    if layer != CopperLayer::Front
+                        || ((rect[2] - rect[0]) * (rect[3] - rect[1]) - geom::area(&ring)).abs() > 1e-9
+                    {
+                        return Err(Error::NotSupported(
+                            "elevated source requires rectangular front-copper terminal patches".to_owned(),
+                        ));
+                    }
+                    let z = b.stack.z(layer).expect("front copper");
+                    component_posts.push(MetalBlock {
+                        start: [rect[0], rect[1], z],
+                        stop: [rect[2], rect[3], z + nm_to_mm(height_nm)],
+                    });
+                }
+                resolved.start[2] += nm_to_mm(height_nm);
+                resolved.stop[2] += nm_to_mm(height_nm);
+                resolved.description.push_str(&format!("; explicit source fixture {:.3} mm above front copper, rectangular PEC terminal posts; package parasitics unknown", nm_to_mm(height_nm)));
+            }
             if ports.iter().any(|q: &ResolvedPort| q.spec.name == p.name) {
                 return Err(Error::Invalid(format!("two ports are named {}", p.name)));
             }
             ports.push(resolved);
             straps.extend(port_straps);
             posts.extend(port_posts);
+        }
+        if spec.ports.iter().any(|p| p.elevation_nm.is_some()) {
+            b.flag("explicit_elevated_source_fixture");
+            b.notes.extend(ports.iter().filter(|p| p.spec.elevation_nm.is_some()).map(|p| p.description.clone()));
+        }
+        if spec.distributed_port_voltage {
+            b.notes.push("port voltage is averaged over the distributed lumped element's transverse columns; current is its terminal current, not a displaced H-loop measurement".to_owned());
         }
         for post in &posts {
             let net_id = b.net_id(&post.net);
@@ -1320,6 +1379,7 @@ impl RegionModel {
             net_names[*id as usize] = n.clone();
         }
         let mut model = RegionModel {
+            component_posts,
             spec: spec.clone(),
             stack,
             region,
@@ -1443,6 +1503,75 @@ impl Builder<'_> {
         }
         Ok(())
     }
+
+    fn add_raised_bridge(
+        &mut self,
+        board: &PhysicalBoard,
+        bridge: &RaisedBridge,
+        pads: &[PlacedPad],
+    ) -> Result<Vec<MetalBlock>> {
+        if bridge.height_nm <= 0 {
+            return Err(Error::Invalid(format!("raised bridge {} needs a positive height", bridge.name)));
+        }
+        let (la, ra, _) = terminal_info(&bridge.a, pads, &self.stack, None, self.region)?;
+        let (lb, rb, _) = terminal_info(&bridge.b, pads, &self.stack, None, self.region)?;
+        if la != CopperLayer::Front || lb != CopperLayer::Front {
+            return Err(Error::NotSupported(
+                "raised component fixtures currently require front copper terminals".to_owned(),
+            ));
+        }
+        let z = self.stack.z(la).expect("front copper");
+        let raised = z + nm_to_mm(bridge.height_nm);
+        let mut posts = Vec::new();
+        for ring in [&ra, &rb] {
+            let rect = geom::bbox(ring).ok_or_else(|| Error::Invalid("empty raised bridge terminal".to_owned()))?;
+            // Rectangular posts must not add copper outside their terminal.
+            let area = geom::area(ring).abs();
+            if ((rect[2] - rect[0]) * (rect[3] - rect[1]) - area).abs() > 1e-9 {
+                return Err(Error::NotSupported("raised bridge requires rectangular terminal patches".to_owned()));
+            }
+            if rect[0] < self.region[0]
+                || rect[1] < self.region[1]
+                || rect[2] > self.region[2]
+                || rect[3] > self.region[3]
+            {
+                return Err(Error::Invalid("raised bridge terminal lies outside the window".to_owned()));
+            }
+            posts.push(MetalBlock { start: [rect[0], rect[1], z], stop: [rect[2], rect[3], raised] });
+        }
+        let points: Vec<_> = ra.into_iter().chain(rb).collect();
+        let ring = geom::convex_hull(&points);
+        let polygon =
+            |r: &[Pt]| copper_cam::poly::polygon(&r.iter().map(|p| (p.0 * 1e6, p.1 * 1e6)).collect::<Vec<_>>());
+        let shape = polygon(&ring);
+        if self
+            .sheets
+            .iter()
+            .filter(|s| s.kind == "raised_bridge")
+            .any(|s| !copper_cam::poly::intersection(&shape, &polygon(&s.ring)).is_empty())
+        {
+            return Err(Error::NotSupported(
+                "raised component fixtures overlap in projection; their isolation is not defined".to_owned(),
+            ));
+        }
+        let net = format!("raised fixture {}", bridge.name);
+        let net_id = self.net_id(&net);
+        self.sheets.push(Sheet {
+            kind: "raised_bridge",
+            net,
+            net_id,
+            layer: la,
+            z: raised,
+            ring,
+            treatment: NetTreatment::Pec,
+            thickness_m: self.thickness_m(board, la),
+            touches_edge: false,
+        });
+        self.counts.bridges += 1;
+        self.flag("explicit_raised_component_fixture");
+        self.notes.push(format!("{}: rectangular PEC terminal posts and a PEC bridge {:.3} mm above front copper; fixture fields included, component ESR/ESL and dielectric excluded", bridge.name, nm_to_mm(bridge.height_nm)));
+        Ok(posts)
+    }
 }
 
 impl RegionModel {
@@ -1490,6 +1619,12 @@ impl RegionModel {
             lines[0].push(Line::new(w.x, Rank::Via, Some(w.net_id)));
             lines[1].push(Line::new(w.y, Rank::Via, Some(w.net_id)));
         }
+        for post in &self.component_posts {
+            for (k, axis) in lines.iter_mut().enumerate() {
+                axis.push(Line::new(post.start[k], Rank::Port, None));
+                axis.push(Line::new(post.stop[k], Rank::Port, None));
+            }
+        }
         for p in &self.ports {
             for (k, axis_lines) in lines.iter_mut().enumerate() {
                 let (a, b) = (p.start[k], p.stop[k]);
@@ -1504,7 +1639,7 @@ impl RegionModel {
         for (_, z) in &self.stack.copper {
             lines[2].push(Line::new(*z, Rank::Copper, None));
         }
-        for s in self.sheets.iter().filter(|s| s.kind == "strap") {
+        for s in self.sheets.iter().filter(|s| matches!(s.kind, "strap" | "raised_bridge")) {
             lines[2].push(Line::new(s.z, Rank::Copper, None));
         }
         for s in &self.stack.slabs {

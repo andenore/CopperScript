@@ -1,6 +1,6 @@
 //! Convergence of a mesh series across the whole port matrix.
 //!
-//! A series of meshes of the same layout (the finest, one coarser by 1.5 in pitch, and one coarser still) is judged
+//! A series of meshes of the same layout (the finest and two progressively coarser meshes) is judged
 //! on every entry of the inductance matrix `L` and of the resistance matrix `R` at every frequency, not on the hot
 //! loop's self inductance alone (a mutual term or the resistance can move while the self inductance does not).
 //!
@@ -62,7 +62,7 @@ impl Worst {
     pub fn text(&self) -> String {
         if self.row == self.col {
             format!(
-                "{} of {} at {:.0} MHz changes by {:.1} %",
+                "{} of {} at {:.0} MHz changes by {:.3} %",
                 self.matrix,
                 self.row,
                 self.frequency_hz * 1e-6,
@@ -70,7 +70,7 @@ impl Worst {
             )
         } else {
             format!(
-                "{} between {} and {} at {:.0} MHz changes by {:.1} % (of the geometric mean of the diagonals)",
+                "{} between {} and {} at {:.0} MHz changes by {:.3} % (of the geometric mean of the diagonals)",
                 self.matrix,
                 self.row,
                 self.col,
@@ -177,7 +177,7 @@ fn step(a: &MeshRun, b: &MeshRun) -> StepChange {
     let filament_ratio = a.filaments as f64 / b.filaments.max(1) as f64;
     if filament_ratio < MIN_FILAMENT_RATIO {
         why.push(format!(
-            "the {} mesh has {} filaments and the {} mesh {} (ratio {:.2}, less than {MIN_FILAMENT_RATIO}): they are the same density, squeezed against the same budget, so their agreement is not evidence of convergence",
+            "the {} mesh has {} filaments and the {} mesh {} (ratio {:.2}, less than {MIN_FILAMENT_RATIO}): they are effectively the same density; budget coarsening or protected features and local repairs can dominate the requested pitch, so their agreement is not evidence of convergence",
             a.role, a.filaments, b.role, b.filaments, filament_ratio
         ));
     }

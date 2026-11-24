@@ -6,8 +6,174 @@ use std::process::{Command, Output};
 
 use copper_json::Value;
 
+#[path = "../../copper-extract/tests/common/external.rs"]
+mod external;
+
+#[test]
+fn routed_buck_boost_extracts_two_passive_contours_without_conducted_substitution() {
+    let directory = std::env::temp_dir().join(format!("copper-emi-external-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let state_path = directory.join("external.state.json");
+    let plot_path = directory.join("currents.svg");
+    let state = copper_state::StateDocument::new(
+        "pcbir.physical:PhysicalBoard",
+        copper_json::Object::new(),
+        copper_route::state_codec::encode_board(&external::board()),
+    );
+    std::fs::write(&state_path, state.to_text()).unwrap();
+    let output = copper(&[
+        "emi-check",
+        "examples/emi_buck_boost/board.copper",
+        "--run",
+        state_path.to_str().unwrap(),
+        "--extract",
+        "--extract-single-mesh",
+        "--extract-cell",
+        "0.1",
+        "--extract-margin",
+        "1",
+        "--extract-budget",
+        "2000",
+        "--plot-current",
+        plot_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}\n{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
+    let report = copper_json::parse(&stdout(&output)).unwrap();
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    let hot: Vec<_> =
+        findings.iter().filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP")).collect();
+    assert_eq!(hot.len(), 2);
+    for finding in hot {
+        let m = finding.get("measures").unwrap();
+        let extract = m.get("extract").expect("numerical extraction");
+        let scope = m.get("extract_scope").unwrap();
+        assert_eq!(scope.get("model").and_then(Value::as_str), Some("external_joint_contact_network/v1"));
+        assert_eq!(scope.get("inter_loop_coupling").and_then(Value::as_str), Some("evaluated_in_joint_matrix"));
+        assert_eq!(extract.get("port_labels").and_then(Value::as_array).unwrap().len(), 2);
+        assert!(
+            extract.get("not_used_in_conducted").and_then(Value::as_str).unwrap().contains("passive external contour")
+        );
+        assert_eq!(extract.get("closed_form_nh"), Some(&Value::Null));
+        assert!(extract.get("cross_check").is_none());
+    }
+    let coverage = report.get("coverage").and_then(Value::as_array).unwrap();
+    for kind in ["input", "output"] {
+        let key = format!("EMI-EXTRACT:U1:{kind}");
+        let entries: Vec<_> =
+            coverage.iter().filter(|c| c.get("check").and_then(Value::as_str) == Some(&key)).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].get("status").and_then(Value::as_str), Some("executed"));
+    }
+    assert!(!stdout(&output).contains("extracted_connection"));
+    let plot = std::fs::read_to_string(&plot_path).unwrap();
+    assert!(plot.contains("U1:input") && plot.contains("U1:output"));
+    std::fs::remove_file(plot_path).unwrap();
+    std::fs::remove_file(state_path).unwrap();
+    std::fs::remove_dir(directory).unwrap();
+}
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the workspace root").to_path_buf()
+}
+
+#[test]
+fn paired_contact_cli_reports_the_matrix_and_labels_its_unit_excitation() {
+    let directory = std::env::temp_dir().join(format!("copper-emi-paired-cli-{}", std::process::id()));
+    let source = external::paired_source(&directory);
+    let state_path = directory.join("paired.state.json");
+    let plot_path = directory.join("currents.svg");
+    let state = copper_state::StateDocument::new(
+        "pcbir.physical:PhysicalBoard",
+        copper_json::Object::new(),
+        copper_route::state_codec::encode_board(&external::paired_board()),
+    );
+    std::fs::write(&state_path, state.to_text()).unwrap();
+    let output = copper(&[
+        "emi-check",
+        source.to_str().unwrap(),
+        "--run",
+        state_path.to_str().unwrap(),
+        "--extract",
+        "--extract-single-mesh",
+        "--extract-cell",
+        "0.1",
+        "--extract-margin",
+        "1",
+        "--extract-budget",
+        "6000",
+        "--extract-width-cells",
+        "5",
+        "--extract-ideal-capacitors",
+        "--fullwave",
+        "--fullwave-budget",
+        "0.001",
+        "--plot-current",
+        plot_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}\n{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stderr).matches("standard: assembled").count(), 1);
+    let report = copper_json::parse(&stdout(&output)).unwrap();
+    let hot: Vec<_> = report
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .collect();
+    assert_eq!(hot.len(), 2);
+    for finding in hot {
+        let m = finding.get("measures").unwrap();
+        let scope = m.get("extract_scope").unwrap();
+        let kind = m.get("loop_id").unwrap().get("kind").and_then(Value::as_str).unwrap();
+        assert_eq!(scope.get("loop_id"), m.get("loop_id"));
+        assert!(scope.get("terminal_provenance_by_loop").unwrap().get("U1:output").is_some());
+        let n = 4;
+        assert_eq!(scope.get("model").and_then(Value::as_str), Some("external_joint_contact_network/v1"));
+        assert_eq!(scope.get("ports").and_then(Value::as_array).unwrap().len(), n);
+        assert!(scope.get("capacitor_boundary").and_then(Value::as_str).unwrap().contains("ideal terminal shorts"));
+        assert_eq!(scope.get("executed"), Some(&Value::Bool(true)));
+        assert_eq!(scope.get("usable"), Some(&Value::Bool(false)), "single mesh remains unqualified");
+        assert!(scope.get("contact_current_sharing").and_then(Value::as_str).unwrap().contains("unspecified"));
+        let extract = m.get("extract").unwrap();
+        let standard = &extract.get("meshes").and_then(Value::as_array).unwrap()[0];
+        assert_eq!(standard.get("loop_width_cells"), Some(&Value::from(5_i64)));
+        assert_eq!(standard.get("loop_cell_floor_mm"), Some(&Value::from(0.025)));
+        assert_eq!(extract.get("port_labels").and_then(Value::as_array).unwrap().len(), n);
+        for key in ["resistance_matrix_ohm", "inductance_matrix_nh"] {
+            for matrix in extract.get(key).and_then(Value::as_array).unwrap() {
+                assert_eq!(matrix.as_array().unwrap().len(), n);
+                assert!(matrix.as_array().unwrap().iter().all(|row| row.as_array().unwrap().len() == n));
+            }
+        }
+        assert_eq!(extract.get("scalar_port_index"), Some(&Value::from(if kind == "input" { 0_i64 } else { 3 })));
+        let selected = if kind == "input" { 0 } else { 3 };
+        let negative = &scope.get("ports").and_then(Value::as_array).unwrap()[selected].get("negative").unwrap();
+        assert_eq!(negative.get("pad"), m.get("loop_pads").and_then(Value::as_array).unwrap()[2].get("pad"));
+        assert_eq!(extract.get("closed_form_nh"), Some(&Value::Null));
+        assert!(
+            extract.get("not_used_in_conducted").and_then(Value::as_str).unwrap().contains("passive external contour")
+        );
+        let coverage = report.get("coverage").and_then(Value::as_array).unwrap();
+        for (prefix, status) in [("EMI-EXTRACT", "executed"), ("EMI-FULLWAVE", "unsupported")] {
+            let key = format!("{prefix}:U1:{kind}");
+            let entry = coverage.iter().find(|c| c.get("check").and_then(Value::as_str) == Some(&key)).unwrap();
+            assert_eq!(entry.get("status").and_then(Value::as_str), Some(status));
+            if prefix == "EMI-FULLWAVE" {
+                let detail = entry.get("detail").and_then(Value::as_str).unwrap();
+                assert!(
+                    detail.contains("source") && (detail.contains("intersects") || detail.contains("overlap")),
+                    "{detail}"
+                );
+            }
+        }
+    }
+    let plot = std::fs::read_to_string(plot_path).unwrap();
+    assert!(plot.contains("port 0; other port currents zero"));
+    assert!(!plot.contains("per ampere into the switch port"));
+    assert!(!stdout(&output).contains("extracted_connection"));
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 fn copper(arguments: &[&str]) -> Output {
@@ -45,6 +211,7 @@ fn help_names_the_extract_options_and_sub_options_need_the_flag() {
         "--extract-cell",
         "--extract-single-mesh",
         "--extract-no-switch-bar",
+        "--extract-ideal-capacitors",
         "--extract-reference",
     ] {
         assert!(help.contains(option), "{option} in {help}");
@@ -53,13 +220,21 @@ fn help_names_the_extract_options_and_sub_options_need_the_flag() {
         ["emi-check", BOARD, "--extract-budget", "100"],
         ["emi-check", BOARD, "--extract-margin", "3"],
         ["emi-check", BOARD, "--extract-cell", "0.2"],
+        ["emi-check", BOARD, "--extract-width-cells", "5"],
         ["emi-check", BOARD, "--extract-single-mesh", "--json"],
         ["emi-check", BOARD, "--extract-no-switch-bar", "--json"],
+        ["emi-check", BOARD, "--extract-ideal-capacitors", "--json"],
         ["emi-check", BOARD, "--extract-reference", "--json"],
     ] {
         assert_eq!(copper(&arguments).status.code(), Some(2), "{arguments:?}");
     }
     assert_eq!(copper(&["emi-check", BOARD, "--extract", "--extract-budget", "10"]).status.code(), Some(2));
+    let over_budget = copper(&["emi-check", BOARD, "--extract", "--extract-budget", "32769"]);
+    assert_eq!(over_budget.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&over_budget.stderr).contains("outside 50 to 32768"));
+    for width in ["3", "17", "many"] {
+        assert_eq!(copper(&["emi-check", BOARD, "--extract", "--extract-width-cells", width]).status.code(), Some(2));
+    }
     assert_eq!(copper(&["emi-check", BOARD, "--extract", "--extract-budget", "many"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--extract", "--extract-margin", "-3"]).status.code(), Some(2));
 }

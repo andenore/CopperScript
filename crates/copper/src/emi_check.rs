@@ -2,8 +2,8 @@
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
 //! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]] [--plot-impedance OUT.svg]
 //! [--plot-current OUT.svg] [--plot-summary OUT.svg]
-//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-zone-outline]]
-//! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh]
+//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-capacitor-height MM] [--fullwave-source-height MM] [--fullwave-zone-outline]]
+//! [--extract [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-width-cells N] [--extract-single-mesh]
 //! [--extract-no-switch-bar]] [--verbose] [--json]`:
 //! screen the placed switching cells for noise sources (hot loop, switch node,
 //! proximity). Screening evidence only; findings never change the exit status.
@@ -26,7 +26,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--plot-impedance PLOT_IMPEDANCE] [--plot-current PLOT_CURRENT] [--plot-summary PLOT_SUMMARY] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-single-mesh] [--extract-no-switch-bar] [--extract-reference] [--verbose] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--plot-impedance PLOT_IMPEDANCE] [--plot-current PLOT_CURRENT] [--plot-summary PLOT_SUMMARY] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-capacitor-height MM] [--fullwave-source-height MM] [--fullwave-single-mesh] [--fullwave-zone-outline] \n[--extract] [--extract-budget FILAMENTS] [--extract-margin MM] [--extract-cell MM] [--extract-width-cells N] [--extract-single-mesh] [--extract-no-switch-bar] [--extract-ideal-capacitors] [--extract-reference] [--verbose] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -56,6 +56,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         flag("--fullwave"),
         value("--fullwave-fidelity"),
         value("--fullwave-budget"),
+        value("--fullwave-capacitor-height"),
+        value("--fullwave-source-height"),
         value("--fullwave-margin"),
         flag("--fullwave-single-mesh"),
         flag("--fullwave-zone-outline"),
@@ -63,7 +65,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--extract-budget"),
         value("--extract-margin"),
         value("--extract-cell"),
+        value("--extract-width-cells"),
         flag("--extract-single-mesh"),
+        flag("--extract-ideal-capacitors"),
         flag("--extract-no-switch-bar"),
         flag("--extract-reference"),
         flag("--verbose"),
@@ -77,7 +81,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. The text report is compact (one line for each finding, at most 110 characters a line); --verbose prints the full text with every input and caveat. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 20000; --extract-margin MM, --extract-cell MM, --extract-single-mesh, --extract-no-switch-bar). --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run 
+             inductor and switch-node proximity); screening evidence, not EMC qualification. The text report is compact (one line for each finding, at most 110 characters a line); --verbose prints the full text with every input and caveat. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only, --fullwave-zone-outline takes the pours from the zone outlines minus clearances instead of the native zone fill; a ring-down fit that fails its withheld-tail, stability or passivity checks makes the value indicative). \n             --extract adds, per buck cell, the hot-loop interconnect impedance (L and R at 1, 10 and 100 MHz) from a quasi-static partial-element extraction of the real filled copper (zone fills natively, tracks, pads, vias; measures.extract, an EMI-EXTRACT:<cell> coverage entry), beside the closed-form and full-wave values, with the numerical sensitivity of a series of three meshes (the finest and two coarser by 1.5); the connection inductances of the other capacitors on the hot node and their couplings to the hot loop are extracted as a multi-port matrix and used in EMI-CONDUCTED in place of the estimates (tag extracted_connection_inductance, the estimate stays beside them; a capacitor that no copper joins to the hot node, whose port the extraction closed with a straight bar, keeps its estimate, and an extraction whose mesh does not have the copper's connectivity has status error and is not used); seconds to minutes, never part of the default run \n             (--extract-budget FILAMENTS bounds the dense system, default 9000, at most 32768; 32768 requires 8.6 GB for the inductance matrix alone, plus assembly/factorization workspace; --extract-margin MM, --extract-cell MM, --extract-width-cells N (4 to 16 requested cells across loop copper), --extract-single-mesh, --extract-no-switch-bar). For buck-boost, --extract assembles a joint input/output native-copper network with independent signed contact ports (at most 16), shared-return and mutual coupling, and no package shorts or assumed current sharing. Each loop reports its own port and current map; other port currents are zero. Selected capacitor copper fixtures must not cross native copper. --extract-ideal-capacitors explicitly uses ideal terminal shorts instead, excluding capacitor body copper, its magnetic field, ESR and ESL (PEEC only). Repeated pad numbers require matching occurrences and one continuous land. --fullwave attempts experimental external source-gap matrices with a shared per-controller budget and explicit geometry, passivity and convergence checks; its boundary differs from PEEC. --fullwave-capacitor-height MM explicitly replaces the external capacitor fixtures by raised PEC bridges and rectangular terminal posts, retaining native copper below them; the supplied height is an analysis assumption, fixture fields are included, and component ESR/ESL and dielectric remain excluded. --fullwave-source-height MM explicitly elevates facing controller source gaps on rectangular PEC terminal posts; the height and fixture fields are analysis assumptions, not a characterized package model. Intersecting source volumes or fixtures are refused. Inspect extract_scope/fullwave_scope and result status: executed does not mean usable. Passive matrices do not provide a switching waveform or enable conducted, radiation or ringing prediction. --extract-reference also runs an independent reference solver from the same copper (a raster of every layer, flood-fill topology, finite-difference DC conduction, the DC inductance from the field energy of the current distribution: it shares no code with the mesher) and puts its R and L matrices beside the extraction's at 1 kHz in measures.extract.reference, with the difference of every entry; a disagreement beyond the stated limit adds a status reason (flag reference_disagrees), a topology disagreement makes the status error; it is the DC limit and does not validate skin or proximity redistribution; seconds to minutes more, never part of the default run
              --plot-summary OUT.svg draws the one-page summary of each cell (a title, one line of facts, up to five stat tiles, the findings as chips, and the near field, the conducted spectrum, the input-network impedance and with --extract the current distribution as pictures), the picture to open first; with EMI-RETURN-PATH findings (--run) it adds a return-path map with numbered marks (gaps, reference changes without a return path, plane and board edge points) and a legend beside it, and on a board with no switching cell that map is the whole picture; one page then charts the mode conversion of the pairs (a bar per pair in dB, the worst first, with its channel of sections and parts beside it) and one page per cable connector charts the common-mode voltage of each driver in dBuV, in three groups (pairs, ground noise, ranking only); one footer line ends the document. --plot-spectrum also draws, for each cable connector whose finding publishes a voltage, the same driver chart (no limit line: voltages, not a field). For each cable connector the report has an EMI-CABLE-COMMON-MODE finding: the common-mode voltage (dBuV) each driver leaves at the connector and a ranking of the drivers, never a current, a field or a margin (differential pairs need --run)"
         );
         crate::help::options(out, "emi-check");
@@ -336,6 +340,8 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
             ("--fullwave-fidelity", fidelity),
             ("--fullwave-budget", budget),
             ("--fullwave-margin", margin),
+            ("--fullwave-capacitor-height", parsed.value("--fullwave-capacitor-height")),
+            ("--fullwave-source-height", parsed.value("--fullwave-source-height")),
             ("--fullwave-single-mesh", parsed.flag("--fullwave-single-mesh").then_some("")),
             ("--fullwave-zone-outline", parsed.flag("--fullwave-zone-outline").then_some("")),
         ] {
@@ -367,6 +373,8 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
         fidelity,
         budget_seconds: positive("--fullwave-budget", budget)?,
         margin_mm: positive("--fullwave-margin", margin)?,
+        capacitor_height_mm: positive("--fullwave-capacitor-height", parsed.value("--fullwave-capacitor-height"))?,
+        source_height_mm: positive("--fullwave-source-height", parsed.value("--fullwave-source-height"))?,
         single_mesh: parsed.flag("--fullwave-single-mesh"),
         zone_outline: parsed.flag("--fullwave-zone-outline"),
     }))
@@ -376,12 +384,15 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
 fn extract_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_extract::Options>, String> {
     let (budget, margin, cell) =
         (parsed.value("--extract-budget"), parsed.value("--extract-margin"), parsed.value("--extract-cell"));
+    let width = parsed.value("--extract-width-cells");
     if !parsed.flag("--extract") {
         for (name, given) in [
             ("--extract-budget", budget),
             ("--extract-margin", margin),
             ("--extract-cell", cell),
+            ("--extract-width-cells", width),
             ("--extract-single-mesh", parsed.flag("--extract-single-mesh").then_some("")),
+            ("--extract-ideal-capacitors", parsed.flag("--extract-ideal-capacitors").then_some("")),
             ("--extract-no-switch-bar", parsed.flag("--extract-no-switch-bar").then_some("")),
             ("--extract-reference", parsed.flag("--extract-reference").then_some("")),
         ] {
@@ -405,21 +416,30 @@ fn extract_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_e
     let budget_filaments = match budget.map(str::trim) {
         None => None,
         Some(text) => match text.parse::<usize>() {
-            Ok(n) if (50..=20_000).contains(&n) => Some(n),
+            Ok(n) if (50..=32_768).contains(&n) => Some(n),
             Ok(n) => {
                 return Err(format!(
-                    "argument --extract-budget: {n} filaments is outside 50 to 20000 (the inductance matrix is dense: n^2 doubles)"
+                    "argument --extract-budget: {n} filaments is outside 50 to 32768 (the inductance matrix alone is n^2 doubles, plus assembly/factorization workspace)"
                 ));
             }
             Err(_) => return Err(format!("argument --extract-budget: invalid int value: '{text}'")),
         },
     };
+    let width_cells = width
+        .map(|text| {
+            text.trim().parse::<usize>().ok().filter(|n| (4..=16).contains(n)).ok_or_else(|| {
+                format!("argument --extract-width-cells: expected an integer from 4 to 16, got '{text}'")
+            })
+        })
+        .transpose()?;
     Ok(Some(crate::emi_extract::Options {
         budget_filaments,
+        width_cells,
         margin_mm: positive("--extract-margin", margin)?,
         cell_mm: positive("--extract-cell", cell)?,
         single_mesh: parsed.flag("--extract-single-mesh"),
         no_switch_bar: parsed.flag("--extract-no-switch-bar"),
+        ideal_capacitors: parsed.flag("--extract-ideal-capacitors"),
         reference: parsed.flag("--extract-reference"),
         current_map: parsed.value("--plot-current").is_some() || parsed.value("--plot-summary").is_some(),
     }))

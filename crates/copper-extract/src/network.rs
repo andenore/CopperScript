@@ -129,8 +129,9 @@ pub struct Solver {
     nb: usize,
     nl: usize,
     resistance: Vec<f64>,
-    /// Partial inductance matrix, `nb x nb`, row major.
-    inductance: Vec<f64>,
+    /// Rows of the partial inductance matrix needed by port paths. The complete
+    /// matrix is used to assemble B L B^T, then released before factorization.
+    path_inductance: BTreeMap<usize, Vec<f64>>,
     /// Loops as sparse rows `(branch, sign)`.
     loops: Vec<Vec<(usize, f64)>>,
     /// `B R B^T` and `B L B^T`, `nl x nl`.
@@ -173,34 +174,44 @@ impl Dsu {
 /// number of threads.
 fn assemble_inductance(branches: &[Branch]) -> Vec<f64> {
     let nb = branches.len();
-    let row = |i: usize| -> Vec<f64> {
-        let mut out = Vec::with_capacity(nb - i);
-        out.push(partial::self_inductance(&branches[i].bar));
+    if nb == 0 {
+        return Vec::new();
+    }
+    let fill = |i: usize, row: &mut [f64]| {
+        row[i] = partial::self_inductance(&branches[i].bar);
         for j in (i + 1)..nb {
-            out.push(partial::mutual(&branches[i].bar, &branches[j].bar));
+            row[j] = partial::mutual(&branches[i].bar, &branches[j].bar);
         }
-        out
     };
     let threads = if nb >= 200 { parallelism().min(nb) } else { 1 };
-    let mut rows: Vec<(usize, Vec<f64>)> = if threads <= 1 {
-        (0..nb).map(|i| (i, row(i))).collect()
-    } else {
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let row = &row;
-                    scope.spawn(move || (t..nb).step_by(threads).map(|i| (i, row(i))).collect::<Vec<_>>())
-                })
-                .collect();
-            handles.into_iter().flat_map(|h| h.join().expect("assembly thread")).collect()
-        })
-    };
-    rows.sort_unstable_by_key(|r| r.0);
+    // Fill the final allocation directly. Keeping an intermediate triangular
+    // matrix adds about 2.7 GB at 26,000 branches, before the loop-system workspace.
     let mut m = vec![0.0; nb * nb];
-    for (i, values) in rows {
-        for (d, v) in values.into_iter().enumerate() {
-            m[i * nb + i + d] = v;
-            m[(i + d) * nb + i] = v;
+    if threads <= 1 {
+        for (i, row) in m.chunks_mut(nb).enumerate() {
+            fill(i, row);
+        }
+    } else {
+        // Disjoint mutable row slices preserve interleaved load balancing without
+        // unsafe shared writes or a second allocation of the matrix entries.
+        let mut work: Vec<Vec<_>> = (0..threads).map(|_| Vec::new()).collect();
+        for (i, row) in m.chunks_mut(nb).enumerate() {
+            work[i % threads].push((i, row));
+        }
+        std::thread::scope(|scope| {
+            for rows in work {
+                let fill = &fill;
+                scope.spawn(move || {
+                    for (i, row) in rows {
+                        fill(i, row);
+                    }
+                });
+            }
+        });
+    }
+    for i in 0..nb {
+        for j in 0..i {
+            m[i * nb + j] = m[j * nb + i];
         }
     }
     m
@@ -341,20 +352,18 @@ impl Solver {
         // Partial inductance matrix.
         let inductance = assemble_inductance(&network.branches);
         let resistance: Vec<f64> = network.branches.iter().map(|b| b.resistance).collect();
-        // B L B^T = (B L) B^T.
-        let mut bl_rows = vec![0.0; nl * nb];
-        parallel_rows(&mut bl_rows, nb, |l, row| {
-            for &(k, s) in &loops[l] {
+        // B L B^T = (B L) B^T. Keep one row of B L per worker,
+        // not the whole nl-by-nb intermediate (about 4 GB at 32,000
+        // branches). Both sums retain their original accumulation order.
+        let mut bl = vec![0.0; nl * nl];
+        parallel_rows(&mut bl, nl, |l1, out| {
+            let mut row = vec![0.0; nb];
+            for &(k, s) in &loops[l1] {
                 let src = &inductance[k * nb..(k + 1) * nb];
                 for (dst, v) in row.iter_mut().zip(src) {
                     *dst += s * v;
                 }
             }
-        });
-        let mut bl = vec![0.0; nl * nl];
-        let mut br = vec![0.0; nl * nl];
-        parallel_rows(&mut bl, nl, |l1, out| {
-            let row = &bl_rows[l1 * nb..(l1 + 1) * nb];
             for (l2, lp2) in loops.iter().enumerate() {
                 let mut acc = 0.0;
                 for &(k, s) in lp2 {
@@ -363,7 +372,10 @@ impl Solver {
                 out[l2] = acc;
             }
         });
+        let path_inductance = path_rows.iter().map(|&k| (k, inductance[k * nb..(k + 1) * nb].to_vec())).collect();
+        drop(inductance);
         // B R B^T: loops share a branch only through it.
+        let mut br = vec![0.0; nl * nl];
         let mut users: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nb];
         for (l, lp) in loops.iter().enumerate() {
             for &(k, s) in lp {
@@ -377,7 +389,19 @@ impl Solver {
                 }
             }
         }
-        Ok(Solver { nb, nl, resistance, inductance, loops, br, bl, paths, path_rows, components, merged_nodes: nn })
+        Ok(Solver {
+            nb,
+            nl,
+            resistance,
+            path_inductance,
+            loops,
+            br,
+            bl,
+            paths,
+            path_rows,
+            components,
+            merged_nodes: nn,
+        })
     }
 
     pub fn filaments(&self) -> usize {
@@ -404,7 +428,7 @@ impl Solver {
             let mut zb = vec![Complex::ZERO; nb];
             for &(k, s) in path {
                 zb[k] = zb[k] + Complex::new(self.resistance[k] * s, 0.0);
-                let column = &self.inductance[k * nb..(k + 1) * nb]; // symmetric: row k = column k
+                let column = &self.path_inductance[&k]; // symmetric: row k = column k
                 for (z, l) in zb.iter_mut().zip(column) {
                     *z = *z + Complex::new(0.0, w * s * l);
                 }
@@ -439,7 +463,7 @@ impl Solver {
             let mut drop = BTreeMap::new();
             for &k in &self.path_rows {
                 let mut acc = Complex::new(self.resistance[k], 0.0) * b[k];
-                let row = &self.inductance[k * nb..(k + 1) * nb];
+                let row = &self.path_inductance[&k];
                 let (mut sr, mut si) = (0.0, 0.0);
                 for (l, v) in row.iter().zip(&b) {
                     sr += l * v.re;

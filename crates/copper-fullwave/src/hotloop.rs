@@ -25,6 +25,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use copper_drc::emi::EmiFinding;
+use copper_drc::emi::loop_model::{ClosureKind, ExternalContour, LoopId, LoopKind, LoopPad, LoopPortLayout};
 use copper_json::Value;
 use copper_pcb::board::PhysicalBoard;
 use copper_physical::CopperLayer;
@@ -54,6 +55,7 @@ pub struct LegInfo {
 pub struct HotLoopInput {
     /// The controller's reference.
     pub cell: String,
+    pub loop_kind: LoopKind,
     pub topology: String,
     pub capacitor: String,
     /// The loop's pads in order, `(component, pad)`.
@@ -69,6 +71,10 @@ pub struct HotLoopInput {
     /// The controller's switch-node pad nearest the hot supply pad, for a synchronous cell
     /// (the finding's pad sequence of a four-pad loop does not contain it).
     pub switch_pad: Option<(String, String)>,
+    /// Validated identity/contact metadata for the PEEC-only external PCB contour.
+    pub external_contour: Option<ExternalContour>,
+    /// Optional second side in the same physical network; never used by buck ports.
+    pub external_peer: Option<ExternalContour>,
 }
 
 fn number(v: &Value) -> Option<f64> {
@@ -85,22 +91,44 @@ impl HotLoopInput {
     pub fn from_finding(finding: &EmiFinding, topology: &str) -> Result<HotLoopInput> {
         let measures = &finding.measures;
         let bad = |what: &str| Error::Invalid(format!("EMI-HOT-LOOP finding: {what}"));
+        let id = LoopId::from_finding(finding).map_err(|e| bad(&e))?;
+        let external_contour = if topology == "buck_boost" && id.kind != LoopKind::Standard {
+            Some(ExternalContour::from_finding(finding).map_err(Error::NotSupported)?)
+        } else {
+            None
+        };
         let labels: Vec<String> = measures
             .get("pad_sequence")
             .and_then(Value::as_array)
             .ok_or_else(|| bad("no pad_sequence"))?
             .iter()
-            .filter_map(|v| v.as_str().map(str::to_owned))
-            .collect();
-        let pads = labels
-            .iter()
-            .map(|label| {
-                let last = label.split_whitespace().last().unwrap_or("");
-                last.rsplit_once('.')
-                    .map(|(c, p)| (c.to_owned(), p.to_owned()))
-                    .ok_or_else(|| bad(&format!("cannot read a pad from '{label}'")))
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .map(|v| v.as_str().map(str::to_owned).ok_or_else(|| bad("pad_sequence contains a non-string")))
+            .collect::<Result<_>>()?;
+        let pads = if let Some(value) = measures.get("loop_pads") {
+            let values = value.as_array().ok_or_else(|| bad("loop_pads must be an array"))?;
+            if values.len() != labels.len() {
+                return Err(bad("loop_pads and pad_sequence have different lengths"));
+            }
+            values
+                .iter()
+                .map(|v| {
+                    let pad = LoopPad::from_value(v).map_err(|e| bad(&e))?;
+                    Ok((pad.component, pad.pad))
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            // Compatibility with findings saved before structured physical endpoints existed.
+            labels
+                .iter()
+                .map(|label| {
+                    let last = label.split_whitespace().last().unwrap_or("");
+                    last.rsplit_once('.')
+                        .filter(|(c, p)| !c.is_empty() && !p.is_empty())
+                        .map(|(c, p)| (c.to_owned(), p.to_owned()))
+                        .ok_or_else(|| bad(&format!("cannot read a pad from '{label}'")))
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
         let capacitor = measures.get("loop_capacitor").and_then(Value::as_str).unwrap_or_default().to_owned();
         let legs = measures
             .get("legs")
@@ -128,7 +156,8 @@ impl HotLoopInput {
             })
             .unwrap_or_default();
         Ok(HotLoopInput {
-            cell: finding.cell.clone().unwrap_or_default(),
+            cell: id.controller,
+            loop_kind: id.kind,
             topology: if topology.is_empty() { "buck".to_owned() } else { topology.to_owned() },
             capacitor,
             pads,
@@ -139,7 +168,58 @@ impl HotLoopInput {
             trace_status: measures.get("trace_status").and_then(Value::as_str).unwrap_or("no_copper").to_owned(),
             polygon_mm,
             switch_pad: None,
+            external_contour,
+            external_peer: None,
         })
+    }
+
+    /// One topology/closure definition for PEEC and full wave. Named loops must never
+    /// acquire buck ports merely because their screening contours also have four pads.
+    pub fn port_layout(&self) -> Result<LoopPortLayout> {
+        if self.labels.len() != self.pads.len() {
+            return Err(Error::Invalid("hot-loop pads and labels have different lengths".to_owned()));
+        }
+        LoopPortLayout::buck(&self.topology, self.loop_kind, self.pads.len(), self.switch_pad.is_some())
+            .map_err(Error::NotSupported)
+    }
+
+    /// PEEC has native copper connectivity validation for the external contour. FDTD
+    /// deliberately continues to use `port_layout` until its own geometry is validated.
+    pub fn peec_port_layout(&self) -> Result<LoopPortLayout> {
+        if let Some(contour) = &self.external_contour {
+            contour.validate().map_err(Error::NotSupported)?;
+            if self.topology != "buck_boost"
+                || self.loop_kind == LoopKind::Standard
+                || self.loop_kind != contour.id.kind
+                || self.cell != contour.id.controller
+                || self.capacitor != contour.pads[0].component
+                || self.labels.len() != 4
+                || self.switch_pad.is_some()
+                || contour.pads[1].component != self.cell
+                || contour.pads[2].component != self.cell
+                || contour.pads[3].component != self.capacitor
+                || self.capacitor == self.cell
+                || contour.pads.iter().enumerate().any(|(i, p)| contour.pads[..i].contains(p))
+                || self.pads != contour.pads.iter().map(|p| (p.component.clone(), p.pad.clone())).collect::<Vec<_>>()
+            {
+                return Err(Error::Invalid("external contour does not match the hot-loop input".to_owned()));
+            }
+            return Ok(self.external_network()?.expect("external contour").layout);
+        }
+        if self.external_peer.is_some() {
+            return Err(Error::Invalid("external peer without primary contour".to_owned()));
+        }
+        self.port_layout()
+    }
+
+    pub fn external_network(&self) -> Result<Option<copper_drc::emi::loop_model::ExternalNetwork>> {
+        self.external_contour
+            .as_ref()
+            .map(|c| {
+                copper_drc::emi::loop_model::ExternalNetwork::new(c.clone(), self.external_peer.clone())
+                    .map_err(Error::NotSupported)
+            })
+            .transpose()
     }
 }
 
@@ -346,32 +426,13 @@ pub fn hot_loop_spec(
     input: &HotLoopInput,
     options: &HotLoopOptions,
 ) -> Result<(RegionSpec, Vec<String>)> {
-    if input.topology != "buck" {
-        return Err(Error::NotSupported(format!(
-            "the full-wave hot-loop extraction is defined for buck cells (asynchronous and synchronous); the {} topology has no port definition",
-            input.topology
-        )));
-    }
+    let layout = input.port_layout()?;
     let n = input.pads.len();
-    // Asynchronous: 0 C.supply, 1 hot supply, 2 switch, 3 D.switch side, 4 D.rail side, 5 C.return.
-    // Synchronous: 0 C.supply, 1 hot supply, 2 hot return, 3 C.return.
-    // Synchronous with a known switch pad (index 4): the port is across the high-side switch (hot supply
-    // pad to switch pad), the low-side switch is a bridge from the switch pad to the hot return pad.
-    type Pairs = Vec<(usize, usize)>;
     let mut pad_ids: Vec<(String, String)> = input.pads.clone();
-    let (port, bridges, legs): ((usize, usize), Pairs, Pairs) = match n {
-        6 => ((1, 2), vec![(3, 4), (5, 0)], vec![(0, 1), (2, 3), (4, 5)]),
-        4 if input.switch_pad.is_some() => {
-            pad_ids.extend(input.switch_pad.clone());
-            ((1, 4), vec![(4, 2), (3, 0)], vec![(0, 1), (2, 3)])
-        }
-        4 => ((1, 2), vec![(3, 0)], vec![(0, 1), (2, 3)]),
-        _ => {
-            return Err(Error::NotSupported(format!(
-                "a hot loop of {n} pads has no port definition (a buck loop has 4 or 6)"
-            )));
-        }
-    };
+    if layout.append_switch_pad {
+        pad_ids.extend(input.switch_pad.clone());
+    }
+    let port = layout.port;
     let stack = stack(board)?;
     let all = placed_pads(board, &crate::model::poses(board), &stack);
     let find = |k: usize| {
@@ -450,7 +511,8 @@ pub fn hot_loop_spec(
             boxes.push(loop_box);
         } else {
             boxes.extend(around(format!("{}-switch port", input.cell), &[&placed[port.0].ring, &placed[port.1].ring]));
-            for &(a, b) in &bridges {
+            for closure in &layout.closures {
+                let (a, b) = closure.terminals;
                 boxes.extend(around(
                     format!("bridge {}-{}", pad_ids[a].0, pad_ids[b].0),
                     &[&placed[a].ring, &placed[b].ring],
@@ -464,13 +526,14 @@ pub fn hot_loop_spec(
     }
     let term = |k: usize| Terminal::pad(&pad_ids[k].0, &pad_ids[k].1);
     spec.ports = vec![PortSpec::gap(&format!("{}-switch", input.cell), term(port.0), term(port.1))];
-    for (a, b) in bridges {
-        let name = if a == 5 || (n == 4 && a == 3) { input.capacitor.clone() } else { pad_ids[a].0.clone() };
+    for closure in &layout.closures {
+        let (a, b) = closure.terminals;
+        let name = if closure.kind == ClosureKind::Capacitor { input.capacitor.clone() } else { pad_ids[a].0.clone() };
         spec.bridges.push(Bridge { name, a: term(a), b: term(b) });
     }
     // Copper legs without routed copper get the straight trace of the closed form.
     let mut notes = Vec::new();
-    for (a, b) in legs {
+    for (a, b) in layout.legs {
         let (from, to) = (&input.labels[a], &input.labels[(a + 1) % n]);
         let routed = input.legs.iter().any(|l| &l.from == from && &l.to == to && l.kind == "traced");
         if routed {

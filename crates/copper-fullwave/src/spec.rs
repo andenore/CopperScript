@@ -113,15 +113,30 @@ pub struct PortSpec {
     pub z_ref: f64,
     /// Join a gap port to its pads by straps even where the pads face each other across free space.
     pub strap: bool,
+    /// Explicit elevation of a facing gap port above front copper, with
+    /// rectangular PEC terminal posts. Includes fixture fields, not a package model.
+    pub elevation_nm: Option<i64>,
 }
 
 impl PortSpec {
     pub fn gap(name: &str, from: Terminal, to: Terminal) -> PortSpec {
-        PortSpec { name: name.to_owned(), kind: PortKind::Gap { from, to }, z_ref: 50.0, strap: false }
+        PortSpec {
+            name: name.to_owned(),
+            kind: PortKind::Gap { from, to },
+            z_ref: 50.0,
+            strap: false,
+            elevation_nm: None,
+        }
     }
 
     pub fn to_plane(name: &str, top: Terminal, plane: CopperLayer) -> PortSpec {
-        PortSpec { name: name.to_owned(), kind: PortKind::ToPlane { top, plane }, z_ref: 50.0, strap: false }
+        PortSpec {
+            name: name.to_owned(),
+            kind: PortKind::ToPlane { top, plane },
+            z_ref: 50.0,
+            strap: false,
+            elevation_nm: None,
+        }
     }
 
     /// Make a gap port a strap port (see [`PortSpec::strap`]).
@@ -144,6 +159,17 @@ pub struct Bridge {
     pub name: String,
     pub a: Terminal,
     pub b: Terminal,
+}
+
+/// Explicit component fixture above the front copper: rectangular PEC terminal
+/// posts and a PEC sheet joining their outlines at `height_nm`. This includes
+/// fixture fields; it is neither a zero-inductance short nor a component model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaisedBridge {
+    pub name: String,
+    pub a: Terminal,
+    pub b: Terminal,
+    pub height_nm: i64,
 }
 
 /// Copper added where the board has none: a straight trace between two
@@ -209,6 +235,7 @@ pub struct RegionSpec {
     pub default_treatment: NetTreatment,
     pub ports: Vec<PortSpec>,
     pub bridges: Vec<Bridge>,
+    pub raised_bridges: Vec<RaisedBridge>,
     pub extra_traces: Vec<ExtraTrace>,
     /// The analysis band `(low, high)` in hertz. The excitation covers it.
     pub band_hz: (f64, f64),
@@ -260,6 +287,9 @@ pub struct RegionSpec {
     /// Complete a record that has not decayed with a fit of its ring-down (see `crate::fit`) and end the run
     /// when the fit is stable instead of waiting for the energy to decay. Records that do decay are unchanged.
     pub ring_fit: bool,
+    /// Average the voltage lines over the same transverse columns used by the
+    /// distributed lumped element, instead of using only its centre line.
+    pub distributed_port_voltage: bool,
     /// Stop when the field energy has decayed this far (dB, negative).
     pub decay_db: f64,
     /// Simulated-time cap, ns; `None` derives it from the window.
@@ -283,6 +313,7 @@ impl RegionSpec {
             default_treatment: NetTreatment::Pec,
             ports: Vec::new(),
             bridges: Vec::new(),
+            raised_bridges: Vec::new(),
             extra_traces: Vec::new(),
             band_hz: (100e6, 1e9),
             fidelity: Fidelity::Coarse,
@@ -299,6 +330,7 @@ impl RegionSpec {
             zone_fills: None,
             pulse_scale: 1.0,
             ring_fit: true,
+            distributed_port_voltage: false,
             decay_db: -35.0,
             max_time_ns: None,
             threads: 0,

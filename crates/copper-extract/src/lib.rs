@@ -7,6 +7,7 @@ pub mod convergence;
 pub mod current;
 pub mod extract;
 pub mod fasthenry;
+pub mod fullwave;
 pub mod hotloop;
 pub mod layout;
 pub mod linalg;

@@ -1,9 +1,9 @@
-//! The interconnect impedance of a buck cell's hot loop, extracted from the real filled copper.
+//! Interconnect impedance of validated hot-loop PCB networks, extracted from real filled copper.
 //!
 //! The port, the shorts and the window are those of `copper-fullwave`'s hot-loop model (see [`crate::board`]), so
-//! the numbers can be read next to the closed-form value of the finding and the full-wave one. The extraction is
-//! made on a series of three meshes (pitch ratio 1.5); the difference between the two finest is the numerical
-//! sensitivity reported and decides the status.
+//! buck numbers can be read next to the closed-form value of the finding and the full-wave one. External buck-boost
+//! networks use a separate contact-resolved boundary, excluding package-gap conductors. Three meshes test every
+//! R/L entry: buck keeps pitch ratio 1.5; external networks use ratio 2 and progressively finer width resolution.
 
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use copper_pcb::board::PhysicalBoard;
 
 use crate::board::{BoardModel, BoardOptions, LoopPad, SynthesizedLeg, UnconnectedCapacitor, build_layout, loop_ports};
 use crate::current::CurrentMap;
-use crate::extract::{Extraction, extract};
+use crate::extract::{Extraction, Progress, extract_with_progress};
 use crate::layout::Layout;
 use crate::mesh::MeshSpec;
 use crate::reference::{ReferenceOptions, ReferenceResult};
@@ -185,7 +185,7 @@ fn compare_with_reference(
     let reference = crate::reference::solve(layout, options)?;
     let coarse_options = ReferenceOptions { pitch_nm: Some(reference.pitch_nm * 2), ..options.clone() };
     let coarse_reference = crate::reference::solve(layout, &coarse_options).ok();
-    let x = mesh_with(layout, base, &[REFERENCE_COMPARISON_HZ], false)?;
+    let x = mesh_with(layout, base, &[REFERENCE_COMPARISON_HZ], false, |_| {})?;
     let n = x.solutions[0].z.len();
     let peec_r_ohm: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.resistance(0, i, j)).collect()).collect();
     let peec_l_nh: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| x.inductance(0, i, j) * 1e9).collect()).collect();
@@ -245,6 +245,9 @@ fn compare_with_reference(
 /// One mesh that was run.
 #[derive(Clone, Debug)]
 pub struct MeshRun {
+    pub width_cells: usize,
+    pub loop_cell_nm: i64,
+    pub defect_cell_nm: i64,
     pub role: &'static str,
     pub cell_nm: i64,
     pub coarse_nm: i64,
@@ -297,6 +300,8 @@ pub struct ViaCurrent {
 #[derive(Clone, Debug)]
 pub struct HotLoopExtraction {
     pub cell: String,
+    pub selected_port: usize,
+    pub port_observations: Vec<PortObservations>,
     pub frequencies_hz: Vec<f64>,
     /// The numbers of the finer of the two meshes (the only one without a second).
     pub inductance_nh: Vec<f64>,
@@ -364,6 +369,46 @@ pub struct HotLoopExtraction {
     pub currents: Option<Box<HotLoopCurrents>>,
 }
 
+/// Per-column observations, retained without another solve or summing excitations.
+#[derive(Clone, Debug)]
+pub struct PortObservations {
+    pub via_currents: Vec<Vec<ViaCurrent>>,
+    pub currents: Option<Box<HotLoopCurrents>>,
+}
+
+impl HotLoopExtraction {
+    pub fn select_port(&self, port: usize) -> Result<Self, String> {
+        if port >= self.port_labels.len() || port >= self.port_observations.len() {
+            return Err("reported port is outside the impedance matrix".to_owned());
+        }
+        let mut result = self.clone();
+        result.selected_port = port;
+        for mesh in &mut result.meshes {
+            mesh.inductance_nh = mesh.inductance_matrix_nh.iter().map(|m| m[port][port]).collect();
+            mesh.resistance_ohm = mesh.resistance_matrix_ohm.iter().map(|m| m[port][port]).collect();
+        }
+        result.inductance_nh = result.meshes[0].inductance_nh.clone();
+        result.resistance_ohm = result.meshes[0].resistance_ohm.clone();
+        let difference = |a: usize, b: usize| {
+            result.meshes[a]
+                .inductance_nh
+                .iter()
+                .zip(&result.meshes[b].inductance_nh)
+                .map(|(x, y)| 100.0 * (x - y).abs() / x.abs())
+                .collect()
+        };
+        result.mesh_difference_pct = if result.meshes.len() >= 2 { difference(0, 1) } else { Vec::new() };
+        result.earlier_difference_pct = if result.meshes.len() >= 3 { difference(1, 2) } else { Vec::new() };
+        result.via_currents = self.port_observations[port].via_currents.clone();
+        result.currents = self.port_observations[port].currents.clone();
+        result.port_description = format!(
+            "{}; column {port} of the shared native-copper matrix; all other port currents zero; declared capacitor boundary, no package termination",
+            self.port_labels[port]
+        );
+        Ok(result)
+    }
+}
+
 /// The current distribution of the finest mesh at one frequency, with the loop's pads.
 #[derive(Clone, Debug)]
 pub struct HotLoopCurrents {
@@ -376,12 +421,21 @@ pub struct HotLoopCurrents {
 /// Preferred frequency of the current map, Hz.
 pub const CURRENT_MAP_HZ: f64 = 1e7;
 
-fn mesh_with(layout: &Layout, spec: &MeshSpec, frequencies: &[f64], currents: bool) -> Result<Extraction, String> {
-    extract(layout, spec, frequencies, currents).map_err(|e| e.to_string())
+fn mesh_with(
+    layout: &Layout,
+    spec: &MeshSpec,
+    frequencies: &[f64],
+    currents: bool,
+    progress: impl FnMut(Progress),
+) -> Result<Extraction, String> {
+    extract_with_progress(layout, spec, frequencies, currents, progress).map_err(|e| e.to_string())
 }
 
 pub fn run_info(role: &'static str, x: &Extraction) -> MeshRun {
     MeshRun {
+        width_cells: x.mesh.stats.width_cells,
+        loop_cell_nm: x.mesh.stats.loop_cell_nm,
+        defect_cell_nm: x.mesh.stats.defect_cell_nm,
         role,
         cell_nm: x.mesh.stats.cell_nm,
         coarse_nm: x.mesh.stats.coarse_nm,
@@ -426,6 +480,18 @@ pub fn extract_hot_loop(
     input: &HotLoopInput,
     options: &HotLoopOptions,
 ) -> Result<HotLoopExtraction, String> {
+    extract_hot_loop_with_progress(model, board, input, options, |_, _| {})
+}
+
+/// Extract with a diagnostic observer for each completed stage of each mesh.
+/// Intermediate meshes are not qualified results: convergence is assessed after the series.
+pub fn extract_hot_loop_with_progress(
+    model: &BoardModel,
+    board: &PhysicalBoard,
+    input: &HotLoopInput,
+    options: &HotLoopOptions,
+    mut progress: impl FnMut(&'static str, Progress),
+) -> Result<HotLoopExtraction, String> {
     let started = Instant::now();
     let ports = loop_ports(input)?;
     let build = |board_options: &BoardOptions| {
@@ -448,17 +514,36 @@ pub fn extract_hot_loop(
         layout = build(&BoardOptions { capacitor_ports: ports_kept, ..options.board.clone() })?;
     }
     let freqs = &options.frequencies_hz;
-    let base = MeshSpec { coarsen: true, ..options.mesh.clone() };
-    let first = mesh_with(&layout.layout, &base, freqs, true)?;
+    let base = MeshSpec {
+        coarsen: true,
+        across: if input.external_contour.is_some() { options.mesh.across.max(4) } else { options.mesh.across },
+        loop_cell_nm: if input.external_contour.is_some() { 25_000 } else { options.mesh.loop_cell_nm },
+        defect_cell_nm: if input.external_contour.is_some() { 25_000 } else { options.mesh.defect_cell_nm },
+        ..options.mesh.clone()
+    };
+    let first = mesh_with(&layout.layout, &base, freqs, true, |stage| progress("standard", stage))?;
     let connection_legs = !layout.synthesized_legs.is_empty();
     let mut runs = vec![run_info("standard", &first)];
     if options.series {
-        // Two coarser meshes (pitches times 1.5 and 2.25) so that the last two steps of a refinement series exist:
+        // External networks retain neighbouring copper and feature-scale mesh
+        // constraints. Use octave steps to separate their adaptive meshes;
+        // the original buck series keeps its 1.5 step. Density, topology and
+        // every matrix entry still have to pass the same convergence checks.
+        // Two coarser meshes so that the last two steps of a refinement series exist:
         // the numbers reported are the finest mesh's, the evidence of convergence is how much they move.
         let used = MeshSpec { scale: first.mesh.stats.scale, ..base.clone() };
-        for (role, factor) in [("coarser", 1.0 / 1.5), ("coarsest", 1.0 / 2.25)] {
-            let spec = MeshSpec { coarsen: false, ..used.refined(factor) };
-            let x = mesh_with(&layout.layout, &spec, freqs, false)?;
+        let step = if input.external_contour.is_some() { 2.0 } else { 1.5 };
+        for (role, factor, width_factor) in [("coarser", 1.0 / step, 1.5), ("coarsest", 1.0 / (step * step), 2.25)] {
+            let spec = MeshSpec {
+                coarsen: false,
+                across: if input.external_contour.is_some() {
+                    (base.across as f64 / width_factor).ceil() as usize
+                } else {
+                    base.across
+                },
+                ..used.refined(factor)
+            };
+            let x = mesh_with(&layout.layout, &spec, freqs, false, |stage| progress(role, stage))?;
             runs.push(run_info(role, &x));
         }
     }
@@ -483,6 +568,9 @@ pub fn extract_hot_loop(
     let stats = &first.mesh.stats;
     let mut reasons = Vec::new();
     let mut notes = layout.notes.clone();
+    if input.external_contour.is_some() {
+        notes.push("external native loop tracks retain width-based resolution; local topology defects refine to a 25 um requested cell floor, including neighbouring copper; three pitches use 1:2:4 with decreasing width resolution (default 4/3/2 cells); all matrix convergence limits are unchanged".to_owned());
+    }
     for u in &unconnected {
         notes.push(format!(
             "capacitor {}: no copper joins pad(s) {} to the hot capacitor's pad on the same net, so it gets no port and no bar: its connection inductance stays the estimate",
@@ -556,40 +644,46 @@ pub fn extract_hot_loop(
     flags.sort();
     flags.dedup();
     // Via currents of the standard mesh (it kept the branch currents).
-    let mut via_currents = Vec::new();
-    let mut net_names: Vec<&str> = layout.layout.vias.iter().map(|v| v.net.as_str()).collect();
-    net_names.sort_unstable();
-    net_names.dedup();
-    for f in 0..freqs.len() {
-        let mut list = Vec::new();
-        for net in &net_names {
-            let ids: Vec<usize> =
-                layout.layout.vias.iter().enumerate().filter(|(_, v)| v.net == *net).map(|(i, _)| i).collect();
-            for share in first.via_shares(f, 0, &ids) {
-                if share.current.abs() >= 0.01 {
-                    let v = &layout.layout.vias[share.via];
-                    list.push(ViaCurrent {
-                        name: v.name.clone(),
-                        net: v.net.clone(),
-                        x_mm: v.x as f64 * 1e-6,
-                        y_mm: v.y as f64 * 1e-6,
-                        current_a: share.current.abs(),
-                        share_of_net: share.share,
-                    });
+    let mut port_observations = Vec::new();
+    for port in 0..layout.port_labels.len() {
+        let mut via_currents = Vec::new();
+        let mut net_names: Vec<&str> = layout.layout.vias.iter().map(|v| v.net.as_str()).collect();
+        net_names.sort_unstable();
+        net_names.dedup();
+        for f in 0..freqs.len() {
+            let mut list = Vec::new();
+            for net in &net_names {
+                let ids: Vec<usize> =
+                    layout.layout.vias.iter().enumerate().filter(|(_, v)| v.net == *net).map(|(i, _)| i).collect();
+                for share in first.via_shares(f, port, &ids) {
+                    if share.current.abs() >= 0.01 {
+                        let v = &layout.layout.vias[share.via];
+                        list.push(ViaCurrent {
+                            name: v.name.clone(),
+                            net: v.net.clone(),
+                            x_mm: v.x as f64 * 1e-6,
+                            y_mm: v.y as f64 * 1e-6,
+                            current_a: share.current.abs(),
+                            share_of_net: share.share,
+                        });
+                    }
                 }
             }
+            list.sort_by(|a, b| b.current_a.total_cmp(&a.current_a).then(a.name.cmp(&b.name)));
+            via_currents.push(list);
         }
-        list.sort_by(|a, b| b.current_a.total_cmp(&a.current_a).then(a.name.cmp(&b.name)));
-        via_currents.push(list);
+        let currents = if options.current_map {
+            let index = freqs.iter().position(|f| (f - CURRENT_MAP_HZ).abs() < 1.0).unwrap_or(freqs.len() - 1);
+            first
+                .current_map(&layout.layout, index, port)
+                .map(|map| Box::new(HotLoopCurrents { map, frequency_index: index, pads: layout.loop_pads.clone() }))
+        } else {
+            None
+        };
+        port_observations.push(PortObservations { via_currents, currents });
     }
-    let currents = if options.current_map {
-        let index = freqs.iter().position(|f| (f - CURRENT_MAP_HZ).abs() < 1.0).unwrap_or(freqs.len() - 1);
-        first
-            .current_map(&layout.layout, index, 0)
-            .map(|map| Box::new(HotLoopCurrents { map, frequency_index: index, pads: layout.loop_pads.clone() }))
-    } else {
-        None
-    };
+    let via_currents = port_observations[0].via_currents.clone();
+    let currents = port_observations[0].currents.clone();
     let (reference, reference_error) = match &options.reference {
         None => (None, None),
         Some(reference_options) => {
@@ -638,21 +732,33 @@ pub fn extract_hot_loop(
     // A mesh that does not have the copper's connectivity is not a measurement of the board: status `error`; so is a
     // topology on which the independent reference and the mesher disagree.
     let reference_topology_disagrees = reference.as_ref().is_some_and(|c| !c.topology_disagreements.is_empty());
-    let status = if !stats.topology.mismatches.is_empty() || reference_topology_disagrees {
+    let external_contact_short = input.external_contour.is_some() && !stats.terminals_joining_pieces.is_empty();
+    if external_contact_short {
+        reasons.push(
+            "external contour terminal patches join disconnected copper pieces; this is not the declared board path"
+                .to_owned(),
+        );
+    }
+    let status = if !stats.topology.mismatches.is_empty() || reference_topology_disagrees || external_contact_short {
         "error"
     } else if reasons.is_empty() {
         "ok"
     } else {
         "indicative"
     };
-    let port_description = format!(
+    let mut port_description = format!(
         "{} to {}; {}",
         ports.labels[ports.port.0],
         ports.labels[ports.port.1],
         ports.closures.iter().map(|c| format!("{c} shorted")).collect::<Vec<_>>().join(", ")
     );
+    if input.external_contour.as_ref().is_some_and(|c| c.grouped()) {
+        port_description.push_str("; independent contact matrix; scalar and current map: port 0 only, all other port currents zero; package termination unspecified");
+    }
     Ok(HotLoopExtraction {
         cell: input.cell.clone(),
+        selected_port: 0,
+        port_observations,
         frequencies_hz: freqs.clone(),
         inductance_nh: chosen.inductance_nh.clone(),
         resistance_ohm: chosen.resistance_ohm.clone(),

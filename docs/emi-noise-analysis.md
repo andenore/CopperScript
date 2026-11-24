@@ -399,9 +399,110 @@ prototype placement, not fixed by a `fixed_placement` constraint or a fixed
 macro anchor) and `macro_relative_placement` (the loop lies in one rigid macro
 cluster: its geometry is fixed, the cluster's position is not).
 
+Hot-loop findings also carry `measures.loop_id = { controller, kind }`, where
+`kind` is `standard`, `input` or `output`, and ordered `measures.loop_pads =
+[{ component, pad }, ...]`. These are the selected screening-contour pads, not
+complete equipotential terminal groups. `loop` and `pad_sequence` remain display
+text. Numerical adapters prefer the structured fields, reject malformed fields
+instead of falling back, and still read valid historical findings without them.
+Single-loop coverage keys retain `:<controller>`; named loops use stable
+`:<controller>:input` and `:<controller>:output` suffixes.
+
+Both adapters preserve the buck port/closure contract. Four-switch findings use
+structured external PCB contacts; they are never relabelled as buck.
+
+`--extract` assembles input and output in one native-copper window when both
+contours are valid (`external_joint_contact_network/v1`). An N-1 contact tree
+defines the independent basis: each rail uses its loop's selected return, and
+additional return ports link to the primary reference. No package shorts or
+current sharing are assumed.
+Different selected return contacts retain their own voltage/current boundaries.
+A maximum of 16 ports bounds the right-hand-side solves. Each column injects one
+ampere at its positive terminal and withdraws it at its listed negative contact; other port
+currents are zero. All R/L matrix entries include coupling and shared returns.
+
+`extract_scope.ports` lists signed contacts; `reported_port` and
+`extract.scalar_port_index` select the diagonal, via shares and current map for
+each named loop. Both findings reuse the same solved matrix. Geometry, matrix
+convergence and the optional independent raster/field-energy reference apply to
+all ports. This is an external PCB quantity, not aggregate converter impedance.
+Isolated contours remain supported when only one side is available.
+
+Contacts must be identified SMD lands on one copper layer. Only through vias are supported; a source blind/buried span is refused because native CAM import and this adapter support through vias only. Repeated pad numbers
+require matching occurrence counts and one continuous same-net copper union;
+disconnected same-number lands are refused. All native legs must connect before
+any component boundary is added. Adjacent copper, including floating unassigned
+metal, is retained. Foreign-net overlaps fail. No missing route is repaired and
+no plane-corridor shortcut is used. Output discovery retains its explicitly
+reported VOUT-name heuristic.
+
+By default, selected capacitor lands are joined by explicit coplanar copper
+fixtures. A fixture crossing native copper fails with the capacitor, net and
+intersection location. The optional `--extract-ideal-capacitors` instead shorts
+those terminals electrically without adding body copper or its magnetic field.
+It applies only to external buck-boost PEEC networks and requires `--extract`.
+This explicit PCB-only boundary excludes capacitor body inductance, ESR and ESL;
+it does not characterize the mounted capacitor. Other components remain open.
+`extract_scope.capacitor_boundary`, flags, notes and omissions record the choice.
+The PEEC source/package gap conductor is also excluded.
+Joint external networks use pitch ratios 1:2:4 for the three-mesh study;
+buck retains 1:1.5:2.25. Native tracks on the external loop nets retain width-based
+resolution during budget coarsening. The standard external mesh requests at least
+four cells across narrow copper; the default series requests four, three and two
+cells. Both width resolution and local defect repairs can request 25 µm cells,
+preserving the existing geometric partition floor and contact tolerance; buck
+retains its 50 µm request floors. This matters for actual refinement: a 50 µm
+width floor makes four and five requested cells identical on a 200 µm trace.
+Each mesh reports `loop_width_cells`, `loop_cell_floor_mm` and `defect_cell_floor_mm`.
+`--extract-width-cells N` requests a finer standard mesh (4–16); external coarser
+meshes request `ceil(N/1.5)` and `ceil(N/2.25)` cells. It controls width resolution
+independently of the background pitch and does not override the geometric floor.
+The wider pitch steps separate meshes dominated by protected
+contacts and local topology repairs. Density, connectivity and every R/L matrix
+entry still face the existing convergence limits. Raising the filament budget
+does not by itself qualify a result.
+
+`--fullwave` now attempts the same validated native geometry with the default
+capacitor fixtures and contained rectangular source patches. It refuses invented
+package/air straps. `--fullwave-capacitor-height MM` explicitly replaces capacitor
+closures with rectangular PEC terminal posts and a PEC sheet at that height above
+front copper. `--fullwave-source-height MM` similarly elevates facing controller
+gap ports on rectangular PEC posts. These are declared analysis fixtures, whose
+fields are included; neither height is inferred or claimed to describe a real
+capacitor or package. The native copper below them remains intact. Overlapping
+fixtures, source volumes, or obstructed in-plane gaps are refused. Both flags
+require `--fullwave` and apply only to external buck-boost networks.
+Results live in `fullwave_external`, with frequency-indexed
+complex Z matrices, signed port labels, per-column run statistics, source patches,
+approximations and status reasons. Its source-gap fields differ from the PEEC
+partial-inductance convention, so no automatic numerical cross-check is claimed.
+The time allowance is shared across all columns and one or two meshes per
+controller. Aborts report completed columns; incomplete matrices are not usable.
+The external adapter uses recorded transients with an energy decay target of
+−80 dB and no tail extrapolation. Voltage is averaged over the same transverse
+columns as the lumped element, paired with its terminal-current record. The
+previous centre-line-only voltage measurement produced a nonpassive coupled
+matrix even after longer decay; matching the spatial measurement removes that
+failure in the reference fixture. Buck keeps its existing measurement convention.
+An undecayed record, shared or shorted source edges, different-net edge merging, nonreciprocity over
+1%, normalized Hermitian passivity failure beyond 1 ppm, single mesh or matrix
+change over 5% prevents a usable result. These checks are necessary, not a
+calibration or general accuracy guarantee. A successful fixture regression does
+not qualify arbitrary board/package geometries. The external adapter remains
+experimental, and full-wave model cost can exceed the requested budget even
+when geometry construction succeeds.
+
+Four-switch radiation and ringing predictions now decline without a bound
+switching waveform. `current_peak` is retained as unqualified current-limit
+metadata, never promoted to an instantaneous peak or a worst-case field bound.
+For TPS63020 specifically, its 4 A typical average limit is not such a peak.
+Passive results do not enable conducted prediction. Device mode/timing, current
+spectra, package and capacitor characterization, source/load/harness models and
+physical correlation remain separate requirements. No board or EMC qualification
+is implied. See the [implementation record and plan](emi-four-switch-buck-boost-plan.md).
 | Code | Status | What is measured | Ranked by |
 | --- | --- | --- | --- |
-| `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | headline differential-mode field in dBuV/m in the cell's scenario (rule below), then loop area |
+| `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing and ring energy only with a supported current model (four-switch cases decline without a bound waveform); traced length, vias, layer changes, narrowest width | headline differential-mode field in dBuV/m in the cell's scenario (rule below), then loop area |
 | `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, and the voltage-driven common-mode coupling-risk score (`cm_coupling_score`, a relative ranking score in dB, not a field; no margin) | common-mode coupling-risk score, then copper area; after the absolute estimates |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
 | `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the levels are detector readings**: `measures.detector_applicability` is `isolated_lines` for every harmonic, or `receiver_emulation` for the harmonics the receiver model read), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where neither holds the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
@@ -2182,7 +2283,12 @@ both at once; half cells are rounded down). The earlier tensor grid put every fi
 so a via or a pad anywhere made fine rows and columns everywhere; the filaments now go where the requests are.
 
 **Budget.** The inductance matrix is dense (`n_b^2` doubles) and a frequency costs one complex elimination of about
-`n_b / 2` loops, so the number of filaments is bounded: `--extract-budget` (default 9000, at most 20000). The assembly of
+`n_b / 2` loops, so the number of filaments is bounded: `--extract-budget` (default 9000, at most 32768). Budgets above
+20000 are explicit large-memory studies: 32768 branches require about 8.6 GB for the inductance matrix alone, plus assembly
+and factorization workspace. Assembly fills the final allocation directly and forms the loop matrix with one temporary
+branch-length row per worker, rather than retaining the full intermediate product. After forming the complete loop matrix,
+only the inductance rows used by port paths remain for frequency solving. No mutual coupling or native branch is
+discarded by this storage reduction. The assembly of
 the matrix and the elimination share their rows between the machine's threads (`std::thread::scope`, at most 16;
 every row is computed by the same code, so the result is the same to the bit whatever the thread count); on the
 12-core machine of this work 6700 filaments took 25 s, 9400 took 56 s and 14100 took 203 s for one mesh and three

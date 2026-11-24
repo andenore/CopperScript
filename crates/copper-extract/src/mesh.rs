@@ -32,7 +32,8 @@
 //!   such nodes); where it does not touch the node is split, one for each side.
 //! * Every place that violates one of these (a slot or gap narrower than the filament, two pieces of copper in one
 //!   filament body, a piece of copper that the meshing cut apart) is a defect of the partition and is refined: cells of
-//!   half the body's extents there, at most `MAX_REFINE_ROUNDS` times, down to `2 ABS_GAP_NM`, while the budget holds.
+//!   half the body's extents there, at most `MAX_REFINE_ROUNDS` times, down to the requested `defect_cell_nm`
+//!   (by default `2 ABS_GAP_NM`, never below `ABS_GAP_NM`), while the budget holds.
 //!   What cannot be resolved (a gap narrower than the smallest cell, the budget) is never bridged: it is listed in
 //!   `MeshStats::unresolved_gaps` with the flag `unresolved_gap`, and the extraction is `indicative`.
 //! * A topology check follows the build: the connected components of the copper pieces (joined by vias) are compared
@@ -71,6 +72,9 @@ pub struct MeshSpec {
     pub fine_extent_cells: f64,
     /// A narrow shape is cut into at least this many cells across its width (cells no larger than `cell_nm`).
     pub across: usize,
+    /// Minimum requested cell for width resolution of loop copper. Separate
+    /// from the local defect-repair floor; never below the geometric floor.
+    pub loop_cell_nm: i64,
     /// Parallel filaments across the copper thickness (1 = uniform current over the thickness).
     pub thickness_filaments: usize,
     /// The most filaments the dense inductance matrix is allowed.
@@ -82,6 +86,9 @@ pub struct MeshSpec {
     /// Multiplier of every pitch, `cell_nm`, `coarse_nm` and the layout's hints alike (1 = as given); a refinement
     /// series divides it.
     pub scale: f64,
+    /// Smallest requested cell for local defect repair, nm. Must be at least
+    /// the partition's 25 um geometric floor. Budget coarsening does not change it.
+    pub defect_cell_nm: i64,
 }
 
 impl Default for MeshSpec {
@@ -92,11 +99,13 @@ impl Default for MeshSpec {
             growth: 2.0,
             fine_extent_cells: 8.0,
             across: 2,
+            loop_cell_nm: 50_000,
             thickness_filaments: 1,
             max_filaments: DEFAULT_MAX_FILAMENTS,
             coarsen: true,
             min_coverage: 0.05,
             scale: 1.0,
+            defect_cell_nm: 50_000,
         }
     }
 }
@@ -140,6 +149,9 @@ pub struct LayerStats {
 /// What the mesh was.
 #[derive(Clone, Debug, Default)]
 pub struct MeshStats {
+    pub width_cells: usize,
+    pub loop_cell_nm: i64,
+    pub defect_cell_nm: i64,
     pub filaments: usize,
     pub bars: usize,
     pub nodes: usize,
@@ -712,7 +724,15 @@ fn build_once(
     let fine_extent = (spec.fine_extent_cells * spec.cell_nm as f64) as i64;
     let mut network = Network::default();
     let mut nodes: Vec<MeshNode> = Vec::new();
-    let mut stats = MeshStats { cell_nm: cell, coarse_nm: coarse, scale, ..MeshStats::default() };
+    let mut stats = MeshStats {
+        cell_nm: cell,
+        coarse_nm: coarse,
+        scale,
+        width_cells: spec.across,
+        loop_cell_nm: spec.loop_cell_nm,
+        defect_cell_nm: spec.defect_cell_nm,
+        ..MeshStats::default()
+    };
     let mut by_layer_net: LayerNodes = BTreeMap::new();
     let mut bar_count = 0usize;
     let mut defects: Vec<Defect> = Vec::new();
@@ -763,7 +783,7 @@ fn build_once(
                     if (extent as f64) > fine_extent as f64 {
                         0
                     } else if on_loop {
-                        cell.min(extent / across).max(2 * ABS_GAP_NM)
+                        cell.min(extent / across).max(spec.loop_cell_nm)
                     } else {
                         cell
                     }
@@ -783,8 +803,11 @@ fn build_once(
                         .sum();
                     let width = if perimeter > 0.0 { 2.0 * poly::shape_area(shape) / perimeter } else { f64::MAX };
                     if width <= fine_extent as f64 {
-                        let fine =
-                            if on_loop { cell.min((width / across as f64) as i64).max(2 * ABS_GAP_NM) } else { cell };
+                        let fine = if on_loop {
+                            cell.min((width / across as f64) as i64).max(spec.loop_cell_nm)
+                        } else {
+                            cell
+                        };
                         (sx, sy) = (fine, fine);
                     }
                 }
@@ -1382,11 +1405,11 @@ fn region_bounds(region: &Shapes) -> Option<(i64, i64, i64, i64)> {
 }
 
 /// The source of finer cells a defect asks for: each extent of the filament's body halved, an extent at least
-/// `4 ABS_GAP_NM` long (the cells go no finer than `2 ABS_GAP_NM`); `None` when the body is already that small. Both
+/// twice the requested minimum long; `None` when the body is already that small. Both
 /// axes: the gap that the body holds may lie across its axis as well as along it.
-fn refinement(defect: &Defect) -> Option<Source> {
+fn refinement(defect: &Defect, minimum: i64) -> Option<Source> {
     let r = defect.rect;
-    let half = |extent: i64| if extent >= 4 * ABS_GAP_NM { extent / 2 } else { 0 };
+    let half = |extent: i64| if extent / 2 >= minimum { extent / 2 } else { 0 };
     let (sx, sy) = (half(r[2] - r[0]), half(r[3] - r[1]));
     (sx > 0 || sy > 0).then_some(Source { rect: r, sx, sy, growth: REFINE_GROWTH })
 }
@@ -1436,7 +1459,7 @@ fn build(layout: &Layout, spec: &MeshSpec, auto_scale: f64) -> Result<Attempt, M
         let mut required: Vec<(usize, Source)> = Vec::new();
         let mut optional: Vec<(f64, usize, [i64; 4], Source)> = Vec::new();
         for d in &attempt.defects {
-            let Some(source) = refinement(d) else { continue };
+            let Some(source) = refinement(d, spec.defect_cell_nm) else { continue };
             match d.kind {
                 // A dropped filament is refined where it may be what cut a piece of copper: next to a node of a part
                 // that was cut off (within a filament length of its body), not everywhere in a big piece.
@@ -1596,6 +1619,12 @@ fn finish(attempt: Attempt, step: usize) -> Result<Mesh, MeshError> {
 
 /// Mesh a layout. Coarsens to the budget when `spec.coarsen` allows.
 pub fn mesh(layout: &Layout, spec: &MeshSpec) -> Result<Mesh, MeshError> {
+    if spec.loop_cell_nm < ABS_GAP_NM {
+        return Err(MeshError::Invalid("loop cell must be at least the 25 um geometric floor".to_owned()));
+    }
+    if spec.defect_cell_nm < ABS_GAP_NM {
+        return Err(MeshError::Invalid("defect cell must be at least the 25 um geometric floor".to_owned()));
+    }
     let mut scale = 1.0;
     let mut fallback: Option<(usize, Box<Attempt>)> = None;
     for step in 0..=10 {

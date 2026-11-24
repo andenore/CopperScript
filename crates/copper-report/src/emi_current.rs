@@ -114,6 +114,8 @@ pub struct TransitionRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurrentPanel {
     pub cell: String,
+    /// Explicit boundary for non-buck ports; `None` keeps the historical switch caption.
+    pub excitation: Option<String>,
     pub frequency_hz: f64,
     pub window: [f64; 4],
     pub layers: Vec<LayerPanel>,
@@ -340,7 +342,11 @@ fn picture(panel: &CurrentPanel, compact: bool, id: usize) -> FieldPicture {
     let column = 330.0;
     let title =
         format!("{} hot loop: current density in the copper at {}", panel.cell, frequency_label(panel.frequency_hz));
-    let subtitle = format!("per ampere into the switch port; quasi-static extraction ({} filaments)", panel.filaments);
+    let subtitle = format!(
+        "per ampere into {}; quasi-static extraction ({} filaments)",
+        panel.excitation.as_deref().unwrap_or("the switch port"),
+        panel.filaments
+    );
     let width = if compact {
         (LEFT + map_w + LEFT).max(460.0)
     } else {
@@ -828,6 +834,7 @@ mod tests {
             .collect();
         let square = |x0: f64, y0: f64, x1: f64, y1: f64| vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]];
         CurrentPanel {
+            excitation: None,
             cell: "U1".to_owned(),
             frequency_hz: 10e6,
             window: [0.0, 0.0, 10.0, 4.0],

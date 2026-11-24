@@ -68,14 +68,47 @@ pub struct Extraction {
 
 /// Mesh `layout`, build the loop system and solve at every frequency. `currents` keeps the branch currents.
 pub fn extract(layout: &Layout, spec: &MeshSpec, frequencies: &[f64], currents: bool) -> Result<Extraction, Error> {
+    extract_with_progress(layout, spec, frequencies, currents, |_| {})
+}
+
+/// Completed numerical stages, for long-running diagnostic studies. These are
+/// progress observations, not a qualification or convergence assessment.
+#[derive(Clone, Debug)]
+pub enum Progress {
+    Meshed { filaments: usize, nodes: usize, topology_mismatches: usize, unresolved_gaps: usize, seconds: f64 },
+    Assembled { loops: usize, seconds: f64 },
+    Solved { frequency_hz: f64, seconds: f64 },
+}
+
+/// Extract with an observer after meshing, assembly and each frequency solve.
+pub fn extract_with_progress(
+    layout: &Layout,
+    spec: &MeshSpec,
+    frequencies: &[f64],
+    currents: bool,
+    mut progress: impl FnMut(Progress),
+) -> Result<Extraction, Error> {
     let started = Instant::now();
     let mesh = crate::mesh::mesh(layout, spec)?;
     let mesh_seconds = started.elapsed().as_secs_f64();
+    progress(Progress::Meshed {
+        filaments: mesh.stats.filaments,
+        nodes: mesh.stats.nodes,
+        topology_mismatches: mesh.stats.topology.mismatches.len(),
+        unresolved_gaps: mesh.stats.unresolved_gap_count,
+        seconds: mesh_seconds,
+    });
     let started = Instant::now();
     let solver = Solver::new(&mesh.network, spec.max_filaments.max(mesh.network.branches.len()))?;
     let assemble_seconds = started.elapsed().as_secs_f64();
+    progress(Progress::Assembled { loops: solver.loop_count(), seconds: assemble_seconds });
     let started = Instant::now();
-    let solutions = frequencies.iter().map(|&f| solver.solve(f, currents)).collect::<Result<Vec<_>, _>>()?;
+    let mut solutions = Vec::with_capacity(frequencies.len());
+    for &frequency_hz in frequencies {
+        let frequency_started = Instant::now();
+        solutions.push(solver.solve(frequency_hz, currents)?);
+        progress(Progress::Solved { frequency_hz, seconds: frequency_started.elapsed().as_secs_f64() });
+    }
     let solve_seconds = started.elapsed().as_secs_f64();
     Ok(Extraction {
         loops: solver.loop_count(),

@@ -1,6 +1,7 @@
 //! The hot-loop region of a synthetic asynchronous buck: window, nets, port, bridges and added
 //! traces, without running the solver.
 
+use copper_drc::emi::loop_model::LoopKind;
 use copper_fullwave::hotloop::{HotLoopInput, HotLoopOptions, LegInfo, hot_loop_spec};
 use copper_fullwave::testing::{bare_board, zone};
 use copper_fullwave::{Error, PortKind, RegionModel, Terminal};
@@ -103,6 +104,7 @@ fn buck_board() -> copper_pcb::board::PhysicalBoard {
 fn input() -> HotLoopInput {
     HotLoopInput {
         cell: "U1".to_owned(),
+        loop_kind: LoopKind::Standard,
         topology: "buck".to_owned(),
         capacitor: "CIN".to_owned(),
         pads: vec![
@@ -130,6 +132,8 @@ fn input() -> HotLoopInput {
         trace_status: "no_copper".to_owned(),
         polygon_mm: Vec::new(),
         switch_pad: None,
+        external_contour: None,
+        external_peer: None,
     }
 }
 
@@ -182,6 +186,22 @@ fn other_topologies_and_odd_loops_are_refused_clearly() {
     assert!(matches!(hot_loop_spec(&board, &odd, &HotLoopOptions::default()), Err(Error::NotSupported(_))));
 }
 
+#[test]
+fn four_pad_named_loops_cannot_acquire_buck_ports() {
+    let board = sync_board();
+    for kind in [LoopKind::Input, LoopKind::Output] {
+        for topology in ["buck_boost", "buck"] {
+            let mut named = sync_input();
+            named.loop_kind = kind;
+            named.topology = topology.to_owned();
+            let Err(Error::NotSupported(reason)) = hot_loop_spec(&board, &named, &HotLoopOptions::default()) else {
+                panic!("{kind:?}/{topology} must not be interpreted as a synchronous buck");
+            };
+            assert!(reason.contains("no validated port definition"), "{reason}");
+        }
+    }
+}
+
 /// U1 with VIN (pad 1) on the left, SW (pad 3) on the right and a row above, GND (pad 2) above VIN:
 /// no pair of the three faces another across a free gap.
 fn sync_board() -> copper_pcb::board::PhysicalBoard {
@@ -209,6 +229,7 @@ fn sync_board() -> copper_pcb::board::PhysicalBoard {
 fn sync_input() -> HotLoopInput {
     HotLoopInput {
         cell: "U1".to_owned(),
+        loop_kind: LoopKind::Standard,
         topology: "buck".to_owned(),
         capacitor: "CIN".to_owned(),
         pads: vec![
@@ -227,6 +248,8 @@ fn sync_input() -> HotLoopInput {
         trace_status: "no_copper".to_owned(),
         polygon_mm: Vec::new(),
         switch_pad: Some(("U1".to_owned(), "3".to_owned())),
+        external_contour: None,
+        external_peer: None,
     }
 }
 

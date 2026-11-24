@@ -176,6 +176,26 @@ fn microstrip_impedance_matches_hammerstad_jensen() {
     assert!(worst > -0.5, "worst |S21| {worst} dB");
 }
 
+#[test]
+fn distributed_voltage_matches_the_independent_microstrip_impedance() {
+    let mut model = microstrip(500_000, 1_000_000, 20 * MM, "4.3", Fidelity::Coarse, 50.0);
+    model.spec.distributed_port_voltage = true;
+    model.spec.ring_fit = false;
+    // This independent Z0 benchmark retains the existing line test's decay
+    // criterion and 5% analytic tolerance. The external matrix regression
+    // separately requires -80 dB and the full Hermitian passivity check.
+    model.spec.threads = 2;
+    let matrix = model.solve_all().expect("distributed-voltage line");
+    assert!(matrix.stats.iter().all(|s| s.converged));
+    let actual = extracted_z0(&matrix, 50.0);
+    let expected = hammerstad(2.0, 4.3).0;
+    println!("distributed voltage: Z0 {actual:.3} ohm; Hammerstad-Jensen {expected:.3} ohm");
+    assert!((actual / expected - 1.0).abs() < 0.05);
+    for f in 0..matrix.freqs.len() {
+        assert!((matrix.s[0][1][f] - matrix.s[1][0][f]).norm() < 1e-3);
+    }
+}
+
 /// 3a at the cell the edge rule was fitted at (0.25 mm: the strip is four cells wide) and with the default rule:
 /// Z0 within 0.02 % of Hammerstad-Jensen (measured), 1.5 % allowed. With the edges on the mesh lines as drawn
 /// (`VAL_INSET=0`) it is 11.7 % low, with the rule of a third 0.6 %: the test fails if the rule regresses.

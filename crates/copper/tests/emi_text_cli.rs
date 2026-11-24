@@ -119,6 +119,13 @@ fn check_values(compact: &str, json: &Value) {
         let estimate = finding.get("estimate").filter(|e| matches!(e, Value::Object(_)));
         match text(finding, "code").unwrap() {
             "EMI-HOT-LOOP" => {
+                if estimate.is_none() {
+                    assert_eq!(measures.and_then(|m| text(m, "scenario")), Some("uncharacterized"));
+                    assert!(!line.contains("dBuV/m") && !line.contains("over the limit"), "{line}");
+                    assert!(number(measures.and_then(|m| m.get("loop_inductance_nh"))).is_some());
+                    checked += 1;
+                    continue;
+                }
                 let level = number(estimate.and_then(|e| e.get("value"))).expect("an estimate");
                 assert!(line.contains(&format!("{level:.1} dBuV/m")), "{line}");
                 let margin = number(finding.get("margin_db")).expect("a margin");
