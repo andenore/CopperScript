@@ -271,4 +271,5 @@ source object
 source.benches_sha256 string
 source.board_file string
 source.design_sha256 string
+source.models array
 status string

@@ -144,9 +144,12 @@ pub fn settling_time(t: &[f64], x: &[f64], band: f64) -> Result<f64, MeasureErro
     }
     let last = x[x.len() - 1];
     let Some(k) = (0..x.len()).rev().find(|&k| (x[k] - last).abs() > band) else { return Ok(t[0]) };
-    // x[k] is outside, x[k + 1] inside: where |x - last| falls to the band.
-    let (a, b) = ((x[k] - last).abs() - band, (x[k + 1] - last).abs() - band);
-    Ok(t[k] + (t[k + 1] - t[k]) * a / (a - b))
+    // x[k] is outside, x[k + 1] inside: where the piecewise-linear x reaches
+    // the band's edge on x[k]'s side. |x - last| is not linear on a segment
+    // that crosses `last`, so the signed waveform is interpolated.
+    let edge = if x[k] > last { last + band } else { last - band };
+    let f = (x[k] - edge) / (x[k] - x[k + 1]);
+    Ok(t[k] + (t[k + 1] - t[k]) * f.clamp(0.0, 1.0))
 }
 
 /// How far `x` passes its last value, as a fraction of its step from its
@@ -333,6 +336,21 @@ mod tests {
         assert!(overshoot(&[1.0, 1.0]).is_err());
         assert_eq!(overshoot(&[0.0, 0.5, 1.0]).unwrap(), 0.0);
         assert_eq!(settling_time(&t[..2], &[1.0, 1.0], 0.1).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn settling_interpolates_the_signed_waveform_across_the_final_value() {
+        // 2 V -> -0.5 V -> 0 V with a 1 V band around 0 V: the first segment
+        // falls through the band's upper edge (1 V) at 0.4 s and ends inside
+        // it, so that is where x enters the band for good.
+        let ts = settling_time(&[0.0, 1.0, 2.0], &[2.0, -0.5, 0.0], 1.0).unwrap();
+        assert!((ts - 0.4).abs() < 1e-12, "{ts}");
+        // From below: -2 V -> 0.5 V -> 0 V enters through -1 V, also at 0.4 s.
+        let ts = settling_time(&[0.0, 1.0, 2.0], &[-2.0, 0.5, 0.0], 1.0).unwrap();
+        assert!((ts - 0.4).abs() < 1e-12, "{ts}");
+        // A segment that stays on one side is unchanged: 3 V -> 0.5 V enters at 0.8 s.
+        let ts = settling_time(&[0.0, 1.0, 2.0], &[3.0, 0.5, 0.0], 1.0).unwrap();
+        assert!((ts - 0.8).abs() < 1e-12, "{ts}");
     }
 
     #[test]

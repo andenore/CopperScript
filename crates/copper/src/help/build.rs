@@ -65,7 +65,7 @@ pub const COMMANDS: &[Command] = &[
                 help: "also check the pin voltages a copper sim run recorded in FILE (sim-results.json) against the \
                        pins' absolute ratings (SIM_PIN_ABSOLUTE_HIGH / SIM_PIN_ABSOLUTE_LOW) and the simulated \
                        components against their parts' rated_power, rated_voltage and pins' current_max \
-                       (SIM_STRESS_*), naming the bench, step and value; results made from other board or bench \
+                       (SIM_STRESS_*), naming the bench, step and value; results made from other board, bench or local SPICE model \
                        sources are refused (SIM_RESULTS_STALE); check never runs a simulation",
             },
         ],
@@ -116,7 +116,7 @@ pub const COMMANDS: &[Command] = &[
                        (per bench, step and bench supply, with its source), the rail's totals and the loads in no \
                        bench, and fail a rail whose mean or peak exceeds its budget (the supply's current_max / \
                        current_peak_max, its source pin's current_max, its source part's output_current_limit: \
-                       SIM_RAIL_MEAN_HIGH / SIM_RAIL_PEAK_HIGH); results made from other board or bench sources \
+                       SIM_RAIL_MEAN_HIGH / SIM_RAIL_PEAK_HIGH); results made from other board, bench or model sources \
                        are refused (SIM_RESULTS_STALE); power-check never runs a simulation",
             },
         ],

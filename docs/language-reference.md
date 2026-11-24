@@ -479,7 +479,7 @@ benches as they are now:
 | Finding | Diagnostic |
 | --- | --- |
 | a simulated voltage beyond the absolute range (more than `1e-9` of the limit, at least 1 nV) | error `SIM_PIN_ABSOLUTE_HIGH` / `SIM_PIN_ABSOLUTE_LOW`, naming the bench, the worst step, the value, where on the axis it was reached and how many steps exceed it |
-| results of another board, of another version of its sources (parts, packages and ratings included; not comments) or of other bench sources, or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
+| results of another board, of another version of its sources (parts, packages and ratings included; not comments), of other bench sources or of other local SPICE model files (a `sim spice` `file` or a file it includes), or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
 | simulated pins that declare no absolute rating (ground and passive-only pins excepted), or whose relative rating refers to a pin no bench solved | one warning `SIM_PIN_NOT_CHECKED` listing them |
 | rated pins that no bench solved | one warning `SIM_PIN_NOT_SIMULATED` listing the components |
 
@@ -3757,7 +3757,7 @@ name), subtraction needs spaces: `mag(i) / 15uA - 1`.
 | `mag`, `abs`, `re`, `im` | Real, of the argument's dimension. |
 | `phase` | Real, deg; a swept phase is unwrapped along the axis, starting in (-180, 180]. `db` is real, dB: `20 log10(abs(x))` with `x` in its base unit. |
 | `min`, `max`, `mean` | Reduce a real swept value over the analysis axis (`SIM066`, `SIM067`); `mean` is the mean of the samples, on the logarithmic ac axis the mean over log frequency. `max(x, from, to)` and the other windows reduce over a sub-band (or a time window, or part of a dc sweep): the samples inside it plus its two ends, interpolated as `at` interpolates (linear in log frequency on the ac and noise axes); `max(mag(H), 1kHz, 10kHz)` is the largest gain in that band. |
-| `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis. |
+| `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis: when the reference run's axis points are not the bench's (a reference that sets a param the analysis's bounds read, or a transient run whose time steps come out otherwise), the run stops with `SIM121`, never pairing samples of different points. |
 | `at(x, f)` | `x` at one frequency of the ac or noise axis (`SIM068`). At a sample, the sample; between two samples the circuit is solved at `f` itself (with the step's reference runs): `x`'s swept parts (probes, lets of them, noise densities) are evaluated there and its scalar parts (`max(...)`, other `at(...)`, params) as on the whole axis, and a phase is taken on the branch of the sweep's unwrapped phase at `f`. The result is the exact response at `f`, independent of `points_per_decade`. `f` must lie within the axis. In `analysis tran` and `analysis dc` it is interpolated, see there. |
 
 | `noise()`, `noise(X)` | `analysis noise` only (`SIM085`): the output noise density, real and swept, V/rtHz; `noise(X)` the part of it that component or bench model `X` contributes (all of its generators, every unit of a multi-unit part; `SIM087`). With several outputs, name one (`SIM095`). |
@@ -4789,6 +4789,7 @@ components that form a loop of voltage sources.
 | `SIM118` | `use layout;` without a routed board: no `--layout`, or a `--layout RUN` that holds no `final-board.state.json` (when the bench runs) |
 | `SIM119` | `use layout;` with a routed board that is not the design's (other components, pads on other nets) or cannot be extracted (a net's pads not joined by copper, copper of two nets overlapping) |
 | `SIM120` | `use layout;` in a bench of a module on its own |
+| `SIM121` | `reference(x, NAME)`: the reference run's analysis axis is not the bench's (other points or another number of them; when the bench runs) |
 
 ## KiCad schematic export
 

@@ -199,6 +199,66 @@ fn results_of_other_sources_are_refused() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A source part whose model is the local SPICE file `models/src.lib`.
+const SPICE_SOURCE: &str = "part SRC {
+    category = \"power.reference\";
+    pin OUT { number = \"1\"; domains = \"analog\"; directions = \"output\"; }
+    pin REF { number = \"2\"; domains = \"ground\"; directions = \"passive\"; }
+    sim spice { file = \"../models/src.lib\"; subckt = \"SRC\"; terminals = OUT, REF; }
+}
+";
+
+const SPICE_BOARD: &str = "board Ref {
+    use library \"tiny\";
+    import p \"./parts\";
+    component U1: p.SRC;
+    component R1: RESISTOR { value = 1kohm; }
+    net OUT { U1.OUT; R1.1; }
+    net GND { U1.REF; R1.2; }
+    supply GROUND { voltage = 0V; net = GND; external = true; }
+}
+";
+
+fn spice_source_model(volts: &str) -> String {
+    format!(".SUBCKT SRC OUT REF\nV1 OUT REF {volts}\n.ENDS\n")
+}
+
+#[test]
+fn results_are_stale_once_a_local_model_file_changes() {
+    let model = spice_source_model("2");
+    let directory = project_with(
+        "model",
+        &[
+            ("board.copper", SPICE_BOARD),
+            ("parts/src.copper", SPICE_SOURCE),
+            ("models/src.lib", &model),
+            ("benches/op.copper", "bench Op for Ref {\n    analysis op;\n    measure out = V(OUT);\n}\n"),
+        ],
+    );
+    let results = simulate(&directory);
+    let document = std::fs::read_to_string(directory.join(results)).unwrap();
+    assert!(document.contains("\"file\": \"models/src.lib\""), "the model file is fingerprinted: {document}");
+    let check = || {
+        let output = copper(&directory, &["check", "board.copper", "--sim-results", results]);
+        format!("{}{}", stdout(&output), stderr(&output))
+    };
+    assert!(!check().contains("SIM_RESULTS_STALE"), "{}", check());
+    // The model now produces 3 V: the 2 V results are not evidence for it.
+    std::fs::write(directory.join("models/src.lib"), spice_source_model("3")).unwrap();
+    let text = check();
+    assert!(text.contains("ERROR SIM_RESULTS_STALE"), "{text}");
+    assert!(text.contains("the SPICE model file models/src.lib changed since they were written"), "{text}");
+    // Results written before the models were fingerprinted cannot vouch for one.
+    std::fs::write(directory.join("models/src.lib"), &model).unwrap();
+    let start = document.find(",\n    \"models\": [").expect("source.models");
+    let end = start + document[start..].find("]").unwrap() + 1;
+    std::fs::write(directory.join("old.json"), format!("{}{}", &document[..start], &document[end..])).unwrap();
+    let output = copper(&directory, &["check", "board.copper", "--sim-results", "old.json"]);
+    let text = stdout(&output);
+    assert!(text.contains("SIM_RESULTS_STALE") && text.contains("carry no digests of the SPICE model files"), "{text}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn the_power_check_lists_simulated_rail_currents_with_their_source() {
     let directory = project("power");

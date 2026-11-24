@@ -41,6 +41,9 @@ Code: `crates/copper-simulate/src/results.rs` (the document, `bench_value`),
 | `source.board_file` | string | The board file as `copper sim` was given it. |
 | `source.design_sha256` | string | SHA-256 of the compiled design (the JSON `copper compile` writes): any change to the board, its parts, packages, ratings or sim blocks changes it; a comment does not. |
 | `source.benches_sha256` | string | SHA-256 over the board's bench sources: each file of `benches/` in load order, its name relative to `benches/`, a NUL, its bytes and a NUL. |
+| `source.models` | array | Added within v1. Every local SPICE model file the board's simulation reads: each `sim spice { file = ...; }` of the parts of the board, its modules and its benches, and every file it includes (`.INCLUDE`, `.LIB FILE`), sorted by file. Vendor models are not listed (the hash their part declares pins them, and `design_sha256` covers it). A document without the field is accepted only for a board that reads no local model file. |
+| `source.models[].file` | string | The file, relative to the board's directory, with `/`. |
+| `source.models[].sha256` | string | SHA-256 of its bytes; empty when it could not be read. |
 | `board` | string | The board's name. |
 | `status` | string | `pass`, `fail` (a measure outside its limits) or `error` (a bench could not be solved); the worst of the benches. |
 | `benches` | array | One entry per bench run, in file and declaration order. A bench with several analyses gives one entry per analysis (a section). With `--bench NAME` only that bench. |
@@ -433,7 +436,11 @@ evidence (plan F11; code: `crates/copper-simulate/src/evidence.rs`):
   sources. `copper check --sim-results FILE` and `copper power-check
   --sim-results FILE` recompute both from the board they are given and refuse
   (`SIM_RESULTS_STALE`) a document whose board, design digest or bench digest
-  differs, or that has no `source`.
+  differs, or that has no `source`. `source.models` (added later in v1, plan
+  I5 fixes): the local SPICE model files and the files they include, with
+  their digests, recomputed and compared the same way; a document without it
+  is refused only when the board reads a local model file, since it cannot
+  vouch for that file's contents.
 - `benches[].steps[].pins` and `benches[].steps[].supplies`: what those checks
   read. `copper check --sim-results` judges each pin against the absolute
   rating the board declares now (a relative rating against its `relative`
