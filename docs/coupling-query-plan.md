@@ -1,17 +1,20 @@
-# Coupling between nets: prototypes and plan
+# Coupling between nets
 
-Status: two prototypes, no user-facing command. Screening evidence only, like the rest of the full-wave tiers
-(`docs/emi-noise-analysis.md` section 11, `docs/pcb-antenna-synthesis-research.md`).
+Status: implemented as `copper coupling` (steps 1 to 5 of section 3). Screening evidence only, like the rest of the
+full-wave tiers (`docs/emi-noise-analysis.md` section 11, `docs/pcb-antenna-synthesis-research.md`).
 
 The question: *how much does this net couple to that one*, for example a radio's antenna to a QSPI clock, or one
-fast line to its neighbour. Both full-wave models already run the pinned `ems` FDTD solver with lumped ports; a
-coupling is the transmission `S_k1` from a port on the aggressor to a port on the victim. What exists after the
-prototypes:
+fast line to its neighbour. A coupling is the transmission `S_k1` from a port on the aggressor to a port on the
+victim, each port a lumped element from one end of its net down to the ground plane under it, terminated in that
+end's impedance. Both full-wave models run the pinned `ems` FDTD solver:
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| Line-to-line validation | `crates/copper-extract/tests/coupled_microstrip.rs` | Four-port region model (`copper-fullwave`) of two parallel microstrips against coupled-line theory, with the even and odd modes from the 2-D field solver (`copper_extract::capacitance`) |
-| Antenna-to-net coupling | `copper_antenna::model::{Victim, evaluate_coupled}`, test `crates/copper-antenna/tests/victim_coupling.rs` | The antenna site model with a victim net's F.Cu tracks, the ground cut back around them, and a passive 50 ohm port at each end; returns `S_k1` from the feed to every victim port |
+| Net ends, geometry, terminations, region coupling | `copper_fullwave::coupling` | A net's ends (its pads, or free track ends); its copper through the region model's translator (tracks at any angle, arcs, vias, pads, any layer); each end's termination; the region model of an aggressor, its victims and the ground nets (native zone fills, planes continued into the PML, the smoothing mesher), one solve per aggressor end |
+| Antenna-to-net coupling | `copper_antenna::model::{Victim, cut_ground, evaluate_coupled}` | The antenna site model with victims from that translator, the site's ground cut around them, and a port at each of their ends; `S_k1` from the feed |
+| Desensitisation | `copper_emi::desense` | The power a signal's lines deliver into the antenna port through `S`, against a declared sensitivity and margin |
+| Command | `copper coupling` (`crates/copper/src/coupling.rs`, schema `copperscript-coupling/v0.1`) | `--from NET` (region model) or `--antenna NAME` (site model), `--to NET`, `--run RUN`, `--terminate END=OHMS`, `--describe`, `--json`; `EMI-RF-DESENSE` in antenna mode |
+| Validation | `crates/copper-extract/tests/coupled_microstrip.rs`, `crates/copper-antenna/tests/victim_coupling.rs`, `crates/copper/tests/coupling.rs` | Sections 1 and 2; the command on `examples/coupling` |
 
 `evaluate` is `evaluate_coupled` with no victims and builds the same model as before, so synthesis results and
 `MODEL_REVISION` are unchanged.

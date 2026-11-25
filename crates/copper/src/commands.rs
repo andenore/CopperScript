@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
-    compile_macro, completions, drc, edit_mechanical, editor_overlay, emi_check, explain, export_kicad,
+    compile_macro, completions, coupling, drc, edit_mechanical, editor_overlay, emi_check, explain, export_kicad,
     export_kicad_pcb, export_manufacturing, fill, help, init, issues, library, lock, lsp, models, plan_layout, plot,
     power_check, query, render, replay_critical, replay_unified, route_board, route_global, si_check, sim, state,
     summarize, synthesize_antenna, view,
@@ -42,6 +42,7 @@ pub const COMMANDS: &[&str] = &[
     "synthesize-antenna",
     "si-check",
     "emi-check",
+    "coupling",
     "issues",
     "view",
     "summarize",
@@ -110,6 +111,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "export-kicad" => export_kicad::run(rest, out, err),
         "export-kicad-pcb" => export_kicad_pcb::run(rest, out, err),
         "synthesize-antenna" => synthesize_antenna::run(rest, out, err),
+        "coupling" => coupling::run(rest, out, err),
         "panelize" => crate::panelize::run(rest, out, err),
         "lsp" => lsp::run(rest, out, err),
         "explain" => explain::run(rest, out, err),

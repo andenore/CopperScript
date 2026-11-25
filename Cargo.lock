@@ -44,6 +44,7 @@ dependencies = [
  "copper-cam",
  "copper-drc",
  "copper-editor",
+ "copper-emi",
  "copper-extract",
  "copper-fullwave",
  "copper-json",

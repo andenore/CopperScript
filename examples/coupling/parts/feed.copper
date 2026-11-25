@@ -1,0 +1,6 @@
+// Synthetic one-land antenna feed: the synthesized radiator starts at this pad.
+// Not a reusable part or a qualified RF component.
+part AntennaFeed {
+    footprint = "../feed.kicad_mod";
+    pin FEED { number = "1"; domains = "analog"; directions = "passive"; }
+}

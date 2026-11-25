@@ -20,6 +20,7 @@ copper-antenna.workspace = true
 copper-assembly.workspace = true
 copper-cam.workspace = true
 copper-drc.workspace = true
+copper-emi.workspace = true
 copper-editor.workspace = true
 copper-extract.workspace = true
 copper-fullwave.workspace = true

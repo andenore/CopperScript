@@ -1757,6 +1757,8 @@ constraint antenna(ANT1.FEED) {
     ground = GND;                     // the host reference ground net
     bands = "2400 MHz-2483.5 MHz";    // LOW-HIGH with units; ';' separates bands
     max_return_loss_db = -10;         // synthesis target over every band (default -10)
+    sensitivity_dbm = -95;            // receiver sensitivity at the feed, for `copper coupling` (optional)
+    desense_margin_db = 6;            // how far below it a spur must stay (default 0; needs sensitivity_dbm)
     track_width = 1mm;                // default: the board's default track width
     keepout_margin = 0.5mm;           // extra component clearance around the region
     topology = auto;                  // auto | monopole | meander | inverted_f | pixel
@@ -1765,6 +1767,15 @@ constraint antenna(ANT1.FEED) {
     tuned_for = "sha256:...";         // site digest the geometry was tuned for
 }
 ```
+
+`sensitivity_dbm` and `desense_margin_db` describe the receiver behind the
+feed; they change no copper and are not in the site digest, so `tuned_for`
+stays valid. `copper coupling BOARD --antenna NAME --to NET` holds every
+in-band line of `NET`'s declared signal, coupled to the feed from its driver,
+to `sensitivity_dbm - desense_margin_db` (`EMI-RF-DESENSE`, see
+[the coupling plan](coupling-query-plan.md)); without `sensitivity_dbm` it
+reports the spurs without a verdict. Both must be numbers, and a margin
+without a sensitivity is a compile error.
 
 Exactly one region form is required; the region must be a rectangle whose
 one edge lies on the straight outer board perimeter while the opposite edge

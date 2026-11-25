@@ -377,6 +377,11 @@ pub struct AntennaSite {
     pub bands: Vec<Band>,
     pub topology: Topology,
     pub max_return_loss_db: f64,
+    /// The receiver's sensitivity at the feed, dBm (`sensitivity_dbm`): what `copper coupling` holds a spur to.
+    /// Not part of the site digest: it changes no copper.
+    pub sensitivity_dbm: Option<f64>,
+    /// How far below the sensitivity a spur must stay, dB (`desense_margin_db`, default 0).
+    pub desense_margin_db: f64,
     pub area: Bounds,
     pub frame: Frame,
     pub perimeter: Vec<usize>,
@@ -614,6 +619,12 @@ fn resolve_site(
         Some(ParameterValue::Float(value)) => *value,
         _ => -10.0,
     };
+    let number = |name: &str| match parameters.get(name) {
+        Some(ParameterValue::Int(value)) => value.to_string().parse::<f64>().ok(),
+        Some(ParameterValue::Float(value)) => Some(*value),
+        _ => None,
+    };
+    let (sensitivity_dbm, desense_margin_db) = (number("sensitivity_dbm"), number("desense_margin_db").unwrap_or(0.0));
     let ground = text(parameters, "ground").unwrap_or_default().to_owned();
     if !board.nets.iter().any(|net| net.name == ground) {
         return Err(problem(format!("ground net {} is unknown", repr(&ground))));
@@ -747,6 +758,8 @@ fn resolve_site(
         bands,
         topology,
         max_return_loss_db,
+        sensitivity_dbm,
+        desense_margin_db,
         area,
         frame,
         perimeter,

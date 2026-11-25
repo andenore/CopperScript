@@ -15,6 +15,7 @@ mod compare_cam;
 mod compile;
 mod compile_macro;
 mod completions;
+mod coupling;
 mod drc;
 mod edit_mechanical;
 mod editor_overlay;

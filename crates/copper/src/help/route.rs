@@ -749,6 +749,63 @@ pub const COMMANDS: &[Command] = &[
         actions: &[],
     },
     Command {
+        name: "coupling",
+        group: Group::Layout,
+        summary: "full-wave coupling from a net or an antenna's feed to the ends of other nets",
+        options: &[
+            Opt {
+                flag: "--from NET",
+                help: "the aggressor net: the region model holds it, the victims and the ground nets, with a port at every end, and excites each of its ends",
+            },
+            Opt {
+                flag: "--antenna NAME",
+                help: "the aggressor is a constraint antenna's feed: the antenna site model with its declared geometry and the victims",
+            },
+            Opt { flag: "--to NET", help: "a victim net; may repeat (at least one)" },
+            Opt {
+                flag: "--run RUN",
+                help: "take the copper from a routed run (final-board.state.json of route-board --checkpoint-dir); without it only pads are modelled",
+            },
+            Opt { flag: "--band LOW:HIGH", help: "with --from: the analysis band, such as 100MHz:3GHz (default)" },
+            Opt {
+                flag: "--ground NET",
+                help: "with --from: a return-plane net; may repeat (default: every zoned net)",
+            },
+            Opt {
+                flag: "--terminate END=OHMS",
+                help: "terminate an end (U2.4, or a free track end as printed) in OHMS; may repeat (default: the driver's declared output_impedance, else 50 ohm)",
+            },
+            Opt { flag: "--fidelity {coarse,fine}", help: "mesh fidelity (default: coarse)" },
+            Opt { flag: "--budget SECONDS", help: "with --from: the longest estimated run accepted (default: 1800)" },
+            Opt { flag: "--margin MM", help: "with --from: board modelled around the nets' copper (default: 3)" },
+            Opt { flag: "--threads N", help: "solver threads; 0 picks one per physical core (default: 0)" },
+            Opt {
+                flag: "--describe",
+                help: "print the model, its ends and their terminations, and stop before solving",
+            },
+            Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-coupling/v0.1)" },
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt {
+                flag: "--layers {2,4,6}",
+                help: "copper-layer count; default derives from source requirements; must match a declared stackup",
+            },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: fab_profile of the board's build block, else generic)",
+            },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
         name: "bench",
         group: Group::Benchmark,
         summary: "benchmark ladder: route a fixed set of boards and compare completion and time",

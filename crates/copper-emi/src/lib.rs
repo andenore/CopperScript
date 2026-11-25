@@ -18,6 +18,7 @@
 //! | [`receiver`] | EMI receiver emulation: Gaussian IF filter, peak, quasi-peak and average detectors |
 //! | [`circuit`] | linear circuits in the frequency domain (R, L, C, mutual coupling, sources, VCCS, real capacitors and inductors, V-network lines), solved by `copper-sim`; impedance and sweeps |
 //! | [`harmonic`] | periodic steady state of a circuit from Fourier coefficients; complex Fourier series of trapezoidal pulse trains and triangular ripple; waveform reconstruction |
+//! | [`desense`] | the power a fast signal's lines deliver into a receiver's antenna port through a full-wave coupling, held to a declared sensitivity and margin (`EMI-RF-DESENSE`) |
 //! | [`conducted`] | conducted-emission (CISPR Band B) prediction for a switching cell's input side: DM and CM paths, input filter, LISN, limits and margins |
 //!
 //! **Every result is screening evidence, not EMC qualification.** The solvers
@@ -38,6 +39,7 @@
 pub mod cable_circuit;
 pub mod circuit;
 pub mod conducted;
+pub mod desense;
 pub mod estimate;
 pub mod field;
 pub mod harmonic;

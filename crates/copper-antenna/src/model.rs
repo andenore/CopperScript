@@ -442,9 +442,20 @@ impl Victim {
         net: &str,
         terminate: &dyn Fn(&NetEnd) -> Termination,
     ) -> Result<Victim, String> {
+        Victim::from_board(problem, problem.board, net, terminate)
+    }
+
+    /// The victim of `net` as `board` draws it: a routed board of the same design, whose site `problem` was
+    /// resolved on the design's unrouted board.
+    pub fn from_board(
+        problem: &Problem,
+        board: &PhysicalBoard,
+        net: &str,
+        terminate: &dyn Fn(&NetEnd) -> Termination,
+    ) -> Result<Victim, String> {
         let grounds: BTreeSet<String> = [problem.site.ground.clone()].into();
         let geometry =
-            net_geometry(problem.board, net, &grounds, terminate).map_err(|e| format!("coupling victim {net}: {e}"))?;
+            net_geometry(board, net, &grounds, terminate).map_err(|e| format!("coupling victim {net}: {e}"))?;
         // As the feed slot: the cut is the board clearance widened to one coarse cell, so the mesh resolves it at
         // every fidelity (a narrower cut lets the ground edge snap onto the victim's and short it).
         let coarse = Fidelity::coarse(problem.site, 1).cell;
@@ -705,13 +716,16 @@ pub fn cut_ground(problem: &Problem, victims: &[Victim]) -> CutGround {
         .collect();
     // Only the axis-aligned edges of a cut get mesh lines (a vertical edge its x, a horizontal one its y): those
     // are what a mesh line can keep off the victim, and the vertices of slanted edges would only add slivers.
+    // Short edges (the chamfers of the offset, the step where a track meets a pad) are left out: they would cut
+    // slivers that set the time step.
+    let shortest = (Fidelity::coarse(problem.site, 1).cell * NM_PER_MM) as i64;
     let mut edges = [Vec::new(), Vec::new()];
     for contour in cuts.iter().flatten() {
         for i in 0..contour.len() {
             let (p, q) = (contour[i], contour[(i + 1) % contour.len()]);
-            if p.x == q.x && p.y != q.y {
+            if p.x == q.x && (p.y - q.y).abs() >= shortest {
                 edges[0].push(p.x as f64 / NM_PER_MM);
-            } else if p.y == q.y && p.x != q.x {
+            } else if p.y == q.y && (p.x - q.x).abs() >= shortest {
                 edges[1].push(p.y as f64 / NM_PER_MM);
             }
         }
@@ -892,8 +906,11 @@ pub fn evaluate_coupled(
                 lines.extend([(vp.start[k], LineRank::Port), (vp.stop[k], LineRank::Port)]);
             }
         }
+        // A cut edge next to a line already planned is held by it: never two lines closer than a quarter cell.
         for v in cut.iter().flat_map(|c| &c.edges[k]) {
-            lines.push((*v, LineRank::Boundary));
+            if lines.iter().all(|(w, _)| (w - v).abs() >= cell / 4.0) {
+                lines.push((*v, LineRank::Boundary));
+            }
         }
     }
     // The antenna's own cells span every feature line; around the port, a

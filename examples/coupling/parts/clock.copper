@@ -1,0 +1,12 @@
+// Synthetic two-land clock driver: a 48 MHz output declared as a Thevenin
+// source (3.3 V open circuit behind 33 ohm) with 1 ns edges. Not a reusable
+// part; it exists to give the coupling example a declared aggressor.
+part ClockSource {
+    footprint = "../source.kicad_mod";
+    pin OUT {
+        number = "1"; domains = "digital"; directions = "output";
+        clock_frequency = 48MHz; rise_time = 1ns;
+        open_circuit_swing = 3.3V; output_impedance = 33ohm;
+    }
+    pin GND { number = "2"; domains = "digital"; directions = "passive"; }
+}

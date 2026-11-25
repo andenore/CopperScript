@@ -426,6 +426,9 @@ pub fn coupling_model(
     spec.budget = request.budget;
     spec.threads = request.threads;
     spec.extend_planes = true;
+    // A routed board's copper leaves gaps far below the cell between nets: the smoothing mesher grades into them
+    // and floors the slivers that would set the time step (as for the hot-loop runs).
+    spec.smooth_mesh = true;
     if request.zone_fills {
         spec.zone_fills = crate::fill::zone_fill_set(board).ok();
     }

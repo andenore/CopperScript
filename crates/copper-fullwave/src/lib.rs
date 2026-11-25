@@ -32,6 +32,7 @@ pub mod stack;
 #[doc(hidden)]
 pub mod testing;
 
+pub use ems::Complex64;
 pub use model::{Counts, Estimate, MeshReport, Post, RegionModel, ResolvedPort, Sheet, Strap, Wire};
 pub use solve::{PortColumn, PortMatrix, RunStats, SOLVER, auto_threads, db};
 pub use spec::{
