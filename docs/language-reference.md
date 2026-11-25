@@ -1571,8 +1571,8 @@ constraint copper_zone(GND) {
 
 `copper_zone` targets exactly one existing net and lowers to an unfilled
 physical zone inside the declared board outline. `layers` is required;
-`inset`, `clearance`, `minimum_width`, `pad_connection`, `thermal_gap` and
-`thermal_spoke_width` are optional.
+`inset`, `clearance`, `minimum_width`, `pad_connection`, `thermal_gap`,
+`thermal_spoke_width` and `stitch_pitch` are optional.
 
 Pads join a zone through thermal reliefs by default: the fill keeps
 `thermal_gap` (default 0.3 mm) around each same-net pad and bridges it with
@@ -1593,6 +1593,28 @@ constraint copper_zone(GND) {
     layers = "F.Cu,B.Cu";
     thermal_gap = 0.25mm;
     thermal_spoke_width = 0.4mm;
+}
+```
+
+`stitch_pitch` (a positive length, optional) joins the zone's layers with a
+grid of through vias of the board's default size at that pitch. `route-board`
+places them after routing and before the exact DRC and the native fill
+verification, which see them like any other via: a grid site takes a via only
+where the zone's net is filled on every copper layer with the via's pad inside
+the fill (so clear of other nets' copper, keepouts and antipads), its drill is
+at least the board's hole clearance from every other drill, and its pad is at
+least the board clearance from every pad of the net. A zone that is not on
+every copper layer gets none (a through via would pierce a layer it does not
+fill), and the route report's `pour_stitching` says so per zone, with the grid
+sites and the vias added. Two pours of one net joined only where pads and
+routed vias happen to join them are, at radio frequencies, a parallel-plate
+cavity that couples every port inside it (see
+[the coupling plan](coupling-query-plan.md), section 3.1).
+
+```copper
+constraint copper_zone(GND) {
+    layers = "F.Cu,B.Cu";
+    stitch_pitch = 5mm;
 }
 ```
 

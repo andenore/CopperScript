@@ -1535,8 +1535,30 @@ fn finish(
             None => (output_board, None),
         }
     };
+    // Opt-in pour stitching (`copper_zone ... stitch_pitch`): a via grid joining a zone's layers, placed after the
+    // last change to the routed copper so the exact DRC and the native checks below see it like any other copper.
+    let (output_board, pour_stitching) = if stopped {
+        (output_board, Vec::new())
+    } else {
+        let (stitched, outcomes) = copper_route::pour_stitch::stitch_pours(&output_board)
+            .map_err(|error| copper_pcb::Error::Value(format!("pour stitching: {error}")))?;
+        for outcome in &outcomes {
+            emit(
+                progress,
+                "pour_stitching",
+                "finished",
+                vec![
+                    ("zone", Value::from(outcome.zone.as_str())),
+                    ("vias", Value::from(outcome.added as i64)),
+                    ("sites", Value::from(outcome.sites as i64)),
+                ],
+            );
+        }
+        (stitched, outcomes)
+    };
     let output_drc = if !stopped
-        && ((context.stitch_enabled && stitch.is_some())
+        && (pour_stitching.iter().any(|outcome| outcome.added != 0)
+            || (context.stitch_enabled && stitch.is_some())
             || duplicate_stitch.added_track_count != 0
             || trimmed_overhangs
             || swept_single_layer_vias
@@ -2038,6 +2060,22 @@ fn finish(
     }
     if let Some(cleanup) = native_cleanup {
         report.insert("native_cleanup".to_owned(), cleanup);
+    }
+    if !pour_stitching.is_empty() {
+        let zones = pour_stitching
+            .iter()
+            .map(|o| {
+                object_of(vec![
+                    ("zone", Value::from(o.zone.as_str())),
+                    ("net", Value::from(o.net.as_str())),
+                    ("pitch_nm", Value::from(o.pitch_nm)),
+                    ("sites", Value::from(o.sites as i64)),
+                    ("vias_added", Value::from(o.added as i64)),
+                    ("skipped", o.skipped.as_deref().map_or(Value::Null, Value::from)),
+                ])
+            })
+            .collect();
+        report.insert("pour_stitching".to_owned(), Value::Array(zones));
     }
     if let Some(outcome) = &arc_corners {
         report.insert("arc_corners".to_owned(), outcome.document());

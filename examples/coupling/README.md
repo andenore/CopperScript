@@ -19,7 +19,9 @@ the default 50 ohm. The other direction, the clock as the aggressor in the regio
 `--from CLK --to ANT_FEED`. Accuracy and limits are in
 [`docs/coupling-query-plan.md`](../../docs/coupling-query-plan.md).
 
-`radio_beside_feed.copper` is the same board with the radio `U1` beside the feed land. Compare the two with the
-clock as the aggressor and the ground as routed, then stitched (`--stitch 4.9`): the routed pours, joined by
-three vias, are a cavity that dominates the coupling (see section 3.1 of the coupling plan).
+`radio_beside_feed.copper` is the fix: the radio `U1` beside the feed land, so the feed line is short, and
+`stitch_pitch = 5mm` on the GND zone, so route-board stitches the two pours. On `board.copper` the routed pours,
+joined by three vias, are a cavity that dominates the coupling; `--stitch 4.9` shows that board with assumed
+stitching (see section 3.1 of the coupling plan). Even fixed, the 1 ns clock fails the synthetic receiver by
+about 24 dB through the antenna itself: distance, a slower edge or a spread clock are what is left.
 

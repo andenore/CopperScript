@@ -135,7 +135,8 @@ driver's end. The 51st harmonic of the example clock (2448 MHz), driver end `U2.
 | Board | Ground as routed (3 vias) | `--stitch 4.9` (assumed vias every 4.9 mm) |
 | --- | --- | --- |
 | `board.copper` (feed line past the clock) | -23.1 dB, -62.8 dBm: fail by 38.2 dB; 266 s | -30.4 dB, -70.1 dBm: fail by 30.9 dB; 65 s |
-| `radio_beside_feed.copper` (radio next to the feed land) | **-11.0 dB**, -50.8 dBm: fail by 50.2 dB; 185 s | -38.5 dB, -78.3 dBm: fail by 22.7 dB; 65 s |
+| the same board without `stitch_pitch` (radio next to the feed land) | **-11.0 dB**, -50.8 dBm: fail by 50.2 dB; 185 s | -38.5 dB, -78.3 dBm: fail by 22.7 dB; 65 s |
+| `radio_beside_feed.copper` (radio next to the feed land, `stitch_pitch = 5mm`: 43 real vias) | -37.0 dB, -76.8 dBm: fail by 24.2 dB; 78 s | |
 | antenna mode (radiator only, site model with its own stitching) | | -34.4 dB to `U2.1` from the feed (fail by 26.9 dB) |
 
 What this shows:
@@ -169,8 +170,13 @@ What this shows:
    reaches a board edge ends its planes at the window.
 5. **Desensitisation finding.** Done in both modes (sections 3 and 3.1). Open: spurs of data signals as lines
    rather than a bound, and a channel bandwidth for random data.
-6. **Stitching the pours.** The router joins pours only where pads and vias need it; nothing places a via grid
-   between two pours of one net. Section 3.1 makes that the largest single lever on this board.
+6. **Stitching the pours.** Done, opt-in: `constraint copper_zone(NET) { stitch_pitch = 5mm; }` makes route-board
+   place a grid of through vias where the net is filled on every copper layer, before the exact DRC and native
+   fill verification (`copper_route::pour_stitch`). On `radio_beside_feed.copper` it places 43 vias, the native
+   checks pass, and the coupling with the real vias (-37.0 dB) matches the assumed stitching (-38.5 dB). Boards
+   that do not declare it route to byte-identical copper (checked on the examples that resolve offline). Open:
+   zones that are not on every copper layer (blind or buried stitching), and a default pitch derived from the
+   highest declared frequency instead of a declared one.
 
 Not checked against a measurement anywhere. The fit tests `copper-fullwave/src/fit.rs` (four of them) fail on the
 base commit this work started from as well; they are not touched here.

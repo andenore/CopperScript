@@ -1281,8 +1281,9 @@ fn lower_physical_constraints(
                 if !net_names.contains(net.as_str()) {
                     return Err(Error::Value(format!("copper_zone references unknown net {}", repr(net))));
                 }
-                const KNOWN: [&str; 17] = [
+                const KNOWN: [&str; 18] = [
                     "layers",
+                    "stitch_pitch",
                     "inset",
                     "pad_connection",
                     "thermal_gap",
@@ -1351,6 +1352,7 @@ fn lower_physical_constraints(
                         .then_some(10_000_000_000_000),
                     reserve_routing,
                     allow_same_net_hard_macro_overlap: allow_overlap,
+                    stitch_pitch_nm: optional_length(parameters, "stitch_pitch")?,
                 };
                 zone.validate()?;
                 zones.push(zone);

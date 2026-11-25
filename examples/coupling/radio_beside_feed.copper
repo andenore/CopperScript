@@ -1,7 +1,7 @@
 // Coupling probe, radio beside the feed: board.copper with the radio U1 moved
 // next to the antenna's feed land, so its feed line is short and never passes
-// the clock. Not a qualified radio design; no isolation, desense or regulatory
-// claim. See README.md.
+// the clock, and the two GND pours stitched every 5 mm. Not a qualified radio
+// design; no isolation, desense or regulatory claim. See README.md.
 board CouplingProbeRadioBesideFeed {
     import parts "./parts";
 
@@ -17,7 +17,7 @@ board CouplingProbeRadioBesideFeed {
     constraint fixed_placement(U1) { x = 16.5mm; y = 7.5mm; rotation = 180; }
     constraint fixed_placement(U2) { x = 21mm; y = 10mm; }
     constraint fixed_placement(U3) { x = 37mm; y = 10mm; }
-    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; }
+    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; stitch_pitch = 5mm; }
 
     constraint antenna(ANT1.FEED) {
         name = "bt";

@@ -181,3 +181,46 @@ fn excited_ends_and_the_receiver_must_be_ends_of_their_nets() {
     assert_eq!(status, 2, "{output}");
     assert!(output.contains("applies to --from NET"), "{output}");
 }
+
+#[test]
+fn a_zone_with_a_stitch_pitch_gets_a_via_grid_that_passes_the_native_checks() {
+    let directory = scratch("stitched");
+    let report = directory.join("route.json");
+    let pcb = directory.join("board.kicad_pcb");
+    let (status, output) = copper(&[
+        "route-board",
+        "examples/coupling/radio_beside_feed.copper",
+        "-o",
+        &pcb.to_string_lossy(),
+        "--report",
+        &report.to_string_lossy(),
+        "--locked",
+        "--offline",
+    ]);
+    assert_eq!(status, 0, "{output}");
+    assert!(
+        output.contains("native fill verified=True") && output.contains("native filled-board DRC=pass"),
+        "{output}"
+    );
+    let report = copper_json::parse(&std::fs::read_to_string(&report).expect("the report")).expect("JSON");
+    let zones = report.get("pour_stitching").and_then(|v| v.as_array()).expect("pour_stitching");
+    assert_eq!(zones.len(), 1);
+    let added = match zones[0].get("vias_added") {
+        Some(copper_json::Value::Int(n)) => n.to_string().parse::<i64>().unwrap(),
+        other => panic!("{other:?}"),
+    };
+    // A 40 x 30 mm board at 5 mm: 48 sites, less the antenna region and the sites too close to pads and drills.
+    assert!((30..48).contains(&added), "{added} vias");
+    // None lands in the antenna's region (x 18 to 40, y 0 to 6 mm), which the fill keeps out.
+    let board = std::fs::read_to_string(&pcb).expect("the board");
+    let mut at = board.match_indices("(via").map(|(i, _)| &board[i..]);
+    assert!(at.all(|via| {
+        let xy: Vec<f64> = via
+            .split("(at ")
+            .nth(1)
+            .and_then(|t| t.split(')').next())
+            .map(|t| t.split_whitespace().filter_map(|v| v.parse().ok()).collect())
+            .unwrap_or_default();
+        !(xy.len() == 2 && (18.0..=40.0).contains(&xy[0]) && (0.0..=6.0).contains(&xy[1]))
+    }));
+}
