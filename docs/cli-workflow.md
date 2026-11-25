@@ -607,7 +607,7 @@ copper check-footprint path/to/package.kicad_mod --strict
 For a development build of the `copper` command:
 
 ```console
-cargo build --release -p copper
+cargo build --release -p copperscript
 target/release/copper check examples/valid_board/board.copper
 cargo test --workspace
 ```

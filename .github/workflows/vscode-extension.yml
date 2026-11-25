@@ -50,7 +50,7 @@ jobs:
       - name: Install the pinned Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Build the copper binary
-        run: cargo build --release --locked -p copper
+        run: cargo build --release --locked -p copperscript
       - name: Check command selection and the actual copper lsp language server providers
         env:
           COPPER_TEST_BIN: target/release/copper${{ runner.os == 'Windows' && '.exe' || '' }}

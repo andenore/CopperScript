@@ -137,7 +137,7 @@ copper compile examples/valid_board/board.copper -o build/board.json
 For development, build and test the workspace; see the [Rust workspace](crates/README.md):
 
 ```console
-cargo build --release -p copper      # target/release/copper
+cargo build --release -p copperscript      # target/release/copper
 cargo test --workspace --release
 ```
 

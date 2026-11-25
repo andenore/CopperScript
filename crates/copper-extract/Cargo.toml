@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish.workspace = true
 
 [dependencies]
@@ -21,5 +23,5 @@ indexmap.workspace = true
 workspace = true
 
 [dev-dependencies]
-copper-lang.workspace = true
+copper-lang = { path = "../copper-lang" }
 ems.workspace = true
