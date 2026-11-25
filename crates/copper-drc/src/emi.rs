@@ -2567,7 +2567,11 @@ impl LoopScenario {
                 format!("the operating point could not be evaluated: {}", self.reason.as_deref().unwrap_or(""))
             }
             _ => match self.topology {
-                Some(Topology::Buck) => format!("declare load_current on {controller} for an operating point"),
+                Some(Topology::Buck) => {
+                    format!(
+                        "declare load_current on {controller} or on the supply of its output rail for an operating point"
+                    )
+                }
                 None => format!(
                     "declare load_current on {controller} for an operating point; the topology is not declared as a buck, so also declare `topology = buck` on the part"
                 ),
@@ -2662,6 +2666,11 @@ fn record_scenario(finding: &mut EmiFinding, scenario: &LoopScenario, cell: &Swi
     put(&mut operating, "reason", scenario.reason.as_deref().map_or(Value::Null, Value::from));
     put(&mut operating, "reason_code", scenario.reason_code.map_or(Value::Null, Value::from));
     put(&mut operating, "load_current_a", scenario.point.as_ref().map_or(Value::Null, |p| num(p.load, 6)));
+    put(
+        &mut operating,
+        "load_current_source",
+        cell.load_current_source.as_ref().map_or(Value::Null, |source| Value::from(source.describe(&cell.controller))),
+    );
     put(&mut operating, "current_limit_a", scenario.limit.map_or(Value::Null, |i| num(i, 6)));
     if let Some(p) = &scenario.point {
         put(&mut operating, "inductor", p.inductor.as_ref().map_or(Value::Null, |(n, _)| Value::from(n.as_str())));
@@ -3026,7 +3035,10 @@ fn radiated_estimate(
                 rounded(p.valley(), 4),
                 rounded(p.peak(), 4),
                 rounded(p.load, 4),
-                cell.controller,
+                cell.load_current_source.as_ref().map_or_else(
+                    || format!("component {}", cell.controller),
+                    |source| source.describe(&cell.controller)
+                ),
                 rounded(p.nominal_ripple(), 4),
                 match (&p.inductor, p.ripple) {
                     (Some((name, l)), _) =>

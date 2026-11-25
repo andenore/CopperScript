@@ -82,6 +82,25 @@ pub struct MagneticLink {
     pub output_net: Option<String>,
 }
 
+/// Where a cell's operating point was declared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoadCurrentSource {
+    /// `load_current` on the converter's component.
+    Component,
+    /// `load_current` on the supply of the buck's output net (the magnetic's output terminal), named here.
+    Supply(String),
+}
+
+impl LoadCurrentSource {
+    /// `component U1` or `supply VCORE`, for messages and the JSON.
+    pub fn describe(&self, controller: &str) -> String {
+        match self {
+            LoadCurrentSource::Component => format!("component {controller}"),
+            LoadCurrentSource::Supply(name) => format!("supply {name}"),
+        }
+    }
+}
+
 /// The asynchronous cell's catch diode (buck: to the hot return; boost: to the hot supply).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CatchDiode {
@@ -134,8 +153,11 @@ pub struct SwitchingCell {
     /// First declared 10-90 % current commutation times among the switch pins (distinct from the voltage edge).
     pub current_rise_time: Option<Quantity>,
     pub current_fall_time: Option<Quantity>,
-    /// `load_current` on the component: the operating point of the cell (mean inductor current of a buck).
+    /// The operating point of the cell (mean inductor current of a buck): `load_current` on the component, or else
+    /// on the supply of a buck's output net.
     pub load_current: Option<Quantity>,
+    /// Where `load_current` was declared.
+    pub load_current_source: Option<LoadCurrentSource>,
     pub switch_pins: Vec<Endpoint>,
     pub hot_supply_pins: Vec<Endpoint>,
     pub hot_return_pins: Vec<Endpoint>,
@@ -349,6 +371,12 @@ fn cell_value(cell: &SwitchingCell) -> Value {
         ("current_rise_time", optional_quantity(cell.current_rise_time.as_ref())),
         ("current_fall_time", optional_quantity(cell.current_fall_time.as_ref())),
         ("load_current", optional_quantity(cell.load_current.as_ref())),
+        (
+            "load_current_source",
+            cell.load_current_source
+                .as_ref()
+                .map_or(Value::Null, |source| Value::from(source.describe(&cell.controller))),
+        ),
         ("switch_pins", endpoints_value(&cell.switch_pins)),
         ("hot_supply_pins", endpoints_value(&cell.hot_supply_pins)),
         ("hot_return_pins", endpoints_value(&cell.hot_return_pins)),
@@ -634,6 +662,22 @@ fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefin
     }
     let bootstrap_capacitor =
         roles.bootstrap.iter().find_map(|pin| bootstrap_capacitor_for(context, pin, &switch_nets));
+    // The operating point: the component's own `load_current`, else (a buck) the `load_current` of the supply on the
+    // magnetic's output net, the rail the cell feeds.
+    let (load_current, load_current_source) =
+        match component.properties.get(LOAD_CURRENT).and_then(|text| parse_quantity_text(text, Dimension::Current)) {
+            Some(current) => (Some(current), Some(LoadCurrentSource::Component)),
+            None if topology == Some(Topology::Buck) => magnetic
+                .as_ref()
+                .and_then(|m| m.output_net.as_ref())
+                .and_then(|net| {
+                    context.board.supplies.iter().find(|supply| &supply.net == net && supply.load_current.is_some())
+                })
+                .map_or((None, None), |supply| {
+                    (supply.load_current.clone(), Some(LoadCurrentSource::Supply(supply.name.clone())))
+                }),
+            None => (None, None),
+        };
     SwitchingCell {
         controller: component.reference.clone(),
         part: part.name.clone(),
@@ -646,10 +690,8 @@ fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefin
         current_peak: roles.current_peak,
         current_rise_time: roles.current_rise_time,
         current_fall_time: roles.current_fall_time,
-        load_current: component
-            .properties
-            .get(LOAD_CURRENT)
-            .and_then(|text| parse_quantity_text(text, Dimension::Current)),
+        load_current,
+        load_current_source,
         switch_pins: roles.switch,
         hot_supply_pins: roles.supply,
         hot_return_pins: roles.ret,

@@ -509,7 +509,9 @@ component U1: Buck { switching_frequency = 500kHz; load_current = 2A; }
 component CIN: Cap { value = 10uF; capacitance_at_bias = 4.2uF; role = decoupling; decouples = U1.VIN; }
 ```
 
-A component that declares `load_current` without being a switching cell gets the warning
+A buck whose component declares no `load_current` takes the `load_current` of
+the supply on its inductor's output net ([Supplies](#supplies)). A component that
+declares `load_current` without being a switching cell gets the warning
 `EMI_OPERATING_POINT_NO_CELL`.
 
 ```copper
@@ -1258,6 +1260,21 @@ the magnitude, so a negative rail's budget is written positive. A rail with a
 `output_current_limit` of the source part's `sim regulator` or `sim reference`
 block whose `out` is that pin (against the mean and the peak). The budgets
 enter the compiled design only when declared.
+
+A supply may also declare its expected mean load, the board's estimate of what
+its consumers draw in normal operation:
+
+```copper
+supply VCORE { voltage = 1.0V; source = BUCK_CORE.VOUT; load_current = 400mA; }
+```
+
+`load_current` is a positive current, at most `current_max` when both are
+given (`CMP213`), and enters the compiled design only when declared. It is not
+a budget: nothing is judged against it. A buck converter whose power inductor
+feeds the supply's net takes it as its operating point for the EMI screening
+when the converter's own component declares no `load_current` (that one wins).
+This is how a board gives an operating point to a converter inside a library
+module, whose components it cannot annotate.
 
 A standalone passive part can explicitly declare `dc_power_path = "P1,P2";`
 between two passive, power-only pins. ERC follows this path only from an existing

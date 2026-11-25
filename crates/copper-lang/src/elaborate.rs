@@ -232,6 +232,7 @@ fn expand_one(parent: FlatElectricalView, instance: &str, template: &Template) -
             externally_driven,
             current_max: supply.current_max.clone(),
             current_peak_max: supply.current_peak_max.clone(),
+            load_current: supply.load_current.clone(),
         });
     }
 

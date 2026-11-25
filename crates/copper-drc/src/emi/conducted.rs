@@ -2190,9 +2190,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 (None, Ripple::Computed(_)) => String::new(),
             };
             format!(
-                "load current {} declared on {} (component load_current); {how}; valley {} peak {}, continuous conduction",
+                "load current {} declared on {} (load_current); {how}; valley {} peak {}, continuous conduction",
                 si(p.load, "A"),
-                cell.controller,
+                cell.load_current_source.as_ref().map_or_else(
+                    || format!("component {}", cell.controller),
+                    |source| source.describe(&cell.controller)
+                ),
                 si(p.load - ripple / 2.0, "A"),
                 si(p.load + ripple / 2.0, "A")
             ) + &p.peak_may_exceed_text().map_or(String::new(), |t| format!("; {t}"))
@@ -2218,7 +2221,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             ),
         },
         (None, _) => format!(
-            "no load_current is declared on {}: the switch current limit {} is used as the pulse amplitude, a worst case and not a prediction of operation; declare `load_current = <current>;` on the component to give the cell an operating point",
+            "no load_current is declared on {}: the switch current limit {} is used as the pulse amplitude, a worst case and not a prediction of operation; declare `load_current = <current>;` on the component or on the supply of its output rail to give the cell an operating point",
             cell.controller,
             si(current_limit, "A")
         ),
@@ -2371,7 +2374,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             "scenario declared_operating_point: the input current of an ideal lossless buck in continuous conduction at the declared load current (a ramp on a pedestal, {}); the current limit is a second scenario",
             if main.ripple_band { "the ripple from a rule-of-thumb ratio band" } else { "the ripple from the power inductor's value" }
         ),
-        Kind::CurrentLimit => "scenario current_limit: the switch current limit (current_peak) is the amplitude of a flat-top pulse: a worst case that bounds operation, not a prediction of it. Declare load_current on the component for an operating point".to_owned(),
+        Kind::CurrentLimit => "scenario current_limit: the switch current limit (current_peak) is the amplitude of a flat-top pulse: a worst case that bounds operation, not a prediction of it. Declare load_current on the component or on the supply of its output rail for an operating point".to_owned(),
     });
     assumptions.push(
         "10-90 % edge times are converted to the 0-100 % ramp of the current edge by dividing by 0.8 (linear ramp); the current commutation time is the declared current_rise_time/current_fall_time, else the switch-node voltage edge (an assumption: the two are different quantities, the current commutates in a time set by loop inductance and drive)".to_owned(),
@@ -2486,7 +2489,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             }
         ),
         (Kind::CurrentLimit, None) => format!(
-            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction of operation; declare load_current on {} for an operating point)",
+            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction of operation; declare load_current on {} or on the supply of its output rail for an operating point)",
             si(current_limit, "A"),
             cell.controller
         ),
@@ -2724,6 +2727,11 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         Value::from(format!("component {} {{ load_current = <current>; }}", cell.controller)),
     );
     put(&mut operating, "load_current_a", point.as_ref().map_or(Value::Null, |p| num(p.load, 6)));
+    put(
+        &mut operating,
+        "load_current_source",
+        cell.load_current_source.as_ref().map_or(Value::Null, |source| Value::from(source.describe(&cell.controller))),
+    );
     put(&mut operating, "current_limit_a", limit_current.map_or(Value::Null, |i| num(i, 6)));
     if let Some(p) = &point {
         put(&mut operating, "inductor", p.inductor.as_ref().map_or(Value::Null, |(n, _)| Value::from(n.as_str())));
