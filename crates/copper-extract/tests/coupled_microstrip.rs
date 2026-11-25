@@ -31,19 +31,17 @@
 //! | gap 8 mm, planes continued | 1.02 M, 4,351, 21 s | -50.39 dB | 4.92 dB (0.39 at 0.5 GHz) | 1.55 dB |
 //!
 //! So the error is not the record length (a deeper decay threshold ran the same steps) and not the mesh (a finer
-//! cell changes it by 0.04 dB). Part of it is the truncated plane (the reference's plane is infinite); the rest
-//! grows with frequency and is most likely the direct coupling of the two vertical port elements 4 mm apart at
-//! each end, which the reference does not have. The full wave reads high in every case, which is the conservative
-//! side for screening. Below about -40 dB a path that the TEM reference lacks dominates at the top of the band:
-//! at 0.5 GHz the weakest pair still agrees within 0.4 dB (planes continued), at 3 GHz it reads 5 dB high. Whether
-//! that path is the port elements (a modelling artefact) or the radiation of the open line ends and port wires
-//! (physics the reference leaves out) is not yet separated; a line-length sweep would separate them. Until then,
-//! a coupling below -40 dB at GHz frequencies is an upper bound, not an estimate, and coupling runs should continue
-//! the planes into the PML (`extend_planes`), which removed 1 to 2 dB in every case.
+//! cell changes it by 0.04 dB). Part of it is the truncated plane (the reference's plane is infinite), and the full
+//! wave reads high in every case. The rest, which dominates below -40 dB at the top of the band, was separated in
+//! `the_weak_coupling_excess_is_separated_by_length_and_a_stub_only_control`: the port elements alone couple 30 to
+//! 40 dB below it, it grows with the line length, and in air (both modes TEM, the reference exact) the full wave
+//! agrees within 0.6 dB at -52 to -62 dB (`weak_coupling_in_air_matches_tem_theory_within_one_db`). It is the
+//! modal dispersion of the inhomogeneous line, which the quasi-static reference leaves out and to which weak coupling
+//! (a difference of two nearly equal mode impedances) is most sensitive. See `docs/coupling-query-plan.md`.
 //!
 //! The full-wave runs take 15 s to a minute, so they are `#[ignore]`d: `cargo test --release -p copper-extract
-//! --test coupled_microstrip -- --ignored --nocapture`. `CPL_GAP_UM`, `CPL_MARGIN_MM`, `CPL_EXTEND` and
-//! `CPL_CELL` reproduce the study rows. Screening evidence, like the rest of the tier.
+//! --test coupled_microstrip -- --ignored --nocapture`. `CPL_GAP_UM`, `CPL_MARGIN_MM`, `CPL_EXTEND`,
+//! `CPL_CELL` and `CPL_STUDY_CASE` reproduce the study rows. Screening evidence, like the rest of the tier.
 
 use copper_extract::capacitance::{Rect, SPEED_OF_LIGHT, Section, SectionMesh, Slab, Wall};
 use copper_fullwave::testing::*;
@@ -64,11 +62,22 @@ struct Pair {
     height: i64,
     length: i64,
     er: f64,
+    /// Only the port terminals' 0.5 mm of copper at each end, no line between them: what the ports couple by
+    /// themselves.
+    stubs_only: bool,
 }
 
 impl Pair {
     fn with_gap(gap: i64) -> Pair {
-        Pair { width: MM, gap, height: 500_000, length: 20 * MM, er: 4.3 }
+        Pair { width: MM, gap, height: 500_000, length: 20 * MM, er: 4.3, stubs_only: false }
+    }
+
+    fn long(self, length: i64) -> Pair {
+        Pair { length, ..self }
+    }
+
+    fn stubs(self) -> Pair {
+        Pair { stubs_only: true, ..self }
     }
 
     /// The centre lines of the two strips (board nm).
@@ -124,7 +133,7 @@ fn reference(pair: &Pair, modes: (f64, f64, f64, f64), f: f64) -> [Complex64; 4]
 }
 
 /// The full-wave model of the pair: ports 1/2 at the near/far end of the aggressor, 3/4 of the victim.
-fn model(pair: &Pair, cell: i64, decay_db: f64) -> RegionModel {
+fn model(pair: &Pair, cell: i64, decay_db: f64, extend: bool) -> RegionModel {
     let mut board = bare_board();
     let er = format!("{}", pair.er);
     declare_stackup(
@@ -139,7 +148,12 @@ fn model(pair: &Pair, cell: i64, decay_db: f64) -> RegionModel {
     let (ya, yb) = pair.centres();
     let w = pair.width;
     for (net, y) in [("AGG", ya), ("VIC", yb)] {
-        board.tracks.push(track(net, (x0 + w / 2, y), (x1 - w / 2, y), w, CopperLayer::Front));
+        if pair.stubs_only {
+            board.tracks.push(track(net, (x0 + w / 2, y), (x0 + STUB - w / 2, y), w, CopperLayer::Front));
+            board.tracks.push(track(net, (x1 - STUB + w / 2, y), (x1 - w / 2, y), w, CopperLayer::Front));
+        } else {
+            board.tracks.push(track(net, (x0 + w / 2, y), (x1 - w / 2, y), w, CopperLayer::Front));
+        }
     }
     board.zones.push(zone("GND", &[CopperLayer::Back], [0, 0, 100 * MM, 100 * MM]));
     let end = |a: i64, b: i64, y: i64| Terminal::rect(CopperLayer::Front, [a, y - w / 2, b, y + w / 2]);
@@ -148,7 +162,7 @@ fn model(pair: &Pair, cell: i64, decay_db: f64) -> RegionModel {
     // `CPL_MARGIN_MM` and `CPL_EXTEND` (studies): more modelled plane around the pair, or planes continued into
     // the PML.
     spec.margin_nm = std::env::var("CPL_MARGIN_MM").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(2) * MM;
-    spec.extend_planes = std::env::var_os("CPL_EXTEND").is_some();
+    spec.extend_planes = extend || std::env::var_os("CPL_EXTEND").is_some();
     spec.band_hz = (0.5e9, 3.0e9);
     spec.fidelity = Fidelity::Coarse;
     spec.cell_nm = Some(cell);
@@ -204,7 +218,7 @@ fn compare(pair: &Pair, column: &PortColumn) -> Comparison {
 }
 
 fn run(name: &str, pair: Pair, cell: i64, decay_db: f64) -> Comparison {
-    let model = model(&pair, cell, decay_db);
+    let model = model(&pair, cell, decay_db, false);
     let t = std::time::Instant::now();
     let column = model.solve_port(0).expect("solve");
     println!(
@@ -267,4 +281,66 @@ fn weak_pair_crosstalk_matches_coupled_line_theory_within_three_db() {
     assert!(c.fext_error_db < 1.5, "FEXT error {} dB", c.fext_error_db);
     // Conservative: the full wave does not under-read the coupling.
     assert!(c.next_peak_db.0 > c.next_peak_db.1 - 0.5);
+}
+
+/// Weak coupling where the reference is exact: the 8 mm pair (NEXT about -52 to -62 dB) in air, where both modes
+/// are TEM and the quasi-static reference has no dispersion to neglect. Measured: within 0.58 dB over 0.5 to 3 GHz
+/// (planes continued into the PML, 1.02 M cells, 19 s).
+#[test]
+#[ignore = "full-wave run, about 20 s"]
+fn weak_coupling_in_air_matches_tem_theory_within_one_db() {
+    let pair = Pair { er: 1.0, ..Pair::with_gap(8 * MM) };
+    let model = model(&pair, 250_000, -35.0, true);
+    let column = model.solve_port(0).expect("solve");
+    let c = compare(&pair, &column);
+    println!("air pair: NEXT worst error {:.2} dB, FEXT peak {:.2} dB", c.next_error_db, c.fext_peak_db.0);
+    assert!(c.next_error_db < 1.0, "NEXT error {} dB", c.next_error_db);
+    assert!(c.next_peak_db.1 < -50.0, "the case is weak coupling: {} dB", c.next_peak_db.1);
+}
+
+/// Step 1 of `docs/coupling-query-plan.md`: what the excess over the reference at weak coupling is. The 8 mm pair
+/// (planes continued into the PML) at 10, 20 and 40 mm, and the same ports with only their terminal copper (no
+/// line): the excess `|S31_fw - S31_ref|` of a port artefact would not depend on the length and would equal the
+/// stub-only coupling; coupling along the line would grow with it.
+#[test]
+#[ignore = "study: seven full-wave runs, about four minutes"]
+fn the_weak_coupling_excess_is_separated_by_length_and_a_stub_only_control() {
+    let probe = [0.5e9, 1.0e9, 1.5e9, 2.0e9, 2.5e9, 3.0e9];
+    let solve = |pair: Pair| {
+        let model = model(&pair, 250_000, -35.0, true);
+        let t = std::time::Instant::now();
+        let column = model.solve_port(0).expect("solve");
+        (column, model.mesh.cells, t.elapsed().as_secs_f64())
+    };
+    let nearest = |column: &PortColumn, f: f64| {
+        (0..column.freqs.len()).min_by(|a, b| (column.freqs[*a] - f).abs().total_cmp(&(column.freqs[*b] - f).abs()))
+    };
+    println!("gap 8 mm, planes continued; per frequency: NEXT full wave / reference, |excess| (dB)");
+    // The last case is the 20 mm pair in air (er 1): pure TEM, no modal dispersion, the same radiation.
+    let cases = [(10 * MM, 4.3), (20 * MM, 4.3), (40 * MM, 4.3), (20 * MM, 1.0)];
+    let only = std::env::var("CPL_STUDY_CASE").ok().and_then(|v| v.parse::<usize>().ok());
+    for (i, (length, er)) in cases.into_iter().enumerate() {
+        if only.is_some_and(|o| o != i) {
+            continue;
+        }
+        let base = Pair { er, ..Pair::with_gap(8 * MM).long(length) };
+        let m = modes(&base);
+        let (line, cells, seconds) = solve(base);
+        let (stubs, _, stub_seconds) = solve(base.stubs());
+        println!("length {} mm, er {er}: {cells} cells, {seconds:.0} s (stubs only {stub_seconds:.0} s)", length / MM);
+        for f in probe {
+            let k = nearest(&line, f).expect("a frequency");
+            let r = reference(&base, m, line.freqs[k]);
+            let excess = line.s[2][k] - r[2];
+            println!(
+                "  {:.1} GHz: NEXT {:7.2} / {:7.2}, excess {:7.2}; stubs only NEXT {:7.2}, FEXT {:7.2}",
+                line.freqs[k] / 1e9,
+                db(line.s[2][k]),
+                db(r[2]),
+                db(excess),
+                db(stubs.s[2][k]),
+                db(stubs.s[3][k])
+            );
+        }
+    }
 }

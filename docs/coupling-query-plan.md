@@ -33,14 +33,32 @@ over 36 frequencies (4 threads, release):
 | 8 mm, planes continued | | -50.39 dB | 4.92 dB (0.39 at 0.5 GHz) | 1.55 dB | 21 s |
 
 A finer cell (0.167 mm) and a deeper decay threshold (-50 dB) changed the 3 mm case by at most 0.04 dB. The full
-wave reads high in every case (the conservative side). Above about -40 dB it agrees within 1 to 3 dB; below that,
-a path the TEM reference lacks dominates at the top of the band and grows with frequency: either the direct
-coupling of the vertical port elements (an artefact of the measurement) or radiation from the open ends and port
-wires (physics the reference leaves out). It is not separated yet.
+wave reads high in every case. Above about -40 dB it agrees within 1 to 3 dB; below that the difference grows with
+frequency. Where it comes from was measured (`the_weak_coupling_excess_is_separated_by_length_and_a_stub_only_control`,
+8 mm pair, planes continued; `excess` is `|S31_fw - S31_ref|`):
 
-**Reading the numbers:** coupling stronger than about -40 dB is an estimate within a few dB; weaker coupling at GHz
-frequencies is an upper bound until the open item below is closed. Coupling runs should continue planes into the
-PML (`RegionSpec::extend_planes`).
+| Case | NEXT at 3 GHz, full wave / reference | Excess at 1.5 / 3 GHz | Same ports, stub pads only (no line) |
+| --- | --- | --- | --- |
+| 10 mm, er 4.3 | -54.27 / -54.74 dB | -77.3 / -72.0 dB | -95.5 / -90.4 dB |
+| 20 mm, er 4.3 | -50.45 / -55.37 dB | -69.8 / -57.1 dB | -95.5 / -90.4 dB |
+| 40 mm, er 4.3 | -48.72 / -53.90 dB | -61.1 / -55.7 dB | -95.5 / -90.4 dB |
+| 20 mm, **air** (er 1) | -51.21 / -51.81 dB | -74.3 / -65.2 dB | -89.2 / -83.9 dB |
+
+- **Not the ports.** With the lines removed the same four port elements couple at -84 to -105 dB, 30 to 40 dB
+  below the excess.
+- **Distributed along the line.** The excess grows with length (by 15 dB at 3 GHz from 10 to 20 mm).
+- **Not radiation; the reference's quasi-static modes.** In air both modes are TEM and the reference is exact: the
+  full wave then agrees within **0.60 dB at -52 to -62 dB of coupling** over the whole band
+  (`weak_coupling_in_air_matches_tem_theory_within_one_db`). On FR-4 the field is partly in air and partly in the
+  substrate, the modes disperse with frequency, and weak coupling is set by the difference of two nearly equal
+  mode impedances (49.22 and 49.01 ohm for the 8 mm pair), so a small dispersive change of either moves it by
+  several dB. The static 2-D reference leaves that out; the full wave does not.
+
+**Reading the numbers:** the full wave resolves coupling to at least -62 dB within 1 dB where its reference is
+exact, and its port elements are 30 dB below that. The weak-coupling difference on FR-4 is a limit of the
+reference, not of the model; it is not proven against a dispersive reference (Kirschning-Jansen coupled-line
+dispersion would be the next check), so the evidence grade stays `screening`. Coupling runs continue planes into
+the PML (`RegionSpec::extend_planes`), which removed 1 to 2 dB of truncation error in every case.
 
 ## 2. Antenna-to-net coupling (antenna site model)
 
@@ -56,16 +74,14 @@ arm, ported to B.Cu at both ends. Coarse fidelity (0.5 mm cell: the trace is one
 
 Checked: the coupling falls by 17 dB with distance, no port receives more than the feed delivers, and a far victim
 leaves S11 unchanged. Not checked: accuracy. There is no closed form for this geometry, the far case sits in the
-range that section 1 says is an upper bound, and the trace is one cell wide at coarse fidelity. The coupling is
+weak range of section 1 (resolved where the reference is exact), and the trace is one cell wide at coarse fidelity. The coupling is
 referenced to the wave incident at the feed; the bare antenna has an S11 of -3.3 to -4 dB in band (it is matched
 by an L-section on the board), so relative to the power the antenna accepts the numbers are about 2.5 dB higher.
 
 ## 3. Plan
 
-1. **Separate the weak-coupling floor.** Sweep the line length of the 8 mm pair (10, 20, 40 mm) at fixed port
-   geometry: a port-element artefact stays constant with length, real coupling scales with it. If it is the
-   ports, compare against de-embedding the port pair, or a matched-load termination at the strip end instead of a
-   vertical port.
+1. **Separate the weak-coupling floor.** Done (section 1): not the ports, not radiation; the quasi-static
+   reference's lack of modal dispersion. Open: a check against a dispersive coupled-microstrip reference.
 2. **Victim geometry.** Take victims from the board translator of `copper-fullwave` (any-angle tracks, arcs, vias,
    inner layers, pads, real zone fills) instead of the prototype's axis-aligned F.Cu tracks, and share it between
    the two models.
