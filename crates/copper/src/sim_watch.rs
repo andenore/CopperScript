@@ -245,13 +245,17 @@ mod tests {
 
     #[test]
     fn changes_and_what_they_rerun() {
-        let directory = std::env::temp_dir().join(format!("copper-sim-watch-unit-{}", std::process::id()));
+        // Resolved, and joined a component at a time, as the watcher names the files it compares: on Windows the
+        // temporary directory is an 8.3 path (RUNNER~1) that resolving expands, and `/` is not its separator.
+        let directory = copper_lang::paths::resolve(
+            &std::env::temp_dir().join(format!("copper-sim-watch-unit-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(directory.join("benches")).unwrap();
         std::fs::create_dir_all(directory.join("build/sim")).unwrap();
         std::fs::create_dir_all(directory.join(".git")).unwrap();
         let board = directory.join("board.copper");
-        let bench = directory.join("benches/a.copper");
+        let bench = directory.join("benches").join("a.copper");
         std::fs::write(&board, "board B {}").unwrap();
         std::fs::write(&bench, "bench A for B { analysis op; }").unwrap();
         std::fs::write(directory.join("build/sim/A.html"), "page").unwrap();
@@ -269,7 +273,7 @@ mod tests {
         assert_eq!(affected(&changed, &bench_files), Some(bench_files.clone()));
         assert_eq!(affected(std::slice::from_ref(&board), &bench_files), None);
         // A fixture declares no bench: any bench may use it, so it reruns all.
-        let fixture = directory.join("benches/f.copper");
+        let fixture = directory.join("benches").join("f.copper");
         std::fs::write(&fixture, "fixture F for B { param P = 1V; }").unwrap();
         let declarations = bench_declarations(&board);
         assert_eq!(declarations, bench_files, "the bench file, not the fixture");
