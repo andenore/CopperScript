@@ -14,7 +14,7 @@
 //! within 1 to 3 dB above -40 dB on FR-4 microstrip, where the static reference leaves out modal dispersion.
 //! Screening evidence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use copper_pcb::board::PhysicalBoard;
 use copper_physical::geometry::point_in_polygon;
@@ -55,6 +55,60 @@ pub struct Termination {
 impl Termination {
     pub fn default_ohms() -> Termination {
         Termination { ohms: DEFAULT_TERMINATION_OHMS, source: format!("default {DEFAULT_TERMINATION_OHMS} ohm") }
+    }
+}
+
+/// How each end of a coupling question is terminated, in order: an override by end name (`U1.3`, or a free end's
+/// `NET@(x,y)`), then the declared `output_impedance` of the signal's driving pin when the end is a pad of that
+/// component on that net, then [`DEFAULT_TERMINATION_OHMS`]. A receiver's input impedance is not declared anywhere
+/// in the language, so a receiving end is 50 ohm unless overridden, and says so.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Terminations {
+    pub overrides: BTreeMap<String, f64>,
+    /// `(component, net) -> (ohms, pin)`: the drivers that declare an `output_impedance`.
+    pub drivers: BTreeMap<(String, String), (f64, String)>,
+}
+
+impl Terminations {
+    /// The declared driver impedances of `model`'s signals (each member net of a pair included).
+    pub fn from_emi(model: &copper_lang::emi::EmiModel) -> Terminations {
+        let mut drivers = BTreeMap::new();
+        for source in model.signals.values() {
+            let Some(z) = &source.output_impedance else { continue };
+            let ohms: f64 = z.value.base_value().decimal_text().parse().unwrap_or(f64::NAN);
+            if !(ohms.is_finite() && ohms > 0.0) {
+                continue;
+            }
+            let nets = std::iter::once(source.net.clone())
+                .chain(source.partner.clone())
+                .chain(source.members.iter().map(|m| m.net.clone()));
+            for net in nets {
+                drivers.insert((z.from.component.clone(), net), (ohms, z.from.pin.clone()));
+            }
+        }
+        Terminations { overrides: BTreeMap::new(), drivers }
+    }
+
+    /// The termination of `end`.
+    pub fn choose(&self, end: &NetEnd) -> Termination {
+        if let Some(ohms) = self.overrides.get(&end.name) {
+            return Termination { ohms: *ohms, source: "--terminate".to_owned() };
+        }
+        if let Some((component, _)) = &end.pad
+            && let Some((ohms, pin)) = self.drivers.get(&(component.clone(), end.net.clone()))
+        {
+            return Termination { ohms: *ohms, source: format!("declared output_impedance of {component}.{pin}") };
+        }
+        let mut t = Termination::default_ohms();
+        if end.pad.is_some() {
+            t.source.push_str(" (no declared impedance)");
+        }
+        t
+    }
+
+    /// Overrides that name no end of `ends`: an error to report, not to ignore.
+    pub fn unknown_overrides(&self, ends: &[NetEnd]) -> Vec<String> {
+        self.overrides.keys().filter(|name| !ends.iter().any(|e| &e.name == *name)).cloned().collect()
     }
 }
 
@@ -447,6 +501,30 @@ mod tests {
         board.tracks.push(track("B", (33 * MM, 56 * MM), (40 * MM, 56 * MM), MM, CopperLayer::Front));
         board.zones.push(zone("GND", &[CopperLayer::Back], [0, 0, 100 * MM, 100 * MM]));
         board
+    }
+
+    #[test]
+    fn terminations_prefer_an_override_then_a_declared_driver_then_fifty_ohm() {
+        let end = |name: &str, pad: Option<(&str, &str)>| NetEnd {
+            net: "CLK".to_owned(),
+            name: name.to_owned(),
+            terminal: Terminal::rect(CopperLayer::Front, [0, 0, 1, 1]),
+            layer: CopperLayer::Front,
+            at: (0.0, 0.0),
+            pad: pad.map(|(c, p)| (c.to_owned(), p.to_owned())),
+        };
+        let mut t = Terminations::default();
+        t.drivers.insert(("U1".to_owned(), "CLK".to_owned()), (33.0, "CLKOUT".to_owned()));
+        t.overrides.insert("U2.4".to_owned(), 1000.0);
+        let driver = t.choose(&end("U1.7", Some(("U1", "7"))));
+        assert_eq!(driver.ohms, 33.0);
+        assert_eq!(driver.source, "declared output_impedance of U1.CLKOUT");
+        let overridden = t.choose(&end("U2.4", Some(("U2", "4"))));
+        assert_eq!((overridden.ohms, overridden.source.as_str()), (1000.0, "--terminate"));
+        let receiver = t.choose(&end("U3.1", Some(("U3", "1"))));
+        assert_eq!(receiver.ohms, DEFAULT_TERMINATION_OHMS);
+        assert!(receiver.source.contains("no declared impedance"), "{}", receiver.source);
+        assert_eq!(t.unknown_overrides(&[end("U1.7", None)]), ["U2.4".to_owned()]);
     }
 
     #[test]
