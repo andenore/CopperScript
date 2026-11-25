@@ -439,6 +439,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             for line in model.model.describe().lines() {
                 let _ = text::print(out, &format!("  {line}"));
             }
+            // Copper by net and layer (sheet area, mm^2), and how much of it lies in each antenna region.
+            let mut areas: std::collections::BTreeMap<(String, i64), f64> = std::collections::BTreeMap::new();
+            for sheet in &model.model.sheets {
+                *areas.entry((sheet.net.clone(), (sheet.z * 1e6).round() as i64)).or_default() +=
+                    copper_fullwave::geom::area(&sheet.ring);
+            }
+            for ((net, z), area) in &areas {
+                let _ = text::print(out, &format!("  copper {net} at z {:.3} mm: {area:.1} mm^2", *z as f64 / 1e6));
+            }
             for p in &model.ports {
                 let _ = text::print(
                     out,
@@ -466,6 +475,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 .map(|p| p.termination.clone())
                 .unwrap_or_else(Termination::default_ohms)
         };
+        notes.extend(model.notes.iter().cloned());
         notes.push(format!("ground nets: {}", model.grounds.iter().cloned().collect::<Vec<_>>().join(", ")));
         Report {
             mode: "region",

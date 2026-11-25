@@ -67,19 +67,33 @@ the PML (`RegionSpec::extend_planes`), which removed 1 to 2 dB of truncation err
 
 `examples/antenna_synthesis/board.copper` (2.4 GHz monopole in the top-right corner, GND on F.Cu and B.Cu over
 1.51 mm FR-4) with its tuned geometry and a synthetic 0.5 mm F.Cu trace, 14 mm long, parallel to the monopole's
-arm, ported to B.Cu at both ends. Coarse fidelity (0.5 mm cell: the trace is one cell wide), 4 threads:
+arm, ported to B.Cu at both ends (`crates/copper-antenna/tests/victim_coupling.rs`, coarse fidelity, 4 threads).
+The victim's copper comes from the region model's translator, and the site's ground is cut around it by the board
+clearance **widened to one coarse cell** (0.5 mm here), as the antenna model already widens its feed slot:
 
-| Case | Model | Coupling in band (2.40 to 2.48 GHz), near end / far end of the trace | Peak over the sweep | S11 change |
+| Case | Model | At 2.44 GHz, near end / far end of the trace | Peak over the sweep | S11 change |
 | --- | --- | --- | --- | --- |
-| antenna alone | 0.29 M cells, 9,001 steps, 12 s | | | |
-| trace 2.5 mm below the antenna region | 0.33 M cells, 12 s | -34.8 to -35.1 / -38.5 dB | -34.3 dB | at most 0.01 dB in band |
-| trace 18 mm below the region | 0.44 M cells, 17 s | -54.7 to -55.3 / -52.3 to -52.8 dB | -51.6 dB | at most 0.05 dB |
+| antenna alone | 0.29 M cells, 9,001 steps, 10 s | | | |
+| trace 2.5 mm below the antenna region | 0.31 M cells, 10 s | -28.9 / -31.0 dB | -27.7 dB | at most 0.03 dB |
+| trace 18 mm below the region | 0.41 M cells, 13 s | -48.3 / -48.9 dB | -46.8 dB | at most 0.04 dB |
+| 2.5 mm below, with a 45-degree jog of 2 mm | 0.39 M cells, 38 s | -30.6 / -33.2 dB | -29.4 dB | |
 
-Checked: the coupling falls by 17 dB with distance, no port receives more than the feed delivers, and a far victim
-leaves S11 unchanged. Not checked: accuracy. There is no closed form for this geometry, the far case sits in the
-weak range of section 1 (resolved where the reference is exact), and the trace is one cell wide at coarse fidelity. The coupling is
-referenced to the wave incident at the feed; the bare antenna has an S11 of -3.3 to -4 dB in band (it is matched
-by an L-section on the board), so relative to the power the antenna accepts the numbers are about 2.5 dB higher.
+Two mesh faults were found and fixed on the way, both of which made a victim touch the ground in the discretised
+model while the geometry was right (`ground_is_cut_around_a_victim_and_its_stitching_removed` checks the geometry):
+
+- **A cut narrower than the cell.** With the board clearance (0.2 mm) on a 0.5 mm mesh the ground edge snapped onto
+  the victim's and shorted it: the far trace read -69 dB and the jogged trace's far end -62 dB. Widening the cut to
+  one coarse cell and keeping its axis-aligned edges on mesh lines of their own fixed both.
+- **Slivers.** Pinning every vertex of a cut (and, on a routed board, two cut edges microns apart where a track
+  meets its pad) left cells of 0.002 mm and a time step 50 times shorter. Only cut edges at least one cell long get
+  a line, and none within a quarter cell of a line already planned.
+
+Checked: coupling falls with distance (by 19 dB from 2.5 to 18 mm), no port receives more than the feed delivers, a
+far victim leaves S11 unchanged, and the jog moves the coupling by 2 dB. Not checked: accuracy against an
+independent reference (there is no closed form for this geometry); the widened cut exposes the victim more than the
+board's 0.2 mm clearance would, so the numbers lean high, the conservative side. The coupling is referenced to the
+wave incident at the feed; the bare antenna has an S11 of -3.3 to -4 dB in band (an L-section matches it on the
+board), so relative to the power the antenna accepts the numbers are about 2.5 dB higher.
 
 ## 3. Plan
 

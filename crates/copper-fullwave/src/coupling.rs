@@ -352,6 +352,8 @@ pub struct CouplingModel {
     /// Indices into `ports` of the aggressor's ends (each is excited in turn).
     pub aggressor_ports: Vec<usize>,
     pub grounds: BTreeSet<String>,
+    /// What the model left out or changed, for the report.
+    pub notes: Vec<String>,
 }
 
 /// The transmission from one excited end to another end.
@@ -418,14 +420,35 @@ pub fn coupling_model(
     let ends: Vec<NetEnd> = ports.iter().map(|p| p.end.clone()).collect();
     let window =
         copper_bounds(board, &signal, &ends).ok_or_else(|| Error::Invalid("the nets have no copper".to_owned()))?;
-    let mut spec = RegionSpec::new(window);
-    spec.margin_nm = request.margin_nm;
+    // The window and its margin, clipped to the board. Planes are continued into the PML only when every edge of
+    // the window is inside the board: past a board edge the continuation would put ground where there is air
+    // (around an antenna, the very space it radiates into).
+    let m = request.margin_nm;
+    let mut region = [window[0] - m, window[1] - m, window[2] + m, window[3] + m];
+    let mut notes = Vec::new();
+    let outline = &board.outline.vertices;
+    if !outline.is_empty() {
+        let lo = |f: fn(&Point) -> i64| outline.iter().map(f).min().unwrap_or(0);
+        let hi = |f: fn(&Point) -> i64| outline.iter().map(f).max().unwrap_or(0);
+        let b = [lo(|p| p.x_nm), lo(|p| p.y_nm), hi(|p| p.x_nm), hi(|p| p.y_nm)];
+        region = [region[0].max(b[0]), region[1].max(b[1]), region[2].min(b[2]), region[3].min(b[3])];
+        let interior = region[0] > b[0] && region[1] > b[1] && region[2] < b[2] && region[3] < b[3];
+        if !interior {
+            notes.push(
+                "the model reaches a board edge: planes end at the window instead of continuing into the PML                  (flag planes_truncated)"
+                    .to_owned(),
+            );
+        }
+    }
+    let interior = notes.is_empty();
+    let mut spec = RegionSpec::new(region);
+    spec.margin_nm = 0;
     spec.nets = Some(signal.iter().chain(&grounds).cloned().collect());
     spec.band_hz = request.band_hz;
     spec.fidelity = request.fidelity;
     spec.budget = request.budget;
     spec.threads = request.threads;
-    spec.extend_planes = true;
+    spec.extend_planes = interior;
     // A routed board's copper leaves gaps far below the cell between nets: the smoothing mesher grades into them
     // and floors the slivers that would set the time step (as for the hot-loop runs).
     spec.smooth_mesh = true;
@@ -438,7 +461,7 @@ pub fn coupling_model(
         port.start = resolved.start;
         port.stop = resolved.stop;
     }
-    Ok(CouplingModel { model, ports, aggressor_ports, grounds })
+    Ok(CouplingModel { model, ports, aggressor_ports, grounds, notes })
 }
 
 impl CouplingModel {
@@ -576,6 +599,7 @@ mod tests {
         assert_eq!(m.ports.len(), 4);
         assert_eq!(m.grounds, ["GND".to_owned()].into());
         assert_eq!(m.model.ports[0].spec.z_ref, 25.0);
+        // The synthetic board has no outline: nothing to clip, the planes continue.
         assert!(m.model.spec.extend_planes);
     }
 }
