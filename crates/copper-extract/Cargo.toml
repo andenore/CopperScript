@@ -22,3 +22,4 @@ workspace = true
 
 [dev-dependencies]
 copper-lang.workspace = true
+ems.workspace = true

@@ -155,6 +155,7 @@ dependencies = [
  "copper-lang",
  "copper-pcb",
  "copper-physical",
+ "ems",
  "indexmap",
 ]
 
