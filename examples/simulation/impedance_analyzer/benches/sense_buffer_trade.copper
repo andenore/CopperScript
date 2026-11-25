@@ -13,13 +13,13 @@
 // (reference CARD).
 bench SenseBufferTrade for AnalogFrontEnd using FrontEndPorts, SoilModel, FirmwareReadout {
     replace U_BHP with opamp {
-        inp = SNS_HP; inn = BUF_HP; out = BUF_HP; vp = VP; vn = VN;
+        inp = SNS_HP; inn = FB_HP; out = BUFO_HP; vp = VP; vn = VN;
         gbw = 70MHz; open_loop_gain = 120dB; second_pole = 120MHz;
         cmrr = 100dB; cmrr_corner = 2kHz; input_capacitance_common = 2pF; input_capacitance_differential = 0.5pF;
         input_resistance_common = 12000Mohm; output_resistance = 4ohm;
     }
     replace U_BLP with opamp {
-        inp = SNS_LP; inn = BUF_LP; out = BUF_LP; vp = VP; vn = VN;
+        inp = SNS_LP; inn = FB_LP; out = BUFO_LP; vp = VP; vn = VN;
         gbw = 70MHz; open_loop_gain = 120dB; second_pole = 120MHz;
         cmrr = 100dB; cmrr_corner = 2kHz; input_capacitance_common = 2pF; input_capacitance_differential = 0.5pF;
         input_resistance_common = 12000Mohm; output_resistance = 4ohm;

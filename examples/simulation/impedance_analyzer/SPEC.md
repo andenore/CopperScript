@@ -307,7 +307,8 @@ model and strays, the firmware's arithmetic, the tolerances) is in fixtures
 | `GuardStability` | The poles with the electrodes in air and the HC guard connected (no pole in the right half-plane); the pump and feedback-buffer phase margins | P0 | pass |
 | `MeasurementNoise` | Noise on each ADC channel in a 1 kHz detection bandwidth at the soil corners (5, 100, 1300 ohm m); SNR, resolution, contributors (one noise analysis with the four ADC inputs as outputs), and the noise of the computed impedance | P1 | reported (no requirement) |
 | `ResistorMatching`, `ResistorWorstCase` | Monte Carlo and worst case over the tolerances and the matched network; spread of drive current, output impedance, gain before calibration and common-mode rejection; limits 1 %, 1 degree and 0.5 % after calibration | P1 | pass |
-| `Startup` | Rails from models of the regulators (TPS65130, TPS7A4901, TPS7A3001, REF2033), coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2, F4 | pass |
+| `Startup` | Rails from models of the regulators (TPS65130, TPS7A4901, TPS7A3001, REF2033), coupling and blocking capacitors charge, input ranges, no latch-up of the pump with the electrodes in air; limit: settled within 1 s | P2, F4 | pass (default models; the vendor models have no operating point with the rails at 0 V, see [Vendor models](#vendor-models)) |
+| `StartupPowered` | The start-up from the instant VP reaches 2.5 V (8.2 ms after ANA_EN, the ADA4817's minimum 5 V supply; VN at -3.90 V), the rails then as `Startup`'s regulators drive them and every capacitor at its operating point there: the start-up where the vendor models are defined, stated as such; limit: settled within 1 s of ANA_EN | P2 | pass |
 | `Distortion` | Harmonics of the drive current at 1 kHz, 100 kHz and 1 MHz into 160 kohm (1.3 kohm m) and 12 kohm (100 ohm m); clipping and slew headroom | P2 | reported (no requirement) |
 | `SupplyCurrent` | Current per rail from the amplifiers' typical quiescent currents and the currents their outputs deliver: idle, and driving 1 MHz at 0.3 V and 0.65 V into dry soil and at 0.3 V into moist loam; limit 70 mA per +/-4.5 V rail (what the rails are sized for) | F4 | pass |
 | `VendorModels` | `SoilSweep` again with vendor amplifier subcircuits read by `copper`; difference from the built-in models | P3 | not a bench: every bench runs with `copper sim --models vendor` ([Vendor models](#vendor-models)) |
@@ -410,22 +411,23 @@ release build, every bench in one run on 12 threads, 23 and 24 November
 | Bench | Result | Status | Time |
 | --- | --- | --- | --- |
 | `SoilSweep` | 0.35 % and 0.091 degrees (limits 1 % and 1 degree) | pass | 72 s |
-| `CalibrationCard` | 0.47 % and 0.125 degrees | pass | 55 s |
-| `StrayCapacitance` | 0.88 % and 0.48 degrees | pass | 167 s |
-| `ContactImbalance` | 0.79 % and 0.82 degrees, all 192 steps | pass | 398 s |
-| `SenseCommonMode` | 63.95 dB (min 63 dB) | pass | 22 s |
+| `CalibrationCard` | 0.47 % and 0.119 degrees | pass | 55 s |
+| `StrayCapacitance` | 0.88 % and 0.47 degrees | pass | 167 s |
+| `ContactImbalance` | 0.78 % and 0.81 degrees, all 192 steps | pass | 398 s |
+| `SenseCommonMode` | 64.09 dB (min 63 dB) | pass | 22 s |
 | `PumpOutputImpedance` | 7.19 Mohm at 1 kHz, guard tracking 1.041 | pass | 25 s |
 | `DcOperatingPoint` | pump node -18.1 mV (limit 50 mV), ADC inputs within 52.8 mV (limit 100 mV) | pass | 12 s |
 | `PowerSide` | `V_MID` 1.650 V, 3.3 V reference 3.300 V | pass | 15 s |
 | `SupplyCurrent` | 55.2 mA a rail idle, 58.2 mA mean driving (max 70 mA) | pass | 16 and 54 s |
-| `LoopStability` | margins: pump 54.25, feedback buffer 64.58, drive buffer 64.15, receiver 58.23, gain 1 62.30, gain 10 72.50, gain 100 73.00, transimpedance 47.31 degrees; poles stable; **sense buffer 41.50 degrees** (min 45) | fail | 23 to 25 s a loop, poles 75 s |
-| `LoopPeaking` | drive buffer 1.109, pump current 1.000, guard 0.999, receiver 1.056, gain 1 1.109, gain 10 1.027, gain 100 1.026, transimpedance 1.000; **sense buffer 1.517** (max 1.12) | fail | 22 s |
-| `GuardStability` | margins: pump 54.01, feedback buffer 69.08 degrees; **poles: one pair at 607 MHz with damping -0.067** (below) | fail | 34 to 36 s, poles 89 s |
-| `ResistorMatching` | 0.38 %, 0.094 degrees, drive current 1.1e-9 (limits 1 %, 1 degree, 0.5 %) | pass | 1078 s |
-| `ResistorWorstCase` | 0.40 %, 0.096 degrees, drive current 8.5e-10 | pass | 908 s |
+| `LoopStability` | margins: pump 54.25, feedback buffer 64.57, drive buffer 64.15, sense buffer 71.83 (41.50 before its in-loop isolation), receiver 58.23, gain 1 62.30, gain 10 72.50, gain 100 73.00, transimpedance 47.30 degrees (min 45); poles stable | pass | 23 to 25 s a loop, poles 75 s |
+| `LoopPeaking` | drive buffer 1.109, pump current 1.000, sense buffer 1.055 (1.517 before), guard 0.999, receiver 1.064, gain 1 1.109, gain 10 1.027, gain 100 1.026, transimpedance 1.000 (max 1.12) | pass | 22 s |
+| `GuardStability` | margins: pump 54.01, feedback buffer 69.07 degrees; poles stable, least damped 1.25 GHz with damping 0.119 (607 MHz with damping -0.067 before the sense buffers' isolation) | pass | 34 to 36 s, poles 89 s |
+| `ResistorMatching` | 0.38 %, 0.094 degrees, drive current 8.8e-10 (limits 1 %, 1 degree, 0.5 %) | pass | 385 s |
+| `ResistorWorstCase` | 0.40 %, 0.096 degrees, drive current 9.9e-10 | pass | 498 s |
 | `MeasurementNoise`, `SenseBufferTrade` | reported, no limits | - | 40 and 9 s |
 | `Startup` | no operating point at its first point (below) | does not run | gives up after 19 s (24 November) |
-| `Distortion` | all 9 steps; THD below 0.02 % at the nominal drive except the 1 kHz dry-soil step (gain 1 0.09 %, gain 10 1.9 %), up to 37 % at the two 0.65 V overdrive steps (below) | no limits | 2549 s (24 November) |
+| `StartupPowered` | settled 333, 411, 602 and 452 ms after VP reaches 2.5 V (gain 1, gain 10, gain 100, current; limit 992 ms), every input inside its absolute maximum | pass | 4465 s |
+| `Distortion` | all 9 steps; THD below 0.02 % at the nominal drive except the 1 kHz dry-soil step (gain 1 0.09 %, gain 10 1.9 %), up to 37 % at the two 0.65 V overdrive steps (below) | no limits | 3236 s |
 
 The values are those of the run of 24 November 2026 (the solver of
 35ee34e5), which moved no limited value by more than 2e-5 of itself; the
@@ -433,9 +435,11 @@ times are those of 23 November except where marked. That run takes 3337 s
 (56 minutes) with `Distortion` running to its end, where the one before took
 4788 s and stopped in it; the solver's own timing gives `ResistorMatching`
 490 s and `ResistorWorstCase` 629 s (not measured again in the whole run).
-Every limit passes but three: the sense buffer's margin and peaking, which
-the snubbers do not touch (below; the options measured fail a limit or cost
-44 mA), and `GuardStability.poles`. The binary of 201ae83b solved every
+Since the sense buffers' in-loop isolation every limit passes (the rows for
+`SoilSweep` to `GuardStability`, the tolerance benches, `StartupPowered` and
+`Distortion` are from runs of that circuit on the evening of 24 November
+2026, bench by bench, with the times of those runs where they differ from
+the whole run's). The binary of 201ae83b solved every
 vendor operating point through all aids to the split, 10 s or more each:
 `CalibrationCard` took 72 s, `ContactImbalance` stopped at its 116th step
 on the circuit before the board change, `ResistorMatching` and
@@ -443,15 +447,58 @@ on the circuit before the board change, `ResistorMatching` and
 after 86 minutes and `GuardStability.poles` left 52 of its roots unrefined
 (plan, I3).
 
-**Sense buffer (not changed).** Isolated stand-alone with the real LP buffer
-and receiver, copper and ngspice-46 agree (41.55 degrees; peaking 1.5614 and
-1.5616). The options measured, none meeting both limits: 200 ohm to 1 kohm in
-series with each receiver input, margin 50.3 to 51.0 degrees (passes) and
-peaking about 1.30 (fails; in the analyzer 50.26 degrees and 1.296); with a
-10 ohm and 10 nF snubber on each sense buffer besides, 58.8 degrees and 1.15,
-but that loads each buffer with 18 ohm at 1 MHz under up to 0.8 V of common
-mode (44 mA); a larger guard resistor raises the peaking (100 ohm: 1.38,
-200 ohm: 1.69). Why it fails is under "The limits that failed" below.
+**Sense buffers, in-loop isolation (24 November 2026, the third change).**
+Each ADA4817 follower (`U_BHP`, `U_BLP`) now drives its load, the AD8130's
+input and its guard resistor, through 33 ohm (`R_IHP`, `R_ILP`) inside its
+loop: -IN takes the load side through 100 ohm (`R_FHP`, `R_FLP`) and the
+output pin (FB) through 4.7 pF C0G (`C_FHP`, `C_FLP`). This is the data
+sheet's circuit for a capacitive load (Chinese edition Rev. A, p. 15: RSNUB
+in series with the output, RF and CF, with RF of 100 to 400 ohm against the
+1.3 pF input capacitance). Where the load comes from: the follower alone
+(vendor model) has 52.7 degrees but a second crossing at 1.3 GHz and peaks
+5.6; 4 pF on its output (the AD8130's input) takes it to 35 degrees, and the
+guard drive (49.9 ohm into 20 pF to the electrode and 100 pF to ground) is
+what damps it on the board, to 41.5 degrees and 1.52. With the isolation
+resistor the load leaves the loop above a few hundred MHz, where the feedback
+capacitor closes the loop at the output pin; below, the loop takes the load
+side and corrects the drop across the 33 ohm. Swept stand-alone (both
+buffers, the receiver, the guards, soil at 800 ohm; vendor models; copper):
+10, 22 and 33 ohm with 100, 249 and 499 ohm and 2.2, 4.7 and 10 pF give
+50.8 to 72.2 degrees and peaking 1.037 to 1.378; 33 ohm, 100 ohm and 4.7 pF
+give 71.4 degrees and 1.056, with margin to spare on either side (22 ohm or
+10 pF: 65.3 and 63.8 degrees, 1.048 and 1.060). In the analyzer: vendor
+models, `LoopStability.sense_buffer_hp` 41.5 to 71.8 degrees (crossover 386
+to 245 MHz) and `LoopPeaking.sense_buffer_hp` 1.517 to 1.055 (receiver
+1.056 to 1.064); default models 59.5 to 76.6 degrees (crossover 297 to
+207 MHz) and 1.071 to 1.066. It also removes `GuardStability.poles`' 607 MHz
+pair (below). What it costs:
+
+- bandwidth: the sense buffer to the receiver's input, -3 dB at 776 MHz
+  before and 331 MHz after (stand-alone, vendor), 1.0004 and 1.0005 at 1 MHz;
+- accuracy, worst rated step, vendor then default: `SoilSweep` 0.350 % to
+  0.347 % and 0.0906 to 0.0906 degrees, 0.395 % to 0.392 % and 0.154 to
+  0.150 degrees; `CalibrationCard` 0.472 % to 0.472 % and 0.125 to
+  0.119 degrees, 0.523 % to 0.523 % and 0.223 to 0.217 degrees;
+  `StrayCapacitance` 0.881 % to 0.876 % and 0.477 to 0.472 degrees, 0.936 %
+  to 0.931 % and 0.576 to 0.570 degrees; `ContactImbalance` 0.792 % to
+  0.776 % and 0.815 to 0.815 degrees, 0.734 % to 0.718 % and 0.9966 to
+  0.9950 degrees; the tolerance benches within 0.005 % and 0.004 degrees;
+- rejection: `SenseCommonMode` 63.95 dB to 64.09 dB (vendor), 66.66 dB to
+  66.67 dB (default);
+- noise: the 100 ohm feedback resistors add 1.3 nV/rtHz to each buffer's
+  4 nV/rtHz; `MeasurementNoise` on the vendor models up to 0.8 % more noise
+  below 100 kHz and 3.3 % more at 1 MHz in the driest soil (SNR 80.78 dB to
+  80.50 dB there, at most 0.1 dB lower elsewhere); default models at most
+  0.23 dB lower SNR (the gain-1 channel at 1 MHz);
+- current: none (no DC through the network); six parts more.
+
+Tried before and dropped (23 November 2026): 200 ohm to 1 kohm in series with
+each receiver input (margin 50.3 to 51.0 degrees, peaking about 1.30: the
+follower's own peaking remains, now on the guard alone); a 10 ohm and 10 nF
+snubber besides (58.8 degrees and 1.15, but 18 ohm at 1 MHz under up to
+0.8 V of common mode: 44 mA); a larger guard resistor (peaking 1.38 with
+100 ohm, 1.69 with 200 ohm). Not tried: a separate guard buffer and another
+footprint-compatible part, which the in-loop isolation made unnecessary.
 
 The evidence for the change, from the circuit before it (22 November 2026):
 accuracy, rejection and headroom passed with the vendor models (macro, then
@@ -542,8 +589,14 @@ the vendor models in this circuit.
   unloaded (only HC's strays are in it); with the HP and LP strays that are
   always there (20 pF to the guard, 100 pF guard to ground, as the other
   benches have them) the stand-alone sense buffers are stable (least damped
-  549 MHz, damping 0.090). The bench is unchanged: whether the air case
-  should carry those strays is the owner's call.
+  549 MHz, damping 0.090). Since the sense buffers' in-loop isolation (24
+  November 2026, above) the pair is gone with the bench unchanged:
+  `GuardStability.poles` passes on the vendor models (none in the right
+  half-plane; least damped 1.25 GHz with damping 0.119, in the ADA4807
+  stages; stand-alone deck 1.25 GHz, 0.119). An HP or LP electrode without
+  its strays is not an operating condition of the board (the pads and their
+  guard copper are on the stake, unplugged or not; J_PROBE only taps them),
+  but it is the harder case, so the bench keeps it.
 
 The options put to the owner (scratch variants of the circuit before the
 change; numbers from `--models vendor` unless marked macro):
@@ -584,9 +637,17 @@ plan's I3 and I10 blocks have the solver side):
   unpowered ADA4817's only solution, which ngspice-46 finds, forward biases
   its input clamps by 1.86 V and puts 1.7e17 A through them; copper's
   matrix goes singular on the way to it. This is the models' limit, not a
-  solver gap. A start-up bench on vendor models has to begin where they
-  are defined, at the regulators' undervoltage lockout; that bench is not
-  written. The run gives up after 19 s.
+  solver gap. The run gives up after 19 s. `StartupPowered` is the start-up
+  where the models are defined: from the instant VP reaches 2.5 V (8.2 ms
+  after ANA_EN in `Startup`; the ADA4817 needs 5 V total), with VN at
+  -3.90 V, `V_MID` 0.83 V from the REF2033 and every capacitor at its
+  operating point there, the rails then ramping as `Startup`'s regulator
+  models drive them (VP to 4.5 V in 6.22 ms, VN to -4.48 V in 1.17 ms). The
+  8.2 ms before are not simulated, so the coupling networks start from that
+  operating point instead of 0 V. Vendor and default models agree: the
+  gain-100 channel settles last, 602.3 ms and 602.4 ms after the start
+  (610.5 ms after ANA_EN; `Startup` on the default models 669 ms from
+  0 V), within the 1 s from ANA_EN.
 
 `Distortion` runs since 24 November 2026 (it stopped at 15.09 us before:
 a gain node inside the ADA4807 model is fixed only to the rounding of its
@@ -598,8 +659,22 @@ dry soil at 0.65 V, 800 ohm at 0.3 V):
   5.6 %), the pump clipping as intended (headroom -29 mV and 57 mV;
   default -0.7 mV and -0.9 mV); at every other step below 0.004 % in both;
 - the gain-1 channel at the 0.65 V steps 37 % and 28 % (default 9.5 % and
-  4.6 %, the current's own): the vendor follower distorts there itself.
-  Not checked against another simulator;
+  4.6 %, the current's own). It is not the gain-1 follower: at the 100 kHz
+  step (an untracked scratch bench with the sense path's nodes) `SNS_HP`
+  swings to 1.90 V, above the ADA4817's linear input range (+VS - 2.8 V =
+  1.7 V), and the vendor model's input stage clips its output at 1.83 V
+  (`BUF_HP` 4.9 % THD); the receiver's output `V_D`, 0.3 V, the difference
+  of the two sense buffers' signals of 2 V that clip differently, carries
+  28.6 %, and the gain-1 follower passes it on (`B1_IN` 28.61 %, `V_1`
+  28.70 %). ngspice-46 (a development aid, not part of any run) agrees on
+  reduced decks: the ADA4817 follower driven as `SNS_HP` clips at 1.826 V in
+  both simulators (THD 0.995 % in both), and the ADA4807 follower driven as
+  `B1_IN`, with its 100 ohm, 1 nF and snubber, shows none in either
+  (below 0.001 %). The macro model has no input common-mode range, so the
+  default run does not show it. The 0.65 V setting is outside the rating
+  (the AD9833's largest output, which a wrong setting could produce; at the
+  nominal 0.3 V the gain-1 channel's THD is at most 0.09 %); the sense
+  buffers' input range is the limit there, not the ADC drivers;
 - the gain-10 channel 29 % and 26 % there (default 26 % and 23 %), and
   1.9 % at the 1 kHz dry-soil step at 0.3 V (default 2.1 %).
 
