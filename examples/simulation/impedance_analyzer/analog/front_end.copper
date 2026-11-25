@@ -12,7 +12,8 @@
 //   improved Howland pump (U_PMP, feedback buffer U_FBB, LT5400 network, R_SET) ->
 //   regulated node PUMP -> 100 nF blocking capacitor -> HC electrode.
 //   HP and LP electrodes -> 4.7 nF, 33 Mohm bias -> FET followers U_BHP, U_BLP, which
-//   also drive the HP and LP guards -> AD8130 receiver at gain 1 (V_D).
+//   also drive the HP and LP guards, each through 33 ohm inside its loop -> AD8130
+//   receiver at gain 1 (V_D).
 //   ADC drivers on 0 V / 3.3 V, centred on V_MID, so that no output can leave the ADC
 //   range: U_B1 (gain 1), U_G10 (gain 10), U_G100 (gain 10 on V_10), and the
 //   transimpedance amplifier U_TIA (20 kohm, LC at V_MID). Each drives its ADC input
@@ -42,6 +43,9 @@ module AnalogFrontEnd {
     param C_COMP = 2.2pF;    // pump loop compensation, across R4 and across R2
     param C_FB_TIA = 10pF;   // transimpedance feedback capacitance (0.8 MHz with 20 kohm; SPEC.md, "Vendor models")
     param R_GUARD = 49.9ohm; // series resistor from each guard driver to its guard
+    param R_SNS_ISO = 33ohm; // sense buffers: output isolation resistor (inside the loop)
+    param R_SNS_F = 100ohm;  // sense buffers: feedback resistor from the load side to -IN
+    param C_SNS_F = 4.7pF;   // sense buffers: feedback capacitor from the output pin to -IN
 
     // ---- DDS reconstruction filter: 3rd-order Butterworth, 3 MHz, 200 ohm both ends ----
     // The AD9833's own 200 ohm is the source termination; R_TERM is the load.
@@ -81,10 +85,19 @@ module AnalogFrontEnd {
     component C_CHP: CAPACITOR { value = 4.7nF; }
     component R_BHP: RESISTOR { value = 33Mohm; }
     component U_BHP: p.ADA4817_1ARDZ;
+    // In-loop isolation of the capacitive load (the receiver's input and the guard):
+    // R_IHP in series with the output, feedback from the load side through R_FHP and
+    // from the output pin (FB) through C_FHP (data sheet p. 15, RSNUB with RF and CF).
+    component R_IHP: RESISTOR { value = R_SNS_ISO; }
+    component R_FHP: RESISTOR { value = R_SNS_F; }
+    component C_FHP: CAPACITOR { value = C_SNS_F; }   // C0G
     component R_GHP: RESISTOR { value = R_GUARD; }
     component C_CLP: CAPACITOR { value = 4.7nF; }
     component R_BLP: RESISTOR { value = 33Mohm; }
     component U_BLP: p.ADA4817_1ARDZ;
+    component R_ILP: RESISTOR { value = R_SNS_ISO; }
+    component R_FLP: RESISTOR { value = R_SNS_F; }
+    component C_FLP: CAPACITOR { value = C_SNS_F; }   // C0G
     component R_GLP: RESISTOR { value = R_GUARD; }
 
     // ---- Differential receiver, gain 1 ----
@@ -172,11 +185,15 @@ module AnalogFrontEnd {
     // ---- Sense path ----
     net E_HP { E_HP1.E; C_CHP.1; J_PROBE.HP; }
     net SNS_HP { C_CHP.2; R_BHP.1; U_BHP.INP; }
-    net BUF_HP { U_BHP.OUT; U_BHP.FB; U_BHP.INN; R_GHP.1; U_DIF.INP; }
+    net BUFO_HP { U_BHP.OUT; U_BHP.FB; R_IHP.1; C_FHP.1; }
+    net FB_HP { U_BHP.INN; R_FHP.2; C_FHP.2; }
+    net BUF_HP { R_IHP.2; R_FHP.1; R_GHP.1; U_DIF.INP; }
     net GUARD_HP { R_GHP.2; J_PROBE.GUARD_HP; }
     net E_LP { E_LP1.E; C_CLP.1; J_PROBE.LP; }
     net SNS_LP { C_CLP.2; R_BLP.1; U_BLP.INP; }
-    net BUF_LP { U_BLP.OUT; U_BLP.FB; U_BLP.INN; R_GLP.1; U_DIF.INN; }
+    net BUFO_LP { U_BLP.OUT; U_BLP.FB; R_ILP.1; C_FLP.1; }
+    net FB_LP { U_BLP.INN; R_FLP.2; C_FLP.2; }
+    net BUF_LP { R_ILP.2; R_FLP.1; R_GLP.1; U_DIF.INN; }
     net GUARD_LP { R_GLP.2; J_PROBE.GUARD_LP; }
     net V_D { U_DIF.OUT; U_DIF.FB; C_B1.1; C_G1.1; }
 

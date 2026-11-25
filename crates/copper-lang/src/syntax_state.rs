@@ -518,6 +518,7 @@ fn bench_statement(statement: &BenchStatement) -> StateValue {
             }
             syntax("BenchTargetDecl", fields)
         }
+        BenchStatement::UseLayout(item) => syntax("UseLayoutDecl", vec![("location", location(&item.location))]),
         BenchStatement::InitialCondition(item) => {
             let target = match &item.target {
                 InitialConditionTarget::Node(node) => syntax("NodeTarget", vec![("node", text(node))]),

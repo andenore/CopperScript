@@ -389,6 +389,7 @@ fn node(declaration: &Declaration) -> Node<'_> {
                 base("InitialConditionDecl", &name, &item.location)
             }
             ast::BenchStatement::Plot(item) => base("PlotDecl", "", &item.location),
+            ast::BenchStatement::UseLayout(item) => base("UseLayoutDecl", "layout", &item.location),
             ast::BenchStatement::Variation(item) => {
                 base("VariationDecl", item.target.as_deref().unwrap_or(&item.kind), &item.location)
             }

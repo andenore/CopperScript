@@ -30,7 +30,7 @@ bench SenseCommonMode for AnalogFrontEnd using FrontEndPorts {
     param R_C = 5.58kohm;
     param CMRR_LP = 90dB;
     replace U_BLP with opamp {
-        inp = SNS_LP; inn = BUF_LP; out = BUF_LP; vp = VP; vn = VN;
+        inp = SNS_LP; inn = FB_LP; out = BUFO_LP; vp = VP; vn = VN;
         gbw = 410MHz; open_loop_gain = 65dB; second_pole = 600MHz;
         cmrr = CMRR_LP; cmrr_corner = 300kHz;
         input_capacitance_common = 1.3pF; input_capacitance_differential = 0.1pF;

@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod board;
+pub mod capacitance;
 pub mod convergence;
 pub mod current;
 pub mod extract;
@@ -13,5 +14,6 @@ pub mod layout;
 pub mod linalg;
 pub mod mesh;
 pub mod network;
+pub mod parasitics;
 pub mod partial;
 pub mod reference;

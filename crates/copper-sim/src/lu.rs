@@ -95,6 +95,7 @@ impl Lu {
             }
         }
         let mut perm: Vec<usize> = (0..n).collect();
+        let mut nonzero: Vec<(usize, Complex)> = Vec::with_capacity(n);
         for col in 0..n {
             let mut piv = col;
             let mut best = lu[col * n + col].abs();
@@ -115,14 +116,18 @@ impl Lu {
                 perm.swap(col, piv);
             }
             let d = lu[col * n + col];
+            // The pivot row's nonzero entries only: an update by a zero entry
+            // leaves the element as it is (but for the sign of a zero).
+            nonzero.clear();
+            nonzero.extend((col + 1..n).filter(|&c| lu[col * n + c] != Complex::ZERO).map(|c| (c, lu[col * n + c])));
             for r in col + 1..n {
                 let f = lu[r * n + col] / d;
                 lu[r * n + col] = f;
                 if f == Complex::ZERO {
                     continue;
                 }
-                for c in col + 1..n {
-                    let t = f * lu[col * n + c];
+                for &(c, u) in &nonzero {
+                    let t = f * u;
                     lu[r * n + c] -= t;
                 }
             }

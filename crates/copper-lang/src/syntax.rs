@@ -494,6 +494,14 @@ pub enum BenchStatement {
     Variation(VariationDecl),
     /// `ic V(NODE) = value;` or `ic COMPONENT = value;`: an initial condition of a transient run.
     InitialCondition(InitialConditionDecl),
+    /// `use layout;`: the bench runs with the routed board's parasitics as well as without them.
+    UseLayout(UseLayoutDecl),
+}
+
+/// `use layout;` in a bench or fixture; `location` is the `use` keyword.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UseLayoutDecl {
+    pub location: Location,
 }
 
 /// `for TARGET` in `bench NAME for TARGET { ... }`: a board, or a module the

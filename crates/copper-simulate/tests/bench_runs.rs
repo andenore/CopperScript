@@ -553,3 +553,29 @@ fn a_module_bench_gives_the_numbers_of_the_same_circuit_drawn_flat() {
     let b = value(&run(&flat_board)[0], 0, "v_out");
     assert!(close(a, 0.75, 1e-12) && a == b, "{a} {b}");
 }
+
+#[test]
+fn a_reference_on_another_analysis_axis_is_an_error() {
+    // Both runs have two frequencies, but the reference's are 1 kHz and 10 kHz:
+    // pairing them by index would divide H(1 kHz) by the reference's H(10 kHz).
+    let bench = "bench B for RC {
+    param F_LO = 100Hz;
+    param F_HI = 1kHz;
+    replace INPUT with source { out = VIN; ref = GND; ac = 1V; }
+    analysis ac { from = F_LO; to = F_HI; points_per_decade = 1; }
+    reference WIDE { F_LO = 1kHz; F_HI = 10kHz; }
+    let h = V(VOUT) / V(VIN);
+    measure ratio = mag(at(h / reference(h, WIDE), 1kHz));
+}";
+    let board = project("reference-axis", &[("board.copper", RC), ("benches/b.copper", bench)]);
+    let runs = run(&board);
+    let error = runs[0].error.clone().unwrap_or_else(|| panic!("no error; ratio {}", value(&runs[0], 0, "ratio")));
+    assert!(error.contains("SIM121") && error.contains("reference WIDE"), "{error}");
+    assert!(error.contains("1 kHz") && error.contains("100 Hz"), "{error}");
+    // A reference that leaves the axis alone still runs.
+    let same = bench.replace("reference WIDE { F_LO = 1kHz; F_HI = 10kHz; }", "reference WIDE { F_LO = 100Hz; }");
+    let board = project("reference-same-axis", &[("board.copper", RC), ("benches/b.copper", &same)]);
+    let runs = run(&board);
+    assert_eq!(runs[0].error, None);
+    assert!(close(value(&runs[0], 0, "ratio"), 1.0, 1e-12));
+}

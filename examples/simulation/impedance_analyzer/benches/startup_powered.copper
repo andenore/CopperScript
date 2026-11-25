@@ -1,0 +1,71 @@
+// StartupPowered: the front end's start-up from the instant its rails reach the
+// amplifiers' minimum specified supply, for the vendor models, which are not defined
+// with their rails at 0 V (SPEC.md, "Vendor models"; the AD8130 model is singular there,
+// the unpowered ADA4817 model's operating point carries 1e17 A in its input clamps).
+// Startup runs the whole sequence from ANA_EN with the macro models; this bench starts
+// where every amplifier model is valid and is stated as such:
+//  - t = 0 here is the instant VP reaches 2.5 V in Startup, 8.2 ms after ANA_EN: the
+//    ADA4817's minimum total supply is 5 V (data sheet Table 1, 5 V to 10 V), and VN is
+//    then at -3.90 V; the AD8130 and the ADA4807 (on V3V3_ANA, up 50 us after ANA_EN)
+//    are inside their supply ranges too;
+//  - the rails continue as Startup's regulator models drive them (read from its run):
+//    VP 2.5 V to 4.5 V in 6.22 ms (the TPS7A4901's soft-start slope), VN -3.90 V to
+//    -4.48 V in 1.17 ms (the TPS7A3001's), V3V3_ANA at 3.3 V and the DDS at its
+//    unprogrammed 0.34 V; V_MID from the REF2033 on VP, as in Startup;
+//  - the run starts from the operating point at those rails: every capacitor at its
+//    DC state for VP = 2.5 V, VN = -3.90 V, V_MID 0.83 V. What happened in the 8.2 ms
+//    before (amplifiers below their supply range) is not simulated, so the coupling
+//    networks start from that operating point, not from 0 V; the settling that remains
+//    is V_MID rising to 1.65 V and the rails to their final values.
+// The settling limit is Startup's 1 s from ANA_EN, so 1 s less 8.2 ms here.
+bench StartupPowered for AnalogFrontEnd using SoilModel {
+    supply GROUND { voltage = 0V; net = GND; }
+
+    // The rails: a source's dc is its final value; the run follows the waveform.
+    model RAIL_VP: source { out = VP; ref = GND; dc = 4.5V; waveform = pwl { points = 0s, 2.5V, 6.22ms, 4.5V; }; }
+    model RAIL_VN: source { out = VN; ref = GND; dc = -4.48V; waveform = pwl { points = 0s, -3.9V, 1.165ms, -4.48V; }; }
+    model RAIL_3V3: source { out = V3V3_ANA; ref = GND; dc = 3.3V; }
+    model DDS: source { out = DDS_OUT; ref = GND; output_resistance = 200ohm; dc = 0.34V; }
+
+    // The REF2033 from VP: V_MID is its VBIAS (as in Startup).
+    component U_REF: analog.p.REF2033AIDDCR;
+    component C_REF_IN: CAPACITOR { value = 100nF; }
+    component C_REF_VREF: CAPACITOR { value = 100nF; }
+    component C_VMID1: CAPACITOR { value = 100nF; }
+    component C_VMID2: CAPACITOR { value = 1uF; }
+    net REF_3V3 { U_REF.VREF; C_REF_VREF.1; }
+    net VP { U_REF.VIN; C_REF_IN.1; }
+    net V_MID { U_REF.VBIAS; C_VMID1.1; C_VMID2.1; }
+    net GND { U_REF.GND; C_REF_IN.2; C_REF_VREF.2; C_VMID1.2; C_VMID2.2; }
+    ignore E_HC1, E_HP1, E_LP1, E_LC1;
+
+    analysis tran { stop = 2s; max_step = 1ms; }
+    step R_TRANSFER, C_TRANSFER in (1000Mohm, 0.001pF), (40ohm, 27.8pF), (800ohm, 27.8pF), (11kohm, 27.8pF);
+
+    // ADC inputs: settling within 1 mV of the value at 2 s, by 1 s after ANA_EN.
+    measure settle_gain1 = settle(V(V_MON_1), 1mV) { max = 991.8ms; }
+    measure settle_gain10 = settle(V(V_MON_10), 1mV) { max = 991.8ms; }
+    measure settle_gain100 = settle(V(V_MON_100), 1mV) { max = 991.8ms; }
+    measure settle_current = settle(V(I_MON), 1mV) { max = 991.8ms; }
+    measure final_gain100 = at(V(V_MON_100), 2s);
+    measure lowest_adc_input = min(V(V_MON_100));
+    measure highest_adc_input = max(V(V_MON_100));
+
+    // Pump and sense path, as in Startup.
+    measure pump_output_max = max(V(DRIVE));
+    measure pump_output_min = min(V(DRIVE));
+    measure pump_node_max = max(abs(V(PUMP)));
+    measure settle_pump_node = settle(V(PUMP), 1mV);
+    measure sense_input_over = max(V(SNS_HP) - V(VP)) { max = 0.5V; }
+    measure sense_input_under = max(V(VN) - V(SNS_HP)) { max = 0.5V; }
+    measure gain1_input_over = max(V(B1_IN) - V(V3V3_ANA)) { max = 0.2V; }
+    measure gain1_input_under = max(-V(B1_IN)) { max = 0.2V; }
+    measure adc_driver_inputs_over = max(V(G2_IN) - V(V3V3_ANA)) { max = 0.2V; }
+    measure adc_driver_inputs_under = max(-V(G2_IN)) { max = 0.2V; }
+    measure drive_buffer_input_over = max(V(DRV_IN) - V(VP)) { max = 0.2V; }
+    measure drive_buffer_input_under = max(V(VN) - V(DRV_IN)) { max = 0.2V; }
+    measure receiver_input_max = max(abs(V(BUF_HP)));
+
+    plot V(VP), V(VN), V(V_MID), V(SNS_HP), V(BUF_HP), V(PUMP), V(DRIVE);
+    plot V(V_MON_1), V(V_MON_100), V(I_MON);
+}

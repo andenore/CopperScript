@@ -479,7 +479,7 @@ benches as they are now:
 | Finding | Diagnostic |
 | --- | --- |
 | a simulated voltage beyond the absolute range (more than `1e-9` of the limit, at least 1 nV) | error `SIM_PIN_ABSOLUTE_HIGH` / `SIM_PIN_ABSOLUTE_LOW`, naming the bench, the worst step, the value, where on the axis it was reached and how many steps exceed it |
-| results of another board, of another version of its sources (parts, packages and ratings included; not comments) or of other bench sources, or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
+| results of another board, of another version of its sources (parts, packages and ratings included; not comments), of other bench sources or of other local SPICE model files (a `sim spice` `file` or a file it includes), or without a source identity | error `SIM_RESULTS_STALE`; the pins are not judged |
 | simulated pins that declare no absolute rating (ground and passive-only pins excepted), or whose relative rating refers to a pin no bench solved | one warning `SIM_PIN_NOT_CHECKED` listing them |
 | rated pins that no bench solved | one warning `SIM_PIN_NOT_SIMULATED` listing the components |
 
@@ -3568,6 +3568,7 @@ bench CurrentFlatness for HowlandPump {
 | Statement | Meaning and checks |
 | --- | --- |
 | `use library "..."` | Parts for bench components, besides the board's. Package imports are not supported in benches yet (`SIM031`). |
+| `use layout;` | Runs the bench with the parasitics of the routed board as well as without them ([Layout parasitics](#layout-parasitics); `SIM118`-`SIM120`). |
 | `param NAME = q;` | A bench param, or an override of a board param of the same dimension (`SIM003`). An override changes the value of every board component that uses the param. |
 | `param TEMP = 85degC;` | The temperature of the run (27 degC without it), steppable like any param ([Temperature](#temperature); `SIM110`). |
 | `component REF: PART { ... }` | A simulation-only component (`SIM032`, `SIM033`). It needs a model: a passive with a value of its dimension, or a part with `sim` blocks (`SIM034`). Each of its pins (each role pin for a modelled part) is on one bench net (`SIM035`, `SIM036`). A capacitor of 0 F (bench or board, also a stepped or param value) is absent: no element, its pins open, so a fixture can hold an optional stray that a bench sets to 0 F. |
@@ -3646,7 +3647,7 @@ bench MeasurementNoise for HowlandPump using LoadedPump {
 
 (`examples/simulation/howland_pump/benches/`.) A fixture is a document of
 its own in `benches/`, `fixture NAME for TARGET { ... }`, holding bench setup
-that several benches share: `use library`, `param`, `component`, `net`,
+that several benches share: `use library`, `use layout`, `param`, `component`, `net`,
 `supply`, `model`, `replace`, `ignore`, `let`, `reference`, `ic` and
 `tolerance`. It is not a bench and is not run; `analysis`, `step`,
 `measure`, `plot`, `montecarlo` and `worstcase` belong in the bench
@@ -3773,7 +3774,7 @@ name), subtraction needs spaces: `mag(i) / 15uA - 1`.
 | `mag`, `abs`, `re`, `im` | Real, of the argument's dimension. |
 | `phase` | Real, deg; a swept phase is unwrapped along the axis, starting in (-180, 180]. `db` is real, dB: `20 log10(abs(x))` with `x` in its base unit. |
 | `min`, `max`, `mean` | Reduce a real swept value over the analysis axis (`SIM066`, `SIM067`); `mean` is the mean of the samples, on the logarithmic ac axis the mean over log frequency. `max(x, from, to)` and the other windows reduce over a sub-band (or a time window, or part of a dc sweep): the samples inside it plus its two ends, interpolated as `at` interpolates (linear in log frequency on the ac and noise axes); `max(mag(H), 1kHz, 10kHz)` is the largest gain in that band. |
-| `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis. |
+| `reference(x, NAME)` | `x` as the reference run `NAME` computes it, at the same step; its type is `x`'s. `x` cannot itself read a reference (`SIM047`); lets that read one are not evaluated in reference runs. A reference cannot change the analysis axis: when the reference run's axis points are not the bench's (a reference that sets a param the analysis's bounds read, or a transient run whose time steps come out otherwise), the run stops with `SIM121`, never pairing samples of different points. |
 | `at(x, f)` | `x` at one frequency of the ac or noise axis (`SIM068`). At a sample, the sample; between two samples the circuit is solved at `f` itself (with the step's reference runs): `x`'s swept parts (probes, lets of them, noise densities) are evaluated there and its scalar parts (`max(...)`, other `at(...)`, params) as on the whole axis, and a phase is taken on the branch of the sweep's unwrapped phase at `f`. The result is the exact response at `f`, independent of `points_per_decade`. `f` must lie within the axis. In `analysis tran` and `analysis dc` it is interpolated, see there. |
 
 | `noise()`, `noise(X)` | `analysis noise` only (`SIM085`): the output noise density, real and swept, V/rtHz; `noise(X)` the part of it that component or bench model `X` contributes (all of its generators, every unit of a multi-unit part; `SIM087`). With several outputs, name one (`SIM095`). |
@@ -4559,6 +4560,67 @@ positive feedback found unstable, and transfer functions of stiff circuits
 (1 fF to 10 uF, 1 mohm to 1 Gohm, coupled inductors, capacitor loops) rebuilt
 from their poles and zeros within `7e-4` of the AC analysis.
 
+### Layout parasitics
+
+```copper
+bench OutputImpedance for HowlandPump {
+    use layout;
+    replace J_IN with source { out = J_IN.1; ref = GND; ac = 0V; }
+    ...
+}
+```
+
+```console
+copper route-board board.copper --checkpoint-dir build/run
+copper sim board.copper --layout build/run
+```
+
+`use layout;` in a bench (or a fixture it uses) adds what the routed board
+adds to the circuit. `copper sim --layout RUN` reads the run's
+`final-board.state.json` (the routed board `route-board --checkpoint-dir`
+writes, as `emi-check --run` reads it), checks that it is this design's,
+fills its zones and extracts from its copper and stack-up:
+
+- the capacitance between every two nets and from every net to the planes:
+  each track, pad and via ring is cut across at stations at most 0.5 mm
+  apart, and the board's cross-section along each cut (all copper the cut
+  crosses, on every layer, in the declared dielectric with air above and
+  below) is solved as a 2-D electrostatic field; tracks that cross on two
+  layers add an overlap estimate, overlapping pours a parallel plate;
+- for every net that is not a supply's, the resistance and inductance of its
+  tracks between the pads they join: a network of the routed copper (a node
+  per pad, via, pour and track end, chains merged), each track's DC
+  resistance and its TEM self-inductance from the same cut in vacuum.
+
+The bench then runs twice, on the schematic alone and with the layout. Each
+component pin is on the node of its pad and `V(NET)` reads the pad of the
+net's first pin that the board has; supply and ground nets are one node.
+The measures, plots and limits are the run with the layout. The text table
+adds, per measure, the schematic value beside the value with the layout
+(`layout z_out_1mhz: 112.1 kohm schematic, 40.87 kohm with layout (-63.5 %)`)
+and the largest extracted capacitances; the results JSON has a `layout`
+object on the bench (`docs/sim-results-schema.md`), and the bench page a
+Layout section.
+
+A bench that uses layout never runs on the schematic alone: without
+`--layout` it is not run (`SIM118`), as when the run has no routed board;
+a routed board that places other components or joins pads to other nets than
+the design, or that leaves a net's pads apart, is refused (`SIM119`). A bench
+of a module on its own cannot use the board's layout (`SIM120`). Benches
+without `use layout;` run exactly as before, with or without `--layout`.
+
+Not modelled: solder mask (outer-layer capacitance is low by up to about
+12 %), end and corner fields of the 2-D cuts, mutual inductance, skin effect
+and via barrels (vias are ideal nodes); capacitance whose field reaches no
+copper within 2.5 mm of its own is reported and left out. The tracks are
+lossless apart from their DC resistance (no skin effect, no dielectric loss),
+so with amplifier models that have no output resistance their inductance and
+capacitance can ring far above the amplifiers' bandwidth: results of a bench
+with layout above a few hundred megahertz (a pole at gigahertz) are not
+established. The method and its
+accuracy against closed forms are in `crates/copper-extract/src/parasitics.rs`
+and `crates/copper-extract/tests/capacitance.rs`.
+
 ### Running benches
 
 ```console
@@ -4741,6 +4803,10 @@ components that form a loop of voltage sources.
 | `SIM115` | stepped ranges: no `by` or `points`, equal ends, a spacing that is not positive, more than 1000 values, `points` outside 2 to 1000 |
 | `SIM116` | an amplifier's `gbw_tempco` or `slew_rate_tempco` that leaves its parameter at or below zero at the bench temperature (when the bench runs) |
 | `SIM117` | `datasheet FIGURE { ... }`: an unknown figure, a key other than `min`, `typ`, `max`, none of them, values that decrease, a figure twice, a `typ` for a figure the block declares, an entry in a `sim spice` block or a kind without data-sheet figures |
+| `SIM118` | `use layout;` without a routed board: no `--layout`, or a `--layout RUN` that holds no `final-board.state.json` (when the bench runs) |
+| `SIM119` | `use layout;` with a routed board that is not the design's (other components, pads on other nets) or cannot be extracted (a net's pads not joined by copper, copper of two nets overlapping) |
+| `SIM120` | `use layout;` in a bench of a module on its own |
+| `SIM121` | `reference(x, NAME)`: the reference run's analysis axis is not the bench's (other points or another number of them; when the bench runs) |
 
 ## KiCad schematic export
 

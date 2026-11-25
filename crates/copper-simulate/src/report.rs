@@ -1909,8 +1909,12 @@ pub fn html_with(run: &BenchRun, board: &str, sections: &[&str]) -> String {
         page.extend(measures_table(run));
     }
     if run.error.is_none() {
-        let sections =
-            [crate::noise::html_section(run), crate::stability::html_section(run), crate::variation::html_section(run)];
+        let sections = [
+            crate::noise::html_section(run),
+            crate::stability::html_section(run),
+            crate::variation::html_section(run),
+            crate::layout::html_section(run),
+        ];
         page.extend(sections.into_iter().filter(|section| !section.is_empty()));
     }
     // One row per fidelity and model, listing the components that share it.

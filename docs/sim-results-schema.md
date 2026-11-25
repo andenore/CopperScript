@@ -41,6 +41,9 @@ Code: `crates/copper-simulate/src/results.rs` (the document, `bench_value`),
 | `source.board_file` | string | The board file as `copper sim` was given it. |
 | `source.design_sha256` | string | SHA-256 of the compiled design (the JSON `copper compile` writes): any change to the board, its parts, packages, ratings or sim blocks changes it; a comment does not. |
 | `source.benches_sha256` | string | SHA-256 over the board's bench sources: each file of `benches/` in load order, its name relative to `benches/`, a NUL, its bytes and a NUL. |
+| `source.models` | array | Added within v1. Every local SPICE model file the board's simulation reads: each `sim spice { file = ...; }` of the parts of the board, its modules and its benches, and every file it includes (`.INCLUDE`, `.LIB FILE`), sorted by file. Vendor models are not listed (the hash their part declares pins them, and `design_sha256` covers it). A document without the field is accepted only for a board that reads no local model file. |
+| `source.models[].file` | string | The file, relative to the board's directory, with `/`. |
+| `source.models[].sha256` | string | SHA-256 of its bytes; empty when it could not be read. |
 | `board` | string | The board's name. |
 | `status` | string | `pass`, `fail` (a measure outside its limits) or `error` (a bench could not be solved); the worst of the benches. |
 | `benches` | array | One entry per bench run, in file and declaration order. A bench with several analyses gives one entry per analysis (a section). With `--bench NAME` only that bench. |
@@ -390,6 +393,40 @@ measure's `steps[].value` is then the worst run's.
 | `benches[].timing.factorizations.refactored` | int | Sparse in a kept ordering. |
 | `benches[].timing.factorizations.dense` | int | Dense (singular or nearly singular systems). |
 
+### Layout
+
+Only on a bench that says `use layout;` and ran with `copper sim --layout RUN`
+([language reference](language-reference.md#layout-parasitics)); every other
+bench has no `layout` key. The bench's own `steps`, `measures` and `plots` are
+the run with the layout.
+
+| Path | Type | Meaning |
+| --- | --- | --- |
+| `benches[].layout` | object | The parasitics the bench ran with, and its schematic-only run. |
+| `benches[].layout.source` | string | The routed board file (`RUN/final-board.state.json`). |
+| `benches[].layout.elements` | object | What the extraction holds. |
+| `benches[].layout.elements.resistors` | int | Track resistances (one per merged branch). |
+| `benches[].layout.elements.inductors` | int | Track inductances (one per merged branch). |
+| `benches[].layout.elements.capacitors` | int | Capacitances between nodes of two nets. Elements on nets the bench does not simulate are left out of its circuit. |
+| `benches[].layout.contributors` | array | The largest extracted values: up to five net-to-net capacitances, largest first, then up to five nets' series copper, largest inductance first. |
+| `benches[].layout.contributors[].kind` | string | `capacitance` or `series`. |
+| `benches[].layout.contributors[].nets` | array | The two nets (`capacitance`) or the net (`series`). |
+| `benches[].layout.contributors[].nets[]` | string | A net. |
+| `benches[].layout.contributors[].value` | float | F, or H (the net's total track inductance) for `series`. |
+| `benches[].layout.contributors[].unit` | string | `F` or `H`. |
+| `benches[].layout.contributors[].text` | string | The same in words, with the track length and resistance for `series`. |
+| `benches[].layout.flags` | array | `assumed_stackup`, `assumed_copper_thickness`, `inductance_without_return`. |
+| `benches[].layout.flags[]` | string | One flag. |
+| `benches[].layout.notes` | array | What the extraction left out or assumed, and its size and time. |
+| `benches[].layout.notes[]` | string | One note. |
+| `benches[].layout.schematic` | object | The bench on the schematic alone. |
+| `benches[].layout.schematic.error` | string or null | Why it could not be solved. |
+| `benches[].layout.schematic.measures` | array | One entry per measure, in measure order. |
+| `benches[].layout.schematic.measures[].name` | string | The measure. |
+| `benches[].layout.schematic.measures[].steps` | array | One entry per step. |
+| `benches[].layout.schematic.measures[].steps[].value` | float or null | Its value without the layout. |
+| `benches[].layout.schematic.measures[].steps[].pass` | bool or null | Whether that value is within the limits. |
+
 ## Added within v1
 
 New optional fields, for the checks that take simulation results as
@@ -399,7 +436,11 @@ evidence (plan F11; code: `crates/copper-simulate/src/evidence.rs`):
   sources. `copper check --sim-results FILE` and `copper power-check
   --sim-results FILE` recompute both from the board they are given and refuse
   (`SIM_RESULTS_STALE`) a document whose board, design digest or bench digest
-  differs, or that has no `source`.
+  differs, or that has no `source`. `source.models` (added later in v1, plan
+  I5 fixes): the local SPICE model files and the files they include, with
+  their digests, recomputed and compared the same way; a document without it
+  is refused only when the board reads a local model file, since it cannot
+  vouch for that file's contents.
 - `benches[].steps[].pins` and `benches[].steps[].supplies`: what those checks
   read. `copper check --sim-results` judges each pin against the absolute
   rating the board declares now (a relative rating against its `relative`
@@ -425,6 +466,9 @@ Added in plan I4 (simulation improvement plan), still under v1:
 
 Nothing else in the document changed; the measure values of the examples are
 identical.
+
+Added in plan I5, still under v1: `benches[].layout` ([Layout](#layout)), on
+benches that use layout only. Nothing else changed.
 
 ## Changes from `copperscript-sim/v0.1`
 
