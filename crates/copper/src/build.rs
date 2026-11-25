@@ -544,8 +544,7 @@ fn input_hashes(settings: &Settings, macro_inputs: &str) -> Object {
 
 fn git(project: &Path, arguments: &[&str]) -> Option<Vec<u8>> {
     let output = Command::new("git")
-        .arg("-C")
-        .arg(project)
+        .current_dir(project)
         .args(arguments)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
