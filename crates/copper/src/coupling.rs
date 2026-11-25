@@ -600,6 +600,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max),
         );
         notes.push(format!(
+            "the site model holds the radiator fed at its land, not the line from the radio to the land: for the \
+             coupling to that line, ask --from {} --to {}",
+            site.feed_net,
+            victims.join(" --to ")
+        ));
+        notes.push(format!(
             "coupling is referenced to the wave incident at the 50 ohm feed; the bare antenna's worst S11 in band is {:.1} dB",
             evaluation
                 .freqs

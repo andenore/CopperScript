@@ -435,7 +435,7 @@ pub fn coupling_model(
         let interior = region[0] > b[0] && region[1] > b[1] && region[2] < b[2] && region[3] < b[3];
         if !interior {
             notes.push(
-                "the model reaches a board edge: planes end at the window instead of continuing into the PML                  (flag planes_truncated)"
+                "the model reaches a board edge: planes end at the window instead of continuing into the PML (flag planes_truncated)"
                     .to_owned(),
             );
         }

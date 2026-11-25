@@ -30,6 +30,7 @@ board CouplingProbe {
         track_width = 1mm;
         // The geometry tuned on examples/antenna_synthesis (same site).
         geometry = "monopole height=5.3mm length=22.77mm";
+        tuned_for = "sha256:fadfbf76cc49b4c96fd35166b5b5f1fba257559bf999fd46f4ff095190e495ba";
         // A synthetic receiver for EMI-RF-DESENSE: no real radio's figures.
         sensitivity_dbm = -95;
         desense_margin_db = 6;

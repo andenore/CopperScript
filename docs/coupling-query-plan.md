@@ -95,19 +95,49 @@ board's 0.2 mm clearance would, so the numbers lean high, the conservative side.
 wave incident at the feed; the bare antenna has an S11 of -3.3 to -4 dB in band (an L-section matches it on the
 board), so relative to the power the antenna accepts the numbers are about 2.5 dB higher.
 
-## 3. Plan
+## 3. The command on a routed board
+
+`examples/coupling/board.copper`: the monopole above, a 48 MHz clock `CLK` from `U2` (declared as 3.3 V open circuit
+behind 33 ohm, 1 ns edges) to `U3` routed 4 to 5 mm below the antenna region, and the radio `U1` at (30, 14) mm, whose
+feed line the router ran from `U1` past `U2` to the feed land (0.75 mm from `U2.1`, within 0.7 mm of the start of
+`CLK`). Routed with `route-board --checkpoint-dir`; 4 threads, coarse fidelity:
+
+| Question | Model | At 2.44 GHz | Run |
+| --- | --- | --- | --- |
+| `--antenna bt --to CLK` | site model, 0.34 M cells | -36 dB to the driver end `U2.1` (33 ohm, declared), -41 dB to `U3.1` (50 ohm, default) | 15 s |
+| `--from CLK --to ANT_FEED` | region model, 2.34 M cells, window clipped to the board | -16 / -13 dB from `U2.1` / `U3.1` to the feed land `ANT1.1`, -23 / -22 dB to the radio's pad `U1.1` | 307 + 348 s |
+
+The two answer different questions, and the difference is the board's: the site model holds the radiator fed at
+its land, the region model also holds the routed feed line, which runs next to the clock. The command says so in
+antenna mode. Found on the way: the first region run continued the planes past the board edge into the space
+around the antenna (3,480 mm^2 of GND per layer on a 1,200 mm^2 board); the window is now clipped to the board and
+planes are continued only when every window edge is inside it (flag `planes_truncated` otherwise).
+
+**EMI-RF-DESENSE** (antenna mode, `copper_emi::desense`). The victim's declared signal at its driver's end: clock
+lines (`clock_frequency`) or, for `data_rate`, the continuous bound on any line (an upper bound). The power a line
+puts into the network is `a^2 / (8 R)` for a Thevenin source (`open_circuit_swing` behind `output_impedance` `R`,
+the available power) or `a^2 / (2 R)` for a loaded `signal_swing`; times `|S|^2` from the driver's end to the feed
+(by reciprocity the run's `S` from the feed) it is the spur at the receiver. It passes when the strongest in-band
+spur is at most `sensitivity_dbm - desense_margin_db`, both declared on `constraint antenna` (outside the site
+digest: `tuned_for` stays valid, checked). On the example (synthetic receiver, -95 dBm, 6 dB margin): only the 51st
+harmonic, 2448 MHz, falls in 2400 to 2483.5 MHz (a 50 % clock has no even ones), -39.8 dBm from the driver
+(hand check: 5.3 mV open circuit behind 33 ohm, -39.7 dBm), -36.1 dB coupling, **-75.9 dBm at the feed: fail by
+25.1 dB**. Without `sensitivity_dbm` the spurs are reported with no verdict; a net that is not a declared fast signal
+is `not_applicable`.
+
+## 4. Plan and status
 
 1. **Separate the weak-coupling floor.** Done (section 1): not the ports, not radiation; the quasi-static
    reference's lack of modal dispersion. Open: a check against a dispersive coupled-microstrip reference.
-2. **Victim geometry.** Take victims from the board translator of `copper-fullwave` (any-angle tracks, arcs, vias,
-   inner layers, pads, real zone fills) instead of the prototype's axis-aligned F.Cu tracks, and share it between
-   the two models.
-3. **Terminations.** Allow each victim end its driver's or receiver's impedance (from the part's pin model where
-   one exists) rather than 50 ohm, and say which was used.
-4. **Query surface.** A `copper coupling BOARD --from NET|PAD --to NET [--band ...]` command that picks the
-   antenna site model when `--from` is an antenna feed and the region model otherwise, prints the model
-   description and cost before running (as `describe()` does), and returns `S_k1` per victim port with the
-   evidence grade and the limits above.
-5. **Desensitisation finding.** Combine the victim's signal spectrum (section 14 of `docs/emi-noise-analysis.md`)
-   with `|S_k1|^2` for the noise power at the antenna port per harmonic, against a declared receiver sensitivity,
-   as an `EMI-RF-DESENSE` finding; and a constraint to declare a required isolation.
+2. **Victim geometry.** Done: `copper_fullwave::coupling::net_geometry`, shared by both models (section 2).
+3. **Terminations.** Done: `--terminate END=OHMS`, else the driver's declared `output_impedance`, else 50 ohm, and
+   every end says which. Open: the language declares no receiver input impedance, so a receiving end is 50 ohm.
+4. **Query surface.** Done: `copper coupling` (section 3). Open: the feed line in antenna mode (today: ask the
+   region model for it), back-side ends (a port goes down to a plane below its end), and a region model that
+   reaches a board edge ends its planes at the window.
+5. **Desensitisation finding.** Done for antenna mode (section 3). Open: desense in region mode (the receiver's
+   pad as the antenna port), spurs of data signals as lines rather than a bound, and a channel bandwidth for
+   random data.
+
+Not checked against a measurement anywhere. The fit tests `copper-fullwave/src/fit.rs` (four of them) fail on the
+base commit this work started from as well; they are not touched here.
