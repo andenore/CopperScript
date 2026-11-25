@@ -139,3 +139,45 @@ fn the_antenna_couples_to_the_routed_clock_and_the_report_says_how() {
         assert!((-70.0..-20.0).contains(&db), "{db} dB: {output}");
     }
 }
+
+#[test]
+fn excited_ends_and_the_receiver_must_be_ends_of_their_nets() {
+    let (status, output) = copper(&[
+        "coupling",
+        BOARD,
+        "--from",
+        "CLK",
+        "--to",
+        "ANT_FEED",
+        "--excite",
+        "U9.1",
+        "--describe",
+        "--locked",
+        "--offline",
+    ]);
+    assert_eq!(status, 2, "{output}");
+    assert!(output.contains("--excite names no end of CLK: U9.1 (its ends are U2.1, U3.1)"), "{output}");
+    // The feed land is the antenna's end, not the radio's.
+    let (status, output) = copper(&[
+        "coupling",
+        BOARD,
+        "--from",
+        "CLK",
+        "--to",
+        "ANT_FEED",
+        "--receiver",
+        "ANT1.1",
+        "--describe",
+        "--locked",
+        "--offline",
+    ]);
+    assert_eq!(status, 2, "{output}");
+    assert!(
+        output.contains("--receiver ANT1.1 is no end of ANT_FEED other than the feed land ANT1.1 (they are U1.1)"),
+        "{output}"
+    );
+    let (status, output) =
+        copper(&["coupling", BOARD, "--antenna", "bt", "--to", "CLK", "--excite", "U2.1", "--locked", "--offline"]);
+    assert_eq!(status, 2, "{output}");
+    assert!(output.contains("applies to --from NET"), "{output}");
+}

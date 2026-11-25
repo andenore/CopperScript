@@ -125,6 +125,38 @@ harmonic, 2448 MHz, falls in 2400 to 2483.5 MHz (a 50 % clock has no even ones),
 25.1 dB**. Without `sensitivity_dbm` the spurs are reported with no verdict; a net that is not a declared fast signal
 is `not_applicable`.
 
+### 3.1 Region-mode desense and the ground cavity
+
+With `--from NET --to FEED_NET`, where `FEED_NET` is a `constraint antenna`'s feed net, `EMI-RF-DESENSE` takes the
+path from the aggressor's driver end to the radio's end of the feed net (`--receiver`, by default the feed net's one
+end besides the feed land), so it covers the feed line as well as the radiator. `--excite END` solves only the
+driver's end. The 51st harmonic of the example clock (2448 MHz), driver end `U2.1` to the radio's pad `U1.1`:
+
+| Board | Ground as routed (3 vias) | `--stitch 4.9` (assumed vias every 4.9 mm) |
+| --- | --- | --- |
+| `board.copper` (feed line past the clock) | -23.1 dB, -62.8 dBm: fail by 38.2 dB; 266 s | -30.4 dB, -70.1 dBm: fail by 30.9 dB; 65 s |
+| `radio_beside_feed.copper` (radio next to the feed land) | **-11.0 dB**, -50.8 dBm: fail by 50.2 dB; 185 s | -38.5 dB, -78.3 dBm: fail by 22.7 dB; 65 s |
+| antenna mode (radiator only, site model with its own stitching) | | -34.4 dB to `U2.1` from the feed (fail by 26.9 dB) |
+
+What this shows:
+
+- **The unstitched pours dominate.** The routed board joins its F.Cu and B.Cu ground by 3 vias. The two pours are
+  then a cavity that couples every port in it: moving the radio away from the clock made the coupling *worse*
+  (-23 to -11 dB), because it moved the radio's port into a stronger part of the cavity's field. With the pours
+  stitched at the antenna model's pitch the coupling falls by 7 to 27 dB and the runs end three times sooner (the
+  cavity no longer rings). The command now warns when a model's two-layer ground has fewer than one via per
+  cm^2 and `--stitch MM` shows the board stitched.
+- **The two models agree where they describe the same board.** Stitched, the region model's coupling from the clock
+  to the feed land is -36.3 dB at 2.44 GHz with the radio beside the feed; the antenna site model, which assumes
+  stitching and has no feed line, gives -34.4 dB. A first cross-check between independent models, within 2 dB.
+- **The feed line costs about 8 dB** (-30.4 against -38.5 dB, both stitched): the radio belongs next to the feed.
+- **What remains is the antenna itself**: 23 to 27 dB over the example's (synthetic) limit even with both fixes, a
+  1 ns-edged 3.3 V clock 3 to 4 mm from a 2.4 GHz radiator. The levers left are distance, a slower edge (a series
+  resistor) or a spread clock; the command measures each.
+- A **passivity guard** reports any run whose excited end sends out more than 1.02 times the incident power (a
+  numerical fault). None of these runs did; the ring-down fit was not used (every record decayed), and
+  `COPPER_COUPLING_NO_RING_FIT` reproduces them exactly.
+
 ## 4. Plan and status
 
 1. **Separate the weak-coupling floor.** Done (section 1): not the ports, not radiation; the quasi-static
@@ -135,9 +167,10 @@ is `not_applicable`.
 4. **Query surface.** Done: `copper coupling` (section 3). Open: the feed line in antenna mode (today: ask the
    region model for it), back-side ends (a port goes down to a plane below its end), and a region model that
    reaches a board edge ends its planes at the window.
-5. **Desensitisation finding.** Done for antenna mode (section 3). Open: desense in region mode (the receiver's
-   pad as the antenna port), spurs of data signals as lines rather than a bound, and a channel bandwidth for
-   random data.
+5. **Desensitisation finding.** Done in both modes (sections 3 and 3.1). Open: spurs of data signals as lines
+   rather than a bound, and a channel bandwidth for random data.
+6. **Stitching the pours.** The router joins pours only where pads and vias need it; nothing places a via grid
+   between two pours of one net. Section 3.1 makes that the largest single lever on this board.
 
 Not checked against a measurement anywhere. The fit tests `copper-fullwave/src/fit.rs` (four of them) fail on the
 base commit this work started from as well; they are not touched here.

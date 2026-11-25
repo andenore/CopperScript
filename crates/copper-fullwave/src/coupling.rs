@@ -327,6 +327,11 @@ pub struct CouplingRequest {
     pub threads: usize,
     /// Use the native zone fills (otherwise zone outlines minus clearances).
     pub zone_fills: bool,
+    /// Complete records that have not decayed with a ring-down fit (the region model's default).
+    pub ring_fit: bool,
+    /// Assume every ground net stitched between its layers by vias at this pitch (nm) wherever its fill covers two or
+    /// more layers with half a millimetre to spare, as the antenna site model assumes. `None`: the board as routed.
+    pub stitch_pitch_nm: Option<i64>,
 }
 
 impl CouplingRequest {
@@ -341,6 +346,8 @@ impl CouplingRequest {
             budget: Budget::default(),
             threads: 0,
             zone_fills: true,
+            ring_fit: true,
+            stitch_pitch_nm: None,
         }
     }
 }
@@ -380,6 +387,25 @@ pub struct CouplingResult {
     /// `S_ii` of each excited end.
     pub reflections: Vec<(String, Vec<Complex64>)>,
     pub runs: Vec<RunStats>,
+}
+
+impl CouplingResult {
+    /// The frequencies at which an excited end sends out more power than it is given: `|S_kk|^2 + sum_i |S_ik|^2`
+    /// above `1 + tolerance` over every port of the model. A passive board cannot; a result that does is a
+    /// numerical fault (an unconverged or badly completed record), whatever its couplings say. `(end, Hz, sum)`.
+    pub fn passivity_violations(&self, tolerance: f64) -> Vec<(String, f64, f64)> {
+        let mut out = Vec::new();
+        for (end, reflection) in &self.reflections {
+            for (k, f) in self.freqs.iter().enumerate() {
+                let sum: f64 = reflection[k].norm_sqr()
+                    + self.paths.iter().filter(|p| &p.from == end).map(|p| p.s[k].norm_sqr()).sum::<f64>();
+                if sum > 1.0 + tolerance {
+                    out.push((end.clone(), *f, sum));
+                }
+            }
+        }
+        out
+    }
 }
 
 /// The region model of `request` on `board`; `terminate` chooses each end's termination.
@@ -452,16 +478,96 @@ pub fn coupling_model(
     // A routed board's copper leaves gaps far below the cell between nets: the smoothing mesher grades into them
     // and floors the slivers that would set the time step (as for the hot-loop runs).
     spec.smooth_mesh = true;
+    spec.ring_fit = request.ring_fit;
     if request.zone_fills {
         spec.zone_fills = crate::fill::zone_fill_set(board).ok();
     }
+    // Ground vias joining the pours: few of them leave two pours as a parallel-plate cavity the ports drive.
+    let ground_vias = board
+        .vias
+        .iter()
+        .filter(|v| grounds.contains(&v.net))
+        .filter(|v| {
+            let (x, y) = (v.position.x_nm, v.position.y_nm);
+            x >= region[0] && x <= region[2] && y >= region[1] && y <= region[3]
+        })
+        .count();
+    let mut stitched = board.clone();
+    if let (Some(pitch), Some(fills)) = (request.stitch_pitch_nm, &spec.zone_fills) {
+        let added = stitch(&mut stitched, fills, &grounds, region, pitch);
+        notes.push(format!(
+            "assumed stitching: {added} ground via(s) added at {:.2} mm pitch where the fill covers two layers \
+             (the board as routed has {ground_vias} in the model)",
+            pitch as f64 * 1e-6
+        ));
+    } else {
+        let area_cm2 = (region[2] - region[0]) as f64 * (region[3] - region[1]) as f64 * 1e-14;
+        let layers = spec
+            .zone_fills
+            .as_ref()
+            .map_or(0, |f| stack.copper.iter().filter(|(l, _)| grounds.iter().any(|g| f.covers(g, *l))).count());
+        if layers >= 2 && (ground_vias as f64) < area_cm2 {
+            notes.push(format!(
+                "the ground pours are joined by {ground_vias} via(s) over {area_cm2:.1} cm^2: two weakly joined pours \
+                 are a cavity that couples every port in it; --stitch MM shows the board with them stitched"
+            ));
+        }
+    }
     spec.ports = ports.iter().map(port_spec).collect();
-    let model = RegionModel::build(board, &spec)?;
+    let model = RegionModel::build(&stitched, &spec)?;
     for (port, resolved) in ports.iter_mut().zip(&model.ports) {
         port.start = resolved.start;
         port.stop = resolved.stop;
     }
     Ok(CouplingModel { model, ports, aggressor_ports, grounds, notes })
+}
+
+/// Add ground vias on a grid of `pitch` (nm) inside `region` wherever a ground net's fill covers two or more layers
+/// with half a millimetre to spare; returns how many. Each via spans the outermost two covered layers.
+fn stitch(
+    board: &mut PhysicalBoard,
+    fills: &crate::fill::ZoneFillSet,
+    grounds: &BTreeSet<String>,
+    region: [i64; 4],
+    pitch: i64,
+) -> usize {
+    use copper_cam::poly;
+    let pitch = pitch.max(500_000);
+    let mut added = 0;
+    for net in grounds {
+        // Each layer's fill shrunk by the margin: a via at a point inside it is clear of the fill's edges.
+        let shrunk: Vec<(CopperLayer, poly::Shapes)> = fills
+            .fills
+            .iter()
+            .filter(|f| &f.net == net)
+            .map(|f| (f.layer, poly::offset(&f.shapes, -500_000, false, 1_000.0)))
+            .collect();
+        let mut y = region[1] + pitch / 2;
+        while y < region[3] {
+            let mut x = region[0] + pitch / 2;
+            while x < region[2] {
+                let p = (x as f64, y as f64);
+                let covered: Vec<CopperLayer> =
+                    shrunk.iter().filter(|(_, s)| poly::shapes_contain(s, p)).map(|(l, _)| *l).collect();
+                if covered.len() >= 2 {
+                    board.vias.push(copper_pcb::board::Via {
+                        net: net.clone(),
+                        position: Point::new(x, y),
+                        size_nm: 600_000,
+                        drill_nm: 300_000,
+                        from_layer: covered[0],
+                        to_layer: *covered.last().expect("two layers"),
+                        technology: None,
+                        finish: "assumed".to_owned(),
+                    });
+                    added += 1;
+                }
+                x += pitch;
+            }
+            y += pitch;
+        }
+    }
+    added
 }
 
 impl CouplingModel {

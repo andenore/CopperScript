@@ -33,7 +33,7 @@ use crate::option_parser::{self, flag, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper coupling [-h] (--from NET | --antenna NAME) --to NET [--to NET ...] [--run RUN] \
-[--band LOW:HIGH] [--ground NET] [--terminate END=OHMS] [--fidelity {coarse,fine}] [--budget SECONDS] \
+[--band LOW:HIGH] [--ground NET] [--terminate END=OHMS] [--excite END] [--receiver END] [--stitch MM] [--fidelity {coarse,fine}] [--budget SECONDS] \
 [--margin MM] [--threads N] [--describe] [--json] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
 [--allow-proxy-footprints] board";
@@ -230,6 +230,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--band"),
         value("--ground"),
         value("--terminate"),
+        value("--excite"),
+        value("--receiver"),
+        value("--stitch"),
         value("--fidelity"),
         value("--budget"),
         value("--margin"),
@@ -270,7 +273,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     {
         return usage_error(err, &format!("argument --to: {from} is the aggressor"));
     }
-    for region_only in ["--band", "--budget", "--margin", "--ground"] {
+    for region_only in ["--band", "--budget", "--margin", "--ground", "--excite", "--receiver", "--stitch"] {
         if antenna.is_some() && !parsed.values(region_only).is_empty() {
             return usage_error(
                 err,
@@ -408,11 +411,24 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         }
         let mut request = CouplingRequest::new(aggressor, &victims);
+        // Diagnostic: `COPPER_COUPLING_NO_RING_FIT` runs every record to decay or the time cap instead of fitting.
+        request.ring_fit = std::env::var_os("COPPER_COUPLING_NO_RING_FIT").is_none();
         request.band_hz = band;
         request.fidelity = if fine { Fidelity::Fine } else { Fidelity::Coarse };
         request.threads = threads;
         if let Some(seconds) = budget {
             request.budget = Budget { max_seconds: seconds, ..Budget::default() };
+        }
+        if let Some(text) = parsed.value("--stitch") {
+            match text.trim().parse::<f64>() {
+                Ok(mm) if mm >= 0.5 && mm.is_finite() => request.stitch_pitch_nm = Some((mm * 1e6).round() as i64),
+                _ => {
+                    return usage_error(
+                        err,
+                        &format!("argument --stitch: expected a pitch of at least 0.5 (mm), got '{text}'"),
+                    );
+                }
+            }
         }
         if let Some(mm) = margin {
             request.margin_nm = (mm * 1e6).round() as i64;
@@ -426,6 +442,62 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             Err(e) => return fail(out, &e.to_string()),
         };
         let ends: Vec<NetEnd> = model.ports.iter().map(|p| p.end.clone()).collect();
+        let mut model = model;
+        let excite = parsed.owned_values("--excite");
+        if !excite.is_empty() {
+            let aggressor_ends: Vec<&str> = model.aggressor_ports.iter().map(|&k| ends[k].name.as_str()).collect();
+            if let Some(bad) = excite.iter().find(|e| !aggressor_ends.contains(&e.as_str())) {
+                return fail(
+                    out,
+                    &format!(
+                        "--excite names no end of {aggressor}: {bad} (its ends are {})",
+                        aggressor_ends.join(", ")
+                    ),
+                );
+            }
+            model.aggressor_ports.retain(|&k| excite.contains(&ends[k].name));
+        }
+        // An antenna whose feed net is a victim: the desense check from the aggressor's driver to the radio's pad.
+        let has_antenna = design.electrical.constraints.iter().any(|c| c.kind == ConstraintKind::Antenna);
+        let mut receivers: Vec<(copper_pcb::antenna::AntennaSite, Result<String, String>)> = Vec::new();
+        if has_antenna {
+            let sites = physicalized(&without_antennas(&design))
+                .and_then(|bare| copper_pcb::antenna::resolve_sites(&bare, &view));
+            match sites {
+                Ok(sites) => {
+                    for site in sites.into_iter().filter(|s| victims.contains(&s.feed_net)) {
+                        let feed = format!("{}.{}", site.feed.component, site.feed.pad);
+                        let candidates: Vec<String> = ends
+                            .iter()
+                            .filter(|e| e.net == site.feed_net && e.name != feed)
+                            .map(|e| e.name.clone())
+                            .collect();
+                        let receiver = match (parsed.value("--receiver"), candidates.as_slice()) {
+                            (Some(r), _) if candidates.iter().any(|c| c == r) => Ok(r.to_owned()),
+                            (Some(r), _) => {
+                                return fail(
+                                    out,
+                                    &format!(
+                                        "--receiver {r} is no end of {} other than the feed land {feed} (they are {})",
+                                        site.feed_net,
+                                        candidates.join(", ")
+                                    ),
+                                );
+                            }
+                            (None, [one]) => Ok(one.clone()),
+                            (None, []) => Err(format!("{} has no end but the feed land {feed}", site.feed_net)),
+                            (None, _) => Err(format!(
+                                "{} has several ends besides the feed land ({}): name the radio's with --receiver",
+                                site.feed_net,
+                                candidates.join(", ")
+                            )),
+                        };
+                        receivers.push((site, receiver));
+                    }
+                }
+                Err(e) => notes.push(format!("antenna sites not resolved, no desense check: {e:?}")),
+            }
+        }
         let unknown = terminations.unknown_overrides(&ends);
         if !unknown.is_empty() {
             let names: Vec<&str> = ends.iter().map(|e| e.name.as_str()).collect();
@@ -461,6 +533,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                     ),
                 );
             }
+            for note in &model.notes {
+                let _ = text::print(out, &format!("  note: {note}"));
+            }
             return 0;
         }
         let result = match model.solve() {
@@ -475,8 +550,50 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 .map(|p| p.termination.clone())
                 .unwrap_or_else(Termination::default_ohms)
         };
+        let violations = result.passivity_violations(0.02);
+        if let Some((end, f, sum)) = violations.iter().max_by(|a, b| a.2.total_cmp(&b.2)) {
+            notes.push(format!(
+                "NOT PASSIVE: exciting {end} sends out {sum:.2} times the incident power at {:.3} GHz ({} frequencies \
+                 above 1.02): a numerical fault, the couplings of that run are not evidence",
+                f / 1e9,
+                violations.len()
+            ));
+        }
         notes.extend(model.notes.iter().cloned());
         notes.push(format!("ground nets: {}", model.grounds.iter().cloned().collect::<Vec<_>>().join(", ")));
+        let findings = receivers
+            .iter()
+            .map(|(site, receiver)| {
+                let bands: Vec<(f64, f64)> = site
+                    .bands
+                    .iter()
+                    .map(|b| {
+                        (copper_pcb::antenna::decimal_f64(&b.low_hz), copper_pcb::antenna::decimal_f64(&b.high_hz))
+                    })
+                    .collect();
+                let site_band = (
+                    bands.iter().map(|b| b.0).fold(f64::INFINITY, f64::min),
+                    bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max),
+                );
+                let find = |driver: &str| {
+                    let receiver = receiver.clone()?;
+                    result
+                        .paths
+                        .iter()
+                        .find(|p| p.from.starts_with(&format!("{driver}.")) && p.to == receiver)
+                        .map(|p| DesensePath {
+                            driver_end: p.from.clone(),
+                            termination: termination_of(&p.from),
+                            receiver_end: p.to.clone(),
+                            s_db: p.db(),
+                        })
+                        .ok_or_else(|| {
+                            format!("no solved path from the driver {driver} to {receiver} (was its end excited?)")
+                        })
+                };
+                desense(aggressor, &emi, site, site_band, &result.freqs, &find)
+            })
+            .collect();
         Report {
             mode: "region",
             board: board.clone(),
@@ -501,7 +618,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 .map(|r| RunOut { cells: r.cells, steps: r.steps, seconds: r.seconds, converged: r.converged })
                 .collect(),
             notes,
-            findings: Vec::new(),
+            findings,
         }
     } else {
         let name = antenna.expect("one of --from and --antenna");
@@ -615,8 +732,24 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 .map(|(_, s)| *s)
                 .fold(f64::NEG_INFINITY, f64::max)
         ));
-        let findings =
-            victims.iter().map(|net| desense(net, &emi, site, band, &evaluation.freqs, &couplings)).collect();
+        let findings = victims
+            .iter()
+            .map(|net| {
+                let find = |driver: &str| {
+                    couplings
+                        .iter()
+                        .find(|c| c.net == *net && c.port.starts_with(&format!("{driver}.")))
+                        .map(|c| DesensePath {
+                            driver_end: c.port.clone(),
+                            termination: c.termination.clone(),
+                            receiver_end: "the feed".to_owned(),
+                            s_db: c.s_db.clone(),
+                        })
+                        .ok_or_else(|| "no end of the net is a pad of its declared driver".to_owned())
+                };
+                desense(net, &emi, site, band, &evaluation.freqs, &find)
+            })
+            .collect();
         Report {
             mode: "antenna",
             board: board.clone(),
@@ -660,13 +793,22 @@ fn si(q: &copper_units::Quantity) -> f64 {
 
 /// `EMI-RF-DESENSE` for victim `net`: the spurs its declared signal puts into the antenna's band through the
 /// coupling from its driver's end, held to the antenna's declared `sensitivity_dbm` and `desense_margin_db`.
+/// The path of a desense finding: the signal's driver end, its termination, the receiver's end and `|S|` in dB
+/// from one to the other at each analysis frequency.
+struct DesensePath {
+    driver_end: String,
+    termination: Termination,
+    receiver_end: String,
+    s_db: Vec<f64>,
+}
+
 fn desense(
     net: &str,
     emi: &copper_lang::emi::EmiModel,
     site: &copper_pcb::antenna::AntennaSite,
     band: (f64, f64),
     freqs: &[f64],
-    couplings: &[copper_antenna::model::VictimCoupling],
+    find_path: &dyn Fn(&str) -> Result<DesensePath, String>,
 ) -> (Vec<String>, Value) {
     use copper_emi::desense::{Source, received_spurs, verdict};
     use copper_emi::signal::{Line, clock_lines, continuous_bound};
@@ -687,14 +829,31 @@ fn desense(
         return finish("not_applicable", "not a declared fast signal (no spectrum to couple)".to_owned(), o, inputs);
     };
     // The driver's end: a pad of the component whose pin declares the signal.
-    let driver = source.pins.first().map(|p| p.component.clone());
-    let path = couplings
-        .iter()
-        .find(|c| c.net == net && driver.as_ref().is_some_and(|d| c.port.starts_with(&format!("{d}."))));
-    let Some(path) = path else {
-        return finish("not_applicable", "no end of the net is a pad of its declared driver".to_owned(), o, inputs);
+    let Some(driver) = source.pins.first().map(|p| p.component.clone()) else {
+        return finish("not_applicable", "the signal names no driving pin".to_owned(), o, inputs);
     };
-    put(&mut o, "driver_end", Value::from(path.port.as_str()));
+    let path = match find_path(&driver) {
+        Ok(path) => path,
+        Err(why) => return finish("not_applicable", why, o, inputs),
+    };
+    put(&mut o, "driver_end", Value::from(path.driver_end.as_str()));
+    put(&mut o, "receiver_end", Value::from(path.receiver_end.as_str()));
+    // The sweep must cover the band: a line with no coupling sample would otherwise drop out and read as a pass.
+    let (lo, hi) = (freqs.first().copied().unwrap_or(f64::NAN), freqs.last().copied().unwrap_or(f64::NAN));
+    if !(lo <= band.0 && hi >= band.1) {
+        return finish(
+            "not_applicable",
+            format!(
+                "the sweep ({:.3}-{:.3} GHz) does not cover the antenna's band ({:.3}-{:.3} GHz)",
+                lo / 1e9,
+                hi / 1e9,
+                band.0 / 1e9,
+                band.1 / 1e9
+            ),
+            o,
+            inputs,
+        );
+    }
     let ohms = path.termination.ohms;
     let (swing, kind) = match (&source.open_circuit_swing, &source.swing) {
         (Some(v), _) => (si(&v.value), Source::Thevenin),
@@ -741,6 +900,7 @@ fn desense(
     };
     put(&mut o, "spectrum", Value::from(spectrum));
     let spurs = received_spurs(&lines, ohms, kind, band, freqs, &path.s_db);
+    inputs.push(format!("path: {} to {}", path.driver_end, path.receiver_end));
     put(
         &mut o,
         "spurs",
@@ -769,12 +929,13 @@ fn desense(
     }
     let worst = spurs.iter().copied().max_by(|a, b| a.received_dbm.total_cmp(&b.received_dbm)).expect("a spur");
     let describe = format!(
-        "worst spur {} at {:.3} MHz: {:.1} dBm from the driver, {:.1} dB coupling, {:.1} dBm at the feed",
+        "worst spur {} at {:.3} MHz: {:.1} dBm from the driver, {:.1} dB coupling, {:.1} dBm at {}",
         if worst.harmonic > 0 { format!("harmonic {}", worst.harmonic) } else { "bound".to_owned() },
         worst.frequency / 1e6,
         worst.source_dbm,
         worst.coupling_db,
-        worst.received_dbm
+        worst.received_dbm,
+        path.receiver_end
     );
     let Some(sensitivity) = site.sensitivity_dbm else {
         return finish(

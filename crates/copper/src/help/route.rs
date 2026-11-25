@@ -775,6 +775,18 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--terminate END=OHMS",
                 help: "terminate an end (U2.4, or a free track end as printed) in OHMS; may repeat (default: the driver's declared output_impedance, else 50 ohm)",
             },
+            Opt {
+                flag: "--excite END",
+                help: "with --from: excite only this end of the aggressor (one solve per excited end); may repeat (default: every end)",
+            },
+            Opt {
+                flag: "--receiver END",
+                help: "with --from and a victim that is an antenna's feed net: the radio's end for EMI-RF-DESENSE (default: the net's one end besides the feed land)",
+            },
+            Opt {
+                flag: "--stitch MM",
+                help: "with --from: assume the ground pours stitched by vias at this pitch wherever the fill covers two layers, as the antenna model assumes (default: the board as routed)",
+            },
             Opt { flag: "--fidelity {coarse,fine}", help: "mesh fidelity (default: coarse)" },
             Opt { flag: "--budget SECONDS", help: "with --from: the longest estimated run accepted (default: 1800)" },
             Opt { flag: "--margin MM", help: "with --from: board modelled around the nets' copper (default: 3)" },
