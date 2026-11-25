@@ -150,6 +150,8 @@ impl Fidelity {
 
 type Rect = [f64; 4];
 type Ring = Vec<(f64, f64)>;
+/// A stitching via `(x, y, z_top, z_bottom)`, mm.
+type Stitch = (f64, f64, f64, f64);
 
 /// How the port reaches ground.
 #[derive(Clone, Debug, PartialEq)]
@@ -739,7 +741,7 @@ pub fn evaluate_coupled(
 ) -> Result<(Evaluation, Vec<VictimCoupling>), String> {
     let (board, site, stack) = (problem.board, problem.site, &problem.stack);
     let cut = (!victims.is_empty()).then(|| cut_ground(problem, victims));
-    let (ground_sheets, stitching): (&Vec<(f64, Ring)>, &Vec<(f64, f64, f64, f64)>) = match &cut {
+    let (ground_sheets, stitching): (&Vec<(f64, Ring)>, &Vec<Stitch>) = match &cut {
         Some(c) => (&c.ground, &c.stitching),
         None => (&problem.ground, &problem.stitching),
     };

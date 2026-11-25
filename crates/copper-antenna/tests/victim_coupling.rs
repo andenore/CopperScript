@@ -29,6 +29,9 @@ use copper_physical::{CopperLayer, Point};
 
 const MM: i64 = 1_000_000;
 
+/// Draws a victim's tracks on `net` at `y` mm.
+type Draw = fn(&str, f64) -> Vec<TrackSegment>;
+
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/antenna_synthesis/board.copper")
 }
@@ -94,8 +97,7 @@ fn coupling_from_the_feed_to_a_trace_falls_with_distance() {
     };
 
     let mut peaks = Vec::new();
-    let cases: [(&str, f64, fn(&str, f64) -> Vec<TrackSegment>); 3] =
-        [("near", 8.5, trace), ("far", 24.0, trace), ("jogged", 8.5, jogged)];
+    let cases: [(&str, f64, Draw); 3] = [("near", 8.5, trace), ("far", 24.0, trace), ("jogged", 8.5, jogged)];
     for (name, y, draw) in cases {
         physical.tracks.retain(|t| !t.net.starts_with("VICTIM"));
         let net = format!("VICTIM_{name}");
@@ -150,7 +152,7 @@ fn coupling_from_the_feed_to_a_trace_falls_with_distance() {
 #[test]
 fn ground_is_cut_around_a_victim_and_its_stitching_removed() {
     let (mut physical, site) = board();
-    for (net, draw) in [("VICTIM_S", trace as fn(&str, f64) -> Vec<TrackSegment>), ("VICTIM_J", jogged)] {
+    for (net, draw) in [("VICTIM_S", trace as Draw), ("VICTIM_J", jogged)] {
         physical.tracks.retain(|t| !t.net.starts_with("VICTIM"));
         physical.tracks.extend(draw(net, 8.5));
         let problem = Problem::new(&physical, &site).expect("the problem");
