@@ -799,7 +799,8 @@ impl Reader {
                         // `.LIB SECTION` opens a library section: its cards belong to the file.
                         None
                     }
-                    Some(Token::Word(w)) => Some(w.clone()),
+                    // The tokens are upper-cased; the file name keeps the case it is written in.
+                    Some(Token::Word(w)) => Some(lexer::written(line, w)),
                     _ => return Err(err(loc, ErrorKind::Syntax, format!("{card} needs a file name"))),
                 };
                 let Some(target) = target else { return Ok(()) };

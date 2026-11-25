@@ -970,7 +970,7 @@ pub fn build_layout(
         let p0 = layout.ports[0].clone();
         layout.ports[0] = crate::layout::PortDef { name: p0.name, plus: p0.minus, minus: p0.plus };
         let hot_supply_pad = 0;
-        let hot_return_pad = hot_capacitor_return_pad(&ports);
+        let hot_return_pad = hot_capacitor_return_pad(ports);
         let supply_net = terminal_pads[hot_supply_pad][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
         let return_net = terminal_pads[hot_return_pad][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
         for reference in &options.capacitor_ports {
