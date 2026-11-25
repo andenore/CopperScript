@@ -44,8 +44,21 @@ PML (`RegionSpec::extend_planes`).
 
 ## 2. Antenna-to-net coupling (antenna site model)
 
-Pending: the first runs of `victim_coupling.rs` (coarse fidelity, a 0.5 mm trace 2.5 mm and 18 mm below the
-example monopole's region) are recorded here when they finish.
+`examples/antenna_synthesis/board.copper` (2.4 GHz monopole in the top-right corner, GND on F.Cu and B.Cu over
+1.51 mm FR-4) with its tuned geometry and a synthetic 0.5 mm F.Cu trace, 14 mm long, parallel to the monopole's
+arm, ported to B.Cu at both ends. Coarse fidelity (0.5 mm cell: the trace is one cell wide), 4 threads:
+
+| Case | Model | Coupling in band (2.40 to 2.48 GHz), near end / far end of the trace | Peak over the sweep | S11 change |
+| --- | --- | --- | --- | --- |
+| antenna alone | 0.29 M cells, 9,001 steps, 12 s | | | |
+| trace 2.5 mm below the antenna region | 0.33 M cells, 12 s | -34.8 to -35.1 / -38.5 dB | -34.3 dB | at most 0.01 dB in band |
+| trace 18 mm below the region | 0.44 M cells, 17 s | -54.7 to -55.3 / -52.3 to -52.8 dB | -51.6 dB | at most 0.05 dB |
+
+Checked: the coupling falls by 17 dB with distance, no port receives more than the feed delivers, and a far victim
+leaves S11 unchanged. Not checked: accuracy. There is no closed form for this geometry, the far case sits in the
+range that section 1 says is an upper bound, and the trace is one cell wide at coarse fidelity. The coupling is
+referenced to the wave incident at the feed; the bare antenna has an S11 of -3.3 to -4 dB in band (it is matched
+by an L-section on the board), so relative to the power the antenna accepts the numbers are about 2.5 dB higher.
 
 ## 3. Plan
 

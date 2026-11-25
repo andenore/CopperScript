@@ -3,8 +3,9 @@
 //! The board is `examples/antenna_synthesis/board.copper` (a 2.4 GHz monopole in the top-right corner, GND zoned on
 //! F.Cu and B.Cu over 1.51 mm of FR-4) with its tuned geometry. A synthetic 0.5 mm F.Cu trace of 14 mm on a net of
 //! its own is added parallel to the monopole's arm, either 2.5 mm below the antenna region (`near`) or 18 mm below
-//! it (`far`), terminated in 50 ohm at both ends to B.Cu. The coarse fidelity is used; the runs take minutes, so
-//! the test is `#[ignore]`d: `cargo test --release -p copper-antenna --test victim_coupling -- --ignored
+//! it (`far`), terminated in 50 ohm at both ends to B.Cu. The coarse fidelity is used. Measured (4 threads):
+//! antenna alone 0.29 M cells, 12 s; near 0.33 M cells, 12 s, peak coupling -34.3 dB (about -35 dB in band);
+//! far 0.44 M cells, 17 s, peak -51.6 dB, S11 moved by at most 0.05 dB. The test is `#[ignore]`d: `cargo test --release -p copper-antenna --test victim_coupling -- --ignored
 //! --nocapture`.
 //!
 //! What is checked is physical consistency, not accuracy (there is no closed form for this geometry; the
@@ -62,7 +63,7 @@ fn trace(net: &str, y_mm: f64) -> TrackSegment {
 }
 
 #[test]
-#[ignore = "three coarse full-wave runs, minutes"]
+#[ignore = "three coarse full-wave runs, about 45 s"]
 fn coupling_from_the_feed_to_a_trace_falls_with_distance() {
     let (mut physical, site) = board();
     // Both victims on the board at once would couple to each other; each is evaluated on its own copy.
