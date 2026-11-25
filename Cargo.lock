@@ -66,6 +66,8 @@ dependencies = [
 name = "copper-antenna"
 version = "0.1.0"
 dependencies = [
+ "copper-cam",
+ "copper-fullwave",
  "copper-json",
  "copper-lang",
  "copper-pcb",

@@ -24,6 +24,10 @@ use ems::csx::{ContinuousStructure, Material, Primitive, Property, PropertyId};
 use ems::engine::StopReason;
 use ems::prelude::*;
 
+use std::collections::BTreeSet;
+
+use copper_cam::poly;
+use copper_fullwave::coupling::{NetEnd, NetGeometry, Termination, net_geometry};
 use copper_pcb::antenna::{AntennaSite, Axis as FrameAxis, Layout};
 use copper_pcb::board::PhysicalBoard;
 use copper_physical::geometry::point_in_polygon;
@@ -390,32 +394,20 @@ pub struct Evaluation {
     pub warnings: Vec<String>,
 }
 
-/// A net whose coupling to the antenna feed is measured (prototype, see
-/// [`evaluate_coupled`]): its `F.Cu` tracks as PEC sheets, cut out of the
-/// top-layer ground with `clearance`, and a 50 ohm lumped port from each free
-/// end of its tracks down to the first ground layer under that end.
+/// A net whose coupling to the antenna feed is measured (see [`evaluate_coupled`]): its copper as the region
+/// model's board translator draws it ([`copper_fullwave::coupling::net_geometry`]: tracks at any angle, arcs,
+/// vias, pads, on any layer), the site's ground cut back around it by `clearance` on every layer it occupies
+/// (and around its vias), and a lumped port from each of its ends down to the first ground layer under the end,
+/// terminated as the geometry says.
 ///
-/// Prototype limits: axis-aligned `F.Cu` tracks only (no vias, arcs, pads or
-/// other layers); the ends are terminated in 50 ohm rather than the driver's
-/// and receiver's impedances; the vertical port is as tall as the dielectric
-/// to the ground layer, so its own inductance is part of the termination.
+/// Limits: the cut follows the copper grown by the site's clearance, widened to one coarse cell, not the board's fill (the antenna model's
+/// ground is the zone outline); a via's antipad is a circle of twice its drill radius plus the clearance; the
+/// vertical port is as tall as the dielectric to its plane, so its inductance is part of the termination.
 #[derive(Clone, Debug)]
 pub struct Victim {
-    pub net: String,
-    /// Track sheets on `F.Cu` (`[x0, y0, x1, y1]`, mm).
-    pub copper: Vec<Rect>,
-    pub ports: Vec<VictimPort>,
+    pub geometry: NetGeometry,
     /// Ground is cut back this far around the copper, mm.
     pub clearance: f64,
-}
-
-/// A victim port: a vertical lumped element from `F.Cu` (z = 0) down to `z`
-/// over `rect` (mm).
-#[derive(Clone, Debug)]
-pub struct VictimPort {
-    pub name: String,
-    pub rect: Rect,
-    pub z: f64,
 }
 
 /// The transmission from the antenna feed to one victim port.
@@ -423,69 +415,61 @@ pub struct VictimPort {
 pub struct VictimCoupling {
     pub net: String,
     pub port: String,
-    /// `S_k1` (victim port `k`, feed port 1) at each analysis frequency.
+    pub termination: Termination,
+    /// `S_k1` (victim port `k`, feed port 1) at each analysis frequency, power waves referenced to 50 ohm at the
+    /// feed and to the victim port's termination.
     pub s: Vec<Complex64>,
     pub s_db: Vec<f64>,
 }
 
+const NM_PER_MM: f64 = 1e6;
+
+fn to_nm(ring: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    ring.iter().map(|(x, y)| (x * NM_PER_MM, y * NM_PER_MM)).collect()
+}
+
+fn to_mm(contour: &poly::Contour) -> Ring {
+    contour.iter().map(|p| (p.x as f64 / NM_PER_MM, p.y as f64 / NM_PER_MM)).collect()
+}
+
 impl Victim {
-    /// The victim of `net`: its `F.Cu` tracks on the board of `problem`, with
-    /// a port at every track end that no other track of the net shares.
-    pub fn from_net(problem: &Problem, net: &str) -> Result<Victim, String> {
-        let board = problem.board;
-        let tracks: Vec<_> = board.tracks.iter().filter(|t| t.net == net).collect();
-        if tracks.is_empty() {
-            return Err(format!("coupling victim {net}: the net has no tracks"));
-        }
-        let mut copper = Vec::new();
-        let mut ends: Vec<(Point, i64, usize)> = Vec::new();
-        for t in &tracks {
-            if t.layer != CopperLayer::Front {
-                return Err(format!("coupling victim {net}: only F.Cu tracks are modelled (prototype)"));
-            }
-            if t.start.x_nm != t.end.x_nm && t.start.y_nm != t.end.y_nm {
-                return Err(format!("coupling victim {net}: only axis-aligned tracks are modelled (prototype)"));
-            }
-            let h = t.width_nm / 2;
-            copper.push([
-                mm(t.start.x_nm.min(t.end.x_nm) - h),
-                mm(t.start.y_nm.min(t.end.y_nm) - h),
-                mm(t.start.x_nm.max(t.end.x_nm) + h),
-                mm(t.start.y_nm.max(t.end.y_nm) + h),
-            ]);
-            for p in [t.start, t.end] {
-                match ends.iter_mut().find(|(q, _, _)| *q == p) {
-                    Some(end) => end.2 += 1,
-                    None => ends.push((p, t.width_nm, 1)),
-                }
-            }
-        }
-        let zones: Vec<_> = board.zones.iter().filter(|z| z.net == problem.site.ground).collect();
-        let mut ports = Vec::new();
-        for (p, width, _) in ends.iter().filter(|(_, _, n)| *n == 1) {
-            let below = problem.stack.copper.iter().skip(1).find(|(layer, _)| {
-                zones.iter().any(|zone| zone.layers.contains(layer) && point_in_polygon(*p, &zone.outer))
-            });
-            let Some((_, z)) = below else {
-                return Err(format!(
-                    "coupling victim {net}: no ground zone under the track end at ({:.3}, {:.3}) mm for its port",
-                    mm(p.x_nm),
-                    mm(p.y_nm)
-                ));
-            };
-            let a = width / 2;
-            let rect = [mm(p.x_nm - a), mm(p.y_nm - a), mm(p.x_nm + a), mm(p.y_nm + a)];
-            ports.push(VictimPort { name: format!("{net}@({:.2},{:.2})", mm(p.x_nm), mm(p.y_nm)), rect, z: *z });
-        }
-        if ports.is_empty() {
-            return Err(format!("coupling victim {net}: its tracks have no free end for a port"));
-        }
-        Ok(Victim { net: net.to_owned(), copper, ports, clearance: mm(problem.site.clearance) })
+    /// The victim of `net` on the board of `problem`, every end terminated by `terminate`, returning to the
+    /// site's ground net.
+    pub fn from_net(
+        problem: &Problem,
+        net: &str,
+        terminate: &dyn Fn(&NetEnd) -> Termination,
+    ) -> Result<Victim, String> {
+        let grounds: BTreeSet<String> = [problem.site.ground.clone()].into();
+        let geometry =
+            net_geometry(problem.board, net, &grounds, terminate).map_err(|e| format!("coupling victim {net}: {e}"))?;
+        // As the feed slot: the cut is the board clearance widened to one coarse cell, so the mesh resolves it at
+        // every fidelity (a narrower cut lets the ground edge snap onto the victim's and short it).
+        let coarse = Fidelity::coarse(problem.site, 1).cell;
+        Ok(Victim { geometry, clearance: mm(problem.site.clearance).max(coarse) })
     }
 
-    fn keepout(&self) -> Vec<Rect> {
-        let c = self.clearance;
-        self.copper.iter().map(|r| [r[0] - c, r[1] - c, r[2] + c, r[3] + c]).collect()
+    pub fn net(&self) -> &str {
+        &self.geometry.net
+    }
+
+    /// The area cut out of ground at height `z`: the copper on that layer and the antipads of the vias through it,
+    /// grown by the clearance (nm shapes).
+    fn keepout_at(&self, z: f64) -> poly::Shapes {
+        let mut shapes: poly::Shapes = Vec::new();
+        for (sz, ring) in &self.geometry.sheets {
+            if (sz - z).abs() < 1e-9 {
+                shapes.extend(poly::polygon(&to_nm(ring)));
+            }
+        }
+        for [x, y, top, bottom, r] in &self.geometry.wires {
+            if z <= top + 1e-9 && z >= bottom - 1e-9 {
+                let centre =
+                    copper_cam::geometry::Point::new((x * NM_PER_MM).round() as i64, (y * NM_PER_MM).round() as i64);
+                shapes.extend(poly::circle(centre, 2.0 * r * NM_PER_MM, 1_000.0));
+            }
+        }
+        poly::offset(&poly::union(&shapes), (self.clearance * NM_PER_MM).round() as i64, false, 1_000.0)
     }
 }
 
@@ -699,6 +683,49 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     evaluate_coupled(problem, layout, fidelity, &[]).map(|(evaluation, _)| evaluation)
 }
 
+/// The site's ground sheets with `victims` cut out of them (the copper of each at its layer and its vias'
+/// antipads, grown by the clearance), and the stitching vias that stay half a millimetre clear of every cut.
+pub fn cut_ground(problem: &Problem, victims: &[Victim]) -> CutGround {
+    let mut ground = Vec::new();
+    let mut cuts: poly::Shapes = Vec::new();
+    for (z, ring) in &problem.ground {
+        let keepout: poly::Shapes = victims.iter().flat_map(|v| v.keepout_at(*z)).collect();
+        cuts.extend(keepout.iter().cloned());
+        let remaining = poly::difference(&poly::polygon(&to_nm(ring)), &keepout);
+        ground.extend(remaining.iter().map(|shape| (*z, to_mm(&poly::fracture(shape)))));
+    }
+    let clear = poly::offset(&poly::union(&cuts), 500_000, false, 1_000.0);
+    let stitching = problem
+        .stitching
+        .iter()
+        .copied()
+        .filter(|(x, y, _, _)| !poly::shapes_contain(&clear, (x * NM_PER_MM, y * NM_PER_MM)))
+        .collect();
+    // Only the axis-aligned edges of a cut get mesh lines (a vertical edge its x, a horizontal one its y): those
+    // are what a mesh line can keep off the victim, and the vertices of slanted edges would only add slivers.
+    let mut edges = [Vec::new(), Vec::new()];
+    for contour in cuts.iter().flatten() {
+        for i in 0..contour.len() {
+            let (p, q) = (contour[i], contour[(i + 1) % contour.len()]);
+            if p.x == q.x && p.y != q.y {
+                edges[0].push(p.x as f64 / NM_PER_MM);
+            } else if p.y == q.y && p.x != q.x {
+                edges[1].push(p.y as f64 / NM_PER_MM);
+            }
+        }
+    }
+    CutGround { ground, stitching, edges }
+}
+
+/// The ground after [`cut_ground`].
+pub struct CutGround {
+    pub ground: Vec<(f64, Ring)>,
+    pub stitching: Vec<(f64, f64, f64, f64)>,
+    /// The x of the cuts' vertical edges and the y of their horizontal ones: mesh lines that keep the cut's edges
+    /// off the victim's.
+    pub edges: [Vec<f64>; 2],
+}
+
 /// [`evaluate`] with `victims` in the model (prototype): their copper, the
 /// ground cut back around it (stitching vias within the cut removed), and a
 /// passive 50 ohm port at each of their ends; returns the transmission from
@@ -711,26 +738,11 @@ pub fn evaluate_coupled(
     victims: &[Victim],
 ) -> Result<(Evaluation, Vec<VictimCoupling>), String> {
     let (board, site, stack) = (problem.board, problem.site, &problem.stack);
-    let keepouts: Vec<Rect> = victims.iter().flat_map(Victim::keepout).collect();
-    let mut ground_owned = Vec::new();
-    let ground_sheets: &Vec<(f64, Ring)> = if keepouts.is_empty() {
-        &problem.ground
-    } else {
-        for (z, ring) in &problem.ground {
-            let mut pieces = vec![ring.clone()];
-            if *z == 0.0 {
-                for k in &keepouts {
-                    pieces = pieces.iter().flat_map(|piece| subtract(piece, *k)).collect();
-                }
-            }
-            ground_owned.extend(pieces.into_iter().map(|piece| (*z, piece)));
-        }
-        &ground_owned
+    let cut = (!victims.is_empty()).then(|| cut_ground(problem, victims));
+    let (ground_sheets, stitching): (&Vec<(f64, Ring)>, &Vec<(f64, f64, f64, f64)>) = match &cut {
+        Some(c) => (&c.ground, &c.stitching),
+        None => (&problem.ground, &problem.stitching),
     };
-    let inside =
-        |x: f64, y: f64| keepouts.iter().any(|k| x > k[0] - 0.5 && x < k[2] + 0.5 && y > k[1] - 0.5 && y < k[3] + 0.5);
-    let stitching: Vec<(f64, f64, f64, f64)> =
-        problem.stitching.iter().copied().filter(|(x, y, _, _)| !inside(*x, *y)).collect();
     if problem.freqs.len() < 2 {
         return Err("antenna bands give no analysis frequencies".to_owned());
     }
@@ -760,9 +772,11 @@ pub fn evaluate_coupled(
         sheet(&mut model, antenna, *rect, 0.0)?;
     }
     for victim in victims {
-        let id = model.add_property(Property::metal(format!("victim-{}", victim.net)));
-        for rect in &victim.copper {
-            sheet(&mut model, id, *rect, 0.0)?;
+        let id = model.add_property(Property::metal(format!("victim-{}", victim.net())));
+        for (z, ring) in &victim.geometry.sheets {
+            model
+                .add_primitive(id, Primitive::new(Polygon::new(2, *z, ring.clone())).with_priority(30))
+                .map_err(err)?;
         }
     }
     // The short's ground via is a barrel over the span the board gets, F.Cu
@@ -812,16 +826,15 @@ pub fn evaluate_coupled(
         .excite(1.0)
         .add_to(&mut model)
         .map_err(|e| e.to_string())?;
-    // Victim ports: passive 50 ohm terminations, numbered after the feed.
+    // Victim ports: passive terminations, numbered after the feed.
     let mut victim_ports = Vec::new();
     for victim in victims {
-        for vp in &victim.ports {
+        for vp in &victim.geometry.ports {
             let number = 2 + victim_ports.len() as u32;
-            let r = vp.rect;
-            let added = LumpedPort::new(number, 50.0, [r[0], r[1], vp.z], [r[2], r[3], 0.0], Axis::Z)
+            let added = LumpedPort::new(number, vp.termination.ohms, vp.start, vp.stop, Axis::Z)
                 .add_to(&mut model)
                 .map_err(|e| e.to_string())?;
-            victim_ports.push((victim.net.clone(), vp.clone(), added));
+            victim_ports.push((victim.net().to_owned(), vp.clone(), added));
         }
     }
 
@@ -863,15 +876,22 @@ pub fn evaluate_coupled(
             lines.extend([(r[k], LineRank::Copper), (r[k + 2], LineRank::Copper)]);
         }
         for victim in victims {
-            for r in &victim.copper {
-                lines.extend([(r[k], LineRank::Copper), (r[k + 2], LineRank::Copper)]);
+            for (_, ring) in &victim.geometry.sheets {
+                let (lo, hi) = ring
+                    .iter()
+                    .map(|p| if k == 0 { p.0 } else { p.1 })
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+                lines.extend([(lo, LineRank::Copper), (hi, LineRank::Copper)]);
             }
-            for r in victim.keepout() {
-                lines.extend([(r[k], LineRank::Boundary), (r[k + 2], LineRank::Boundary)]);
+            for w in &victim.geometry.wires {
+                lines.push((w[k], LineRank::Copper));
             }
-            for vp in &victim.ports {
-                lines.extend([(vp.rect[k], LineRank::Port), (vp.rect[k + 2], LineRank::Port)]);
+            for vp in &victim.geometry.ports {
+                lines.extend([(vp.start[k], LineRank::Port), (vp.stop[k], LineRank::Port)]);
             }
+        }
+        for v in cut.iter().flat_map(|c| &c.edges[k]) {
+            lines.push((*v, LineRank::Boundary));
         }
     }
     // The antenna's own cells span every feature line; around the port, a
@@ -921,8 +941,9 @@ pub fn evaluate_coupled(
     planned[2].extend(stack.slabs.iter().flat_map(|s| [(s.top, LineRank::Edge), (s.bottom, LineRank::Edge)]));
     planned[2].extend(keep_z.iter().map(|z| (*z, LineRank::Port)));
     // A victim port spans F.Cu to its ground layer with a line between them, as the feed's vertical port does.
-    for vp in victims.iter().flat_map(|v| &v.ports) {
-        planned[2].extend([(vp.z, LineRank::Port), (vp.z / 2.0, LineRank::Port), (0.0, LineRank::Port)]);
+    for vp in victims.iter().flat_map(|v| &v.geometry.ports) {
+        let (a, b) = (vp.start[2], vp.stop[2]);
+        planned[2].extend([(a, LineRank::Port), ((a + b) / 2.0, LineRank::Port), (b, LineRank::Port)]);
     }
     let z_bottom = planned[2].iter().map(|(z, _)| *z).fold(0.0, f64::min);
     let zone_z = (z_bottom, 4.0 * cell, z_cell);
@@ -949,9 +970,22 @@ pub fn evaluate_coupled(
     };
     let stitches: Vec<[f64; 4]> =
         stitching.iter().map(|(x, y, top, bottom)| [nearest(0, *x), nearest(1, *y), *top, *bottom]).collect();
+    let mut victim_wires = Vec::new();
+    for victim in victims {
+        for [x, y, top, bottom, _] in &victim.geometry.wires {
+            victim_wires.push((victim.net().to_owned(), [nearest(0, *x), nearest(1, *y), *top, *bottom]));
+        }
+    }
     for [x, y, top, bottom] in stitches {
         model
             .add_primitive(ground, Primitive::new(BoxShape::new([x, y, bottom], [x, y, top])).with_priority(10))
+            .map_err(err)?;
+    }
+    // Victim vias likewise (their positions are mesh lines of their own).
+    for (net, [x, y, top, bottom]) in victim_wires {
+        let id = model.add_property(Property::metal(format!("victim-via-{net}-{x:.3}-{y:.3}")));
+        model
+            .add_primitive(id, Primitive::new(BoxShape::new([x, y, bottom], [x, y, top])).with_priority(30))
             .map_err(err)?;
     }
     if std::env::var_os("COPPER_ANTENNA_DEBUG").is_some() {
@@ -1039,7 +1073,13 @@ pub fn evaluate_coupled(
         let b = handle.analyze(&results, &problem.freqs).map_err(|e| e.to_string())?.b();
         let s: Vec<Complex64> = b.iter().zip(&incident).map(|(b, a)| *b / *a).collect();
         let s_db = s.iter().map(|s| 20.0 * s.norm().max(1e-12).log10()).collect();
-        couplings.push(VictimCoupling { net: net.clone(), port: vp.name.clone(), s, s_db });
+        couplings.push(VictimCoupling {
+            net: net.clone(),
+            port: vp.end.name.clone(),
+            termination: vp.termination.clone(),
+            s,
+            s_db,
+        });
     }
     let z = analysed.z_in();
     let mut efficiency = Vec::new();
