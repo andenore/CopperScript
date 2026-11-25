@@ -174,7 +174,10 @@ What this shows:
    place a grid of through vias where the net is filled on every copper layer, before the exact DRC and native
    fill verification (`copper_route::pour_stitch`). On `radio_beside_feed.copper` it places 43 vias, the native
    checks pass, and the coupling with the real vias (-37.0 dB) matches the assumed stitching (-38.5 dB). Boards
-   that do not declare it route to byte-identical copper (checked on the examples that resolve offline). Open:
+   that do not declare it route to byte-identical copper: the seven local boards of the benchmark ladder
+   (`copper bench bench/ladder.json --tags small` and `--tags medium`, base commit against this branch, every
+   `board.kicad_pcb` compared) and `antenna_synthesis`, `macro_definition` and `resolved_footprint_board`, with no
+   ladder regression; the consumer boards (`COPPER_BOARDS`) were not available to this run. Open:
    zones that are not on every copper layer (blind or buried stitching), and a default pitch derived from the
    highest declared frequency instead of a declared one.
 
