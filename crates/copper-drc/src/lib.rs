@@ -918,6 +918,7 @@ pub(crate) struct PadCopper {
     pub(crate) layers: Vec<CopperLayer>,
     pub(crate) clearance_nm: i64,
     pub(crate) component: String,
+    number: String,
 }
 
 /// `_copper_pads`: every plated land, unconnected ones on their own net.
@@ -951,6 +952,7 @@ pub(crate) fn copper_pads(board: &PhysicalBoard) -> Vec<PadCopper> {
                 layers,
                 clearance_nm: footprint.clearance_nm.unwrap_or(0),
                 component: placement.reference.clone(),
+                number: pad.number.clone(),
             });
         }
     }
@@ -1371,6 +1373,15 @@ fn check_copper_spacing(
             let right = &pads[right_position];
             let shared: Vec<CopperLayer> = left.layers.iter().copied().filter(|l| right.layers.contains(l)).collect();
             if left.net == right.net || shared.is_empty() {
+                continue;
+            }
+            // An unconnected terminal can be drawn as several overlapping lands.
+            // Leave its individual obstacles and all disjoint lands intact.
+            if left.component == right.component
+                && !left.number.is_empty()
+                && left.number == right.number
+                && shapes_touch_or_overlap(&left.shape, &right.shape)
+            {
                 continue;
             }
             let (relaxed, normal) = spacing.between(

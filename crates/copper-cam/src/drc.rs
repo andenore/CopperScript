@@ -1388,6 +1388,18 @@ impl<'a> Checker<'a> {
         // clearance of 0 mm, as KiCad reports it.
         for (&(i, j), &(d, at)) in &pairs {
             let (a, b) = (&self.items[i], &self.items[j]);
+            if d <= 0.0
+                && a.net.is_none()
+                && b.net.is_none()
+                && let (Owner::Pad(left), Owner::Pad(right)) = (a.owner, b.owner)
+            {
+                let ((left_fp, left_pad), (right_fp, right_pad)) = (self.pads[left], self.pads[right]);
+                // A numbered terminal can be drawn as several overlapping lands.
+                if std::ptr::eq(left_fp, right_fp) && !left_pad.number.is_empty() && left_pad.number == right_pad.number
+                {
+                    continue;
+                }
+            }
             let required = rules.clearance(&a.rule, &b.rule) as f64;
             if d < required - EPSILON {
                 let items = vec![self.describe(a), self.describe(b)];

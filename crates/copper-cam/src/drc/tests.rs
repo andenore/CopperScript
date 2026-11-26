@@ -88,6 +88,31 @@ fn clearance_shorts_and_dangling_tracks() {
 }
 
 #[test]
+fn overlapping_copper_of_one_unconnected_terminal_passes_board_clearance() {
+    let package = |number: &str| {
+        format!(
+            r#"(footprint "L:Q" (layer "F.Cu") (at 10 5)
+              (property "Reference" "U1" (at 0 0) (layer "F.Fab"))
+              (pad "7" smd roundrect (at 0.725 0.875) (size 0.25 0.65)
+                (roundrect_rratio 0.2) (layers "F.Cu"))
+              (pad "{number}" smd roundrect (at 0.9 0.7) (size 0.6 0.3)
+                (roundrect_rratio 0.166666667) (layers "F.Cu")))"#
+        )
+    };
+    assert!(!kinds(&checked(&package("7"))).contains(&"clearance"));
+    assert!(kinds(&checked(&package("8"))).contains(&"clearance"));
+
+    let disjoint = package("7").replace("(at 0.9 0.7)", "(at 1.2 0.7)");
+    assert!(kinds(&checked(&disjoint)).contains(&"clearance"));
+
+    let unnumbered = package("7").replace(r#"pad "7""#, r#"pad """#);
+    assert!(kinds(&checked(&unnumbered)).contains(&"clearance"));
+
+    let other_package = package("7").replace(r#""U1""#, r#""U2""#);
+    assert!(kinds(&checked(&format!("{} {other_package}", package("7")))).contains(&"clearance"));
+}
+
+#[test]
 fn a_local_pad_clearance_is_checked_beyond_the_rule_reach() {
     // The OTHER pad's edge is 0.7 mm from the SIG track's: farther than every
     // board rule (the widest is the 0.5 mm edge clearance) but inside the
