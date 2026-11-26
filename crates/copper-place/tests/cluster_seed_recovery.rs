@@ -103,7 +103,7 @@ fn a_later_seed_can_place_a_group_after_the_first_exhausts_its_budget() {
     assert_eq!(candidate.statistics.failed_seed_attempts.len(), 1);
     let failure = &candidate.statistics.failed_seed_attempts[0];
     assert_eq!(failure.seed, 0);
-    assert_eq!(failure.failed_reference, "A");
+    assert_eq!(failure.failed_reference.as_deref(), Some("A"));
     assert_eq!(failure.accepted_count, 0);
     assert!(failure.reason.contains("rigid cluster 'pair'"), "{}", failure.reason);
     let poses: Poses = candidate.placements.iter().map(|pose| (pose.reference.clone(), pose.clone())).collect();
@@ -364,7 +364,7 @@ fn diagnostics_choose_the_deepest_failed_seed_and_keep_the_target_unaccepted() {
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].seed, 1);
     assert_eq!(diagnostics[0].accepted.len(), 2);
-    assert_eq!(diagnostics[0].failed_reference, "Z");
+    assert_eq!(diagnostics[0].failed_reference.as_deref(), Some("Z"));
     assert!(!diagnostics[0].accepted.contains_key("Z"));
     assert_eq!(diagnostics[0].proposal.as_ref().unwrap().reference, "Z");
 }
@@ -422,7 +422,7 @@ fn diagnostics_preserve_complete_constraint_rejections_over_partial_failures() {
         let diagnostic = &diagnostics[0];
         assert_eq!(diagnostic.seed, if mixed { 1 } else { 0 });
         assert_eq!(diagnostic.accepted.len(), board.placements.len());
-        assert_eq!(diagnostic.failed_reference, "B", "locate the actual first violated rule target");
+        assert_eq!(diagnostic.failed_reference.as_deref(), Some("B"), "locate the actual violated rule target");
         assert!(diagnostic.proposal.is_none());
         assert!(diagnostic.reason.contains("complete layout rejected"));
         let scene = Scene::new(&board, options.policy());

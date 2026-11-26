@@ -176,7 +176,7 @@ fn the_second_macro_is_reported_when_only_its_copper_fails() {
     let mut observe = |d: &copper_place::planner::PlacementFailureDiagnostic| diagnostics.push(d.clone());
     assert!(generate_placement_candidates_with_diagnostics(&board, &options, None, Some(&mut observe)).is_err());
     assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].failed_reference, "B");
+    assert_eq!(diagnostics[0].failed_reference.as_deref(), Some("B"));
     assert_eq!(
         diagnostics[0]
             .physical_rejection

@@ -532,14 +532,18 @@ promoted, no budget is restarted within an attempt, and no extra seed is added.
 Host-zone overlap and a connected local return via missing its declared host
 plane at the trial pose are also typed candidate rejections. Missing authored
 vias, disconnected private pads, malformed ports and absent plane declarations
-remain hard errors. Macro acceptance runs even without decoupling links.
+remain hard errors. Macro acceptance runs during placement even on boards
+without decoupling links. A pose that fails it is discarded here rather than
+reaching the routing stage.
 
 Unrouted-source/unknown-lock/corridor prechecks, invalid fixed geometry, rigid
 contracts, malformed source and unexpected `PlacementAlgorithmError` failures
 remain fatal. Retry classification does not inspect error text. Retained
 candidates carry an immutable `failed_seed_attempts` statistics tuple with the
 seed, failed reference, accepted count and reason, including failures after a
-successful seed. The report omits this field when empty. When all attempts fail,
+successful seed. The report omits this field when empty. An unattributed
+failure has `failed_reference: null` and an empty `components` list in the error
+record. When all attempts fail,
 the final error retains all bounded reasons and the deepest accepted-count
 message (earliest seed on a tie). Finite attempts never prove infeasibility.
 

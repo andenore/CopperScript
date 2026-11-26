@@ -217,7 +217,7 @@ impl LayoutReport {
                         .map(|f| {
                             object(vec![
                                 ("seed", int(f.seed)),
-                                ("failed_reference", text(&f.failed_reference)),
+                                ("failed_reference", f.failed_reference.as_deref().map_or(Value::Null, text)),
                                 ("accepted_count", int(f.accepted_count)),
                                 ("reason", text(&f.reason)),
                             ])

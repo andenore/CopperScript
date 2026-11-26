@@ -74,9 +74,10 @@ previous timed event. `copper bench` copies the timings into each board's
   Plane-contact selection prefers to preserve sampled surface exits of nearby
   ordinary signal pads. Each stitch pass uses one spatial pad catalog, caches
   bounded exit samples per pin, and checks candidate copper against those
-  samples without rebuilding the clearance index. If no sampled exit can be
-  preserved by a legal contact, the best legal contact is still used. The
-  samples are advisory, so an explicit contact remains pending only when the
+  samples without rebuilding the clearance index. The preference does not
+  sample via fanout, so a pin with only a via exit contributes no witness.
+  If no sampled exit can be preserved by a legal contact, the best legal
+  contact is still used. An explicit contact remains pending only when the
   contact search fails. Native final refill and connectivity checks remain
   authoritative.
 - **Verification.** Exact physical DRC on the explicit copper, then a refill and

@@ -1121,9 +1121,6 @@ fn route(
         let reusing = initial_placement.is_some();
         let mut on_stage = |stage: Stage<'_>| {
             if let Stage::PlacementFailure { board, diagnostic } = stage {
-                if diagnostic.search_succeeded {
-                    return;
-                }
                 if let Some(report) = arguments.path("--report") {
                     match write_placement_failure(Path::new(&report), board, diagnostic) {
                         Ok(artifact) => {

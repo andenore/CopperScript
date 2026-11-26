@@ -25,7 +25,7 @@ use crate::seed::{analytical_place, initial_seed};
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeedFailure {
     pub seed: i64,
-    pub failed_reference: String,
+    pub failed_reference: Option<String>,
     pub accepted_count: i64,
     pub reason: String,
 }
@@ -36,7 +36,8 @@ pub struct SeedFailure {
 #[derive(Clone, Debug)]
 pub struct PlacementFailureDiagnostic {
     pub seed: i64,
-    pub failed_reference: String,
+    /// Absent when the rejection cannot be attributed to a component.
+    pub failed_reference: Option<String>,
     pub accepted: Poses,
     pub proposal: Option<Placement>,
     pub reason: String,
@@ -44,8 +45,6 @@ pub struct PlacementFailureDiagnostic {
     pub physical_rejection: Option<Box<MacroRejection>>,
     /// Compact observation of the failed ordinary local pack; no candidate poses.
     pub bounded_packing: Option<copper_json::Value>,
-    /// True when this discarded seed accompanies a successful search.
-    pub search_succeeded: bool,
 }
 
 pub type PlacementFailureObserver<'a> = &'a mut dyn FnMut(&PlacementFailureDiagnostic);
@@ -255,13 +254,12 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
         {
             diagnostic = Some(PlacementFailureDiagnostic {
                 seed,
-                failed_reference: failure.failed_reference.clone(),
+                failed_reference: Some(failure.failed_reference.clone()),
                 accepted: failure.accepted.clone(),
                 proposal: targets.get(&failure.failed_reference).cloned(),
                 reason: failure.message.clone(),
                 physical_rejection: None,
                 bounded_packing: failure.bounded_packing.clone(),
-                search_succeeded: false,
             });
         }
     };
@@ -279,7 +277,7 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
                     remember(seed, &failure, &continuous);
                     failures.push(SeedFailure {
                         seed,
-                        failed_reference: failure.failed_reference,
+                        failed_reference: Some(failure.failed_reference),
                         accepted_count: failure.accepted.len() as i64,
                         reason: failure.message,
                     });
@@ -301,7 +299,7 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
                 remember(seed, &failure, &continuous);
                 failures.push(SeedFailure {
                     seed,
-                    failed_reference: failure.failed_reference,
+                    failed_reference: Some(failure.failed_reference),
                     accepted_count: failure.accepted.len() as i64,
                     reason: failure.message,
                 });
@@ -334,7 +332,7 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
             DecouplingPlacement::Accepted(poses, moves) => (poses, moves),
             DecouplingPlacement::Rejected(rejection) => {
                 let reason = rejection.message();
-                let reference = rejection.failed_reference().unwrap_or_default().to_owned();
+                let reference = rejection.failed_reference().map(str::to_owned);
                 failures.push(SeedFailure {
                     seed,
                     failed_reference: reference.clone(),
@@ -350,7 +348,6 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
                         reason,
                         physical_rejection: Some(rejection),
                         bounded_packing: None,
-                        search_succeeded: false,
                     });
                 }
                 scene.progress("macro_physical_rejected");
@@ -406,7 +403,8 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
             let attempts: Vec<String> = failures
                 .iter()
                 .map(|f| {
-                    format!("seed {}: {} after {} accepted placements", f.seed, f.failed_reference, f.accepted_count)
+                    let location = f.failed_reference.as_deref().unwrap_or("unattributed failure");
+                    format!("seed {}: {} after {} accepted placements", f.seed, location, f.accepted_count)
                 })
                 .collect();
             message.push_str(&format!("; {}; bounded seed attempts: {}", best.reason, attempts.join("; ")));
@@ -467,15 +465,13 @@ fn rejected_layout_diagnostic(
     }
     Ok(PlacementFailureDiagnostic {
         seed,
-        // Global inventory or rigid/fixed invariants need not identify one
-        // illegal pose. Use a stable location while keeping the rejection explicit.
-        failed_reference: reference.or_else(|| poses.keys().min().cloned()).unwrap_or_default(),
+        // Global inventory or rigid/fixed invariants need not identify one illegal pose.
+        failed_reference: reference,
         accepted: poses.clone(),
         proposal: None,
         reason: format!("complete layout rejected by final placement constraints; {details}"),
         physical_rejection: None,
         bounded_packing: None,
-        search_succeeded: false,
     })
 }
 

@@ -33,13 +33,12 @@ fn failed_geometry_views_natively_and_cannot_be_reused() {
     let packing = copper_json::parse(r#"{"selected_references":["B","A"],"outcome":"no_sampled_witness","passes":1,"final_pass":"coarse","domains":[{"reference":"B","sampled":64,"legal":0}],"empty_reference":"B","search_remaining":null}"#).unwrap();
     let diagnostic = PlacementFailureDiagnostic {
         seed: 1,
-        failed_reference: "B".to_owned(),
+        failed_reference: Some("B".to_owned()),
         accepted: [("A".to_owned(), held)].into_iter().collect::<Poses>(),
         proposal: Some(proposal),
         reason: "cannot legalize component 'B' within the local repair budget".to_owned(),
         physical_rejection: None,
         bounded_packing: Some(packing.clone()),
-        search_succeeded: false,
     };
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("placement-failure-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -98,7 +97,7 @@ fn failed_geometry_views_natively_and_cannot_be_reused() {
 }
 
 #[test]
-fn a_successful_search_cannot_write_an_inspection_failure_artifact() {
+fn stale_cleanup_only_removes_a_generated_failure_artifact() {
     let source = board(
         "accepted-search",
         30.0,
@@ -109,24 +108,17 @@ fn a_successful_search_cannot_write_an_inspection_failure_artifact() {
     );
     let diagnostic = PlacementFailureDiagnostic {
         seed: 1,
-        failed_reference: "A".to_owned(),
+        failed_reference: Some("A".to_owned()),
         accepted: source.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect(),
         proposal: None,
         reason: "discarded physical seed".to_owned(),
         physical_rejection: None,
         bounded_packing: None,
-        search_succeeded: true,
     };
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stale-seed-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let report = directory.join("route-report.json");
-    assert_eq!(
-        write_placement_failure(&report, &source, &diagnostic).err().unwrap().kind(),
-        std::io::ErrorKind::InvalidInput
-    );
-    let mut failed = diagnostic;
-    failed.search_succeeded = false;
-    let artifact = write_placement_failure(&report, &source, &failed).unwrap();
+    let artifact = write_placement_failure(&report, &source, &diagnostic).unwrap();
     let state = directory.join(&artifact.state_filename);
     assert!(remove_stale_placement_failure(&report).unwrap());
     assert!(!state.exists());
@@ -148,13 +140,12 @@ fn complete_rejected_geometry_is_inspectable_but_never_a_checkpoint() {
     );
     let diagnostic = PlacementFailureDiagnostic {
         seed: 0,
-        failed_reference: "B".to_owned(),
+        failed_reference: Some("B".to_owned()),
         accepted: board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect(),
         proposal: None,
         reason: "complete layout rejected by final placement constraints".to_owned(),
         physical_rejection: None,
         bounded_packing: None,
-        search_succeeded: false,
     };
     let directory =
         Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("complete-placement-failure-{}", std::process::id()));
@@ -211,21 +202,22 @@ fn rejected_macro_copper_views_natively_without_acquiring_a_certificate() {
     let findings = copper_drc::run_physical_drc(&trial, copper_drc::Policy::default()).unwrap().findings;
     assert!(findings.iter().any(|f| f.code == "DRC-HOLE-CLEARANCE"));
     let rejection = copper_drc::macros::MacroRejection { board: trial, findings };
+    assert_eq!(rejection.failed_reference(), None, "the rejected copper has no named component owner");
     let diagnostic = PlacementFailureDiagnostic {
         seed: 1,
-        failed_reference: "A".to_owned(),
+        failed_reference: rejection.failed_reference().map(str::to_owned),
         accepted: source.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect(),
         proposal: None,
         reason: rejection.message(),
         physical_rejection: Some(Box::new(rejection)),
         bounded_packing: None,
-        search_succeeded: false,
     };
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("macro-rejection-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let report = directory.join("route-report.json");
     let artifact = write_placement_failure(&report, &source, &diagnostic).unwrap();
     assert_eq!(artifact.metadata["rejected_macro_copper"], Value::Bool(true));
+    assert_eq!(artifact.metadata["failed_reference"], Value::Null);
     assert!(artifact.metadata["note"].as_str().unwrap().contains("every placement seed failed"));
     assert!(!artifact.metadata["physical_findings"].as_array().unwrap().is_empty());
     let error = write_error_record_with_diagnostic(
@@ -238,6 +230,8 @@ fn rejected_macro_copper_views_natively_without_acquiring_a_certificate() {
         Some(&artifact),
     )
     .unwrap();
+    let document = copper_json::parse(&std::fs::read_to_string(&error).unwrap()).unwrap();
+    assert_eq!(document.get("components"), Some(&Value::Array(Vec::new())));
     let mut run = copper_report::issues::load_run(&error.to_string_lossy()).unwrap();
     let scene = run.scene(false).unwrap();
     assert_eq!(scene.tracks.len(), 1);
@@ -267,13 +261,12 @@ fn only_a_successful_command_removes_its_generated_failure_sibling() {
         board("stale-run", 30.0, 30.0, vec![one_pad()], vec![placement("A", "test/one-pad", 5.0, 5.0)], Vec::new());
     let diagnostic = PlacementFailureDiagnostic {
         seed: 0,
-        failed_reference: "A".into(),
+        failed_reference: Some("A".into()),
         accepted: source.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect(),
         proposal: None,
         reason: "prior placement failure".into(),
         physical_rejection: None,
         bounded_packing: None,
-        search_succeeded: false,
     };
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("failure-lifecycle-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

@@ -42,12 +42,6 @@ pub fn write_placement_failure(
     board: &PhysicalBoard,
     diagnostic: &copper_place::planner::PlacementFailureDiagnostic,
 ) -> std::io::Result<PlacementFailureArtifacts> {
-    if diagnostic.search_succeeded {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "successful placement search has no failure artifact",
-        ));
-    }
     let mut shown = diagnostic.physical_rejection.as_ref().map_or_else(|| board.clone(), |r| r.board.clone());
     shown.placements.retain(|pose| diagnostic.accepted.contains_key(&pose.reference));
     for pose in &mut shown.placements {
@@ -80,9 +74,8 @@ pub fn write_placement_failure(
     let mut metadata = Object::from([
         ("stage".to_owned(), Value::from("placement_failure")),
         ("inspection_only".to_owned(), Value::Bool(true)),
-        ("placement_search_succeeded".to_owned(), Value::Bool(diagnostic.search_succeeded)),
         ("seed".to_owned(), Value::Int(diagnostic.seed.into())),
-        ("failed_reference".to_owned(), Value::from(diagnostic.failed_reference.as_str())),
+        ("failed_reference".to_owned(), diagnostic.failed_reference.as_deref().map_or(Value::Null, Value::from)),
         ("accepted_references".to_owned(), strings(diagnostic.accepted.keys().cloned().collect())),
         ("unaccepted_target_references".to_owned(), strings(proposals)),
         ("omitted_references".to_owned(), strings(omitted)),
@@ -343,13 +336,19 @@ pub fn write_error_record_with_diagnostic(
     document.insert("elapsed_seconds".to_owned(), elapsed);
     document.insert("options".to_owned(), Value::Object(args_summary));
     document.insert("note".to_owned(), Value::from("Working record of a failed run; not routing or signoff evidence."));
-    if let Some(diagnostic) =
-        diagnostic.filter(|d| d.metadata.get("placement_search_succeeded") != Some(&Value::Bool(true)))
-    {
+    if let Some(diagnostic) = diagnostic {
         document.insert("diagnostic_state".to_owned(), Value::from(diagnostic.state_filename.as_str()));
         document.insert("placement_failure".to_owned(), Value::Object(diagnostic.metadata.clone()));
         document.insert("note".to_owned(), diagnostic.metadata["note"].clone());
-        document.insert("components".to_owned(), Value::Array(vec![diagnostic.metadata["failed_reference"].clone()]));
+        let components = diagnostic
+            .metadata
+            .get("failed_reference")
+            .and_then(Value::as_str)
+            .filter(|reference| !reference.is_empty())
+            .map(Value::from)
+            .into_iter()
+            .collect();
+        document.insert("components".to_owned(), Value::Array(components));
     }
     let path = error_record_path(report_path);
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {

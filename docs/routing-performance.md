@@ -44,6 +44,13 @@ times did not increase. One warm repeat passed the same native benchmark
 comparison (5.4 s and 93.2 s) and reproduced both patched PCB files byte for
 byte. The cause of the startup variation is unconfirmed.
 
+A diagnostic-only follow-up (sources `dc6e34e1e947`) reproduced this pattern on
+nRF52. Its first wall time was 69.2 s, with a 2.287 s recorded pipeline. The
+same executable completed a warm repeat in 3.0 s with a byte-identical PCB and
+passed the 4.7 s pre-lightgun benchmark comparison. Both demo outputs also
+matched the previous branch byte for byte. The first-run delay is outside
+the recorded phases; its cause remains open.
+
 ## Generic fixes for the CopperProbe open connections (2026-10-25)
 
 Each cause in the section below got a generic change on the unified path;
