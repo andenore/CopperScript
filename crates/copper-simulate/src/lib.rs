@@ -23,6 +23,7 @@ pub mod check_model;
 pub mod evaluate;
 pub mod evidence;
 pub mod format;
+pub mod layout;
 pub mod lower;
 pub mod noise;
 pub mod parallel;
@@ -43,7 +44,8 @@ use copper_lang::compiler::Design;
 pub use copper_lang::simulation::ModelChoice;
 
 pub use copper_sim::timing;
-pub use run::{BenchRun, Status, run_bench};
+pub use layout::{LayoutInput, LayoutParasitics};
+pub use run::{BenchRun, Status, run_bench, run_bench_with_layout};
 
 /// Why benches could not be run at all.
 #[derive(Debug)]
@@ -64,6 +66,16 @@ impl std::fmt::Display for SimulateError {
 }
 
 impl std::error::Error for SimulateError {}
+
+/// Whether any of the board's benches (or the one named `only`) says `use layout;`; `false` when they do not compile.
+pub fn uses_layout(board_file: &Path, design: &Design, only: Option<&str>) -> bool {
+    load_benches(board_file, design).is_ok_and(|benches| {
+        benches
+            .iter()
+            .filter(|bench| only.is_none_or(|name| bench.name == name || bench.bench_name() == name))
+            .any(|bench| bench.layout.is_some())
+    })
+}
 
 /// Run the benches of the board in `board_file` (already compiled to
 /// `design`): all of them, or the one named `only`.
@@ -90,6 +102,29 @@ pub fn simulate_matching(
     only: Option<&str>,
     keep: &dyn Fn(&copper_lang::bench::Bench) -> bool,
     choice: ModelChoice,
+) -> Result<Vec<BenchRun>, SimulateError> {
+    simulate_matching_with_layout(board_file, design, only, keep, choice, &LayoutInput::Absent)
+}
+
+/// The benches of the board, with `layout` for those that say `use layout;` (`copper sim --layout RUN`).
+pub fn simulate_with_layout(
+    board_file: &Path,
+    design: &Design,
+    only: Option<&str>,
+    choice: ModelChoice,
+    layout: &LayoutInput,
+) -> Result<Vec<BenchRun>, SimulateError> {
+    simulate_matching_with_layout(board_file, design, only, &|_| true, choice, layout)
+}
+
+/// [`simulate_matching`] with `layout` for the benches that say `use layout;`.
+pub fn simulate_matching_with_layout(
+    board_file: &Path,
+    design: &Design,
+    only: Option<&str>,
+    keep: &dyn Fn(&copper_lang::bench::Bench) -> bool,
+    choice: ModelChoice,
+    layout: &LayoutInput,
 ) -> Result<Vec<BenchRun>, SimulateError> {
     let mut benches = load_benches(board_file, design).map_err(SimulateError::Compile)?;
     let project = copper_lang::paths::resolve(board_file).parent().map(|dir| dir.to_string_lossy().into_owned());
@@ -125,7 +160,11 @@ pub fn simulate_matching(
             names.join(", ")
         )));
     }
-    Ok(selected.into_iter().filter(|bench| keep(bench)).map(|bench| run_bench(design, bench)).collect())
+    Ok(selected
+        .into_iter()
+        .filter(|bench| keep(bench))
+        .map(|bench| run_bench_with_layout(design, bench, layout))
+        .collect())
 }
 
 /// True when any measure fails or any bench could not be solved.

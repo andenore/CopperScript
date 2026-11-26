@@ -23,7 +23,7 @@ pub const CODE: &str = "CMP126";
 
 /// Every parameter an antenna declaration accepts (besides the generic
 /// `id`, `mode`, `consumers` and `verifier`).
-pub const PARAMETERS: [&str; 17] = [
+pub const PARAMETERS: [&str; 19] = [
     "name",
     "region",
     "polygon_mm",
@@ -38,6 +38,8 @@ pub const PARAMETERS: [&str; 17] = [
     "track_width",
     "keepout_margin",
     "max_return_loss_db",
+    "sensitivity_dbm",
+    "desense_margin_db",
     "geometry",
     "tuned_for",
     "short",
@@ -212,6 +214,18 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
         && !matches!(parameters.get("max_return_loss_db"), Some(ParameterValue::Int(_) | ParameterValue::Float(_)))
     {
         return fail("antenna max_return_loss_db must be a number".to_owned());
+    }
+    for name in ["sensitivity_dbm", "desense_margin_db"] {
+        if parameters.contains_key(name)
+            && !matches!(parameters.get(name), Some(ParameterValue::Int(_) | ParameterValue::Float(_)))
+        {
+            return fail(format!("antenna {name} must be a number"));
+        }
+    }
+    if let Some(ParameterValue::Int(_) | ParameterValue::Float(_)) = parameters.get("desense_margin_db")
+        && !parameters.contains_key("sensitivity_dbm")
+    {
+        return fail("antenna desense_margin_db needs sensitivity_dbm".to_owned());
     }
     Ok(())
 }

@@ -787,6 +787,10 @@ pub struct Supply {
     pub current_max: Option<Quantity>,
     /// The budget for the rail's peak current (`current_peak_max`); `current_max` without it.
     pub current_peak_max: Option<Quantity>,
+    /// The rail's expected mean load (`load_current`): the board's estimate of what its consumers draw in normal
+    /// operation. A switching converter whose output this supply is takes it as its operating point when the
+    /// converter's component declares none (EMI screening input, never a budget or a pass).
+    pub load_current: Option<Quantity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

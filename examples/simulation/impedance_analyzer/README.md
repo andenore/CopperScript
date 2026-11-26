@@ -163,7 +163,7 @@ names.
 | Drive buffer | `C_IN` 1 uF, `R_INB` 10 kohm (16 Hz), `U_DRV` ADA4807 follower; `R_SN_DRV` 33 ohm with `C_SN_DRV` 10 nF (C0G) from its output to ground | The pump's R1 must see a source far below 0.01 % of 10 kohm, so the follower has no series resistor. The snubber damps its closed-loop peak instead, which the vendor model needs (SPEC.md, "Vendor models"); it loads the output with 37 ohm at 1 MHz, about 4 mA peak at the nominal drive. |
 | Improved Howland pump | `U_PMP`, `U_FBB` ADA4807; `RN_HOW` LT5400-1 (four 10 kohm, 0.0125 % matched); `R_SET` 10 kohm 0.1 %; `C_CMP_N`, `C_CMP_P` 2.2 pF across R4 and R2; `C_NDC` 4.7 uF in series with R3 | `I = V(DRV_BUF) / R_SET` = 15 uA peak. Equal capacitors across R4 and R2 keep the bridge balanced. `C_NDC` gives the pump unity DC gain, so offsets cannot walk the regulated node to a rail (see [DC path](#dc-path)). |
 | Blocking and HC guard | `C_BLK` 100 nF (C0G or film); `U_FBB`'s output drives `GUARD_HC` through `R_GHC` 49.9 ohm | No DC through the soil. The guard driver is the pump's own feedback buffer; 49.9 ohm isolates its 120 pF guard load (with 0 ohm the guard tracking peaks to 376 %). |
-| Sense buffers | `C_CHP`, `C_CLP` 4.7 nF; `R_BHP`, `R_BLP` 33 Mohm (0.15 s, 1 Hz); `U_BHP`, `U_BLP` ADA4817 followers; each drives its guard through 49.9 ohm | FET input, lowest input capacitance on the board (1.3 pF). This capacitance, not the guard, limits dry-soil accuracy (see [Results](#results)). |
+| Sense buffers | `C_CHP`, `C_CLP` 4.7 nF; `R_BHP`, `R_BLP` 33 Mohm (0.15 s, 1 Hz); `U_BHP`, `U_BLP` ADA4817 followers, each driving the receiver input and its guard (49.9 ohm) through 33 ohm inside its loop (`R_IHP`, `R_ILP`): -IN from the load side through 100 ohm (`R_FHP`, `R_FLP`) and from the output pin (FB) through 4.7 pF C0G (`C_FHP`, `C_FLP`) | FET input, lowest input capacitance on the board (1.3 pF). This capacitance, not the guard, limits dry-soil accuracy (see [Results](#results)). The isolation is the data sheet's circuit for a capacitive load; it takes the vendor model's margin from 41.5 to 71.8 degrees and its peaking from 1.52 to 1.06 (SPEC.md, "Vendor models"), at 1.3 nV/rtHz more noise per buffer and a closed loop of 331 MHz instead of 776 MHz. |
 | Differential receiver | `U_DIF` AD8130, gain 1 (FB to OUT, REF to ground) | High input impedance on both inputs and 80 dB minimum CMRR at 2 MHz. |
 | ADC drivers | `U_B1` gain 1, `U_G10` gain 10.09 (9.09 k / 1 k, `C_G1G` 22 uF for unity DC gain), `U_G100` another gain 10.09 on `V_10`; `C_G1F`, `C_G2F` 2.2 pF (C0G) across each 9.09 k; all ADA4807 on 0 V / `V3V3_ANA` (the switched 3.3 V); inputs AC-coupled with 1 uF and biased at `V_MID` through 47 kohm (3.4 Hz), 1 kohm series into each input; `R_SN_B1` 33 ohm with `C_SN_B1` 10 nF (C0G) from `U_B1`'s output to ground | Powered from 0 V and at most the MCU's 3.3 V, no output can leave the ADC's range in any condition, saturation included. Each ADC input has its own channel; no analog switch. The gain-1 follower's snubber damps its closed-loop peak for the vendor model, as the drive buffer's does. The 2.2 pF give each gain-10 stage's loop phase lead (8 MHz with 9.09 k), for the margin the vendor model needs (SPEC.md, "Vendor models"); they also make 8 MHz the stage's closed-loop pole: 5.8 MHz to -3 dB, 98.5 % and -9.3 degrees at 1 MHz (an untracked scratch bench, `ChannelCosts`). |
 | Transimpedance amplifier | `U_TIA` ADA4807 on 0 V / `V3V3_ANA`, `R_TIA` 20 kohm 0.1 %, `C_TIA` 10 pF (`C_FB_TIA`); non-inverting input at `V_MID` | LC sits at `V_MID` (no DC current: every other electrode is capacitor-coupled). 0.3 V peak at 15 uA. 10 pF gives a 0.8 MHz pole and no peaking against 21 pF at LC; it was 1.5 pF (5.3 MHz) until the vendor model's margin needed more (SPEC.md, "Vendor models"). The cost is at 1 MHz: the stage passes 62.5 % with 52 degrees of lag, and with its anti-alias RC the channel 61.9 % with 60.7 degrees (1.5 pF: 98.6 % and 19.7 degrees; `ChannelCosts`), so `I_MON` carries at most 0.19 V peak at 1 MHz instead of 0.30 V (`MeasurementNoise`). Calibration removes the response, not the lost signal. |
@@ -371,6 +371,7 @@ the gain-1 channel's 32.8 degrees).
 | `ResistorMatching` | AC, Monte Carlo | Spread from component tolerances; what calibration removes |
 | `ResistorWorstCase` | AC, worst case | The same at the sensitivity corners |
 | `Startup` | transient | Rails coming up from models of the regulators, coupling networks charging, input ranges, settling |
+| `StartupPowered` | transient | The same from the instant VP reaches 2.5 V (8.2 ms after ANA_EN), where the vendor models are defined |
 | `Distortion` | transient, periodic steady state | Drive-current harmonics and spectrum, clipping and slew headroom |
 | `SupplyCurrent` | operating point, transient | The current per rail, idle and driving 1 MHz ([Supply current](#supply-current)) |
 | `PowerSide` | operating point | The whole board at the `MEASURE` state, DC: every rail with all its loads (the REF2033 on VP and V_MID included), and the regulators', switches', DDS's and MCU's pins at their DC levels, with the DDS lines low and high ([Supply current](#supply-current)) |
@@ -801,9 +802,9 @@ degraded range the common mode costs at most 0.1 % below 100 kHz (7 times
 
 ### LoopPeaking: pass
 
-Every loop at most 6.3 % (0.53 dB) above its in-band gain from 1 kHz to 1 GHz:
-drive buffer 1.8 %, pump current 5.3 %, sense buffer 6.3 %, guard 0 %,
-receiver 3.2 %, gain-1 driver 1.8 %, gain-10 stages 0 %, transimpedance 0 %.
+Every loop at most 6.6 % (0.56 dB) above its in-band gain from 1 kHz to 1 GHz:
+drive buffer 2.2 %, pump current 5.1 %, sense buffer 6.6 %, guard 0 %,
+receiver 4.4 %, gain-1 driver 2.2 %, gain-10 stages 0 %, transimpedance 0 %.
 
 ### LoopStability: pass (every loop at least 45 degrees; no pole in the right half-plane)
 
@@ -816,7 +817,7 @@ attached as in `LoopPeaking`:
 | Pump (`U_PMP.OUT`) | 78.6 deg | 37.7 MHz | 50.7 dB |
 | Pump feedback buffer and HC guard (`U_FBB.OUT`) | 72.4 deg | 150 MHz | 39.2 dB |
 | Drive buffer (`U_DRV.OUT`) | 61.6 deg | 159 MHz | |
-| HP sense buffer (`U_BHP.OUT`) | 58.9 deg | 299 MHz | |
+| HP sense buffer (`U_BHP.OUT`) | 76.6 deg | 207 MHz | |
 | Receiver (`U_DIF.OUT`) | 61.2 deg | 227 MHz | |
 | Gain-1 driver (`U_B1.OUT`) | 49.1 deg | 117 MHz | |
 | Gain-10 stage, gain-100 stage | 91.6 deg, 91.7 deg | 64.4 MHz | |
@@ -833,9 +834,8 @@ its own closed loop, `T / (1 + T)`, peaks 23 % at 135 MHz, but its input
 input capacitance, so `V(V_1) / V(B1_IN)` peaks only 1.8 %; from the source
 side, `V(V_1) / V(B1_C)`, it is 6 % (an ac sweep by hand). For the followers
 the closed loop and `LoopPeaking` agree: drive buffer 1.7 % and 1.8 %,
-receiver 3.1 % and 3.2 %. The HP sense buffer's 6.3 % in `LoopPeaking` is
-the guard's positive feedback on `SNS_HP`, outside the buffer's own loop
-(1.9 %).
+receiver 3.1 % and 3.2 %. The HP sense buffer's 6.6 % in `LoopPeaking` is
+the guard's positive feedback on `SNS_HP`, outside the buffer's own loop.
 
 ### GuardStability: pass (electrodes in air: no pole in the right half-plane)
 
@@ -1196,9 +1196,10 @@ control shortens some of them (the 1.3 kohm m runs).
   the rated range is not a combined worst case (SPEC.md, "Usable range").
 - The benches run built-in macro models, fitted to data-sheet tables and
   figures; the amplifiers' vendor models run with `copper sim --models vendor`
-  (SPEC.md, "Vendor models"), where the sense buffer's loop and
-  `GuardStability.poles` (electrodes in air) still fail and `Startup` and
-  `Distortion` do not finish. CMRR is a single
+  (SPEC.md, "Vendor models"), where every limit passes; `Startup` cannot
+  start there with the rails at 0 V, so `StartupPowered` starts at VP = 2.5 V,
+  and the sense buffers' input common-mode range (+VS - 2.8 V), which the
+  macro model does not have, shapes the 0.65 V `Distortion` steps. CMRR is a single
   corner fit; the AD8130's feedback pair has no input model; the ADA4807 has
   no output resistance, so the default run does not show what the gain-1
   driver's 100 ohm and 1 nF change (its margin is 49.2 degrees with either

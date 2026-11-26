@@ -72,7 +72,7 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the binary
-        run: cargo build --release --locked -p copper
+        run: cargo build --release --locked -p copperscript
       - name: Populate the package cache
         # Locked online checks fetch every board's pinned packages into its
         # .copper-cache without changing copper.lock, and a locked online
@@ -85,7 +85,8 @@ jobs:
             target/release/copper audit-footprints "$board" --locked > /dev/null || true
           done
       - name: Test
-        run: cargo test --workspace --locked
+        # Every failing test binary is reported, not only the first.
+        run: cargo test --workspace --locked --no-fail-fast
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -195,7 +196,7 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Build the binary
-        run: cargo build --release --locked -p copper
+        run: cargo build --release --locked -p copperscript
       - name: Restore cached KiCad packages
         id: kicad-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

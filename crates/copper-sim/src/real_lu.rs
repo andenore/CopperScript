@@ -63,6 +63,7 @@ impl RealLu {
             }
         }
         let mut perm: Vec<usize> = (0..n).collect();
+        let mut nonzero: Vec<(usize, f64)> = Vec::with_capacity(n);
         for col in 0..n {
             let mut piv = col;
             let mut best = lu[col * n + col].abs();
@@ -85,6 +86,11 @@ impl RealLu {
             let d = lu[col * n + col];
             let (upper, lower) = lu.split_at_mut((col + 1) * n);
             let pivot_row = &upper[col * n + col + 1..col * n + n];
+            // The pivot row's nonzero entries: a circuit matrix stays sparse
+            // through much of its elimination, and an update by a zero entry
+            // leaves the element as it is (but for the sign of a zero).
+            nonzero.clear();
+            nonzero.extend(pivot_row.iter().enumerate().filter(|(_, u)| **u != 0.0).map(|(j, u)| (j, *u)));
             for r in 0..n - col - 1 {
                 let row = &mut lower[r * n..(r + 1) * n];
                 let f = row[col] / d;
@@ -92,8 +98,9 @@ impl RealLu {
                 if f == 0.0 {
                     continue;
                 }
-                for (x, u) in row[col + 1..].iter_mut().zip(pivot_row) {
-                    *x -= f * u;
+                let tail = &mut row[col + 1..];
+                for &(j, u) in &nonzero {
+                    tail[j] -= f * u;
                 }
             }
         }
@@ -158,5 +165,59 @@ mod tests {
         }
         assert_eq!(RealLu::factor(vec![1.0, -1.0, -1.0, 1.0], 2).unwrap_err(), LuError::Singular(1));
         assert_eq!(RealLu::factor(vec![1.0, 0.0, 0.0, 0.0], 2).unwrap_err(), LuError::EmptyRow(1));
+    }
+
+    /// The elimination with every entry of the pivot row, as it was before
+    /// zero entries were skipped.
+    fn eliminate_every_entry(mut lu: Vec<f64>, n: usize) -> Vec<f64> {
+        for col in 0..n {
+            let mut piv = col;
+            let mut best = lu[col * n + col].abs();
+            for r in col + 1..n {
+                if lu[r * n + col].abs() > best {
+                    (piv, best) = (r, lu[r * n + col].abs());
+                }
+            }
+            if piv != col {
+                for c in 0..n {
+                    lu.swap(col * n + c, piv * n + c);
+                }
+            }
+            let d = lu[col * n + col];
+            for r in col + 1..n {
+                let f = lu[r * n + col] / d;
+                lu[r * n + col] = f;
+                if f == 0.0 {
+                    continue;
+                }
+                for c in col + 1..n {
+                    let u = lu[col * n + c];
+                    lu[r * n + c] -= f * u;
+                }
+            }
+        }
+        lu
+    }
+
+    #[test]
+    fn skipping_the_pivot_rows_zeros_changes_no_factor() {
+        // Sparse circuit-like matrices (a diagonal, a few entries a row,
+        // values over many decades): the factors equal those of the
+        // elimination with every entry, value for value.
+        let mut rng = crate::rng::Rng::new(11);
+        for n in [5, 17, 40] {
+            let mut a = vec![0.0; n * n];
+            for r in 0..n {
+                a[r * n + r] = 1.0 + rng.uniform();
+                for _ in 0..3 {
+                    let c = (rng.uniform() * n as f64) as usize % n;
+                    a[r * n + c] += (rng.uniform() - 0.5) * 10f64.powf(rng.uniform() * 12.0 - 6.0);
+                }
+            }
+            let lu = RealLu::factor(a, n).unwrap();
+            let scaled: Vec<f64> = (0..n * n).map(|k| lu.a[k] * lu.row_scale[k / n] * lu.col_scale[k % n]).collect();
+            let want = eliminate_every_entry(scaled, n);
+            assert!(lu.lu.iter().zip(&want).all(|(x, y)| x == y), "n = {n}");
+        }
     }
 }

@@ -938,6 +938,7 @@ fn zone(value: &StateValue) -> Result<CopperZone> {
         "fill_mode",
         "reserve_routing",
         "allow_same_net_hard_macro_overlap",
+        "stitch_pitch_nm",
     ])?;
     let (outer, holes) = polygon_with_holes(fields.required("outline")?)?;
     let (mut thermal_gap_nm, mut thermal_spoke_width_nm) = (300_000, 300_000);
@@ -982,6 +983,7 @@ fn zone(value: &StateValue) -> Result<CopperZone> {
         minimum_island_area_nm2: optional_integer(fields.get("minimum_island_area_nm2"))?,
         reserve_routing: flag("reserve_routing")?,
         allow_same_net_hard_macro_overlap: flag("allow_same_net_hard_macro_overlap")?,
+        stitch_pitch_nm: optional_integer(fields.get("stitch_pitch_nm"))?,
     };
     zone.validate()?;
     Ok(zone)

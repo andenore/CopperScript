@@ -677,7 +677,9 @@ fn ring_of(s: &[Complex64], c: &[Complex64], rel: f64) -> Vec<Complex64> {
     let big = c.iter().map(|c| c.norm()).fold(0.0_f64, f64::max);
     let mut found: Option<(f64, f64)> = None;
     for (s, c) in s.iter().zip(c) {
-        if c.norm() < rel * big || s.im <= 0.0 {
+        // A real pole (a decaying start) is no ring: root finding returns it with an imaginary part of rounding
+        // size (1e-30 of its magnitude) whose sign is arbitrary, and taken as a ring it reads as 1e-22 Hz.
+        if c.norm() < rel * big || s.im <= 1e-9 * s.norm() {
             continue;
         }
         let f = s.im / (2.0 * std::f64::consts::PI);

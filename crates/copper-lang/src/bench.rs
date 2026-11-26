@@ -522,6 +522,9 @@ pub struct Bench {
     /// Which of a part's macro and vendor models run (`copper sim --models`);
     /// set by the runner, [`simulation::ModelChoice::Default`] when compiled.
     pub model_choice: simulation::ModelChoice,
+    /// Where the bench (or a fixture it uses) says `use layout;`: the bench then runs once without and once with
+    /// the routed board's parasitics (`copper sim --layout RUN`), and refuses to run without a routed board.
+    pub layout: Option<Location>,
 }
 
 impl Bench {
@@ -2555,7 +2558,8 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
             | BenchStatement::Analysis(_)
             | BenchStatement::Reference(_)
             | BenchStatement::Variation(_)
-            | BenchStatement::InitialCondition(_) => {}
+            | BenchStatement::InitialCondition(_)
+            | BenchStatement::UseLayout(_) => {}
         }
     }
     // A loop analysis that plots nothing shows its Bode plot.
@@ -2588,6 +2592,23 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
     };
     let variation = crate::tolerance::variation(document, &lookup)?;
 
+    // `use layout;`: the routed board is the board's, so a bench of a module on its own cannot use it.
+    let layout = document.declarations.iter().find_map(|declaration| match declaration {
+        Declaration::Bench(BenchStatement::UseLayout(item)) => Some(item.location.clone()),
+        _ => None,
+    });
+    if let (Some(location), Some(module)) = (&layout, &module) {
+        return Err(error(
+            "SIM120",
+            format!(
+                "use layout inserts the parasitics of the routed board, whose nets are the board's; bench {} simulates module {} on its own: write the bench for the board {}",
+                repr(&document.name),
+                repr(module),
+                repr(&board.name)
+            ),
+            location,
+        ));
+    }
     // Module parts are not in the board's library: keep the ones the target's components use.
     let target_library = view
         .library
@@ -2623,6 +2644,7 @@ fn compile_merged(document: &Document, design: &Design) -> Result<Bench> {
         fixtures: target.fixtures.clone(),
         section: None,
         model_choice: simulation::ModelChoice::Default,
+        layout,
     })
 }
 

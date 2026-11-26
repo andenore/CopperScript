@@ -677,14 +677,26 @@ fn plot_summary(input: &SummaryInput, path: &str) -> Result<String, String> {
             // No extraction: no picture and no placeholder.
             missing("")
         } else {
+            // A buck cell's loop is keyed by its controller; a buck-boost cell's loops by `<controller>:<kind>`.
+            let loop_prefix = format!("{cell}:");
+            let of_cell = |name: &str| name == cell || name.starts_with(&loop_prefix);
             let drawn = input
                 .extracted
                 .iter()
-                .find(|(name, _)| name == cell)
-                .and_then(|(name, result)| crate::emi_current::panel(name, result));
+                .filter(|(name, _)| of_cell(name))
+                .find_map(|(name, result)| crate::emi_current::panel(name, result));
             match drawn {
                 Some(panel) => Thumb::Picture(copper_report::emi_current::current_thumbnail(&panel, i)),
-                None => Thumb::Missing(format!("no current density: no result (copper explain EMI-EXTRACT:{cell})")),
+                None => {
+                    let check = input
+                        .report
+                        .coverage
+                        .iter()
+                        .filter_map(|c| c.check.strip_prefix("EMI-EXTRACT:"))
+                        .find(|name| of_cell(name))
+                        .unwrap_or(cell);
+                    Thumb::Missing(format!("no current density: no result (copper explain EMI-EXTRACT:{check})"))
+                }
             }
         };
         thumbnails.push(CellThumbnails {
@@ -772,10 +784,24 @@ fn write_section(run: &str, section: copper_json::Value) -> Result<String, Strin
     Ok(format!("emi section written to {} ({summary}; sha256 {})", written.report.display(), written.digest))
 }
 
+/// The state file [`routed_board`] reads for `run`, for messages; `None` when there is none.
+pub(crate) fn routed_file(run: &str) -> Option<String> {
+    let path = Path::new(run);
+    let file = if path.is_file() {
+        Some(path.to_path_buf())
+    } else {
+        ["final-board.state.json", "checkpoint/final-board.state.json"]
+            .iter()
+            .map(|name| path.join(name))
+            .find(|candidate| candidate.is_file())
+    };
+    file.map(|file| copper_lang::paths::display(&file))
+}
+
 /// The routed `PhysicalBoard` of a run: a `copperscript.state/v1` file holding one (as written by
 /// `route-board --checkpoint-dir DIR` to `DIR/final-board.state.json`), or a directory holding
 /// `final-board.state.json` itself or in `checkpoint/`.
-fn routed_board(run: &str) -> Result<copper_pcb::board::PhysicalBoard, String> {
+pub(crate) fn routed_board(run: &str) -> Result<copper_pcb::board::PhysicalBoard, String> {
     let path = Path::new(run);
     let file = if path.is_file() {
         path.to_path_buf()
@@ -797,7 +823,7 @@ fn routed_board(run: &str) -> Result<copper_pcb::board::PhysicalBoard, String> {
 }
 
 /// Placement references of `board` that are no component of the design, joined; `None` when all match.
-fn unknown_placements(
+pub(crate) fn unknown_placements(
     board: &copper_pcb::board::PhysicalBoard,
     view: &copper_lang::model::FlatElectricalView,
 ) -> Option<String> {
@@ -817,7 +843,7 @@ fn unknown_placements(
 /// widened over the footprint's internal pad groups. Net names go through the design's alias table
 /// on both sides. Pads the design leaves unconnected only differ when the checkpoint connects them,
 /// and components the checkpoint does not place are skipped (`unknown_placements` owns those).
-fn net_mismatches(
+pub(crate) fn net_mismatches(
     board: &copper_pcb::board::PhysicalBoard,
     view: &copper_lang::model::FlatElectricalView,
 ) -> Option<String> {

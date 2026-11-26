@@ -1328,7 +1328,7 @@ hashes and exit status). See [Make builds](make-builds.md).
 For a function-level profile, run the release binary under a native sampling
 profiler, for example `perf record -g target/release/copper route-board ...`
 on Linux or Windows Performance Recorder on Windows. Build with
-`CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release -p copper` for
+`CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release -p copperscript` for
 symbols. The former `cProfile` instrumentation, its profiling wrapper and the
 `routing_benchmark summarize`/`compare` commands were removed with the Python
 implementation.

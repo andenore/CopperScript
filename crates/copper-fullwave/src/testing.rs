@@ -121,6 +121,7 @@ pub fn zone(net: &str, layers: &[CopperLayer], rect: [i64; 4]) -> CopperZone {
         minimum_island_area_nm2: None,
         reserve_routing: false,
         allow_same_net_hard_macro_overlap: false,
+        stitch_pitch_nm: None,
     }
 }
 

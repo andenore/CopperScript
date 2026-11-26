@@ -2551,6 +2551,26 @@ fn a_declared_operating_point_is_the_headline_and_the_current_limit_the_secondar
     assert!(radiated(&report) < radiated(&plain_report) - 1.0, "a 2 A mean is below the 4.5 A limit");
 }
 
+#[test]
+fn a_load_current_on_the_output_supply_gives_the_same_operating_point_as_one_on_the_component() {
+    let on_component = with_load("load-component", "2A", None);
+    let on_supply = run(
+        "load-supply",
+        &[(
+            "supply VOUT { net = VOUT; voltage = 5V; external = true; }",
+            "supply VOUT { net = VOUT; voltage = 5V; external = true; load_current = 2A; }",
+        )],
+    );
+    let (a, b) = (conducted(&on_component), conducted(&on_supply));
+    assert_eq!(text(b, "scenario"), "declared_operating_point");
+    assert_eq!(operating_point(b).get("load_current_source").and_then(Value::as_str), Some("supply VOUT"));
+    assert_eq!(operating_point(a).get("load_current_source").and_then(Value::as_str), Some("component U1"));
+    for (ra, rb) in rows_of(a).iter().zip(rows_of(b)) {
+        assert_eq!(ra.get("total_dbuv"), rb.get("total_dbuv"));
+    }
+    assert!(text_lines(b).iter().any(|l| l.contains("declared on supply VOUT")), "{:?}", text_lines(b));
+}
+
 /// The Fourier line `n` of the ramp-on-pedestal buck input current with finite edges, by a direct numerical
 /// transform of the sampled waveform (written here: no code of `copper_emi::harmonic` is used). `ramp` is the
 /// 0-100 % duration of both current edges, `valley` and `peak` the ramp's values at the 50 % points of the edges.

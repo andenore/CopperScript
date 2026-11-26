@@ -143,6 +143,44 @@ impl Solution {
     }
 }
 
+/// `Ok` when a reference run's analysis axis is the bench's, point for point
+/// (within 1e-9 relative): its samples are then the bench's samples' peers.
+/// Else `SIM121`, naming the first point that differs: a reference cannot
+/// change the analysis axis.
+fn same_axis(name: &str, bench: &Solution, reference: &Solution) -> Result<(), String> {
+    let (ours, theirs) = (bench.axis(), reference.axis());
+    let text = |x: f64| match bench {
+        Solution::Ac(_) | Solution::Noise(_) | Solution::Loop(_) => crate::format::quantity_text(
+            x,
+            copper_lang::expression::Units::of(copper_units::Dimension::Frequency),
+            4,
+            false,
+        ),
+        Solution::Tran(_) => {
+            crate::format::quantity_text(x, copper_lang::expression::Units::of(copper_units::Dimension::Time), 4, false)
+        }
+        _ => crate::format::significant(x, 4),
+    };
+    let tail = "a reference cannot change the analysis axis (a param it sets may not decide the analysis's points, and a transient run's time steps must come out the same)";
+    if ours.len() != theirs.len() {
+        return Err(format!(
+            "SIM121: reference {name} has {} points on the analysis axis, the bench {}; {tail}",
+            theirs.len(),
+            ours.len()
+        ));
+    }
+    match ours.iter().zip(theirs).position(|(a, b)| (a - b).abs() > 1e-9 * a.abs().max(b.abs())) {
+        None => Ok(()),
+        Some(k) => Err(format!(
+            "SIM121: reference {name} is solved at other points of the analysis axis than the bench: its point {} of {} is at {}, the bench's at {}; {tail}",
+            k + 1,
+            ours.len(),
+            text(theirs[k]),
+            text(ours[k])
+        )),
+    }
+}
+
 /// A value: one sample (scalar) or one per axis point (swept).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Value {
@@ -357,12 +395,8 @@ impl<'a> Evaluator<'a> {
                 };
                 let run = self.references.get(name).ok_or_else(|| format!("reference {name} was not run"))?;
                 let value = run.eval(&arguments[0])?;
-                if value.samples.len() != self.solution.points() && value.swept {
-                    return Err(format!(
-                        "reference {name} has {} points on the analysis axis, the bench {}; a reference cannot change the analysis",
-                        value.samples.len(),
-                        self.solution.points()
-                    ));
+                if value.swept {
+                    same_axis(name, &self.solution, &run.solution)?;
                 }
                 Ok(value)
             }

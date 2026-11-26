@@ -117,6 +117,9 @@ const ABSTOL: f64 = 1e-12;
 /// limit instead of failing ([`Solver::newton`]). An iteration that meets the
 /// full test earlier is unaffected.
 const STALLED_ITERATIONS: usize = 4;
+/// How many times its rounding noise an unknown may still move by in the
+/// last iterations and count as settled ([`Solver::newton`]).
+const NOISE_SETTLE: f64 = 8.0;
 /// The relative tolerance of a junction's current against its linearisation
 /// at convergence: SPICE's default `RELTOL`. A junction whose voltage meets
 /// the voltage tolerance meets it too, unless its `n V_T` is far below that
@@ -956,6 +959,10 @@ pub(crate) struct Solver {
     /// The fixed stamps of the last solve's matrix ([`Part::Linear`]) and what they depend on.
     fixed: Option<(FixedKey, SparseMatrix<f64>)>,
     cache: Option<Factors>,
+    /// Linearise the smooth controls ([`crate::behavioral::Limit::Window`],
+    /// PSpice's smooth switch) at the iterate itself, as SPICE does, instead
+    /// of walking them through their window ([`Aid::Unwindowed`]).
+    pub(crate) free_windows: bool,
     pub factorizations: usize,
     pub iterations: usize,
 }
@@ -1147,7 +1154,12 @@ impl Solver {
                 for (j, (control, limit)) in law.controls.iter().zip(&law.limits).enumerate() {
                     if let Control::Voltage(p, q) = *control {
                         let v = m.v(&x, p) - m.v(&x, q);
-                        junction[base + j] = limit.apply(v, junction[base + j]);
+                        junction[base + j] =
+                            if self.free_windows && matches!(limit, crate::behavioral::Limit::Window { .. }) {
+                                v
+                            } else {
+                                limit.apply(v, junction[base + j])
+                            };
                     }
                 }
             }
@@ -1184,6 +1196,25 @@ impl Solver {
                     }
                 }
             }
+            // In the last iterations before the limit, what is left may be
+            // the rounding of the solve itself: a node of a high-gain stage
+            // (an amplifier model's internal gain node, 250 ohm behind a 1 S
+            // transconductance driven by the input error) is fixed only to
+            // that gain times the rounding of the voltages it amplifies. An
+            // unknown, or a junction voltage, that moves by no more than
+            // [`NOISE_SETTLE`] times its rounding noise counts as settled.
+            let noise = (iteration + STALLED_ITERATIONS > max_iterations).then(|| self.rounding_noise(&x_new));
+            if let Some(noise) = &noise
+                && !settled
+            {
+                settled = (0..n).all(|k| {
+                    let node = matches!(m.layout.unknowns[k], Unknown::Node(_));
+                    !node || last_change[k] <= 1.0 || (x_new[k] - x[k]).abs() <= NOISE_SETTLE * noise[k]
+                });
+                if settled {
+                    unconverged_branches.retain(|&k| (x_new[k] - x[k]).abs() > NOISE_SETTLE * noise[k]);
+                }
+            }
             if settled && !unconverged_branches.is_empty() {
                 let currents = self.branch_scales(m, &rhs, &x_new);
                 settled =
@@ -1198,7 +1229,12 @@ impl Solver {
                     || !junction_current_converged(params, v, lin)
                 {
                     converged = false;
-                    junction_off.push(((v - lin).abs(), d));
+                    let within = noise.as_ref().is_some_and(|noise| {
+                        (v - lin).abs() <= NOISE_SETTLE * (m.v(noise, *anode) + m.v(noise, *cathode))
+                    });
+                    if !within {
+                        junction_off.push(((v - lin).abs(), d));
+                    }
                 }
             }
             for &l in &m.laws {
@@ -1208,7 +1244,13 @@ impl Solver {
                     let lin = junction[base + j];
                     if v.is_finite() && (v - lin).abs() > RELTOL * v.abs().max(lin.abs()) + VNTOL {
                         converged = false;
-                        junction_off.push(((v - lin).abs(), l));
+                        let within = noise.as_ref().is_some_and(|noise| match law.controls[j] {
+                            Control::Voltage(p, q) => (v - lin).abs() <= NOISE_SETTLE * (m.v(noise, p) + m.v(noise, q)),
+                            _ => false,
+                        });
+                        if !within {
+                            junction_off.push(((v - lin).abs(), l));
+                        }
                     }
                 }
             }
@@ -1476,6 +1518,10 @@ pub(crate) enum Aid {
     /// From the hint's circuit and point, its element values moved to the
     /// circuit's step by step ([`continuation`]).
     Continuation,
+    /// Newton from zero with the smooth controls linearised where they are
+    /// ([`Solver::free_windows`]): the window walk of PSpice's smooth switch
+    /// cycles where the switch's own state moves its control (a latch).
+    Unwindowed,
     /// gmin stepping.
     Gmin,
     /// Pseudo-transient continuation.
@@ -1671,6 +1717,11 @@ fn aided(
     }
     let try_aid = |aid: &Aid| -> Option<Result<(Converged, Aid), Failure>> {
         match aid {
+            Aid::Unwindowed if has_windows(m, c) => {
+                let mut solver = Solver { free_windows: true, ..Solver::default() };
+                let (zeros, no_junction) = (vec![0.0; n], vec![0.0; m.slots]);
+                solver.newton(m, c, base, &zeros, &no_junction, 100).ok().map(|p| Ok((p, Aid::Unwindowed)))
+            }
             Aid::Gmin => gmin_stepping(m, c, &mut Solver::default(), base).map(|p| Ok((p, Aid::Gmin))),
             Aid::PseudoTransient if !m.laws.is_empty() => {
                 pseudo_transient(m, c, &mut Solver::default(), base).map(|p| Ok((p, Aid::PseudoTransient)))
@@ -1688,7 +1739,7 @@ fn aided(
     }
     let tried = |aid: &Aid| hinted.is_some_and(|h| std::mem::discriminant(h) == std::mem::discriminant(aid));
     let mut last = failure;
-    for aid in [Aid::Gmin, Aid::PseudoTransient, Aid::Source, Aid::Blocks(Vec::new())] {
+    for aid in [Aid::Unwindowed, Aid::Gmin, Aid::PseudoTransient, Aid::Source, Aid::Blocks(Vec::new())] {
         if tried(&aid) {
             continue;
         }
@@ -1792,6 +1843,14 @@ fn continuation(m: &Model, c: &Circuit, base: &Context, from: &Circuit, start: &
         }
     }
     Solver::default().newton(m, c, base, &x, &junction, 100).ok()
+}
+
+/// Whether a law of `c` has a smooth control ([`crate::behavioral::Limit::Window`]).
+fn has_windows(m: &Model, c: &Circuit) -> bool {
+    m.laws.iter().any(|&l| {
+        matches!(c.elements()[l].kind(), ElementKind::Law { law, .. }
+            if law.limits.iter().any(|limit| matches!(limit, crate::behavioral::Limit::Window { .. })))
+    })
 }
 
 fn gmin_stepping(m: &Model, c: &Circuit, solver: &mut Solver, base: &Context) -> Option<Converged> {
@@ -2346,6 +2405,136 @@ mod tests {
         let law = Law::expression(Output::Current, vec![Control::Voltage(a, NodeId::GROUND)], current);
         c.law("J", a, NodeId::GROUND, law).unwrap();
         c
+    }
+
+    /// A latch of PSpice's smooth switch (`VON` 2.005 V, `VOFF` 1.995 V,
+    /// 1 mohm and 1 Mohm, as `copper-spice` builds it): the switch connects
+    /// `b` to a 2 V rail over 1 kohm to ground, and its control is
+    /// `V(b) + 3 V`, so the switch's own state moves its control. Off, the
+    /// control is 3.002 V, so the switch is on: `V(b)` = 2 V and the
+    /// control 5 V.
+    fn smooth_switch_latch() -> Circuit {
+        use crate::behavioral::{BinaryOp, Expr, Func, Law, Limit, UnaryOp};
+        let g = NodeId::GROUND;
+        let mut c = Circuit::new();
+        let (a, b, r, mid) = (c.node("a"), c.node("b"), c.node("r"), c.node("m"));
+        c.voltage_source("V1", a, g, SourceValue::dc(2.0)).unwrap();
+        c.resistor("R1", b, g, 1e3).unwrap();
+        c.voltage_source("VM", mid, g, SourceValue::dc(-3.0)).unwrap();
+        // V(m) - V(r) = V(b): the control V(0) - V(r) is V(b) + 3 V.
+        c.vcvs("E1", mid, r, b, g, 1.0).unwrap();
+        let (ron, roff, von, voff) = (1e-3f64, 1e6f64, 2.005, 1.995);
+        let bin = |op, x, y| Expr::Binary(op, Box::new(x), Box::new(y));
+        let x = Expr::Call(
+            Func::Limit,
+            vec![
+                bin(
+                    BinaryOp::Div,
+                    bin(BinaryOp::Sub, Expr::Var(1), Expr::Const((von + voff) / 2.0)),
+                    Expr::Const(von - voff),
+                ),
+                Expr::Const(-0.5),
+                Expr::Const(0.5),
+            ],
+        );
+        let cubic = bin(
+            BinaryOp::Sub,
+            bin(BinaryOp::Mul, Expr::Const(1.5), x.clone()),
+            bin(BinaryOp::Mul, Expr::Const(2.0), bin(BinaryOp::Pow, x, Expr::Const(3.0))),
+        );
+        let log_r = bin(
+            BinaryOp::Add,
+            Expr::Const((ron * roff).sqrt().ln()),
+            bin(BinaryOp::Mul, Expr::Const((ron / roff).ln()), cubic),
+        );
+        let conductance = Expr::Call(Func::Exp, vec![Expr::Unary(UnaryOp::Neg, Box::new(log_r))]);
+        let mut law = Law::expression(
+            Output::Current,
+            vec![Control::Voltage(a, b), Control::Voltage(g, r)],
+            bin(BinaryOp::Mul, Expr::Var(0), conductance),
+        );
+        law.limits[1] = Limit::Window { lo: voff, hi: von };
+        c.law("S1", a, b, law).unwrap();
+        c
+    }
+
+    #[test]
+    fn a_smooth_switch_latch_is_solved_with_its_control_linearised_where_it_is() {
+        let c = smooth_switch_latch();
+        let m = Model::new(&c, false).unwrap();
+        let switch_on = vec![false; c.elements().len()];
+        let base = Context {
+            time: None,
+            left: true,
+            method: Method::Dc,
+            h: 0.0,
+            source_scale: 1.0,
+            gmin: 0.0,
+            anchor: None,
+            prev: None,
+            switch_on: &switch_on,
+        };
+        let (zeros, junction) = (vec![0.0; m.layout.size()], vec![0.0; m.slots]);
+        // Walked through its window, the control alternates between the
+        // window's lower edge and a quarter above it: each linearisation in
+        // the steep part predicts the other side.
+        assert!(Solver::default().newton(&m, &c, &base, &zeros, &junction, 100).is_err());
+        let mut free = Solver { free_windows: true, ..Solver::default() };
+        let point = free.newton(&m, &c, &base, &zeros, &junction, 100).expect("linearised where it is, it latches");
+        let b = c.find_node("b").unwrap();
+        let on = 2.0 * 1e3 / (1e3 + 1e-3);
+        assert!((m.v(&point.x, b) - on).abs() < 1e-9, "V(b) = {}", m.v(&point.x, b));
+        // The operating point takes that aid first.
+        let (dc, aid) = dc_point_aided(&m, &c, &mut Solver::default(), None, AnalysisPoint::OperatingPoint).unwrap();
+        assert_eq!(aid, Aid::Unwindowed);
+        assert!((m.v(&dc.x, b) - on).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_node_fixed_only_to_its_rounding_settles() {
+        // Two equal diodes on 1 mA each, a node d that amplifies the
+        // difference of their voltages 1e15 times (1 GS into 1 Mohm), as an
+        // amplifier model's gain node amplifies its input error, and a pair
+        // of 70 V zeners in anti-series from d back to a: the difference is
+        // zero only to the rounding of 0.6 V, so d moves by about 0.1 V from
+        // one iteration to the next however long Newton runs, within the
+        // rounding noise of its row (1 GS times 0.6 V to the last bit).
+        let g = NodeId::GROUND;
+        let mut c = Circuit::new();
+        let (s, a, b, d, mid) = (c.node("s"), c.node("a"), c.node("b"), c.node("d"), c.node("m"));
+        c.voltage_source("VS", s, g, SourceValue::dc(5.0)).unwrap();
+        let diode = crate::devices::DiodeParams { saturation_current: 1e-14, ..Default::default() };
+        c.resistor("RA", s, a, 4.4e3).unwrap();
+        c.diode("DA", a, g, &diode).unwrap();
+        c.resistor("RB", s, b, 4.4e3).unwrap();
+        c.diode("DB", b, g, &diode).unwrap();
+        c.vccs("GD", g, d, a, b, 1e9).unwrap();
+        c.resistor("RD", d, g, 1e6).unwrap();
+        let zener = crate::devices::DiodeParams { breakdown_voltage: Some(70.0), ..Default::default() };
+        c.diode("DZ1", mid, d, &zener).unwrap();
+        c.diode("DZ2", mid, a, &zener).unwrap();
+        let m = Model::new(&c, false).unwrap();
+        let switch_on = vec![false; c.elements().len()];
+        let base = Context {
+            time: None,
+            left: true,
+            method: Method::Dc,
+            h: 0.0,
+            source_scale: 1.0,
+            gmin: 0.0,
+            anchor: None,
+            prev: None,
+            switch_on: &switch_on,
+        };
+        let (zeros, junction) = (vec![0.0; m.layout.size()], vec![0.0; m.slots]);
+        let point = Solver::default().newton(&m, &c, &base, &zeros, &junction, 100).expect("settled to its rounding");
+        let (va, vb) = (m.v(&point.x, a), m.v(&point.x, b));
+        assert!((va - vb).abs() < 1e-14, "{va} against {vb}");
+        assert!((va - 0.0258 * (1e-3f64 / 1e-14).ln()).abs() < 0.02, "{va}");
+        assert!(m.v(&point.x, d).abs() < 70.0, "V(d) = {}", m.v(&point.x, d));
+        let dc =
+            dc_point(&m, &c, &mut Solver::default(), None, AnalysisPoint::OperatingPoint).expect("an operating point");
+        assert!((m.v(&dc.x, a) - va).abs() < 1e-12);
     }
 
     fn solve_hinted(c: &Circuit, hint: Option<std::sync::Arc<DcHint>>) -> Result<(DcPoint, Aid), SimError> {

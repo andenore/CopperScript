@@ -145,6 +145,8 @@ pub struct Wiring {
     /// (component, unit terminal as written, `A.INP`) -> package pin.
     terminals: BTreeMap<(String, String), String>,
     ground: String,
+    /// The routed board's parasitics, for a bench that uses layout ([`crate::layout`]).
+    layout: Option<std::sync::Arc<crate::layout::LayoutParasitics>>,
 }
 
 impl Wiring {
@@ -266,6 +268,16 @@ fn part_of<'a>(bench: &'a Bench, design: &'a Design, component: &SimComponent) -
 
 /// The package pins of every board and bench component pin on a net.
 pub fn wiring(view: &FlatElectricalView, bench: &Bench) -> Result<Wiring, String> {
+    wiring_with(view, bench, None)
+}
+
+/// [`wiring`] with the routed board's parasitics: each pin of a networked net on the node of its pad (`SIM119`
+/// where the routed board puts a pin on another net than the design).
+pub fn wiring_with(
+    view: &FlatElectricalView,
+    bench: &Bench,
+    layout: Option<&std::sync::Arc<crate::layout::LayoutParasitics>>,
+) -> Result<Wiring, String> {
     let mut wiring = Wiring { ground: canonical_net(view, &bench.ground), ..Wiring::default() };
     let simulated = |reference: &str| {
         bench
@@ -320,6 +332,31 @@ pub fn wiring(view: &FlatElectricalView, bench: &Bench) -> Result<Wiring, String
             };
             wiring.nodes.insert((endpoint.component.clone(), pin), net.name.clone());
         }
+    }
+    if let Some(layout) = layout {
+        for (index, net) in layout.nets.iter().enumerate() {
+            if net.nodes.len() <= 1 {
+                continue;
+            }
+            for (component, pin, node) in &net.pins {
+                let key = (component.clone(), pin.clone());
+                match wiring.nodes.get(&key) {
+                    Some(current) if *current == net.net => {
+                        wiring.nodes.insert(key, layout.node_name(index, *node));
+                    }
+                    Some(current) => {
+                        return Err(format!(
+                            "SIM119: the routed board {} puts {component}.{pin} on net {}, the design on net {}; route the board again",
+                            layout.source,
+                            repr(&net.net),
+                            repr(current)
+                        ));
+                    }
+                    None => {}
+                }
+            }
+        }
+        wiring.layout = Some(layout.clone());
     }
     for net in &bench.nets {
         let node = match &net.node {
@@ -1095,6 +1132,32 @@ fn lower_wired(design: &Design, bench: &Bench, wiring: &Wiring, params: &Params)
             SupplyTreatment::Ignored => {}
         }
         models.push(used);
+    }
+    if let Some(layout) = &wiring.layout {
+        // Only between nets the bench simulates: a net whose every pin is ignored would float.
+        let live: Vec<bool> = layout
+            .nets
+            .iter()
+            .enumerate()
+            .map(|(i, net)| {
+                net.net == wiring.ground()
+                    || (0..net.nodes.len().max(1)).any(|k| b.members.contains_key(&layout.node_name(i, k)))
+            })
+            .collect();
+        for (name, kind, a, z, amount, nets) in crate::layout::elements(layout) {
+            if !nets.iter().all(|&n| live[n]) {
+                continue;
+            }
+            let (na, nz) = (b.node(&a, "layout"), b.node(&z, "layout"));
+            let added = match kind {
+                crate::layout::Element::Resistor => b.circuit.resistor(&name, na, nz, amount),
+                crate::layout::Element::Inductor => b.circuit.inductor(&name, na, nz, amount),
+                crate::layout::Element::Capacitor => b.circuit.capacitor(&name, na, nz, amount),
+            };
+            added.map_err(|error| format!("layout {name}: {error}"))?;
+            let nets: Vec<&str> = nets.iter().map(|&n| layout.nets[n].net.as_str()).collect();
+            b.owners.insert(name, format!("the layout of net {}", nets.join(" and ")));
+        }
     }
     Ok(Lowered {
         circuit: b.circuit,

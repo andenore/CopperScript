@@ -310,7 +310,7 @@ pub fn bench_value(run: &BenchRun) -> Value {
         .collect();
     let variation =
         run.variation.as_ref().map(|variation| crate::variation::value_of(run, variation)).unwrap_or(Value::Null);
-    object(vec![
+    let mut bench = object(vec![
         ("name", Value::from(run.name.as_str())),
         ("bench", Value::from(run.bench_name())),
         ("section", run.section.as_deref().map(Value::from).unwrap_or(Value::Null)),
@@ -331,7 +331,12 @@ pub fn bench_value(run: &BenchRun) -> Value {
         ("pole_zero", Value::Array(crate::stability::json(run))),
         ("variation", variation),
         ("timing", run.timing.as_ref().map(timing_value).unwrap_or(Value::Null)),
-    ])
+    ]);
+    // Only a bench that uses layout has the key, so the results of every other bench stay as they were.
+    if let (Some(layout), Value::Object(entries)) = (&run.layout, &mut bench) {
+        entries.insert("layout".to_owned(), crate::layout::value(run, layout));
+    }
+    bench
 }
 
 /// A step's transient solver statistics; the steady-state fields are 0 or
@@ -849,6 +854,7 @@ pub fn text_table(runs: &[BenchRun]) -> String {
         lines.extend(crate::noise::text_lines(run));
         lines.extend(crate::stability::text_lines(run));
         lines.extend(crate::variation::text_lines(run));
+        lines.extend(crate::layout::text_lines(run));
         let (limited, failing) = run.counts();
         lines.push(match run.status() {
             Status::Pass => format!("  PASS: {limited} of {limited} limited measures within limits"),

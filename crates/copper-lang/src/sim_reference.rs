@@ -147,7 +147,7 @@ pub fn option_names(kind: &str) -> Vec<&'static str> {
 }
 
 /// The statements of a bench (and a fixture) body.
-pub const BENCH_STATEMENTS: [Item; 17] = [
+pub const BENCH_STATEMENTS: [Item; 18] = [
     item(
         "analysis",
         "KIND { ... }",
@@ -219,6 +219,12 @@ pub const BENCH_STATEMENTS: [Item; 17] = [
         "montecarlo { runs = 200; seed = 1; }",
     ),
     item("worstcase", "", "run the bench at the sensitivity corners of its tolerances", "worstcase;"),
+    item(
+        "use",
+        "library \"NAME\"; or layout;",
+        "parts for bench components; or layout: run with the routed board's parasitics too (copper sim --layout RUN)",
+        "use layout;",
+    ),
     item(
         "reference",
         "NAME { PARAM = q; ... }",

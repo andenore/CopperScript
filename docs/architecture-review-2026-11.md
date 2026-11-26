@@ -108,7 +108,7 @@ Each is fixable incrementally; a suggested order is at the end.
 
 | What | Result |
 | --- | --- |
-| `cargo build --release -p copper`, cold | 4 m 30 s wall, 9 m 25 s CPU |
+| `cargo build --release -p copperscript`, cold | 4 m 30 s wall, 9 m 25 s CPU |
 | Slowest compile units | copper-route 132 s, copper binary 103 s, ems 38 s, copper-lang 31 s |
 | `cargo test --workspace --release --no-run`, after the binary build | 25 m 29 s for 125 test binaries |
 | `cargo test --workspace --release`, run only | 34 s; 1,484 passed, 0 failed, 6 ignored |

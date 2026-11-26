@@ -1,0 +1,5 @@
+(footprint "feed" (version 20240108) (generator "copperscript-example")
+    (layer "F.Cu")
+    (fp_rect (start -0.75 -0.45) (end 0.75 0.45)
+        (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at 0 0) (size 1.0 0.6) (layers "F.Cu" "F.Paste" "F.Mask")))

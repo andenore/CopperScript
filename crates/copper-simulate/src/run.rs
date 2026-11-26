@@ -254,6 +254,8 @@ pub struct BenchRun {
     pub variation: Option<crate::variation::VariationRun>,
     /// Where the time went, when timing is on (`copper sim --timing`).
     pub timing: Option<BenchTiming>,
+    /// For a bench that uses layout: the parasitics it ran with and the schematic-only run's measures.
+    pub layout: Option<crate::layout::LayoutRun>,
 }
 
 /// The wall time of a bench run and its solver phases (`copper sim --timing`).
@@ -547,6 +549,38 @@ fn culprits(nodes: &[String], elements: &[String], lowered: &Lowered) -> String 
 /// Run `bench` on `design`. Never fails: a bench that cannot be lowered or
 /// solved carries its error, named in source terms.
 pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
+    run_bench_on(design, bench, Wire::Schematic)
+}
+
+/// [`run_bench`] for a bench that may use layout: a bench without `use layout;` runs as [`run_bench`]; one with it
+/// runs on the schematic alone and with the routed board's parasitics, and is refused (`SIM118`, `SIM119`) when
+/// `layout` holds none.
+pub fn run_bench_with_layout(design: &Design, bench: &Bench, layout: &crate::layout::LayoutInput) -> BenchRun {
+    use crate::layout::LayoutInput;
+    if bench.layout.is_none() {
+        return run_bench(design, bench);
+    }
+    match layout {
+        LayoutInput::Ready(parasitics) => {
+            let schematic = run_bench_on(design, bench, Wire::Schematic);
+            let mut run = run_bench_on(design, bench, Wire::Layout(parasitics));
+            run.layout = Some(crate::layout::LayoutRun::new(parasitics, &schematic));
+            run
+        }
+        LayoutInput::Absent => run_bench_on(design, bench, Wire::Refused(&crate::layout::missing(&bench.name))),
+        LayoutInput::Refused(message) => run_bench_on(design, bench, Wire::Refused(message)),
+    }
+}
+
+/// What a bench's circuit is wired from.
+enum Wire<'a> {
+    Schematic,
+    Layout(&'a std::sync::Arc<crate::layout::LayoutParasitics>),
+    /// Not run: the error.
+    Refused(&'a str),
+}
+
+fn run_bench_on(design: &Design, bench: &Bench, wire: Wire) -> BenchRun {
     let two_terminal = |component: &str, pin: &str| {
         // A model the bench placed (a replacement or a bench model): `I(X)` is its first role's current.
         let placed = bench
@@ -638,7 +672,13 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
         error: None,
         variation: bench.variation.as_ref().map(crate::variation::VariationRun::new),
         timing: None,
+        layout: None,
     };
+    if let Wire::Refused(message) = wire {
+        run.error = Some(message.to_owned());
+        run.measures = measures;
+        return run;
+    }
     let clock = copper_sim::timing::enabled().then(std::time::Instant::now);
     if clock.is_some() {
         copper_sim::timing::take();
@@ -655,7 +695,11 @@ pub fn run_bench(design: &Design, bench: &Bench) -> BenchRun {
     };
     // What the results record for the checks (`crate::evidence`).
     let probes = crate::evidence::probes(&view);
-    let wiring: Wiring = match lower::wiring(&view, bench) {
+    let layout = match wire {
+        Wire::Layout(parasitics) => Some(parasitics),
+        _ => None,
+    };
+    let wiring: Wiring = match lower::wiring_with(&view, bench, layout) {
         Ok(wiring) => wiring,
         Err(message) => {
             run.error = Some(message);

@@ -182,6 +182,14 @@ component CIN: Cap { value = 10uF; capacitance_at_bias = 4.2uF; role = decouplin
   without being a switching cell gets the warning `EMI_OPERATING_POINT_NO_CELL`.
   Serialized as `component.properties.load_current` (`"2 A"`); the cell carries
   `load_current` and `copper query BOARD emi` prints it.
+  A converter inside a library module cannot be annotated by the board, so the
+  board may declare the load on the rail instead:
+  `supply VCORE { voltage = 1.0V; source = BUCK.VOUT; load_current = 400mA; }`.
+  A buck cell whose component declares no `load_current` takes the one of the
+  supply on its magnetic's output net; the component's own value wins. The cell
+  records where the point came from (`load_current_source`: `component U1` or
+  `supply VCORE`), and so do `measures.operating_point.load_current_source` and
+  the `input:` line of the current.
 * `capacitance_at_bias`: the effective capacitance of a capacitor at the DC bias of
   its rail (the datasheet curve at the board's voltage), a positive capacitance at
   most the component's value (equal to it for a C0G part). It replaces the

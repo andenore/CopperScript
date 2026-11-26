@@ -1474,35 +1474,37 @@ fn e_via(via: &Via) -> StateValue {
 }
 
 fn e_zone(zone: &CopperZone) -> StateValue {
-    dc(
-        "pcbir.physical:CopperZone",
-        vec![
-            ("id", s(&zone.id)),
-            ("net", s(&zone.net)),
-            ("layers", tuple(&zone.layers, e_layer)),
-            ("outline", e_polygon(&zone.outer, &zone.holes)),
-            ("priority", i(zone.priority)),
-            ("clearance_nm", opt_int(zone.clearance_nm)),
-            ("minimum_width_nm", i(zone.minimum_width_nm)),
-            ("pad_connection", en("pcbir.physical:ZoneConnection", zone.pad_connection.value())),
-            (
-                "thermal",
-                dc(
-                    "pcbir.physical:ThermalReliefSettings",
-                    vec![
-                        ("gap_nm", i(zone.thermal_gap_nm)),
-                        ("spoke_width_nm", i(zone.thermal_spoke_width_nm)),
-                        ("spoke_count", i(4)),
-                    ],
-                ),
+    let mut fields = vec![
+        ("id", s(&zone.id)),
+        ("net", s(&zone.net)),
+        ("layers", tuple(&zone.layers, e_layer)),
+        ("outline", e_polygon(&zone.outer, &zone.holes)),
+        ("priority", i(zone.priority)),
+        ("clearance_nm", opt_int(zone.clearance_nm)),
+        ("minimum_width_nm", i(zone.minimum_width_nm)),
+        ("pad_connection", en("pcbir.physical:ZoneConnection", zone.pad_connection.value())),
+        (
+            "thermal",
+            dc(
+                "pcbir.physical:ThermalReliefSettings",
+                vec![
+                    ("gap_nm", i(zone.thermal_gap_nm)),
+                    ("spoke_width_nm", i(zone.thermal_spoke_width_nm)),
+                    ("spoke_count", i(4)),
+                ],
             ),
-            ("island_policy", en("pcbir.physical:IslandPolicy", zone.island_policy.value())),
-            ("minimum_island_area_nm2", opt_int(zone.minimum_island_area_nm2)),
-            ("fill_mode", en("pcbir.physical:ZoneFillMode", "solid")),
-            ("reserve_routing", b(zone.reserve_routing)),
-            ("allow_same_net_hard_macro_overlap", b(zone.allow_same_net_hard_macro_overlap)),
-        ],
-    )
+        ),
+        ("island_policy", en("pcbir.physical:IslandPolicy", zone.island_policy.value())),
+        ("minimum_island_area_nm2", opt_int(zone.minimum_island_area_nm2)),
+        ("fill_mode", en("pcbir.physical:ZoneFillMode", "solid")),
+        ("reserve_routing", b(zone.reserve_routing)),
+        ("allow_same_net_hard_macro_overlap", b(zone.allow_same_net_hard_macro_overlap)),
+    ];
+    // Written only when set, so a zone without it encodes exactly as before.
+    if let Some(pitch) = zone.stitch_pitch_nm {
+        fields.push(("stitch_pitch_nm", i(pitch)));
+    }
+    dc("pcbir.physical:CopperZone", fields)
 }
 
 fn e_polygon_copper(polygon: &CopperPolygon) -> StateValue {

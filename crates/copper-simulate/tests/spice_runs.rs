@@ -143,3 +143,79 @@ fn netlist_and_file_errors_name_their_source() {
     assert_eq!(good.status(), Status::Pass, "{:?}", good.error);
     let _ = fs::remove_dir_all(&directory);
 }
+
+/// A board whose part `SRC` is a local model file `models/root.lib` that
+/// includes `models/sub.inc`, where a subcircuit drives `volts` into a 1 kohm
+/// load; returns the board file.
+fn included_model_project(name: &str, volts: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("copper-spice-included-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    for sub in ["parts", "benches", "models"] {
+        fs::create_dir_all(directory.join(sub)).unwrap();
+    }
+    fs::write(
+        directory.join("parts/src.copper"),
+        "part Src {
+    category = \"power.reference\";
+    pin OUT { number = \"1\"; domains = \"analog\"; directions = \"output\"; }
+    pin REF { number = \"2\"; domains = \"ground\"; directions = \"passive\"; }
+    sim spice { file = \"../models/root.lib\"; subckt = \"SRC\"; terminals = OUT, REF; }
+}
+",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("board.copper"),
+        "board B {\n    use library \"tiny\";\n    import p \"./parts\";\n    component U1: p.Src;\n    component R1: RESISTOR { value = 1kohm; }\n    net OUT { U1.OUT; R1.1; }\n    net GND { U1.REF; R1.2; }\n    supply G { voltage = 0V; net = GND; external = true; }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("benches/op.copper"),
+        "bench Op for B {\n    analysis op;\n    measure out = V(OUT);\n}\n",
+    )
+    .unwrap();
+    fs::write(directory.join("models/root.lib"), "* the root file\n.INCLUDE sub.inc\n").unwrap();
+    write_included(&directory.join("board.copper"), volts);
+    directory.join("board.copper")
+}
+
+/// Rewrite the included file of [`included_model_project`] to drive `volts`.
+fn write_included(board: &Path, volts: &str) {
+    let file = board.parent().unwrap().join("models/sub.inc");
+    fs::write(file, format!(".SUBCKT SRC OUT REF\nV1 OUT REF {volts}\nRS OUT REF 1MEG\n.ENDS\n")).unwrap();
+}
+
+#[test]
+fn a_changed_included_model_file_is_read_again_in_the_same_process() {
+    let board = included_model_project("cache", "1");
+    let out = measure(&run_board(&board)[0], "out");
+    assert!((out - 1.0).abs() < 1e-9, "{out}");
+    // Only the included file changes; the root file is as it was.
+    write_included(&board, "2");
+    let out = measure(&run_board(&board)[0], "out");
+    assert!((out - 2.0).abs() < 1e-9, "the included file's new subcircuit: {out}");
+    let _ = fs::remove_dir_all(board.parent().unwrap());
+}
+
+#[test]
+fn results_are_stale_once_an_included_model_file_changes() {
+    use copper_simulate::evidence::{self, SourceIdentity};
+    let board = included_model_project("evidence", "1");
+    let design = compile_design_file(&board, false, true).unwrap();
+    let runs = simulate(&board, &design, None).unwrap();
+    let source = SourceIdentity::of(&board, &design);
+    let document = copper_simulate::results::results_value_from(&runs, &design.electrical.name, Some(&source));
+    let written = evidence::read("sim-results.json", &document).unwrap();
+    assert_eq!(evidence::validate_source(&written, &board, &design), Ok(()));
+    write_included(&board, "2");
+    let reason = evidence::validate_source(&written, &board, &design).expect_err("the model changed");
+    assert!(reason.contains("model") && reason.contains("sub.inc"), "{reason}");
+    // As the root file does.
+    write_included(&board, "1");
+    assert_eq!(evidence::validate_source(&written, &board, &design), Ok(()));
+    let root = board.parent().unwrap().join("models/root.lib");
+    fs::write(&root, "* the root file, edited\n.INCLUDE sub.inc\n").unwrap();
+    let reason = evidence::validate_source(&written, &board, &design).expect_err("the root changed");
+    assert!(reason.contains("root.lib"), "{reason}");
+    let _ = fs::remove_dir_all(board.parent().unwrap());
+}

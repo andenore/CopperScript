@@ -40,10 +40,14 @@
 //! compiled design (the JSON of `copper compile`, so any change to the board,
 //! its parts, packages or ratings changes it) and `benches_sha256` of the bench
 //! sources (each file of the board's `benches/` directory, its name and text,
-//! in order). A check recomputes both from the board it is given and refuses
-//! results whose digests differ, whose board differs, or that carry no `source`
-//! (written before it existed): error `SIM_RESULTS_STALE`. Nothing here runs a
-//! simulation.
+//! in order), and `models`, every local SPICE model file the benches read (a
+//! `sim spice { file = ...; }` and the files it includes) with the digest of
+//! its bytes ([`model_files`]): the design digest holds the model's file name,
+//! not its contents. A check recomputes them from the board it is given and
+//! refuses results whose digests differ, whose board differs, that carry no
+//! `source` (written before it existed), or that carry no `models` while the
+//! benches now read a local model file: error `SIM_RESULTS_STALE`. Nothing
+//! here runs a simulation.
 //!
 //! # Checks
 //!
@@ -732,25 +736,103 @@ pub struct SourceIdentity {
     pub board_file: String,
     pub design_sha256: String,
     pub benches_sha256: String,
+    /// The local SPICE model files the benches read, with the digests of their
+    /// contents ([`model_files`]); `None` in a document written before the field existed.
+    pub models: Option<Vec<ModelFile>>,
+}
+
+/// One local SPICE model file (a `sim spice { file = ...; }` or a file it
+/// includes) and the SHA-256 of its bytes: `source.models[]`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ModelFile {
+    /// The file relative to the board's directory, with `/`.
+    pub file: String,
+    /// The SHA-256 of its bytes; empty when it cannot be read.
+    pub sha256: String,
 }
 
 impl SourceIdentity {
-    /// The identity of the board in `board_file`, compiled to `design`, and its bench sources now.
+    /// The identity of the board in `board_file`, compiled to `design`, its
+    /// bench sources and the local model files they read now.
     pub fn of(board_file: &Path, design: &Design) -> SourceIdentity {
         SourceIdentity {
             board_file: copper_lang::paths::display(board_file),
             design_sha256: design_sha256(design),
             benches_sha256: benches_sha256(board_file),
+            models: Some(model_files(board_file, design)),
         }
     }
 
     pub fn value(&self) -> Value {
-        object(vec![
+        let mut fields = vec![
             ("board_file", Value::from(self.board_file.as_str())),
             ("design_sha256", Value::from(self.design_sha256.as_str())),
             ("benches_sha256", Value::from(self.benches_sha256.as_str())),
-        ])
+        ];
+        if let Some(models) = &self.models {
+            let files = models
+                .iter()
+                .map(|model| {
+                    object(vec![
+                        ("file", Value::from(model.file.as_str())),
+                        ("sha256", Value::from(model.sha256.as_str())),
+                    ])
+                })
+                .collect();
+            fields.push(("models", Value::Array(files)));
+        }
+        object(fields)
     }
+}
+
+/// The local SPICE model files the board's simulation reads: for every
+/// `sim spice` block with a `file` in the parts of the board, its modules and
+/// its benches (blocks a `--models` choice leaves out included), the file and
+/// the files it includes (`.INCLUDE`, `.LIB FILE`), each with the SHA-256 of
+/// its bytes, sorted by file. Vendor models are not listed: the hash their part
+/// declares pins them, and the design digest covers it. A model file that
+/// cannot be read or parsed is listed alone, with the digest of its bytes (empty
+/// when it cannot be read).
+pub fn model_files(board_file: &Path, design: &Design) -> Vec<ModelFile> {
+    use copper_lang::simulation::{SimSpec, SpiceSource};
+    let benches = copper_lang::bench::load_benches(board_file, design).unwrap_or_default();
+    let libraries = std::iter::once(&design.electrical.library)
+        .chain(design.electrical.module_definitions.values().map(|module| &module.library))
+        .chain(benches.iter().flat_map(|bench| [&bench.library, &bench.target_library]));
+    let mut specs: Vec<&SimSpec> = libraries
+        .flat_map(|library| library.values())
+        .flat_map(|part| part.sim.iter().map(|block| &block.spec))
+        .collect();
+    for bench in &benches {
+        specs.extend(bench.replacements.iter().map(|replacement| &replacement.spec));
+        specs.extend(bench.models.iter().map(|model| &model.spec));
+    }
+    let directory = copper_lang::paths::resolve(board_file.parent().unwrap_or(Path::new(".")));
+    let shown = |path: &Path| {
+        copper_lang::paths::as_posix(&copper_lang::paths::relpath(&copper_lang::paths::resolve(path), &directory))
+    };
+    let mut files = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for spec in specs {
+        let Some(model) = &spec.spice else { continue };
+        let SpiceSource::File(file) = &model.source else { continue };
+        if !seen.insert((model.directory.clone(), file.clone(), model.dialect.clone())) {
+            continue;
+        }
+        match crate::spice::dependencies(model) {
+            Ok(dependencies) => files.extend(
+                dependencies.iter().map(|(path, sha256)| ModelFile { file: shown(path), sha256: sha256.clone() }),
+            ),
+            Err(_) => {
+                let path = Path::new(&model.directory).join(file);
+                let sha256 = std::fs::read(&path)
+                    .map(|bytes| copper_lang::remote_models::sha256_hex(&bytes))
+                    .unwrap_or_default();
+                files.insert(ModelFile { file: shown(&path), sha256 });
+            }
+        }
+    }
+    files.into_iter().collect()
 }
 
 /// SHA-256 of the compiled design (the JSON `copper compile` writes) without
@@ -879,6 +961,15 @@ pub fn read(file: &str, document: &Value) -> Result<Evidence, String> {
         board_file: text(value, "board_file").unwrap_or_default(),
         design_sha256: text(value, "design_sha256").unwrap_or_default(),
         benches_sha256: text(value, "benches_sha256").unwrap_or_default(),
+        models: value.get("models").and_then(Value::as_array).map(|models| {
+            models
+                .iter()
+                .map(|model| ModelFile {
+                    file: text(model, "file").unwrap_or_default(),
+                    sha256: text(model, "sha256").unwrap_or_default(),
+                })
+                .collect()
+        }),
     });
     let mut benches = Vec::new();
     for bench in array(document, "benches") {
@@ -1030,7 +1121,43 @@ pub fn validate_source(evidence: &Evidence, board_file: &Path, design: &Design) 
     if source.benches_sha256 != now.benches_sha256 {
         return Err("a bench source changed since they were written".to_owned());
     }
-    Ok(())
+    let now = now.models.unwrap_or_default();
+    let Some(then) = &source.models else {
+        // A document from before the field: accepted only for a board that reads no local model file.
+        return match now.first() {
+            None => Ok(()),
+            Some(model) => Err(format!(
+                "they carry no digests of the SPICE model files they read (written by a copper sim without them), and the benches read {}",
+                model.file
+            )),
+        };
+    };
+    models_changed(then, &now).map_or(Ok(()), Err)
+}
+
+/// Why the model files recorded (`then`) and read now differ, if they do.
+fn models_changed(then: &[ModelFile], now: &[ModelFile]) -> Option<String> {
+    fn find<'a>(files: &'a [ModelFile], file: &str) -> Option<&'a String> {
+        files.iter().find(|model| model.file == file).map(|model| &model.sha256)
+    }
+    for model in now {
+        match find(then, &model.file) {
+            Some(sha256) if *sha256 == model.sha256 => {}
+            Some(_) if model.sha256.is_empty() => {
+                return Some(format!("the SPICE model file {} cannot be read", model.file));
+            }
+            Some(_) => return Some(format!("the SPICE model file {} changed since they were written", model.file)),
+            None => {
+                return Some(format!(
+                    "the benches now read the SPICE model file {}, which they were not made with",
+                    model.file
+                ));
+            }
+        }
+    }
+    then.iter().find(|model| find(now, &model.file).is_none()).map(|model| {
+        format!("they were made with the SPICE model file {}, which the benches no longer read", model.file)
+    })
 }
 
 /// The `SIM_RESULTS_STALE` error for a [`validate_source`] failure.
@@ -2224,6 +2351,7 @@ mod tests {
             board_file: "board.copper".to_owned(),
             design_sha256: "d".to_owned(),
             benches_sha256: "b".to_owned(),
+            models: Some(vec![ModelFile { file: "models/amp.lib".to_owned(), sha256: "m".to_owned() }]),
         };
         let document = object(vec![
             ("schema", Value::from(crate::results::SCHEMA)),

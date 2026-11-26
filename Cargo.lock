@@ -36,36 +36,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "copper"
-version = "0.1.0"
-dependencies = [
- "copper-antenna",
- "copper-assembly",
- "copper-cam",
- "copper-drc",
- "copper-editor",
- "copper-extract",
- "copper-fullwave",
- "copper-json",
- "copper-lang",
- "copper-lsp",
- "copper-panel",
- "copper-pcb",
- "copper-physical",
- "copper-place",
- "copper-report",
- "copper-route",
- "copper-simulate",
- "copper-state",
- "copper-units",
- "indexmap",
- "sha2",
-]
-
-[[package]]
 name = "copper-antenna"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
+ "copper-cam",
+ "copper-fullwave",
  "copper-json",
  "copper-lang",
  "copper-pcb",
@@ -76,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "copper-assembly"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-json",
@@ -91,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cam"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-physical",
@@ -101,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "copper-drc"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-emi",
@@ -120,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "copper-editor"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-drc",
  "copper-json",
@@ -138,14 +113,14 @@ dependencies = [
 
 [[package]]
 name = "copper-emi"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-sim",
 ]
 
 [[package]]
 name = "copper-extract"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-drc",
@@ -155,12 +130,13 @@ dependencies = [
  "copper-lang",
  "copper-pcb",
  "copper-physical",
+ "ems",
  "indexmap",
 ]
 
 [[package]]
 name = "copper-fullwave"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-drc",
@@ -176,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "copper-json"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "indexmap",
  "num-bigint",
@@ -186,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "copper-lang"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-physical",
@@ -201,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "copper-lsp"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-lang",
@@ -212,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "copper-panel"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-json",
@@ -223,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pcb"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-lang",
@@ -238,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "copper-physical"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-units",
@@ -252,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "copper-place"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-drc",
  "copper-json",
@@ -266,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "copper-report"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-emi",
  "copper-json",
@@ -283,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "copper-route"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-cam",
  "copper-drc",
@@ -305,11 +281,11 @@ dependencies = [
 
 [[package]]
 name = "copper-sim"
-version = "0.1.0"
+version = "0.3.0"
 
 [[package]]
 name = "copper-simulate"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-lang",
@@ -321,14 +297,14 @@ dependencies = [
 
 [[package]]
 name = "copper-spice"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-sim",
 ]
 
 [[package]]
 name = "copper-state"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "copper-json",
@@ -341,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "copper-units"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "num-bigint",
@@ -352,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "copper-web"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-lang",
@@ -364,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "copper-web-route"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "copper-json",
  "copper-lang",
@@ -374,6 +350,34 @@ dependencies = [
  "copper-report",
  "copper-route",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "copperscript"
+version = "0.3.0"
+dependencies = [
+ "copper-antenna",
+ "copper-assembly",
+ "copper-cam",
+ "copper-drc",
+ "copper-editor",
+ "copper-emi",
+ "copper-extract",
+ "copper-fullwave",
+ "copper-json",
+ "copper-lang",
+ "copper-lsp",
+ "copper-panel",
+ "copper-pcb",
+ "copper-physical",
+ "copper-place",
+ "copper-report",
+ "copper-route",
+ "copper-simulate",
+ "copper-state",
+ "copper-units",
+ "indexmap",
+ "sha2",
 ]
 
 [[package]]

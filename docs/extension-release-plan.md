@@ -73,7 +73,7 @@ and [Azure Login OIDC setup](https://github.com/Azure/login#login-with-openid-co
 Use Node 22 or newer:
 
 ```console
-cargo build --release -p copper
+cargo build --release -p copperscript
 COPPER_TEST_BIN=target/release/copper node --test tests/compiler-client.cjs tests/lsp-client.cjs
 npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
 node --test tests/syntax-highlighting.cjs

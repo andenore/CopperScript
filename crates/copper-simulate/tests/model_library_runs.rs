@@ -64,7 +64,9 @@ fn project(name: &str, sim: &str) -> PathBuf {
         "bench Op for B {\n    analysis op;\n    measure iq = I(POS);\n}\n",
     )
     .unwrap();
-    directory
+    // Named as the loader resolves it: on Windows the temporary directory is an 8.3 path (RUNNER~1) that the
+    // resolved one expands, and the tests compare cache paths with the loader's.
+    copper_lang::paths::resolve(&directory)
 }
 
 fn run(directory: &Path, choice: ModelChoice) -> copper_simulate::BenchRun {

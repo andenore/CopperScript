@@ -116,7 +116,7 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "SIM_RESULTS_STALE",
-        "The simulation results given to --sim-results were made from another board, another version of the board's sources (its parts, packages and ratings included) or other bench sources, or carry no source identity, so they are not used.",
+        "The simulation results given to --sim-results were made from another board, another version of the board's sources (its parts, packages and ratings included), other bench sources or other local SPICE model files (a sim spice file or a file it includes), or carry no source identity, so they are not used.",
         "Rerun copper sim BOARD and pass the sim-results.json it writes.",
     ),
     (

@@ -258,11 +258,11 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
             let name = id.key();
             Coverage { check: format!("EMI-FULLWAVE:{name}"), status, required: false, detail }
         };
-        if options.capacitor_height_mm.is_some() || options.source_height_mm.is_some() {
-            new_coverage.push(key(CoverageStatus::Unsupported,
-                "elevated full-wave fixtures apply only to the external buck-boost network; the buck fixture was not changed".to_owned()));
-            continue;
-        }
+        // The elevated fixtures are an assumption of the external buck-boost network only; a buck loop runs with its
+        // standard fixture and says so.
+        let heights_note = (options.capacitor_height_mm.is_some() || options.source_height_mm.is_some()).then_some(
+            "; --fullwave-capacitor-height and --fullwave-source-height apply only to the external buck-boost network: this buck loop used its standard fixture",
+        );
         if id.kind != LoopKind::Standard || !(topology == "buck" || topology.is_empty()) {
             new_coverage.push(key(
                 CoverageStatus::Unsupported,
@@ -310,10 +310,11 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
                 new_coverage.push(key(
                     CoverageStatus::Executed,
                     format!(
-                        "{}; port: {}; approximations: {}",
+                        "{}; port: {}; approximations: {}{}",
                         text_line(&result),
                         result.port,
-                        result.notes.join("; ")
+                        result.notes.join("; "),
+                        heights_note.unwrap_or("")
                     ),
                 ));
             }
@@ -392,6 +393,7 @@ fn apply_external(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &
             }
         };
         let requested = input.pads[1].clone();
+        let mut joint_declined: Option<String> = None;
         if let Some(peer) =
             inputs.iter().filter_map(|(_, r)| r.as_ref().ok()).find(|p| p.cell == cell && p.loop_kind != id.kind)
         {
@@ -399,7 +401,18 @@ fn apply_external(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &
                 if id.kind == LoopKind::Input { (input.clone(), peer) } else { (peer.clone(), &input) };
             primary.external_peer = secondary.external_contour.clone();
             primary.polygon_mm.extend(secondary.polygon_mm.iter().copied());
-            input = primary;
+            // The joint input/output network when it can be built; otherwise this loop's contour alone.
+            match primary.external_network() {
+                Ok(_) => input = primary,
+                Err(error) => {
+                    let _ = writeln!(
+                        progress,
+                        "full-wave: loop {}: joint input/output network declined ({error}); this loop alone",
+                        id.key()
+                    );
+                    joint_declined = Some(error.to_string());
+                }
+            }
         }
         let network = match input.external_network() {
             Ok(Some(n)) => n,
@@ -413,13 +426,32 @@ fn apply_external(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &
                 continue;
             }
         };
-        let port = network
+        let Some(port) = network
             .ports
             .iter()
             .position(|&(a, _)| network.contacts[a].component == requested.0 && network.contacts[a].pad == requested.1)
-            .expect("requested rail contact");
+        else {
+            coverage.push(Coverage {
+                check: key,
+                status: CoverageStatus::Unsupported,
+                required: false,
+                detail: format!(
+                    "the loop's rail contact {}.{} is not the positive terminal of any port of the external network",
+                    requested.0, requested.1
+                ),
+            });
+            continue;
+        };
         let Value::Object(mut scope) = network.scope_value() else { unreachable!() };
         scope.insert("loop_id".to_owned(), id.to_value());
+        if let Some(why) = &joint_declined {
+            scope.insert(
+                "inter_loop_coupling".to_owned(),
+                Value::from(format!(
+                    "not_evaluated: the joint input/output network was declined ({why}); this loop's contour alone"
+                )),
+            );
+        }
         scope.insert("model".to_owned(), Value::from("external_gap_ports_fdtd/v1"));
         scope.insert("source_boundary".to_owned(),Value::from(if options.source_height_mm.is_some() {
             "explicit elevated gap and rectangular PEC terminal posts; includes fixture fields; package parasitics unknown"
@@ -438,7 +470,9 @@ fn apply_external(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &
             "budget_scope".to_owned(),
             Value::from("shared across every port column and mesh of this controller"),
         );
-        let result = results.entry(cell.clone()).or_insert_with(|| {
+        // A joint network is shared by both loops of the controller; a loop extracted alone has its own.
+        let result_key = if input.external_peer.is_some() { cell.clone() } else { id.key() };
+        let result = results.entry(result_key).or_insert_with(|| {
             let model = filled
                 .get_or_insert_with(|| board_model(board))
                 .as_ref()

@@ -15,6 +15,7 @@ older versions, as `copperscript-assembly-lock` does.
 | Schema | Crates | Defined in |
 | --- | --- | --- |
 | `copperscript-antenna-synthesis/v0.1` | `copper-antenna` | `copper-antenna/src/report.rs` |
+| `copperscript-coupling/v0.1` | `copper` | `copper/src/coupling.rs` |
 | `copperscript-assembly-lock/v0.1` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
 | `copperscript-assembly-lock/v0.2` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
 | `copperscript-assembly-lock/v0.3` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
