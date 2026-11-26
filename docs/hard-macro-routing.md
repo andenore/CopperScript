@@ -21,6 +21,15 @@ rigid rotations including 45 degrees, immutable copper, exact owner continuity,
 private-region exclusion, existing-via plane contacts, rejected copper loss and
 native KiCad macro acceptance. The installed nRF52 example is also exercised.
 
+Host-zone ownership is checked against the declared zone outline before fill;
+zone-blocking keepouts do not clip that ownership outline. A conflict reports
+the host zone, net, layer, macro cluster and anchor, protected region and its
+transformed bounds, plus the rejected sharing condition. Both initial
+materialization and immutable-copper validation use the same predicate and
+diagnostic. Inner-only planes do not claim a private surface region; explicit
+same-net sharing still requires a matching macro zone and no blocking region
+or intersecting zone keepout.
+
 
 
 Current board results and pending native closure are in [the nRF52 example](nrf52-coin-cell.md).

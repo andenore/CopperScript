@@ -941,12 +941,59 @@ pub fn host_zone_overlaps_macro(
     hard: &PhysicalHardMacro,
     hosts: &[&CopperZone],
 ) -> Result<bool> {
+    Ok(host_zone_macro_overlap(board, hard, hosts)?.is_some())
+}
+
+/// Located ownership conflict, using the same predicate as macro acceptance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostZoneMacroOverlap {
+    pub zone: String,
+    pub net: String,
+    pub layer: CopperLayer,
+    pub cluster: String,
+    pub anchor: String,
+    pub region: String,
+    pub vertices: Vec<Point>,
+    pub reason: String,
+}
+
+impl HostZoneMacroOverlap {
+    pub fn message(&self) -> String {
+        let bounds = (
+            self.vertices.iter().map(|p| p.x_nm).min().unwrap_or(0),
+            self.vertices.iter().map(|p| p.y_nm).min().unwrap_or(0),
+            self.vertices.iter().map(|p| p.x_nm).max().unwrap_or(0),
+            self.vertices.iter().map(|p| p.y_nm).max().unwrap_or(0),
+        );
+        format!(
+            "host zone overlaps a private hard-macro region: zone {} net {} layer {}, macro {} anchor {}, region {} bounds ({}, {})..({}, {}) nm; {}",
+            repr(&self.zone),
+            repr(&self.net),
+            self.layer.value(),
+            repr(&self.cluster),
+            repr(&self.anchor),
+            repr(&self.region),
+            bounds.0,
+            bounds.1,
+            bounds.2,
+            bounds.3,
+            self.reason
+        )
+    }
+}
+
+/// First rejected zone/region/layer in source order; never clips or permits copper.
+pub fn host_zone_macro_overlap(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    hosts: &[&CopperZone],
+) -> Result<Option<HostZoneMacroOverlap>> {
     let poses = crate::keepouts::placement_map(board);
     let macro_zones = resolved_macro_zones(board, hard, &poses)?;
     let mut owned_layers: IndexSet<CopperLayer> = macro_zones.iter().flat_map(|z| z.layers.iter().copied()).collect();
     owned_layers.extend(resolved_macro_polygons(board, hard, &poses)?.iter().map(|p| p.layer));
     if owned_layers.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let shareable =
         |layer: CopperLayer, net: &str| macro_zones.iter().any(|z| z.layers.contains(&layer) && z.net == net);
@@ -969,12 +1016,41 @@ pub fn host_zone_overlaps_macro(
                             && zone_outlines_overlap(&only, &host.outer, &only, &keepout.vertices)
                     });
                 if !allowed {
-                    return Ok(true);
+                    let reason = if !host.allow_same_net_hard_macro_overlap {
+                        "host zone does not permit same-net hard-macro overlap".to_owned()
+                    } else if !shareable(*layer, &host.net) {
+                        "macro has no shareable zone on this net and layer".to_owned()
+                    } else if region.block_zones {
+                        "private region blocks zones".to_owned()
+                    } else {
+                        let blocker = keepouts
+                            .iter()
+                            .find(|keepout| {
+                                keepout.layers.contains(layer)
+                                    && keepout.block_zones
+                                    && zone_outlines_overlap(&only, &region.vertices, &only, &keepout.vertices)
+                                    && zone_outlines_overlap(&only, &host.outer, &only, &keepout.vertices)
+                            })
+                            .expect("the unchanged overlap predicate found a blocking keepout");
+                        format!("zone-blocking keepout {} intersects the host and private region", repr(&blocker.id))
+                    };
+                    let cluster =
+                        board.rigid_clusters.iter().find(|c| c.name == hard.cluster).expect("bound macro cluster");
+                    return Ok(Some(HostZoneMacroOverlap {
+                        zone: host.id.clone(),
+                        net: host.net.clone(),
+                        layer: *layer,
+                        cluster: hard.cluster.clone(),
+                        anchor: cluster.anchor_reference.clone(),
+                        region: region.id.clone(),
+                        vertices: region.vertices.clone(),
+                        reason,
+                    }));
                 }
             }
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn capsule(track: &TrackSegment) -> Result<RoundedConvexShape> {
@@ -1106,8 +1182,8 @@ fn validate_materialized(board: &PhysicalBoard) -> Result<()> {
     }
     let hosts: Vec<&CopperZone> = board.zones.iter().filter(|z| !owned_zones.contains_key(&z.id)).collect();
     for hard in &materialized {
-        if host_zone_overlaps_macro(board, hard, &hosts)? {
-            return fail("host zone overlaps a private hard-macro region");
+        if let Some(conflict) = host_zone_macro_overlap(board, hard, &hosts)? {
+            return fail(&conflict.message());
         }
     }
     let keepouts = crate::keepouts::resolved_copper_keepouts(board)?;

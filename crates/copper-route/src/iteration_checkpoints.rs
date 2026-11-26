@@ -31,6 +31,96 @@ use crate::routing::GlobalRouterOptions;
 pub const ERROR_SCHEMA: &str = "copperscript-route-error/v1";
 pub const TIMINGS_SCHEMA: &str = "copperscript-route-timings/v1";
 
+/// Artifact references for the existing failed-run report, not a checkpoint.
+pub struct PlacementFailureArtifacts {
+    pub state_filename: String,
+    pub metadata: Object,
+}
+
+pub fn write_placement_failure(
+    report_path: &Path,
+    board: &PhysicalBoard,
+    diagnostic: &copper_place::planner::PlacementFailureDiagnostic,
+) -> std::io::Result<PlacementFailureArtifacts> {
+    let mut shown = diagnostic.physical_rejection.as_ref().map_or_else(|| board.clone(), |r| r.board.clone());
+    shown.placements.retain(|pose| diagnostic.accepted.contains_key(&pose.reference));
+    for pose in &mut shown.placements {
+        *pose = diagnostic.accepted[&pose.reference].clone();
+    }
+    let mut proposals = Vec::new();
+    if let Some(pose) = &diagnostic.proposal
+        && !diagnostic.accepted.contains_key(&pose.reference)
+    {
+        proposals.push(pose.reference.clone());
+        shown.placements.push(pose.clone());
+    }
+    let omitted: Vec<String> = board
+        .placements
+        .iter()
+        .filter(|pose| !diagnostic.accepted.contains_key(&pose.reference) && !proposals.contains(&pose.reference))
+        .map(|pose| pose.reference.clone())
+        .collect();
+    let strings = |values: Vec<String>| Value::Array(values.into_iter().map(Value::Str).collect());
+    let mut note = format!(
+        "INSPECTION ONLY: failed seed {}; {} held components (not certified), {} unaccepted analytical target(s), {} omitted components. No routing, placement reuse, or manufacturing approval.",
+        diagnostic.seed,
+        diagnostic.accepted.len(),
+        proposals.len(),
+        omitted.len()
+    );
+    if diagnostic.physical_rejection.is_some() {
+        note.push_str(
+            " Includes rejected hard-macro trial copper, not accepted routing; another seed may have succeeded.",
+        );
+    }
+    let mut metadata = Object::from([
+        ("stage".to_owned(), Value::from("placement_failure")),
+        ("inspection_only".to_owned(), Value::Bool(true)),
+        ("placement_search_succeeded".to_owned(), Value::Bool(diagnostic.search_succeeded)),
+        ("seed".to_owned(), Value::Int(diagnostic.seed.into())),
+        ("failed_reference".to_owned(), Value::from(diagnostic.failed_reference.as_str())),
+        ("accepted_references".to_owned(), strings(diagnostic.accepted.keys().cloned().collect())),
+        ("unaccepted_target_references".to_owned(), strings(proposals)),
+        ("omitted_references".to_owned(), strings(omitted)),
+        ("reason".to_owned(), Value::from(diagnostic.reason.as_str())),
+        ("note".to_owned(), Value::Str(note)),
+    ]);
+    if let Some(rejection) = &diagnostic.physical_rejection {
+        metadata.insert("rejected_macro_copper".to_owned(), Value::Bool(true));
+        metadata.insert(
+            "physical_findings".to_owned(),
+            Value::Array(
+                rejection
+                    .findings
+                    .iter()
+                    .map(|finding| {
+                        Value::Object(Object::from([
+                            ("code".to_owned(), Value::from(finding.code.as_str())),
+                            ("message".to_owned(), Value::from(finding.message.as_str())),
+                            ("objects".to_owned(), strings(finding.objects.clone())),
+                            ("nets".to_owned(), strings(finding.nets.clone())),
+                            ("layers".to_owned(), strings(finding.layers.clone())),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(packing) = &diagnostic.bounded_packing {
+        metadata.insert("bounded_packing".to_owned(), packing.clone());
+    }
+    let state =
+        StateDocument::new("pcbir.physical:PhysicalBoard", metadata.clone(), crate::state_codec::encode_board(&shown));
+    let stem = report_path.file_stem().and_then(|s| s.to_str()).unwrap_or("route-report");
+    let state_filename = format!("{stem}.placement-failure.state.json");
+    let path = report_path.with_file_name(&state_filename);
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    copper_json::text::write_text(&path, &state.to_text())?;
+    Ok(PlacementFailureArtifacts { state_filename, metadata })
+}
+
 /// `StageTracker`: wraps a progress callback and remembers where a run got to.
 pub struct StageTracker<'a> {
     pub callback: Option<&'a mut dyn Progress>,
@@ -173,6 +263,18 @@ pub fn write_error_record(
     tracker: Option<&StageState>,
     args_summary: Object,
 ) -> std::io::Result<PathBuf> {
+    write_error_record_with_diagnostic(report_path, board_name, error_type, message, tracker, args_summary, None)
+}
+
+pub fn write_error_record_with_diagnostic(
+    report_path: &Path,
+    board_name: &str,
+    error_type: &str,
+    message: &str,
+    tracker: Option<&StageState>,
+    args_summary: Object,
+    diagnostic: Option<&PlacementFailureArtifacts>,
+) -> std::io::Result<PathBuf> {
     let strings = |items: Vec<String>| Value::Array(items.into_iter().map(Value::Str).collect());
     let mut document = Object::new();
     document.insert("schema".to_owned(), Value::from(ERROR_SCHEMA));
@@ -202,6 +304,14 @@ pub fn write_error_record(
     document.insert("elapsed_seconds".to_owned(), elapsed);
     document.insert("options".to_owned(), Value::Object(args_summary));
     document.insert("note".to_owned(), Value::from("Working record of a failed run; not routing or signoff evidence."));
+    if let Some(diagnostic) =
+        diagnostic.filter(|d| d.metadata.get("placement_search_succeeded") != Some(&Value::Bool(true)))
+    {
+        document.insert("diagnostic_state".to_owned(), Value::from(diagnostic.state_filename.as_str()));
+        document.insert("placement_failure".to_owned(), Value::Object(diagnostic.metadata.clone()));
+        document.insert("note".to_owned(), diagnostic.metadata["note"].clone());
+        document.insert("components".to_owned(), Value::Array(vec![diagnostic.metadata["failed_reference"].clone()]));
+    }
     let path = error_record_path(report_path);
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;

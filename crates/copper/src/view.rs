@@ -244,6 +244,16 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
         return Err(PyErr::value_error("--margin must be zero or positive"));
     }
     let mut notes: Vec<String> = Vec::new();
+    if let Some(run) = &mut run
+        && run.report_path.is_some()
+    {
+        let report = run.report()?;
+        if report.get("placement_failure").is_some() {
+            if let Some(note) = report.get("note").and_then(Value::as_str) {
+                notes.push(note.to_owned());
+            }
+        }
+    }
     if options.filled && run.as_ref().is_some_and(|run| run.filled_board_path.is_none()) {
         notes.push("note: no refilled native board in this run; showing saved geometry without refill".to_owned());
     }

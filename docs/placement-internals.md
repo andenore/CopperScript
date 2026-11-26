@@ -73,6 +73,29 @@ mechanical legality, proximity and escape access remain authoritative.
 
 ## Algorithm choices
 
+Ordinary legalization orders components by authored placement priority, weighted
+connection degree, then body area. Automatically derived hierarchy groups do
+not add their priority or all-to-all clique weight to those ordering keys:
+placing a component inside a logical module must not alone give it first claim
+on board space over a larger root component. Authored group/component priorities
+and other physical grouping hints retain their existing effect. Hierarchy still
+contributes unchanged to analytical seeds, group forces, pose-ranking adjacency
+and spread metrics. Relative units remain scheduled together, and fixed/rigid
+geometry, legal poses and bounded repair allowances are unchanged.
+
+For a pin-relative member whose companions are not placed yet, ordinary-grid
+legalization retains nearest-first search for three quarters of its existing
+raw probe allowance. If that prefix has no legal pose, the remaining allowance
+samples the unused position domain evenly, retaining every allowed orientation
+at each sampled site. Small domains keep their complete original ordering.
+If a complete orientation cycle exceeds the raw allowance, retain the original
+bounded ordinary prefix instead of dropping all candidates.
+Nearby successes skip the distant samples; anchored companion searches keep
+their existing relative neighbourhoods. The `legalize_wide:REFERENCE` progress
+event identifies this bounded coverage. This changes proposals only: exact
+geometry, subsequent companion placement and complete relative checks still
+decide acceptance. A free site for an IC alone does not certify its bypass unit.
+
 Fanout precedes area routing. Critical pairs retain specialized routing and
 ground/power contacts participate in the same negotiated package-access gate.
 Branch checkpoints retain a legal tentative tree only as repair input; local
@@ -182,6 +205,213 @@ complete legality, escape-spacing and placement score gates improve the
 incumbent. Package/critical preflight remains required; a shorter span does not
 establish impedance or EMC performance.
 
+## Origin domains and bounded seeds
+
+Candidate domains use the signed courtyard bounds at each allowed orientation.
+The footprint origin may be at a connector's first pin rather than its centre;
+symmetric half extents must not discard valid placements of such footprints.
+Sampling unions the orientation-specific domains, and analytical projection uses
+the same signed bounds. Board-edge proposals honor the component's declared edge
+allowance. Region boundaries contain the courtyard without adding a second board
+margin; exact legality still checks the independent physical board edge, actual
+polygons, keepouts and all other source requirements.
+
+Exhausting a mutable rigid-group or companion search rejects that placement seed
+and records its failure before trying the remaining bounded seeds. Conflicting
+fixed geometry remains fatal. If every seed exhausts its search, no partial or
+invalid placement is accepted.
+
+When every candidate fails during placement, the route run can save
+the deepest failed seed (most held components, earliest seed on a tie) beside
+its existing error report. `diagnostic_state` is an inspection-only physical
+board consumed by `copper issues` and `copper view`. It contains held poses and
+the failed component's explicitly unaccepted analytical target; remaining
+components are omitted. The report and state list all three sets. Held poses
+may still violate relative constraints and are not certified placement.
+If any seed completes legalization but fails the final constraints, the snapshot
+instead preserves the complete rejected layout with the lowest relative penalty
+(earliest seed on a tie), matching the error details. All components are held,
+none is an unaccepted analytical proposal, and the issue locates a violated rule
+target or an illegal component when available. This complete snapshot takes
+precedence over shallower bounded failures and remains uncertified.
+Ordinary bounded-failure snapshots are emitted only for failed searches. A
+typed physical hard-macro rejection also retains the exact rejected tracks,
+vias and DRC findings, including when a different seed succeeds. Native issues
+locate those copper objects, not an arbitrary macro anchor. Its metadata states
+whether the overall placement search succeeded; such a discarded-seed artifact
+cannot be attached to a later unrelated run error. Neither kind is a
+placement/global routing result or a reusable placement checkpoint.
+
+Rigid groups first retain their nearest-first candidate search and ranking. If
+that search finds no legal pose, a movable group samples the remaining origin
+domain deterministically across its extent. Local and wider trials share the
+existing raw probe allowance, including rejected transforms and rotations.
+Successful local choices are unchanged when the former local domain fits this
+raw allowance (including the usual one-to-four rotation groups). Larger
+orientation sets are now capped too; more than 64 rotations can truncate the
+former local domain. Fixed groups never enter the wider search. Every proposal
+still checks the complete group and held geometry with
+the same exact legality predicate. The `cluster_wide:NAME` progress stage
+identifies this bounded search, without implying that a legal pose exists.
+
+Each candidate checks its moving members first, then every held pose, against
+the same complete trial and resolved group keepouts. This rejects ordinary
+collisions sooner without omitting the held-pose checks: a translated keepout
+can block an outsider even when every moving member is otherwise legal.
+
+Group ordering keeps all groups with fixed members first, in their existing
+name order. Movable groups with any member in a named placement region come
+next, before unrestricted movable groups; name remains the tie-break within
+each class. This reserves constrained placement areas before unrestricted
+groups consume them. It is an ordering heuristic, not a feasibility guarantee
+or permission to move fixed members or ignore any region geometry.
+
+Region-only mutable singletons also reserve their scarce domains after fixed
+groups and before movable groups. Eligibility requires no relative rule or
+rigid membership, and the complete ordinary origin/orientation domain must fit
+the existing legalization-candidate allowance. Order is domain size then
+reference. Each unrelated scarce singleton uses its normal bounded choice once,
+including on boards without rigid groups. A scarce domain whose authored region
+bounds overlap a broad regional domain (including transitive overlaps and the
+pair's courtyard clearance) instead joins the existing broad reservation search.
+Otherwise its greedy central pose can erase every broad candidate before the
+joint packer can move it. Fixed owners and rigid members are never promoted.
+The broad list keeps its domain-size/name order and existing batching; disjoint
+authored regions are not split into separate searches because their access
+envelopes can extend beyond those regions. Bounds only select search members;
+all poses still pass the same exact mechanical and electrical gates.
+
+After the regional rigid groups, remaining region-only singletons are jointly
+packed before unrestricted rigid groups and ordinary components. A broad authored
+region can contain only a small usable landing after mechanical obstacles are
+applied; postponing it by raw rectangle size lets unrelated components fragment
+that landing. The existing local packer filters exact legal domains and checks
+the selected combination. References retain deterministic domain-size/name order;
+each batch has at most `exact_repair_limit` members and uses the existing domain,
+search and heuristic budgets. `region_pack:REF,...` identifies the work. Regional
+rigid groups keep precedence, so these reservations cannot displace their
+accepted geometry. This also runs when there are no rigid groups. Separate
+batches are greedy with respect to earlier batches; this is bounded scheduling,
+not a complete global packing search.
+
+A failed joint regional pack reports each observed initial sampled domain's
+raw-probe and individually legal-pose counts. An empty domain identifies its
+actual component; otherwise the report distinguishes exhausted joint-search
+work from no compatible sampled combination with work remaining. These are
+observations of the same search, not a second sampling pass or a proof about
+unsampled continuous poses. Failure snapshots remain inspection-only.
+
+These reservations are candidate-owned mutable poses, never additions to source
+or phase locks. Ordinary legalization revalidates them against the final held
+fixed/rigid geometry, then carries them in its accepted map and mutable repair
+order instead of repeating their greedy turn. Later exact repair and refinement
+can move them within their original region, side, orientation and clearance
+constraints. Revalidation failure rejects that seed; it cannot relax geometry.
+
+## Ordinary companions of movable macros
+
+A movable rigid macro also accounts for ordinary parts reachable through
+authored pin-to-pin maximum-distance links. Other rigid groups and source-fixed
+parts are boundaries. A small driver and bypass can fit a pocket that strands
+its larger external switch; legal macro geometry alone is insufficient in that
+case. The selected macro pose must have a sampled exact joint placement witness
+for a bounded set of its currently unplaced ordinary companions. At most
+`exact_repair_limit` members are selected by shortest pin-link hop, then larger
+footprint area and reference name. Earlier hops retain the selected dependencies;
+members beyond that bound keep their ordinary placement path and every final
+constraint. `cluster_companions_deferred:NAME:COUNT` exposes that remaining work.
+
+Each existing nearest/wide macro pass retains the original legal-pose ranking.
+At most `exact_repair_candidates` poses are checked with the existing local
+packer: half retain the nearest ranked choices, while the rest span the remaining
+ranked legal domain. Thus one blocked pocket does not consume the complete
+shortlist. No companion packing occurs for every raw macro probe. There are at
+most two passes, or 56 local packs at default options; each pack retains its
+existing domain/search limits and exact gates. Repeated local packs can still
+make this materially more expensive than macro-only placement. This is bounded
+sampling, not a complete search of all coupled poses.
+
+Trials operate on local placement maps. Failed trials retain no accepted macro
+or companion poses. Successful companions become mutable reservations, not rigid
+members or source locks, and later macro candidates preserve their geometry and
+active relative constraints. Ordinary legalization revalidates and consumes
+those witnesses once; its support pack skips already-held components. Failure
+reports the sampled legal macro count and bounded witness trials, explicitly
+distinguishing missing sampled witnesses from geometric impossibility. Complete
+placement, macro copper and routing verification remain mandatory.
+
+## Complete small relative repair units
+
+Within a proximity unit, anchored companions are scheduled by their smallest
+active maximum-distance radius squared divided by courtyard area (body area
+when no courtyard is supplied). This favors a larger part with slightly more
+reach over a tiny part with a tighter raw radius, preventing small supports
+from taking the only pocket that can hold a large companion. The ratio uses
+exact rational arithmetic; equal ratios retain the earlier distance, link-count,
+body-area and reference-name tie breaks. Unit order and anchor choice are
+unchanged. This is a scheduling estimate, not a legal-domain count: region,
+height, side, rotation, material and clearance checks still apply to every pose.
+It adds no candidate allowance, packing stage or repair members.
+
+When greedy placement requests exact repair, reserve the failed component's
+complete maximum-distance unit before filling the remaining repair slots with
+the existing ranked blockers. This applies only when the complete unit fits
+the current repair-member limit, every member has a target and is movable,
+and no member belongs to a rigid group. The unit also includes supports whose
+ordinary turn has not arrived yet; a partial repair can otherwise move its
+anchor into another pocket that strands those supports. Newly accepted members
+enter mutable placement order and are skipped on their later ordinary turn.
+Fixed, rigid, missing-target or oversized units retain the existing blocker selection. A proximity anchor can
+need relocation even when it is not a physical blocker, for example when an
+IC and its decoupler occupy opposite faces.
+
+This changes only membership of the existing bounded local search. It adds no
+repair stage or budget, and leaves successful greedy choices unchanged. The
+existing exact geometry and relative-constraint checks still decide every
+trial; failure leaves the held base untouched. Reserving a complete unit can
+leave fewer slots for unrelated blockers, so it is not a feasibility guarantee.
+
+Ordinary repair emits `repair_pack_started` with the bounded selected references,
+then `repair_pack_finished` with sampled/legal domain counts, the first empty
+domain, remaining combination-search budget, and coarse/fine pass information.
+Counts describe the final pass; a region-refinement pass can retain earlier
+legal poses in addition to its newly sampled poses. A null remaining budget
+means combination search was not reached. No candidate poses are dumped.
+Failed ordinary repairs persist the same `bounded_packing` record in native
+failure metadata; `copper issues RUN --issue E1 --json` exposes it as bounded
+structured details independently of the shortened issue title. This is
+observation of the existing search, not another placement trial or proof of
+geometric impossibility.
+
+Within the existing local pack, variable ordering prioritizes the largest
+connected component of its internal pair-relative rules before independent
+neighbours, retaining minimum-remaining-domain ordering within that component.
+This prevents a narrow independent neighbour from repeating a coupled support
+search first. Independent blockers remain movable in the same joint search and
+participate in exact forward checking; no new pass, candidates or budget are
+added. The ordering is a bounded-search heuristic, not a completeness guarantee.
+
+A held peer bounds the local candidate neighbourhood only through a maximum
+distance. Minimum distances are exclusions, and an alignment still leaves an
+unbounded axis. Pin-relative greedy and joint searches therefore retain their
+existing bounded wide-coverage samples when no held maximum-distance peer
+exists, including when nearby supports have not been placed yet. All minimum,
+maximum and alignment checks still apply to every accepted pose; no additional
+raw probes are allowed.
+
+When this repair removes a mutable pin-distance anchor from the held base,
+candidate generation must not forget its companions. Validated removed poses
+remain candidates; related domains are constructed anchor-first, with bounded
+ordinary-grid coverage when no peer is held. A companion can use up to half its
+existing raw probe allowance for relative proposals around a spread sample of
+already constructed peer-domain poses (at most `exact_repair_candidates`
+anchors). Unused allowance stays with ordinary proposals. Domains still retain
+at most `4 * legalization_candidates` poses, and the existing search/heuristic
+allowances are unchanged. The caller's original reference order is restored
+before search, preserving its tie breaks. This is finite domain propagation,
+not a new recovery pass or a completeness guarantee. Fixed/rigid references are
+excluded; all original base constraints and exact pair/geometry gates apply.
+
 ## Named-region local packing
 
 Initial local packing can supplement ordinary candidates for a mutable component
@@ -281,9 +511,13 @@ immutable footprint and exact transformed pose geometry, never legality answers.
 The default deterministic seed count remains `max(2, candidate_count)`. An
 explicit positive `seed_count` (`--placement-seeds` on `plan-layout` and
 `route-global`) bounds attempts instead.
-Only
-the private typed failure from exhausted mutable legalization/local repair
-discards one attempt and permits the next already planned seed. Each attempt
+The private typed failure from exhausted mutable legalization/local repair,
+or exact physical DRC rejection of a resolved hard-macro trial at the
+decoupling-access preflight, discards one attempt and permits the next already
+planned seed. A rejected later seed cannot erase a prior accepted candidate.
+The strict public macro materialization API still returns an error for that
+same copper; only the planner's typed trial API distinguishes it from malformed
+source and structural errors. No rejected copper enters routing. Each attempt
 builds its own tentative placed map from source/fixed intent and keeps the
 existing per-member, local-repair and search bounds. No partial attempt is
 promoted, no budget is restarted within an attempt, and no extra seed is added.

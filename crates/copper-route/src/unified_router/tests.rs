@@ -615,6 +615,52 @@ fn two_pad_board() -> PhysicalBoard {
     pad_board(&[("A", &[(2.0, 2.0), (3.0, 2.0)]), ("B", &[(18.0, 18.0), (19.0, 18.0)])], 2, vec![])
 }
 
+#[test]
+fn immutable_region_conflicts_price_only_the_mutable_proposal_and_reroute_it() {
+    // Seed a proposal the exact oracle rejects. This exercises the feedback
+    // boundary independently of whether a particular raster happens to avoid
+    // the obstacle: approximate search is never the final geometry oracle.
+    for kind in ["track", "lead", "via"] {
+        let mut board = a_board();
+        board.copper_keepouts.push(copper_keepout("private", &[F], rect(9.0, 9.0, 11.0, 11.0)));
+        let source = board.clone();
+        let mut router = router_all(&board, &pressure_options(8));
+        let a = grid_node(&router, F, 8.0, 10.0);
+        let b = grid_node(&router, F, 12.0, 10.0);
+        let route = match kind {
+            "track" => scripted(vec![vec![a, b]], vec![vec![]]),
+            "lead" => scripted(vec![vec![a]], vec![vec![track("A", (8.0, 10.0), (12.0, 10.0), 0.2, F)]]),
+            _ => scripted(
+                vec![vec![grid_node(&router, F, 10.0, 10.0), grid_node(&router, CopperLayer::Back, 10.0, 10.0)]],
+                vec![vec![]],
+            ),
+        };
+        let routes = IndexMap::from([("A".to_owned(), route)]);
+        assert!(router.commit(&routes, &Default::default()).unwrap().1.contains_key("A"), "{kind}");
+        let conflicts = router.conflicts(&routes).unwrap();
+        assert_eq!(conflicts, indexmap::IndexSet::<String>::from_iter(["A".to_owned()]), "{kind}");
+        router.penalise(&conflicts);
+        match kind {
+            "via" => assert!(router.occupancy.via_history.iter().any(|&v| v > 0.0)),
+            "lead" => assert!(router.lead_history.values().any(|&v| v > 0.0)),
+            _ => assert!(router.occupancy.history.iter().any(|&v| v > 0.0)),
+        }
+        let mut route = routes["A"].clone();
+        router.finish_route(&mut route, 0);
+        router.occupancy.add(&route, 1);
+        router.routes.insert("A".to_owned(), route);
+        // An empty initial cohort must still discover and reroute the invalid
+        // incumbent through the existing negotiation loop.
+        let (routes, conflicts, iterations) =
+            router.negotiate(None, Some(&Default::default()), &mut Vec::new()).unwrap();
+        assert!(iterations > 1 && iterations <= 8, "{kind}");
+        let (accepted, rejected, complete) = router.commit(&routes, &conflicts).unwrap();
+        assert!(rejected.is_empty() && complete.contains("A"), "{kind}: {rejected:?}");
+        clean_commit(&board, &accepted);
+        assert_eq!(board, source, "immutable source intent never changes");
+    }
+}
+
 /// Finish and occupy `routes` in order (spec `i` for route `i`), then commit.
 fn settle(
     router: &mut crate::unified_router::router::Router<'_, '_>,

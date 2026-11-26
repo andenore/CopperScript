@@ -32,8 +32,9 @@ use copper_route::escape_plan::EscapePlanOptions;
 use copper_route::fanout::FanoutOptions;
 use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, Stage, run_routing_pipeline_staged};
 use copper_route::iteration_checkpoints::{
-    PLACEMENT_CHECKPOINT, PlacementReuse, StageState, StageTracker, created_utc_now, load_placement_checkpoint,
-    placement_checkpoint_text, placement_key, write_error_record,
+    PLACEMENT_CHECKPOINT, PlacementFailureArtifacts, PlacementReuse, StageState, StageTracker, created_utc_now,
+    load_placement_checkpoint, placement_checkpoint_text, placement_key, write_error_record_with_diagnostic,
+    write_placement_failure,
 };
 use copper_route::plane::PlaneStitchOptions;
 use copper_route::progress::{ConsoleProgress, Progress, emit, text as text_value};
@@ -835,7 +836,8 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         return 1;
     }
     let mut stage_state: Option<StageState> = None;
-    let outcome = route(&arguments, &design, &board_path, &diagnostics, out, &mut stage_state);
+    let mut placement_failure = None;
+    let outcome = route(&arguments, &design, &board_path, &diagnostics, out, &mut stage_state, &mut placement_failure);
     if outcome.is_ok() {
         write_timings(&arguments, &design.electrical.name, stage_state.as_ref());
     }
@@ -881,13 +883,14 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             );
             summary.insert("routing_profile".to_owned(), optional(arguments.text("--routing-profile")));
             let report = PathBuf::from(report);
-            if let Ok(record) = write_error_record(
+            if let Ok(record) = write_error_record_with_diagnostic(
                 &report,
                 &design.electrical.name,
                 error_type,
                 &recorded,
                 stage_state.as_ref(),
                 summary,
+                placement_failure.as_ref(),
             ) {
                 let _ = text::print(
                     out,
@@ -911,6 +914,7 @@ fn route(
     diagnostics: &[copper_lang::erc::Diagnostic],
     out: &mut dyn Write,
     stage_state: &mut Option<StageState>,
+    placement_failure: &mut Option<PlacementFailureArtifacts>,
 ) -> Result<Finished, Stop> {
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
     let mechanical = design.mechanical.is_some();
@@ -1110,8 +1114,28 @@ fn route(
         }
         let reusing = initial_placement.is_some();
         let mut on_stage = |stage: Stage<'_>| {
+            if let Stage::PlacementFailure { board, diagnostic } = stage {
+                if let Some(report) = arguments.path("--report") {
+                    match write_placement_failure(Path::new(&report), board, diagnostic) {
+                        Ok(artifact) => {
+                            say(&format!("Inspection-only placement failure -> {}", artifact.state_filename));
+                            if !diagnostic.search_succeeded {
+                                *placement_failure = Some(artifact);
+                            }
+                        }
+                        Err(error) => say(&format!("Placement failure diagnostic not saved: {error}")),
+                    }
+                }
+                return;
+            }
+            // A rejected seed's standalone inspection artifact survives, but
+            // must never describe a later failure of the accepted candidate.
+            if matches!(stage, Stage::Placement(_)) {
+                *placement_failure = None;
+            }
             let Some(directory) = &checkpoint_dir else { return };
             let (name, text, label, failure) = match stage {
+                Stage::PlacementFailure { .. } => unreachable!("handled diagnostic"),
                 Stage::Placement(_) if reusing => return,
                 Stage::Placement(placement) => (
                     "placement",

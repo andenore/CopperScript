@@ -32,7 +32,9 @@ use crate::pad_stitch::DuplicatePadStitchResult;
 use crate::plane::{PlaneStitchOptions, PlaneStitchResult};
 use crate::progress::{ProgressCallback, emit, int, text};
 use crate::route_closure::close_detailed_lands;
-use crate::routeflow::{PlacementRoutingFeedbackOptions, PlacementRoutingResult, optimize_placement_for_routing};
+use crate::routeflow::{
+    PlacementRoutingFeedbackOptions, PlacementRoutingResult, optimize_placement_for_routing_with_diagnostics,
+};
 use crate::routing::{GlobalRouterOptions, GlobalRoutingResult};
 use crate::unified_router::UnifiedRouterOptions;
 use crate::{Error, Result};
@@ -80,6 +82,8 @@ pub struct RoutingPipelineOptions {
 
 /// A completed stage, as `on_stage(name, value)` observes it (for checkpoints).
 pub enum Stage<'a> {
+    /// Failed-search geometry for inspection only; never a completed placement.
+    PlacementFailure { board: &'a PhysicalBoard, diagnostic: &'a copper_place::planner::PlacementFailureDiagnostic },
     /// `placement`: the placement and global route the run continues from.
     Placement(&'a PlacementRoutingResult),
     /// `critical-inputs` or `critical-retry-inputs`: what the critical
@@ -1975,7 +1979,19 @@ pub fn run_routing_pipeline_staged(
                 Some(callback) => Some(&mut **callback),
                 None => None,
             };
-            optimize_placement_for_routing(&board, &placement_options, &global_options, &feedback_options, progress)?
+            let mut failure = |diagnostic: &copper_place::planner::PlacementFailureDiagnostic| {
+                if let Some(callback) = on_stage.as_mut() {
+                    callback(Stage::PlacementFailure { board: &board, diagnostic });
+                }
+            };
+            optimize_placement_for_routing_with_diagnostics(
+                &board,
+                &placement_options,
+                &global_options,
+                &feedback_options,
+                progress,
+                Some(&mut failure),
+            )?
         };
         emit(
             &mut on_progress,

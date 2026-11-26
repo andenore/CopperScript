@@ -68,6 +68,7 @@ fn signal_exit_masks_are_removed_for_negotiation_and_need_no_critical_retry() {
         let mut stages: Vec<String> = Vec::new();
         let mut observe = |stage: Stage<'_>| {
             stages.push(match stage {
+                Stage::PlacementFailure { .. } => "placement_failure".to_owned(),
                 Stage::Placement(_) => "placement".to_owned(),
                 Stage::CriticalInputs { name, .. } => name.to_owned(),
             })

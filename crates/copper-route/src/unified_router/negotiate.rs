@@ -118,6 +118,12 @@ impl Router<'_, '_> {
             };
             for record in records {
                 if record.immutable {
+                    // Search rasters are approximate. If emitted copper hits
+                    // source geometry, price and reroute the proposal through
+                    // the same negotiation as mutable/mutable conflicts. The
+                    // immutable blocker itself never becomes a route owner.
+                    bad.insert(name.clone());
+                    prices.push((name.clone(), position));
                     continue;
                 }
                 let Some(other) = objects.get_index_of(&record.occurrence) else { continue };

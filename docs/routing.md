@@ -71,6 +71,14 @@ previous timed event. `copper bench` copies the timings into each board's
   `closure_check=target|source` in `copper issues`; routing results do not change.
 - **Post-processing.** Land closure, route smoothing, stub cleanup and
   single-layer via sweep; declared zones are stitched automatically.
+  Plane-contact selection preserves sampled local exits of nearby ordinary
+  signal pads. It reuses the bounded surface and fanout candidate domains,
+  including permitted via transitions with an exact continuation beyond the
+  package collar. Candidate contacts and same-net anchor retries must leave
+  at least one checked witness per sampled pad. These witnesses are not emitted
+  signal reservations or a global connectivity certificate. Existing source
+  copper remains immutable; an unavailable explicit contact remains pending.
+  Native final refill and connectivity checks remain authoritative.
 - **Verification.** Exact physical DRC on the explicit copper, then a refill and
   DRC of the written board: CopperScript's own filler and DRC by default, or
   KiCad's with `--verify-plane-fill KICAD_CLI`. Opens the refill reports feed at
@@ -120,6 +128,12 @@ width/clearance class, usage, history and owners in flat arrays.
   bends (`bend_cost` 0.25) and breakout necks (`neck_cost` 1.0).
 - **Commit.** `RoutingClearanceIndex` with `remove(owner)`; one shared index
   across commit, repair and pour re-check.
+
+Exact negotiation feedback includes emitted proposals that intersect immutable
+source geometry. Only the offending mutable proposal receives history and is
+rerouted; its fixed blocker never becomes a negotiation participant. This covers
+search-raster mismatches without changing the final exact commit or ownership
+checks.
 
 Its 78 options are listed with types and defaults by
 `copper route-board --list-unified-options` and set with

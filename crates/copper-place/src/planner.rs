@@ -5,15 +5,16 @@
 
 use std::sync::OnceLock;
 
+use copper_drc::macros::{MacroMaterialization, MacroRejection};
 use indexmap::IndexSet;
 
 use copper_pcb::board::{PhysicalBoard, Placement};
 use copper_pcb::keepouts::placement_map;
 use copper_pcb::{Error, Result};
 
-use crate::clusters::{place_rigid_clusters, refine_rigid_clusters};
+use crate::clusters::{ClusterPlacement, refine_rigid_clusters, try_place_rigid_clusters};
 use crate::escape::EscapeSpacingModel;
-use crate::legalize::{Legalized, legalize, local_failure_details};
+use crate::legalize::{Legalized, legalize_with_reservations, local_failure_details};
 use crate::metrics::{PlacementMetrics, dominates, placement_metrics};
 use crate::options::PlannerOptions;
 use crate::refine::{detailed_refine, repair_relative_constraints, spread_escape_components};
@@ -28,6 +29,26 @@ pub struct SeedFailure {
     pub accepted_count: i64,
     pub reason: String,
 }
+
+/// Inspection-only snapshot of a bounded failed seed. Held poses are not a
+/// certified placement; the proposal is the failed component's analytical target.
+/// A complete constraint-rejected layout has no unaccepted proposal.
+#[derive(Clone, Debug)]
+pub struct PlacementFailureDiagnostic {
+    pub seed: i64,
+    pub failed_reference: String,
+    pub accepted: Poses,
+    pub proposal: Option<Placement>,
+    pub reason: String,
+    /// Rejected immutable trial copper for inspection only; never a checkpoint.
+    pub physical_rejection: Option<Box<MacroRejection>>,
+    /// Compact observation of the failed ordinary local pack; no candidate poses.
+    pub bounded_packing: Option<copper_json::Value>,
+    /// True when this discarded seed accompanies a successful search.
+    pub search_succeeded: bool,
+}
+
+pub type PlacementFailureObserver<'a> = &'a mut dyn FnMut(&PlacementFailureDiagnostic);
 
 /// `PlacementStatistics` (support and package patterns are not implemented).
 #[derive(Clone, Debug, PartialEq)]
@@ -76,10 +97,19 @@ pub fn register_decoupling_pass(pass: DecouplingPass) {
 
 /// `improve_decoupling_placement`: the source checks and early exits; a movable
 /// decoupler runs the registered pass on the board at the refined poses.
-fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &PlannerOptions) -> Result<(Poses, i64)> {
+enum DecouplingPlacement {
+    Accepted(Poses, i64),
+    Rejected(Box<MacroRejection>),
+}
+
+fn improve_decoupling_placement(
+    scene: &Scene,
+    refined: &Poses,
+    options: &PlannerOptions,
+) -> Result<DecouplingPlacement> {
     let board = scene.board;
     if board.decoupling_links.is_empty() {
-        return Ok((refined.clone(), 0));
+        return Ok(DecouplingPlacement::Accepted(refined.clone(), 0));
     }
     let mut fixed: IndexSet<String> = scene.fixed_placements(refined, &options.fixed_references).into_keys().collect();
     fixed.extend(board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.clone())));
@@ -91,11 +121,13 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     }
     let mut frame = board.clone();
     frame.placements = refined.values().cloned().collect();
-    copper_drc::macros::materialize_hard_macros(frame)?;
+    if let MacroMaterialization::Rejected(rejection) = copper_drc::macros::try_materialize_hard_macros(frame)? {
+        return Ok(DecouplingPlacement::Rejected(rejection));
+    }
     if options.decoupling_placement_trials == 0
         || board.decoupling_links.iter().all(|link| fixed.contains(&link.capacitor.component))
     {
-        return Ok((refined.clone(), 0));
+        return Ok(DecouplingPlacement::Accepted(refined.clone(), 0));
     }
     let Some(pass) = DECOUPLING_PASS.get() else {
         return copper_pcb::not_implemented(
@@ -105,7 +137,9 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     let mut bypass_board = board.clone();
     bypass_board.placements = board.placements.iter().map(|p| refined[&p.reference].clone()).collect();
     let mut observe = |stage: &str| scene.progress(stage);
-    pass(&bypass_board, refined, options, if scene.observed() { Some(&mut observe) } else { None })
+    let (poses, moves) =
+        pass(&bypass_board, refined, options, if scene.observed() { Some(&mut observe) } else { None })?;
+    Ok(DecouplingPlacement::Accepted(poses, moves))
 }
 
 /// `generate_placement_candidates`: a deterministic Pareto frontier of legal candidates.
@@ -119,6 +153,18 @@ pub fn generate_placement_candidates_with_progress<'a>(
     board: &'a PhysicalBoard,
     options: &PlannerOptions,
     progress: Option<PlacementProgress<'a>>,
+) -> Result<Vec<Candidate>> {
+    generate_placement_candidates_with_diagnostics(board, options, progress, None)
+}
+
+/// Observe the deepest bounded failure when the complete search fails. A
+/// rejected physical macro trial is also exposed when another seed succeeds;
+/// its snapshot is inspection only and never belongs to the accepted candidate.
+pub fn generate_placement_candidates_with_diagnostics<'a>(
+    board: &'a PhysicalBoard,
+    options: &PlannerOptions,
+    progress: Option<PlacementProgress<'a>>,
+    mut on_failure: Option<PlacementFailureObserver<'_>>,
 ) -> Result<Vec<Candidate>> {
     if !board.tracks.is_empty() || !board.vias.is_empty() {
         return error(
@@ -199,19 +245,60 @@ pub fn generate_placement_candidates_with_progress<'a>(
     let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes)?;
     let seeds = options.seed_count.unwrap_or(2.max(options.candidate_count));
     let mut attempts: Vec<Candidate> = Vec::new();
-    let mut closest_rejected: Option<(i64, Poses)> = None;
+    let mut closest_rejected: Option<(i64, i64, Poses)> = None;
     let mut failures: Vec<SeedFailure> = Vec::new();
+    let mut diagnostic: Option<PlacementFailureDiagnostic> = None;
+    let mut physical_diagnostic: Option<PlacementFailureDiagnostic> = None;
+    let mut remember = |seed, failure: &crate::legalize::LegalizationFailure, targets: &Poses| {
+        if on_failure.is_some()
+            && diagnostic.as_ref().is_none_or(|previous| failure.accepted.len() > previous.accepted.len())
+        {
+            diagnostic = Some(PlacementFailureDiagnostic {
+                seed,
+                failed_reference: failure.failed_reference.clone(),
+                accepted: failure.accepted.clone(),
+                proposal: targets.get(&failure.failed_reference).cloned(),
+                reason: failure.message.clone(),
+                physical_rejection: None,
+                bounded_packing: failure.bounded_packing.clone(),
+                search_succeeded: false,
+            });
+        }
+    };
     for seed in 0..seeds {
         scene.progress_at("analytical", seed, seeds);
         let continuous = initial_seed(&scene, &placements, options, seed)?;
         let continuous = analytical_place(&scene, &continuous, options, &spacing)?;
         scene.progress("legalization");
-        let (continuous, seeded_original, phase) =
-            place_rigid_clusters(&scene, &continuous, &placements, options, &spacing)?;
-        let (legalized, exact_repairs) = match legalize(&scene, &continuous, &seeded_original, &phase, &spacing, seed)?
-        {
+        let (continuous, seeded_original, phase, reservations) =
+            match try_place_rigid_clusters(&scene, &continuous, &placements, options, &spacing)? {
+                ClusterPlacement::Placed(targets, original, phase, reservations) => {
+                    (targets, original, phase, reservations)
+                }
+                ClusterPlacement::Failed(failure) => {
+                    remember(seed, &failure, &continuous);
+                    failures.push(SeedFailure {
+                        seed,
+                        failed_reference: failure.failed_reference,
+                        accepted_count: failure.accepted.len() as i64,
+                        reason: failure.message,
+                    });
+                    scene.progress("legalization_failed");
+                    continue;
+                }
+            };
+        let (legalized, exact_repairs) = match legalize_with_reservations(
+            &scene,
+            &continuous,
+            &seeded_original,
+            &reservations,
+            &phase,
+            &spacing,
+            seed,
+        )? {
             Legalized::Placed(poses, repairs) => (poses, repairs),
             Legalized::Failed(failure) => {
+                remember(seed, &failure, &continuous);
                 failures.push(SeedFailure {
                     seed,
                     failed_reference: failure.failed_reference,
@@ -230,8 +317,8 @@ pub fn generate_placement_candidates_with_progress<'a>(
         // A bounded relative repair can leave an infeasible seed; keep it as diagnostic evidence.
         let penalty = scene.penalty(&refined)?;
         if penalty != 0 || !scene.checker.placement_solution_is_legal(&refined)? {
-            if closest_rejected.as_ref().is_none_or(|(best, _)| penalty < *best) {
-                closest_rejected = Some((penalty, refined));
+            if closest_rejected.as_ref().is_none_or(|(best, _, _)| penalty < *best) {
+                closest_rejected = Some((penalty, seed, refined));
             }
             scene.progress("constraints_rejected");
             continue;
@@ -243,7 +330,37 @@ pub fn generate_placement_candidates_with_progress<'a>(
         let (refined, spacing_moves) = spread_escape_components(&scene, &refined, options, &spacing)?;
         moves += spacing_moves;
         scene.progress("decoupling_access");
-        let (refined, bypass_moves) = improve_decoupling_placement(&scene, &refined, &phase)?;
+        let (refined, bypass_moves) = match improve_decoupling_placement(&scene, &refined, &phase)? {
+            DecouplingPlacement::Accepted(poses, moves) => (poses, moves),
+            DecouplingPlacement::Rejected(rejection) => {
+                let reason = rejection.message();
+                let reference = board
+                    .rigid_clusters
+                    .first()
+                    .map(|c| c.anchor_reference.clone())
+                    .unwrap_or_else(|| refined.keys().next().cloned().unwrap_or_default());
+                failures.push(SeedFailure {
+                    seed,
+                    failed_reference: reference.clone(),
+                    accepted_count: refined.len() as i64,
+                    reason: reason.clone(),
+                });
+                if physical_diagnostic.is_none() {
+                    physical_diagnostic = Some(PlacementFailureDiagnostic {
+                        seed,
+                        failed_reference: reference,
+                        accepted: refined,
+                        proposal: None,
+                        reason,
+                        physical_rejection: Some(rejection),
+                        bounded_packing: None,
+                        search_succeeded: false,
+                    });
+                }
+                scene.progress("macro_physical_rejected");
+                continue;
+            }
+        };
         moves += bypass_moves;
         if options.support_pattern_trials != 0 {
             scene.progress("support_patterns");
@@ -254,8 +371,8 @@ pub fn generate_placement_candidates_with_progress<'a>(
         }
         let metrics = placement_metrics(&scene, &refined, options, &spacing)?;
         if metrics.constraint_penalty_nm != 0 || !scene.checker.placement_solution_is_legal(&refined)? {
-            if closest_rejected.as_ref().is_none_or(|(best, _)| metrics.constraint_penalty_nm < *best) {
-                closest_rejected = Some((metrics.constraint_penalty_nm, refined));
+            if closest_rejected.as_ref().is_none_or(|(best, _, _)| metrics.constraint_penalty_nm < *best) {
+                closest_rejected = Some((metrics.constraint_penalty_nm, seed, refined));
             }
             continue;
         }
@@ -277,10 +394,15 @@ pub fn generate_placement_candidates_with_progress<'a>(
     }
     if attempts.is_empty() {
         let mut message = "no legal placement candidate satisfies all represented physical constraints".to_owned();
-        if let Some((_, poses)) = &closest_rejected {
+        if let Some((_, seed, poses)) = &closest_rejected {
             let details = local_failure_details(&scene, poses, options)?;
             if !details.is_empty() {
                 message.push_str(&format!("; {details}"));
+            }
+            // Keep the same lowest-penalty complete rejection used by the error.
+            // It is deeper than a bounded partial failure, but is never certified.
+            if on_failure.is_some() {
+                diagnostic = Some(rejected_layout_diagnostic(&scene, *seed, poses, details)?);
             }
         }
         if !failures.is_empty() {
@@ -293,7 +415,22 @@ pub fn generate_placement_candidates_with_progress<'a>(
                 .collect();
             message.push_str(&format!("; {}; bounded seed attempts: {}", best.reason, attempts.join("; ")));
         }
+        if let Some(physical) = physical_diagnostic
+            && diagnostic.as_ref().is_none_or(|old| {
+                physical.accepted.len() > old.accepted.len()
+                    || (physical.accepted.len() == old.accepted.len() && physical.seed < old.seed)
+            })
+        {
+            diagnostic = Some(physical);
+        }
+        if let (Some(observer), Some(diagnostic)) = (&mut on_failure, &diagnostic) {
+            observer(diagnostic);
+        }
         return error(message);
+    }
+    if let (Some(observer), Some(diagnostic)) = (&mut on_failure, &mut physical_diagnostic) {
+        diagnostic.search_succeeded = true;
+        observer(diagnostic);
     }
     if !failures.is_empty() {
         for candidate in &mut attempts {
@@ -315,6 +452,39 @@ pub fn generate_placement_candidates_with_progress<'a>(
     scene.progress_at("finished", seeds, seeds);
     frontier.truncate(options.candidate_count as usize);
     Ok(frontier)
+}
+
+fn rejected_layout_diagnostic(
+    scene: &Scene,
+    seed: i64,
+    poses: &Poses,
+    details: String,
+) -> Result<PlacementFailureDiagnostic> {
+    let violations = scene.violations(poses)?;
+    let mut reference = violations.iter().flat_map(|v| v.references.iter()).find(|r| poses.contains_key(*r)).cloned();
+    if reference.is_none() {
+        let keepouts = copper_pcb::keepouts::resolved_cluster_keepouts(scene.board, poses);
+        let mut references: Vec<&String> = poses.keys().collect();
+        references.sort();
+        for candidate in references {
+            if !scene.checker.legal(&poses[candidate], &crate::scene::without(poses, candidate), Some(&keepouts))? {
+                reference = Some(candidate.clone());
+                break;
+            }
+        }
+    }
+    Ok(PlacementFailureDiagnostic {
+        seed,
+        // Global inventory or rigid/fixed invariants need not identify one
+        // illegal pose. Use a stable location while keeping the rejection explicit.
+        failed_reference: reference.or_else(|| poses.keys().min().cloned()).unwrap_or_default(),
+        accepted: poses.clone(),
+        proposal: None,
+        reason: format!("complete layout rejected by final placement constraints; {details}"),
+        physical_rejection: None,
+        bounded_packing: None,
+        search_succeeded: false,
+    })
 }
 
 /// `select_placement_candidate`: the best quality vector, then the lowest seed.

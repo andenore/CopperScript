@@ -1673,7 +1673,7 @@ fn decode_value(value: &StateValue) -> Result<Saved> {
 }
 
 /// `plane.PlaneStitchOptions(**fields)`, validated by its `__post_init__`.
-fn plane_stitch_options(value: &StateValue) -> Result<PlaneStitchOptions> {
+pub(crate) fn plane_stitch_options(value: &StateValue) -> Result<PlaneStitchOptions> {
     use copper_pcb::state_codec::{
         Fields, boolean, integer, optional_integer, optional_text, pad_reference, set_items,
     };

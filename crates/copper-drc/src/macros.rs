@@ -6,7 +6,7 @@ use indexmap::{IndexMap, IndexSet};
 use copper_json::python_str_repr as repr;
 use copper_pcb::board::*;
 use copper_pcb::hard_macros::{
-    cluster_placement_matches, host_zone_overlaps_macro, resolved_macro_geometry, resolved_macro_polygons,
+    cluster_placement_matches, host_zone_macro_overlap, resolved_macro_geometry, resolved_macro_polygons,
     resolved_macro_zones, validate_hard_macros, zone_outlines_overlap,
 };
 use copper_pcb::keepouts::placement_map;
@@ -48,6 +48,36 @@ pub fn materialize_via_in_pad_arrays(board: PhysicalBoard) -> Result<PhysicalBoa
 /// unchanged. Required via-in-pad arrays join this immutable prefix after
 /// macro copper.
 pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
+    match try_materialize_hard_macros(board)? {
+        MacroMaterialization::Accepted(board) => Ok(board),
+        MacroMaterialization::Rejected(rejection) => fail(rejection.message()),
+    }
+}
+
+/// Exact physical rejection of a fully resolved trial, never an accepted board.
+#[derive(Clone, Debug)]
+pub struct MacroRejection {
+    pub board: PhysicalBoard,
+    pub findings: Vec<crate::Finding>,
+}
+
+impl MacroRejection {
+    pub fn message(&self) -> String {
+        format!(
+            "hard-macro physical acceptance failed: {}",
+            self.findings.iter().map(|f| format!("{}: {}", f.code, f.message)).collect::<Vec<_>>().join("; ")
+        )
+    }
+}
+
+/// A candidate-local physical rejection is distinct from invalid source or
+/// unsupported materialization. Callers must never route or certify Rejected.
+pub enum MacroMaterialization {
+    Accepted(PhysicalBoard),
+    Rejected(Box<MacroRejection>),
+}
+
+pub fn try_materialize_hard_macros(board: PhysicalBoard) -> Result<MacroMaterialization> {
     if !board.materialized_macros.is_empty() {
         validate_hard_macros(&board)?;
         let owners: IndexSet<&str> = board.hard_macros.iter().map(|m| m.cluster.as_str()).collect();
@@ -55,16 +85,28 @@ pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
         if owners != materialized {
             return fail("partial hard-macro materialization is unsupported");
         }
-        return materialize_via_in_pad_arrays(board); // idempotent; no duplicate owner copper
+        return materialize_via_in_pad_arrays(board).map(MacroMaterialization::Accepted); // idempotent
     }
     if board.hard_macros.is_empty() {
-        return materialize_via_in_pad_arrays(board);
+        return materialize_via_in_pad_arrays(board).map(MacroMaterialization::Accepted);
     }
-    materialize_via_in_pad_arrays(materialize_macro_copper(board)?)
+    match try_materialize_macro_copper(board)? {
+        MacroMaterialization::Accepted(board) => {
+            materialize_via_in_pad_arrays(board).map(MacroMaterialization::Accepted)
+        }
+        rejected => Ok(rejected),
+    }
 }
 
 /// `materialize_macro_copper`: macro copper plus its physical acceptance.
 pub fn materialize_macro_copper(board: PhysicalBoard) -> Result<PhysicalBoard> {
+    match try_materialize_macro_copper(board)? {
+        MacroMaterialization::Accepted(board) => Ok(board),
+        MacroMaterialization::Rejected(rejection) => fail(rejection.message()),
+    }
+}
+
+fn try_materialize_macro_copper(board: PhysicalBoard) -> Result<MacroMaterialization> {
     if !board.tracks.is_empty() || !board.vias.is_empty() || !board.polygons.is_empty() {
         return fail("macro materialization must precede all routing and fill");
     }
@@ -82,8 +124,8 @@ pub fn materialize_macro_copper(board: PhysicalBoard) -> Result<PhysicalBoard> {
     }
     let hosts: Vec<&CopperZone> = board.zones.iter().collect();
     for hard in &board.hard_macros {
-        if host_zone_overlaps_macro(&board, hard, &hosts)? {
-            return fail("host zone overlaps a private hard-macro region");
+        if let Some(conflict) = host_zone_macro_overlap(&board, hard, &hosts)? {
+            return fail(conflict.message());
         }
     }
     for (index, zone) in zones.iter().enumerate() {
@@ -104,19 +146,15 @@ pub fn materialize_macro_copper(board: PhysicalBoard) -> Result<PhysicalBoard> {
     copper_pcb::physicalize::revalidate(&mut result)?;
     let report =
         run_physical_drc(&result, Policy { require_completed_detailed_route: false, fail_on_warnings: false })?;
-    let fatal: Vec<String> = report
-        .findings
-        .iter()
-        .filter(|f| f.severity == Severity::Error && f.code != "DRC-OPEN-NET")
-        .map(|f| format!("{}: {}", f.code, f.message))
-        .collect();
+    let fatal: Vec<crate::Finding> =
+        report.findings.iter().filter(|f| f.severity == Severity::Error && f.code != "DRC-OPEN-NET").cloned().collect();
     if !fatal.is_empty() {
-        return fail(format!("hard-macro physical acceptance failed: {}", fatal.join("; ")));
+        return Ok(MacroMaterialization::Rejected(Box::new(MacroRejection { board: result, findings: fatal })));
     }
     for hard in &board.hard_macros {
         prove_ports(&result, hard)?;
     }
-    Ok(result)
+    Ok(MacroMaterialization::Accepted(result))
 }
 
 /// Port, plane-return and private-net continuity of one macro's actual copper.

@@ -200,27 +200,17 @@ fn smooth_span_gradient(values: &[f64], gamma: f64) -> Vec<f64> {
     positive.iter().zip(&negative).map(|(p, n)| p / sum_positive - n / sum_negative).collect()
 }
 
-/// `_project_coordinate`: clamp a centre inside the board (or its region) by its half extents.
+/// `_project_coordinate`: clamp a footprint origin to its signed courtyard domain.
 fn project_coordinate(
     scene: &Scene,
     pose: &copper_pcb::board::Placement,
     coordinate: &mut [f64; 2],
-    bounds: (i64, i64, i64, i64),
     options: &PlannerOptions,
 ) {
-    let (half_width, half_height) = scene.half_extents_mm(pose);
     let mm = |value: i64| value as f64 / 1_000_000.0;
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (mm(bounds.0), mm(bounds.1), mm(bounds.2), mm(bounds.3));
-    let mut edge = options.edge_clearance_nm as f64 / 1_000_000.0;
-    if let Some(name) = scene.rule(&pose.reference).and_then(|r| r.region.as_ref()) {
-        let region = scene.board.regions.iter().find(|r| r.name == *name).expect("validated region");
-        let region_bounds = point_bounds(&region.outline.vertices);
-        (min_x, min_y, max_x, max_y) =
-            (mm(region_bounds.0), mm(region_bounds.1), mm(region_bounds.2), mm(region_bounds.3));
-        edge = 0.0; // Region boundaries contain courtyards; they are not board edges.
-    }
-    coordinate[0] = py_min(max_x - edge - half_width, py_max(min_x + edge + half_width, coordinate[0]));
-    coordinate[1] = py_min(max_y - edge - half_height, py_max(min_y + edge + half_height, coordinate[1]));
+    let (min_x, min_y, max_x, max_y) = scene.anchor_bounds(pose, options.edge_clearance_nm);
+    coordinate[0] = py_min(mm(max_x), py_max(mm(min_x), coordinate[0]));
+    coordinate[1] = py_min(mm(max_y), py_max(mm(min_y), coordinate[1]));
 }
 
 /// `_analytical_place`: momentum descent on wirelength, overlap, domain, escape and group forces.
@@ -241,7 +231,6 @@ pub fn analytical_place(
         .collect();
     let mut velocity: IndexMap<String, [f64; 2]> = source.keys().map(|r| (r.clone(), [0.0, 0.0])).collect();
     let gamma = py_max(1.0, options.congestion_bin_nm as f64 / 1_000_000.0);
-    let bounds = point_bounds(&board.outline.vertices);
     let mut references: Vec<&String> = source.keys().collect();
     references.sort();
     let extents: IndexMap<&str, (f64, f64)> =
@@ -356,7 +345,7 @@ pub fn analytical_place(
             coordinate[0] += step[0];
             coordinate[1] += step[1];
             let mut value = *coordinate;
-            project_coordinate(scene, &source[*reference], &mut value, bounds, options);
+            project_coordinate(scene, &source[*reference], &mut value, options);
             coordinates[*reference] = value;
         }
     }

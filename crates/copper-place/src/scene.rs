@@ -152,6 +152,27 @@ impl<'a> Scene<'a> {
         (min_x.abs().max(max_x.abs()), min_y.abs().max(max_y.abs()))
     }
 
+    /// Axis-aligned proposal bounds for the footprint origin at this orientation.
+    /// Signed courtyard offsets matter for connectors whose origin is at pin 1.
+    /// These bounds do not replace exact board, region or keepout legality.
+    pub(crate) fn anchor_bounds(&self, pose: &Placement, default_edge_nm: i64) -> (i64, i64, i64, i64) {
+        let rule = self.rule(&pose.reference);
+        let (bounds, edge) = match rule.and_then(|r| r.region.as_ref()) {
+            Some(name) => {
+                let region = self.board.regions.iter().find(|r| r.name == *name).expect("validated region");
+                // Region boundaries contain courtyards; physical board-edge
+                // clearance is still checked independently by exact legality.
+                (point_bounds(&region.outline.vertices), 0)
+            }
+            None => (
+                point_bounds(&self.board.outline.vertices),
+                rule.and_then(|r| r.edge_clearance_nm).unwrap_or(default_edge_nm),
+            ),
+        };
+        let (left, top, right, bottom) = point_bounds(&self.rotated_courtyard(pose));
+        (bounds.0 + edge - left, bounds.1 + edge - top, bounds.2 - edge - right, bounds.3 - edge - bottom)
+    }
+
     /// `_half_extents_mm`.
     pub fn half_extents_mm(&self, pose: &Placement) -> (f64, f64) {
         let (width, height) = self.half_extents(pose);

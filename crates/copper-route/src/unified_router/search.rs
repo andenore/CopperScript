@@ -197,7 +197,7 @@ impl Router<'_, '_> {
         }
         if self.lattice.is_nested() {
             let (hist, occ) = (&self.occupancy.history, &self.occupancy.occ);
-            return copper_physical::pyfloat::sum(
+            return exact + copper_physical::pyfloat::sum(
                 nodes.iter().map(|&(n, weight)| weight * (hist[n as usize] + present * occ[n as usize] as f64)),
             );
         }

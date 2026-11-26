@@ -1166,6 +1166,43 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         let open = if truthy(open) { open.clone() } else { Value::Array(Vec::new()) };
         let stage = py::join(", ", &open)?;
         let stage = if stage.is_empty() { "an unknown stage (run with --progress)".to_owned() } else { stage };
+        // Rejected macro geometry is an inspection trial, not retained-board
+        // DRC. Locate its exact copper objects rather than an arbitrary owner.
+        if let Value::Object(diagnostic) = get(report, "placement_failure")?
+            && let Some(Value::Array(findings)) = diagnostic.get("physical_findings")
+            && !findings.is_empty()
+        {
+            let mut points = Vec::new();
+            let mut objects = Vec::new();
+            let mut nets = Vec::new();
+            let mut layers = Vec::new();
+            for finding in findings {
+                let found_objects = texts(get(finding, "objects")?);
+                let found_nets = get(finding, "nets")?.as_array().map(<[Value]>::to_vec).unwrap_or_default();
+                let found_layers = get(finding, "layers")?.as_array().map(<[Value]>::to_vec).unwrap_or_default();
+                points.extend(object_points(scene, &found_objects, &found_nets, &found_layers)?);
+                objects.extend(found_objects);
+                nets.extend(found_nets);
+                layers.extend(found_layers);
+            }
+            return Ok(vec![
+                RunIssue::new(
+                    "E1".to_owned(),
+                    "error",
+                    "MACRO-TRIAL-REJECTED",
+                    format!(
+                        "Rejected hard-macro trial in {stage}; inspection only ({} exact findings)",
+                        findings.len()
+                    ),
+                )
+                .count(findings.len() as i64)
+                .objects(objects)
+                .nets(nets)
+                .layers(layers)
+                .points(points)
+                .details(Value::Array(findings.clone())),
+            ]);
+        }
         let components = texts(get(report, "components")?);
         let points = components
             .iter()
@@ -1176,8 +1213,30 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
             .collect();
         let message: String = py::text(get_or(report, "message", &Value::from(""))?).chars().take(300).collect();
         let title = format!("{} in {stage}: {message}", py::text(get_or(report, "error_type", &Value::from("Error"))?));
+        let details = report.get("placement_failure").and_then(|failure| failure.get("bounded_packing")).map_or(
+            Value::Null,
+            |packing| {
+                solver_details(
+                    packing,
+                    "bounded_ordinary_packing; no sampled witness is not proof of geometric impossibility",
+                    "placement_failure.bounded_packing",
+                    &[
+                        "selected_references",
+                        "outcome",
+                        "passes",
+                        "final_pass",
+                        "domains",
+                        "empty_reference",
+                        "search_remaining",
+                    ],
+                )
+            },
+        );
         return Ok(vec![
-            RunIssue::new("E1".to_owned(), "error", "RUN-ERROR", title).objects(components).points(points),
+            RunIssue::new("E1".to_owned(), "error", "RUN-ERROR", title)
+                .objects(components)
+                .points(points)
+                .details(details),
         ]);
     }
     let mut issues: Vec<RunIssue> = Vec::new();

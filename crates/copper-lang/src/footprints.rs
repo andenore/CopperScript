@@ -11,6 +11,7 @@ use indexmap::IndexMap;
 use copper_json::python_str_repr as repr;
 use copper_physical::footprint::PhysicalFootprint;
 use copper_physical::kicad_mod::{FootprintImportResult, load_kicad_mod, suffix};
+use copper_physical::mechanical::signed_area_twice;
 
 use crate::elaborate::elaborate;
 use crate::error::CopperScriptError;
@@ -495,6 +496,10 @@ pub struct FootprintAuditEntry {
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
     pub provenance: Vec<(String, String)>,
+    /// Exact area of the resolver's courtyard polygon, in half square nanometres.
+    /// This is not a union of source graphics or clearance-expanded geometry.
+    pub courtyard_area_twice_nm2: Option<i128>,
+    pub courtyard_area_status: &'static str,
 }
 
 impl FootprintAuditEntry {
@@ -530,9 +535,21 @@ pub fn audit_resolved_footprints(board: &Board, resolver: &mut FootprintResolver
             warnings: Vec::new(),
             errors: Vec::new(),
             provenance: Vec::new(),
+            courtyard_area_twice_nm2: None,
+            courtyard_area_status: "unresolved",
         };
         match resolver.resolve(reference) {
             Ok(result) => {
+                let courtyard = &result.footprint.courtyard;
+                let area = signed_area_twice(courtyard).abs();
+                entry.courtyard_area_status = if courtyard.is_empty() {
+                    "missing"
+                } else if area == 0 {
+                    "degenerate"
+                } else {
+                    entry.courtyard_area_twice_nm2 = Some(area);
+                    "measured"
+                };
                 let metadata = &result.footprint.metadata;
                 entry.warnings = result.warnings.clone();
                 entry.source_path = metadata.get("source_path").cloned();

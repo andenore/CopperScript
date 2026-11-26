@@ -93,6 +93,15 @@ copper audit-footprints board.copper --locked --offline --json
 copper export-kicad-pcb board.copper --locked --offline -o build/board.kicad_pcb
 ```
 
+`audit-footprints` also reports resolved courtyard area and component-instance
+counts. JSON includes exact `courtyard_area_twice_nm2` values per footprint and
+the instance-weighted `summed_courtyard_area_twice_nm2`, plus convenience mm²
+values and explicit measured/unknown counts. Missing, degenerate and unresolved
+courtyards remain unknown; the existing audit verdict is unchanged. The sum
+covers all sides and retains the importer's polygon representation: it is not
+union occupancy, clearance-expanded packing, available routing space or a
+placement result. Use the `components` lists to aggregate a known side allocation.
+
 `lock` prepares selected managed footprint dependencies as well as imported
 source packages, and creates/updates `copper.lock`. This inventories complete
 module content, including individual footprint SHA-256 hashes. Downloaded

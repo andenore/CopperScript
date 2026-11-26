@@ -8,7 +8,7 @@ use copper_pcb::transform::transformed_local_point;
 use copper_pcb::{Error, Result};
 use copper_physical::Point;
 use copper_place::PlannerOptions;
-use copper_place::planner::{Candidate, generate_placement_candidates, generate_placement_candidates_with_progress};
+use copper_place::planner::{Candidate, PlacementFailureObserver, generate_placement_candidates_with_diagnostics};
 use copper_units::Decimal;
 
 use crate::progress::{ProgressCallback, emit, int, text};
@@ -122,14 +122,32 @@ pub fn optimize_placement_for_routing(
     placement_options: &PlannerOptions,
     router_options: &GlobalRouterOptions,
     feedback_options: &PlacementRoutingFeedbackOptions,
+    on_progress: Option<ProgressCallback<'_>>,
+) -> Result<PlacementRoutingResult> {
+    optimize_placement_for_routing_with_diagnostics(
+        board,
+        placement_options,
+        router_options,
+        feedback_options,
+        on_progress,
+        None,
+    )
+}
+
+pub fn optimize_placement_for_routing_with_diagnostics(
+    board: &PhysicalBoard,
+    placement_options: &PlannerOptions,
+    router_options: &GlobalRouterOptions,
+    feedback_options: &PlacementRoutingFeedbackOptions,
     mut on_progress: Option<ProgressCallback<'_>>,
+    on_failure: Option<PlacementFailureObserver<'_>>,
 ) -> Result<PlacementRoutingResult> {
     crate::install_hooks();
     let candidates = if on_progress.is_some() {
         let observe = std::cell::RefCell::new(crate::progress::placement_progress(&mut on_progress));
-        generate_placement_candidates_with_progress(board, placement_options, Some(&observe))?
+        generate_placement_candidates_with_diagnostics(board, placement_options, Some(&observe), on_failure)?
     } else {
-        generate_placement_candidates(board, placement_options)?
+        generate_placement_candidates_with_diagnostics(board, placement_options, None, on_failure)?
     };
     let mut evaluated = Vec::with_capacity(candidates.len());
     for candidate in candidates {

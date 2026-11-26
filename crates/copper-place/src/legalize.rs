@@ -12,7 +12,7 @@ use copper_pcb::{Error, Result};
 use copper_physical::footprint::PadKind;
 use copper_physical::pyfloat::{hypot, round_int};
 use copper_physical::{BoardSide, CopperLayer, Point};
-use copper_units::Decimal;
+use copper_units::{Decimal, Fraction};
 
 use crate::escape::{EscapeSpacingModel, placement_units};
 use crate::options::PlannerOptions;
@@ -26,6 +26,10 @@ pub fn spread_index(i: usize, n: usize, count: usize) -> usize {
 
 /// `_adjacency`: connection weights between components.
 pub fn adjacency(scene: &Scene) -> IndexMap<String, IndexMap<String, i64>> {
+    adjacency_with_hierarchy(scene, true)
+}
+
+fn adjacency_with_hierarchy(scene: &Scene, include_hierarchy: bool) -> IndexMap<String, IndexMap<String, i64>> {
     let board = scene.board;
     let mut result: IndexMap<String, IndexMap<String, i64>> =
         board.placements.iter().map(|p| (p.reference.clone(), IndexMap::new())).collect();
@@ -48,7 +52,7 @@ pub fn adjacency(scene: &Scene) -> IndexMap<String, IndexMap<String, i64>> {
             }
         }
     }
-    for group in &board.placement_groups {
+    for group in board.placement_groups.iter().filter(|group| include_hierarchy || group.source != "hierarchy") {
         for reference in &group.references {
             for other in &group.references {
                 if reference != other && result.contains_key(reference) && result.contains_key(other) {
@@ -64,7 +68,7 @@ pub fn adjacency(scene: &Scene) -> IndexMap<String, IndexMap<String, i64>> {
 fn component_priorities(scene: &Scene) -> IndexMap<String, i64> {
     let mut result: IndexMap<String, i64> =
         scene.board.placement_rules.iter().map(|r| (r.reference.clone(), r.priority)).collect();
-    for group in &scene.board.placement_groups {
+    for group in scene.board.placement_groups.iter().filter(|group| group.source != "hierarchy") {
         for reference in &group.references {
             let value = result.get(reference).copied().unwrap_or(0).max(group.priority);
             result.insert(reference.clone(), value);
@@ -99,6 +103,21 @@ pub fn relative_cluster_order(scene: &Scene, movable: &[String], targets: &Poses
     let movable_set: IndexSet<&str> = movable.iter().map(String::as_str).collect();
     let order: IndexMap<&str, usize> = movable.iter().enumerate().map(|(i, r)| (r.as_str(), i)).collect();
     let area = |reference: &str| scene.footprint_area(&targets[reference]);
+    // Use the occupied courtyard rather than the body when one is supplied.
+    // The ratio is only a scheduling heuristic; actual candidate domains still
+    // pass the full outline, region, height, orientation and clearance checks.
+    let courtyard_areas: IndexMap<&str, Fraction> = targets
+        .iter()
+        .map(|(reference, pose)| {
+            let footprint = &scene.board.footprints[&pose.footprint];
+            let twice_area = if footprint.courtyard.is_empty() {
+                2 * i128::from(footprint.body_size.width_nm) * i128::from(footprint.body_size.height_nm)
+            } else {
+                copper_physical::mechanical::signed_area_twice(&footprint.courtyard).abs()
+            };
+            (reference.as_str(), Fraction::from_integer(twice_area.max(1).into()))
+        })
+        .collect();
     let mut groups: Vec<&BTreeSet<String>> = Vec::new();
     for reference in movable {
         let unit = &units[reference];
@@ -135,9 +154,17 @@ pub fn relative_cluster_order(scene: &Scene, movable: &[String], targets: &Poses
                     })
                     .map(|rule| rule.distance_nm.expect("a maximum distance"))
                     .collect();
+                let radius = limits.iter().copied().min();
+                let relative_space = radius.map(|radius| {
+                    let radius = Fraction::from_integer(radius.into());
+                    // Big rational arithmetic avoids squared-distance/cross-
+                    // product overflow and floating-point ordering ties.
+                    &radius * &radius / &courtyard_areas[reference.as_str()]
+                });
                 (
                     limits.is_empty(),
-                    limits.iter().copied().min().map_or(i128::from(i64::MAX) + 1, i128::from),
+                    relative_space,
+                    radius.map_or(i128::from(i64::MAX) + 1, i128::from),
                     -(limits.len() as i64),
                     -area(reference),
                     reference.clone(),
@@ -215,46 +242,85 @@ pub fn general_candidates<'c>(
     }))
 }
 
+/// An unanchored pin-relative unit has no local neighbourhood yet. Keep the
+/// nearest three quarters of its ordinary allowance, reserving the remainder
+/// for positions spread across the unused domain. Sample positions rather than
+/// flattened poses so every sampled site retains every allowed orientation.
+fn unanchored_candidates(
+    scene: &Scene,
+    target: &Placement,
+    options: &PlannerOptions,
+    orientations: &[Decimal],
+) -> (Vec<Placement>, usize) {
+    if orientations.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let allowance = options.probe_limit() / orientations.len();
+    if allowance == 0 {
+        // A source may permit more angles than one raw probe allowance. Keep
+        // the original partial cycle instead of producing an empty domain.
+        let candidates: Vec<_> = general_candidates(scene, target.clone(), options, orientations.to_vec())
+            .take(options.probe_limit())
+            .collect();
+        let nearest = candidates.len();
+        return (candidates, nearest);
+    }
+    let positions = candidate_positions(scene, target, options);
+    let nearest = if positions.len() <= allowance { positions.len() } else { allowance * 3 / 4 };
+    let remainder = (allowance - nearest).min(positions.len() - nearest);
+    let indexes =
+        (0..nearest).chain((0..remainder).map(|i| nearest + spread_index(i, positions.len() - nearest, remainder)));
+    let candidates = indexes
+        .flat_map(|i| {
+            let point = positions[i];
+            orientations.iter().map(move |angle| posed(target, point, angle))
+        })
+        .collect();
+    (candidates, nearest * orientations.len())
+}
+
+/// Only a held maximum-distance peer bounds a local neighbourhood. Minimum
+/// distances exclude nearby material; alignments still leave an unbounded axis.
+fn bounded_by_held_peer(rules: &[&RelativePlacementRule], reference: &str, held: &Poses) -> bool {
+    rules.iter().any(|rule| {
+        rule.kind == RelativePlacementKind::MaxDistance
+            && rule.targets.iter().any(|target| target.reference != reference && held.contains_key(&target.reference))
+    })
+}
+
 /// `_candidate_positions`: the ordinary grid (board or region), nearest first,
 /// plus exact region boundary centres within the unused allowance.
 pub fn candidate_positions(scene: &Scene, placement: &Placement, options: &PlannerOptions) -> Vec<Point> {
-    let board = scene.board;
-    let mut bounds = point_bounds(&board.outline.vertices);
-    let rule = scene.rule(&placement.reference);
-    let mut edge = options.edge_clearance_nm;
-    let region = rule
-        .and_then(|r| r.region.as_ref())
-        .map(|name| board.regions.iter().find(|r| r.name == *name).expect("validated region"));
-    if let Some(region) = region {
-        bounds = point_bounds(&region.outline.vertices);
-        edge = 0; // _legal still enforces the independent physical board edge.
-    }
-    let (min_x, min_y, max_x, max_y) = bounds;
+    let in_region = scene.rule(&placement.reference).is_some_and(|r| r.region.is_some());
     let orientations = scene.allowed_orientations(&placement.reference);
-    let (mut max_half_width, mut max_half_height) = (0, 0);
-    for orientation in &orientations {
-        let candidate = Placement { rotation_degrees: orientation.clone(), ..placement.clone() };
-        let (w, h) = scene.half_extents(&candidate);
-        max_half_width = max_half_width.max(w);
-        max_half_height = max_half_height.max(h);
-    }
+    // A pose need fit at one allowed orientation, not at every orientation.
+    // Union the signed origin domains; the consuming search still checks the
+    // complete pose against exact geometry and the original work budget.
+    let domains: Vec<_> = orientations
+        .iter()
+        .map(|orientation| {
+            let candidate = Placement { rotation_degrees: orientation.clone(), ..placement.clone() };
+            scene.anchor_bounds(&candidate, options.edge_clearance_nm)
+        })
+        .collect();
     let step = options.grid_step_nm;
     let ceil_grid = |value: i64| (value + step - 1).div_euclid(step) * step;
-    let (first_x, first_y) = (ceil_grid(min_x + edge + max_half_width), ceil_grid(min_y + edge + max_half_height));
-    let (last_x, last_y) = (max_x - edge - max_half_width, max_y - edge - max_half_height);
-    let mut coarse: Vec<Point> = Vec::new();
-    let mut y = first_y;
-    while y <= last_y {
-        let mut x = first_x;
-        while x <= last_x {
-            coarse.push(Point::new(x, y));
-            x += step;
+    let mut points = IndexSet::new();
+    for &(low_x, low_y, high_x, high_y) in &domains {
+        let mut y = ceil_grid(low_y);
+        while y <= high_y {
+            let mut x = ceil_grid(low_x);
+            while x <= high_x {
+                points.insert(Point::new(x, y));
+                x += step;
+            }
+            y += step;
         }
-        y += step;
     }
+    let mut coarse: Vec<Point> = points.into_iter().collect();
     let (px, py) = (placement.position.x_nm, placement.position.y_nm);
     coarse.sort_by_key(|p| ((p.x_nm - px).abs() + (p.y_nm - py).abs(), p.y_nm, p.x_nm));
-    if region.is_none() {
+    if !in_region {
         return coarse;
     }
     // Small hard regions can have a legal centre domain between lattice sites;
@@ -266,11 +332,7 @@ pub fn candidate_positions(scene: &Scene, placement: &Placement, options: &Plann
     }
     let mut seen: IndexSet<Point> = coarse.iter().copied().collect();
     let mut extra: Vec<Point> = Vec::new();
-    for orientation in &orientations {
-        let (half_width, half_height) =
-            scene.half_extents(&Placement { rotation_degrees: orientation.clone(), ..placement.clone() });
-        let (low_x, high_x) = (min_x + edge + half_width, max_x - edge - half_width);
-        let (low_y, high_y) = (min_y + edge + half_height, max_y - edge - half_height);
+    for &(low_x, low_y, high_x, high_y) in &domains {
         if low_x > high_x || low_y > high_y {
             continue;
         }
@@ -782,6 +844,7 @@ struct Search<'s> {
     domains: Vec<Vec<Placement>>,
     polygons: Vec<Vec<Vec<Point>>>,
     pair_rules: IndexMap<(usize, usize), Vec<&'s RelativePlacementRule>>,
+    relative_group_sizes: Vec<usize>,
     clashes: IndexMap<(usize, usize, usize, usize), bool>,
     remaining: i64,
     heuristic_remaining: i64,
@@ -817,14 +880,17 @@ impl Search<'_> {
         Ok(value)
     }
 
-    /// `solve`: most-constrained-first backtracking with courtyard forward checking.
+    /// Complete coupled relative groups before independent neighbours, with
+    /// most-constrained-first ordering inside a group and exact forward checking.
     fn solve(&mut self, available: &IndexMap<usize, Vec<usize>>, current: &Poses) -> Result<Option<Poses>> {
         if available.is_empty() {
             return Ok((self.scene.relative_penalty(current, &self.rules)? == 0).then(|| current.clone()));
         }
         let reference = *available
             .iter()
-            .min_by_key(|(item, indices)| (indices.len(), **item, &self.references[**item]))
+            .min_by_key(|(item, indices)| {
+                (Reverse(self.relative_group_sizes[**item]), indices.len(), **item, &self.references[**item])
+            })
             .map(|(item, _)| item)
             .expect("available");
         let obstacles = local_obstacles(self.scene, &self.references[reference], current);
@@ -911,6 +977,24 @@ impl Search<'_> {
     }
 }
 
+/// Sizes of connected components in this pack's internal relative-rule graph.
+/// External anchors remain in `base`; independent neighbours stay movable and
+/// participate in every exact courtyard/relative forward check.
+fn relative_group_sizes(count: usize, edges: impl Iterator<Item = (usize, usize)>) -> Vec<usize> {
+    let mut groups: Vec<usize> = (0..count).collect();
+    for (left, right) in edges {
+        let (keep, replace) = (groups[left], groups[right]);
+        if keep != replace {
+            for group in &mut groups {
+                if *group == replace {
+                    *group = keep;
+                }
+            }
+        }
+    }
+    groups.iter().map(|group| groups.iter().filter(|other| *other == group).count()).collect()
+}
+
 /// `_pack_local_components`: one bounded domain search for anchored companions and local repair.
 ///
 /// Domains contain individually legal poses; courtyard forward checking
@@ -927,7 +1011,78 @@ pub fn pack_local_components(
     fine: bool,
     contact_anchors: &[Placement],
 ) -> Result<Option<Poses>> {
-    pack(scene, references, base, targets, options, allow_general, fine, None, contact_anchors)
+    pack(scene, references, base, targets, options, allow_general, fine, None, contact_anchors, None)
+}
+
+/// Observation of the existing bounded search, never an additional search.
+#[derive(Default, Debug)]
+pub(crate) struct PackingDiagnostics {
+    pub domains: IndexMap<String, (usize, usize)>,
+    pub empty_reference: Option<String>,
+    pub search_remaining: Option<i64>,
+    pub passes: usize,
+    pub fine: bool,
+}
+
+#[derive(Default)]
+struct RepairDiagnostics {
+    references: Vec<String>,
+    packing: PackingDiagnostics,
+}
+
+impl RepairDiagnostics {
+    fn value(&self, result: Option<bool>) -> copper_json::Value {
+        use copper_json::{Object, Value};
+        Value::Object(Object::from([
+            (
+                "selected_references".into(),
+                Value::Array(self.references.iter().map(|r| Value::from(r.as_str())).collect()),
+            ),
+            (
+                "outcome".into(),
+                Value::from(match result {
+                    None => "pending",
+                    Some(true) => "placed",
+                    Some(false) => "no_sampled_witness",
+                }),
+            ),
+            ("passes".into(), Value::from(self.packing.passes as i64)),
+            ("final_pass".into(), Value::from(if self.packing.fine { "fine" } else { "coarse" })),
+            (
+                "domains".into(),
+                Value::Array(
+                    self.packing
+                        .domains
+                        .iter()
+                        .map(|(reference, (sampled, legal))| {
+                            Value::Object(Object::from([
+                                ("reference".into(), Value::from(reference.as_str())),
+                                ("sampled".into(), Value::from(*sampled as i64)),
+                                ("legal".into(), Value::from(*legal as i64)),
+                            ]))
+                        })
+                        .collect(),
+                ),
+            ),
+            (
+                "empty_reference".into(),
+                self.packing.empty_reference.as_ref().map_or(Value::Null, |r| Value::from(r.as_str())),
+            ),
+            ("search_remaining".into(), self.packing.search_remaining.map_or(Value::Null, Value::from)),
+        ]))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pack_local_components_observed(
+    scene: &Scene,
+    references: &[String],
+    base: &Poses,
+    targets: &Poses,
+    options: &PlannerOptions,
+    diagnostics: &mut PackingDiagnostics,
+) -> Result<Option<Poses>> {
+    pack(scene, references, base, targets, options, true, false, None, &[], Some(diagnostics))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -941,7 +1096,15 @@ fn pack(
     fine: bool,
     state: Option<&mut RegionState>,
     contact_anchors: &[Placement],
+    mut diagnostics: Option<&mut PackingDiagnostics>,
 ) -> Result<Option<Poses>> {
+    if let Some(diagnostic) = diagnostics.as_deref_mut() {
+        diagnostic.passes += 1;
+        diagnostic.fine = fine;
+        diagnostic.domains.clear();
+        diagnostic.empty_reference = None;
+        diagnostic.search_remaining = None;
+    }
     let board = scene.board;
     let in_references = |r: &str| references.iter().any(|x| x == r);
     let rules: Vec<&RelativePlacementRule> =
@@ -976,6 +1139,42 @@ fn pack(
     let mut anchors: Vec<&Placement> = base.values().collect();
     anchors.extend(references.iter().map(|r| &targets[r]));
     anchors.extend(held_seeds.iter().copied());
+    // A removed mutable anchor is no longer in `base`. Independent ordinary
+    // domains can then miss every compatible pair, even though both members
+    // can move. Construct these repair domains in dependency order, but retain
+    // the caller's order for the bounded search and its deterministic ties.
+    let mut joint_peers: IndexMap<&str, IndexSet<&str>> =
+        references.iter().map(|r| (r.as_str(), IndexSet::new())).collect();
+    if allow_general && !held_seeds.is_empty() {
+        for rule in &rules {
+            if rule.kind != RelativePlacementKind::MaxDistance
+                || rule.targets.len() != 2
+                || rule
+                    .targets
+                    .iter()
+                    .any(|t| t.pad.is_none() || !in_references(&t.reference) || immutable.contains(&t.reference))
+            {
+                continue;
+            }
+            let (a, b) = (rule.targets[0].reference.as_str(), rule.targets[1].reference.as_str());
+            if a != b {
+                joint_peers[a].insert(b);
+                joint_peers[b].insert(a);
+            }
+        }
+    }
+    let mut domain_order: Vec<&String> = references.iter().collect();
+    if joint_peers.values().any(|peers| !peers.is_empty()) {
+        domain_order.sort_by_key(|r| {
+            (
+                joint_peers[r.as_str()].is_empty(),
+                !held_seeds.iter().any(|p| p.reference == **r),
+                Reverse(joint_peers[r.as_str()].len()),
+                Reverse(scene.footprint_area(&targets[*r])),
+                references.iter().position(|original| original == *r).expect("member"),
+            )
+        });
+    }
     let own_rules_of = |reference: &str| -> Vec<&RelativePlacementRule> {
         rules.iter().copied().filter(|r| r.targets.iter().any(|t| t.reference == reference)).collect()
     };
@@ -1001,20 +1200,61 @@ fn pack(
     let has_state = state.is_some();
     match &state {
         None => {
-            for reference in references {
+            for reference in &domain_order {
+                let reference = *reference;
                 let target = &targets[reference];
                 let obstacles = local_obstacles(scene, reference, base);
                 let own_rules = own_rules_of(reference);
                 let relative = relative_candidates(scene, &candidate_rules, reference, target, base, options, 250_000)?;
+                let unanchored_joint =
+                    own_rules.iter().any(|rule| rule.targets.iter().all(|target| target.pad.is_some()))
+                        && !bounded_by_held_peer(&own_rules, reference, base);
                 let general: Candidates = if allow_general {
-                    general_candidates(scene, target.clone(), options, scene.allowed_orientations(reference))
+                    if unanchored_joint {
+                        Box::new(
+                            unanchored_candidates(scene, target, options, &scene.allowed_orientations(reference))
+                                .0
+                                .into_iter(),
+                        )
+                    } else {
+                        general_candidates(scene, target.clone(), options, scene.allowed_orientations(reference))
+                    }
                 } else {
                     Box::new(std::iter::empty())
                 };
+                let peer_poses: Vec<&Placement> = joint_peers[reference.as_str()]
+                    .iter()
+                    .filter_map(|peer| domains.get(*peer))
+                    .flat_map(|poses| poses.iter())
+                    .collect();
+                let propagated_budget = if peer_poses.is_empty() { 0 } else { probe_limit / 2 };
+                let anchor_count =
+                    peer_poses.len().min(options.exact_repair_candidates as usize).min(propagated_budget);
+                let mut propagated = Vec::new();
+                for i in 0..anchor_count {
+                    let anchor = peer_poses[spread_index(i, peer_poses.len(), anchor_count)];
+                    let held = with(base, anchor);
+                    let proposals =
+                        relative_candidates(scene, &candidate_rules, reference, target, &held, options, 250_000)?;
+                    let allowance = (propagated_budget - propagated.len()) / (anchor_count - i);
+                    let count = proposals.len().min(allowance);
+                    propagated.extend((0..count).map(|j| proposals[spread_index(j, proposals.len(), count)].clone()));
+                }
+                let retained_poses: Vec<Placement> = if joint_peers[reference.as_str()].is_empty() {
+                    Vec::new()
+                } else {
+                    held_seeds.iter().filter(|p| p.reference == *reference).map(|p| (*p).clone()).collect()
+                };
+                let ordinary_budget = probe_limit - propagated.len();
+                let candidates = retained_poses
+                    .into_iter()
+                    .chain(bounded_local_candidates(relative, ordinary_budget, general))
+                    .take(ordinary_budget)
+                    .chain(propagated);
                 let mut legal: Vec<Placement> = Vec::new();
                 let mut seen: IndexSet<Placement> = IndexSet::new();
                 let mut probed = 0i64;
-                for (index, candidate) in bounded_local_candidates(relative, probe_limit, general).enumerate() {
+                for (index, candidate) in candidates.enumerate() {
                     if index >= probe_limit {
                         break;
                     }
@@ -1056,6 +1296,13 @@ fn pack(
                     }
                 }
                 region_probe_remaining.insert(reference.clone(), probe_limit as i64 - probed);
+                if let Some(diagnostic) = diagnostics.as_deref_mut() {
+                    diagnostic.domains.insert(reference.clone(), (probed as usize, legal.len()));
+                    if legal.is_empty() {
+                        diagnostic.empty_reference = Some(reference.clone());
+                        diagnostic.search_remaining = None;
+                    }
+                }
                 if legal.is_empty() {
                     return Ok(None);
                 }
@@ -1114,12 +1361,16 @@ fn pack(
                 }
                 domains.insert(reference.clone(), legal);
             }
+            // Domain generation may follow movable anchors; search ordering
+            // remains the original caller ordering, including its tie breaks.
+            domains = references.iter().map(|r| (r.clone(), domains.shift_remove(r).expect("domain"))).collect();
         }
         Some(region) => {
             let refinable_set = region.refinable.clone();
             let mut remaining_by_ref = region.domain_remaining.clone();
             for reference in references {
                 let mut legal = region.domains[reference].clone();
+                let before = remaining_by_ref[reference];
                 if refinable_set.contains(reference) {
                     // Reuse accepted coarse sites; only new neighbour probes spend the residual allowance.
                     let seen: IndexSet<Placement> = legal.iter().cloned().collect();
@@ -1140,6 +1391,11 @@ fn pack(
                             legal.push(candidate);
                         }
                     }
+                }
+                if let Some(diagnostic) = diagnostics.as_deref_mut() {
+                    diagnostic
+                        .domains
+                        .insert(reference.clone(), ((before - remaining_by_ref[reference]) as usize, legal.len()));
                 }
                 if legal.len() > limit {
                     let n = legal.len();
@@ -1178,6 +1434,7 @@ fn pack(
         rules: rules.clone(),
         polygons: domains.values().map(|poses| poses.iter().map(|p| scene.polygon(p)).collect()).collect(),
         domains: domains.values().cloned().collect(),
+        relative_group_sizes: relative_group_sizes(order.len(), pair_rules.keys().copied()),
         pair_rules,
         clashes: IndexMap::new(),
         remaining,
@@ -1189,6 +1446,9 @@ fn pack(
         domains.values().enumerate().map(|(i, poses)| (i, (0..poses.len()).collect())).collect();
     let result = search.solve(&initial, base)?;
     let (remaining, heuristic_remaining) = (search.remaining, search.heuristic_remaining);
+    if let Some(diagnostic) = diagnostics.as_deref_mut() {
+        diagnostic.search_remaining = Some(remaining);
+    }
     if let Some(region) = state {
         region.search_remaining = remaining;
         region.heuristic_remaining = heuristic_remaining;
@@ -1197,7 +1457,18 @@ fn pack(
     let _ = has_state;
     if result.is_none() && refinable && !fine {
         // Preserve the pre-existing pad-MAX_DISTANCE fine behaviour.
-        return pack(scene, references, base, targets, options, allow_general, true, None, contact_anchors);
+        return pack(
+            scene,
+            references,
+            base,
+            targets,
+            options,
+            allow_general,
+            true,
+            None,
+            contact_anchors,
+            diagnostics,
+        );
     }
     if result.is_none() && !region_refinable.is_empty() && !fine && remaining > 0 {
         let mut region = RegionState {
@@ -1217,6 +1488,7 @@ fn pack(
             true,
             Some(&mut region),
             contact_anchors,
+            diagnostics,
         );
     }
     Ok(result)
@@ -1243,9 +1515,18 @@ pub fn best_legal_choice(
     let mut orientations = scene.allowed_orientations(reference);
     let shift = (seed as usize) % orientations.len();
     orientations.rotate_left(shift);
-    let mut general: Option<Candidates> = Some(general_candidates(scene, target.clone(), options, orientations));
+    let unanchored = local && !bounded_by_held_peer(&relative_rules, reference, placed);
+    let mut wide_start = None;
+    let mut general: Option<Candidates> = Some(if unanchored {
+        let (candidates, nearest_count) = unanchored_candidates(scene, target, options, &orientations);
+        wide_start = Some(nearest_count);
+        Box::new(candidates.into_iter())
+    } else {
+        general_candidates(scene, target.clone(), options, orientations)
+    });
     for step in [250_000, 100_000] {
         let fallback: Candidates = general.take().unwrap_or_else(|| Box::new(std::iter::empty()));
+        let coverage_start = wide_start.take();
         let mut count = 0usize;
         let local_target = best.as_ref().map_or(target, |(_, pose)| pose).clone();
         let relative = relative_candidates(scene, &scene.relative, reference, &local_target, placed, options, step)?;
@@ -1257,6 +1538,14 @@ pub fn best_legal_choice(
         for (probe, candidate) in candidates.enumerate() {
             if local && probe >= options.probe_limit() {
                 break;
+            }
+            if coverage_start == Some(probe) {
+                // A normal nearby success keeps its existing ranking. Distant
+                // coverage only spends the reserved allowance on local failure.
+                if best.is_some() {
+                    break;
+                }
+                scene.progress(&format!("legalize_wide:{reference}"));
             }
             if !scene.legal(&candidate, &obstacles)? {
                 continue;
@@ -1296,6 +1585,7 @@ pub fn best_legal_choice(
 
 /// `_exact_repair`: repack the failed component with its actual blockers and local companions.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn exact_repair(
     scene: &Scene,
     failed: &str,
@@ -1303,6 +1593,18 @@ fn exact_repair(
     placed_order: &[String],
     targets: &Poses,
     options: &PlannerOptions,
+) -> Result<Option<Poses>> {
+    exact_repair_observed(scene, failed, placed, placed_order, targets, options, &mut RepairDiagnostics::default())
+}
+
+fn exact_repair_observed(
+    scene: &Scene,
+    failed: &str,
+    placed: &Poses,
+    placed_order: &[String],
+    targets: &Poses,
+    options: &PlannerOptions,
+    diagnostic: &mut RepairDiagnostics,
 ) -> Result<Option<Poses>> {
     let fixed = scene.fixed_placements(placed, &options.fixed_references);
     let movable: BTreeSet<&str> = placed_order.iter().map(String::as_str).filter(|r| !fixed.contains_key(*r)).collect();
@@ -1351,10 +1653,51 @@ fn exact_repair(
         )
     });
     let mut repair: Vec<String> = vec![failed.to_owned()];
-    repair.extend(neighbours.iter().take((options.exact_repair_limit - 1) as usize).map(|r| (*r).to_owned()));
+    let unit = &units[failed];
+    let complete_mutable_unit = unit.len() > 1
+        && unit.len() <= options.exact_repair_limit as usize
+        && unit.iter().all(|r| {
+            targets.contains_key(r)
+                && !options.fixed_references.contains(r)
+                && !scene.rule(r).is_some_and(|rule| rule.fixed_position.is_some())
+                && (r == failed || !placed.contains_key(r) || movable.contains(r.as_str()))
+        })
+        && !scene
+            .board
+            .rigid_clusters
+            .iter()
+            .any(|cluster| cluster.members.iter().any(|m| unit.contains(&m.reference)));
+    if complete_mutable_unit {
+        // A proximity anchor need not be a collision blocker (for example on
+        // the opposite face). Keep a small movable unit together before other
+        // blockers consume the same bounded repair slots. Its not-yet-placed
+        // supports must participate too: moving the early anchor alone can
+        // strand them again in a pocket that only fits part of the unit.
+        repair.extend(neighbours.iter().filter(|r| unit.contains(**r)).map(|r| (*r).to_owned()));
+        repair.extend(unit.iter().filter(|r| *r != failed && !placed.contains_key(*r)).cloned());
+    }
+    for reference in neighbours {
+        if repair.len() == options.exact_repair_limit as usize {
+            break;
+        }
+        if !repair.iter().any(|r| r == reference) {
+            repair.push(reference.to_owned());
+        }
+    }
     let base: Poses = placed.iter().filter(|(r, _)| !repair.contains(r)).map(|(r, p)| (r.clone(), p.clone())).collect();
     let anchors: Vec<Placement> = repair.iter().filter_map(|r| placed.get(r).cloned()).collect();
-    pack_local_components(scene, &repair, &base, targets, options, true, false, &anchors)
+    diagnostic.references = repair.clone();
+    scene.progress(&format!(
+        "repair_pack_started:{failed}:{}",
+        copper_json::Dumps::new().dumps(&diagnostic.value(None))
+    ));
+    let result =
+        pack(scene, &repair, &base, targets, options, true, false, None, &anchors, Some(&mut diagnostic.packing))?;
+    scene.progress(&format!(
+        "repair_pack_finished:{failed}:{}",
+        copper_json::Dumps::new().dumps(&diagnostic.value(Some(result.is_some())))
+    ));
+    Ok(result)
 }
 
 /// `_local_failure_details`: explain a bounded-search failure without claiming impossibility.
@@ -1396,6 +1739,7 @@ pub struct LegalizationFailure {
     pub message: String,
     pub failed_reference: String,
     pub accepted: Poses,
+    pub bounded_packing: Option<copper_json::Value>,
 }
 
 /// The outcome of `_legalize`.
@@ -1413,6 +1757,19 @@ pub fn legalize(
     spacing: &EscapeSpacingModel,
     seed: i64,
 ) -> Result<Legalized> {
+    legalize_with_reservations(scene, targets, original, &Poses::new(), options, spacing, seed)
+}
+
+/// Carry early region choices as mutable accepted poses, not source locks.
+pub(crate) fn legalize_with_reservations(
+    scene: &Scene,
+    targets: &Poses,
+    original: &Poses,
+    reservations: &Poses,
+    options: &PlannerOptions,
+    spacing: &EscapeSpacingModel,
+    seed: i64,
+) -> Result<Legalized> {
     let board = scene.board;
     let fixed = scene.fixed_placements(original, &options.fixed_references);
     let mut placed = Poses::new();
@@ -1425,19 +1782,37 @@ pub fn legalize(
         }
         placed.insert(reference.clone(), candidate.clone());
     }
+    for (reference, candidate) in reservations {
+        if !scene.legal(candidate, &placed)? {
+            return Ok(Legalized::Failed(LegalizationFailure {
+                message: format!(
+                    "regional reservation {} violates held geometry",
+                    copper_json::python_str_repr(reference)
+                ),
+                failed_reference: reference.clone(),
+                accepted: placed,
+                bounded_packing: None,
+            }));
+        }
+        placed.insert(reference.clone(), candidate.clone());
+    }
     let adjacency = adjacency(scene);
+    // Module provenance supplies locality costs, not first claim on free area.
+    // Keep those weights for pose ranking while ordering by physical/source
+    // priority and degree without the automatically generated hierarchy clique.
+    let ordering_adjacency = adjacency_with_hierarchy(scene, false);
     let priorities = component_priorities(scene);
     let mut movable: Vec<String> = targets.keys().filter(|r| !fixed.contains_key(*r)).cloned().collect();
     movable.sort_by_key(|r| {
         (
             -priorities.get(r).copied().unwrap_or(0),
-            -adjacency.get(r).map_or(0, |n| n.values().sum::<i64>()),
+            -ordering_adjacency.get(r).map_or(0, |n| n.values().sum::<i64>()),
             -scene.footprint_area(&targets[r]),
             r.clone(),
         )
     });
     let movable = relative_cluster_order(scene, &movable, targets);
-    let mut placed_order: Vec<String> = Vec::new();
+    let mut placed_order: Vec<String> = reservations.keys().cloned().collect();
     let mut repair_count = 0;
     let rigid: IndexSet<&str> =
         board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.as_str())).collect();
@@ -1451,7 +1826,7 @@ pub fn legalize(
             continue;
         }
         for target in &rule.targets {
-            if !fixed.contains_key(&target.reference) && !rigid.contains(target.reference.as_str()) {
+            if !placed.contains_key(&target.reference) && !rigid.contains(target.reference.as_str()) {
                 direct.insert(&target.reference);
             }
         }
@@ -1536,8 +1911,13 @@ pub fn legalize(
             Some(pose) => scene.penalty(&with(&placed, pose))? > scene.penalty(&placed)?,
         };
         if worse {
-            match exact_repair(scene, reference, &placed, &placed_order, targets, options)? {
+            let mut diagnostic = RepairDiagnostics::default();
+            match exact_repair_observed(scene, reference, &placed, &placed_order, targets, options, &mut diagnostic)? {
                 Some(repaired) => {
+                    // A complete ordinary-unit repair can place later members
+                    // early. Keep them mutable and available to later repairs.
+                    placed_order
+                        .extend(repaired.keys().filter(|r| *r != reference && !placed.contains_key(*r)).cloned());
                     placed = repaired;
                     repair_count += 1;
                 }
@@ -1554,6 +1934,7 @@ pub fn legalize(
                             ),
                             failed_reference: reference.clone(),
                             accepted: placed,
+                            bounded_packing: Some(diagnostic.value(Some(false))),
                         }));
                     }
                 },
@@ -1574,10 +1955,13 @@ mod test_boards;
 mod tests {
     use super::test_boards::*;
     use super::*;
+    use crate::scene::without;
     use copper_pcb::board::{
         ComponentPlacementRule, PhysicalBoard, PlacementRegion, PlacementTarget, RelativePlacementKind,
+        RigidPlacementCluster, RigidPlacementMember,
     };
     use copper_physical::BoardOutline;
+    use copper_physical::footprint::footprint_geometry_digest;
 
     fn max_distance(a: (&str, &str), b: (&str, &str), distance: f64) -> RelativePlacementRule {
         let target = |(reference, pad): (&str, &str)| PlacementTarget {
@@ -1599,6 +1983,107 @@ mod tests {
             fixed_position: Some(pt(x, y)),
             fixed_rotation_degrees: Some(Decimal::from_i64(0)),
             ..ComponentPlacementRule::new(reference)
+        }
+    }
+
+    fn mutable_reservation_board() -> PhysicalBoard {
+        let mut board = board(
+            "mutable-reservation",
+            30.0,
+            30.0,
+            vec![one_pad()],
+            vec![back("J", "test/one-pad", 10.0, 10.0), back("K", "test/one-pad", 10.0, 10.0)],
+            Vec::new(),
+        );
+        board.regions = vec![region("flexible", 9.45, 9.45, 4.1, 1.1), region("tight", 9.45, 9.45, 1.1, 1.1)];
+        board.placement_rules = [("J", "flexible"), ("K", "tight")]
+            .iter()
+            .map(|(reference, region)| ComponentPlacementRule {
+                region: Some((*region).to_owned()),
+                allowed_orientations: vec![Decimal::from_i64(0)],
+                ..ComponentPlacementRule::new(reference)
+            })
+            .collect();
+        board
+    }
+
+    #[test]
+    fn packing_observation_distinguishes_empty_domain_from_incompatible_nonempty_domains() {
+        for failure in ["none", "empty", "incompatible"] {
+            let mut board = mutable_reservation_board();
+            if failure == "empty" {
+                board.regions[1] = region("tight", 40.0, 40.0, 1.1, 1.1);
+            } else if failure == "incompatible" {
+                board.regions[0] = region("flexible", 9.45, 9.45, 1.1, 1.1);
+            }
+            let options = repair_options();
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let references = ["J".to_owned(), "K".to_owned()];
+            let base = Poses::new();
+            let unobserved =
+                pack_local_components(&scene, &references, &base, &targets, &options, true, false, &[]).unwrap();
+            let mut diagnostic = PackingDiagnostics::default();
+            let observed =
+                pack_local_components_observed(&scene, &references, &base, &targets, &options, &mut diagnostic)
+                    .unwrap();
+            assert_eq!(observed, unobserved, "observations must not alter search decisions");
+            assert!(diagnostic.domains["J"].1 > 0);
+            assert!(diagnostic.domains.values().all(|(probes, _)| *probes <= options.probe_limit()));
+            if failure == "empty" {
+                assert!(observed.is_none());
+                assert_eq!(diagnostic.empty_reference.as_deref(), Some("K"));
+                assert_eq!(diagnostic.domains["K"].1, 0);
+                assert_eq!(diagnostic.search_remaining, None, "joint search never started");
+            } else {
+                assert!(diagnostic.empty_reference.is_none());
+                assert!(diagnostic.domains["K"].1 > 0);
+                assert!(diagnostic.search_remaining.is_some_and(|remaining| remaining > 0));
+                assert_eq!(observed.is_some(), failure == "none");
+            }
+        }
+    }
+
+    #[test]
+    fn early_region_reservation_can_move_in_later_exact_repair() {
+        let board = mutable_reservation_board();
+        let options = repair_options();
+        let scene = Scene::new(&board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let reservations: Poses = [("J".to_owned(), targets["J"].clone())].into_iter().collect();
+        let Legalized::Placed(placed, repairs) =
+            legalize_with_reservations(&scene, &targets, &targets, &reservations, &options, &spacing, 0).unwrap()
+        else {
+            panic!("reservation must remain movable");
+        };
+        assert!(repairs > 0);
+        assert_ne!(placed["J"].position, reservations["J"].position);
+        assert_eq!(placed["K"].position, pt(10.0, 10.0));
+        assert!(!options.fixed_references.contains("J"));
+        assert!(scene.checker.placement_solution_is_legal(&placed).unwrap());
+    }
+
+    #[test]
+    fn region_reservations_are_revalidated_against_regions_and_final_fixed_geometry() {
+        let board = mutable_reservation_board();
+        let mut options = repair_options();
+        options.fixed_references.insert("K".to_owned());
+        let scene = Scene::new(&board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        for position in [pt(20.0, 20.0), pt(10.0, 10.0)] {
+            let mut pose = targets["J"].clone();
+            pose.position = position;
+            let reservations: Poses = [("J".to_owned(), pose)].into_iter().collect();
+            let Legalized::Failed(failure) =
+                legalize_with_reservations(&scene, &targets, &targets, &reservations, &options, &spacing, 0).unwrap()
+            else {
+                panic!("invalid reservation must reject the seed");
+            };
+            assert_eq!(failure.failed_reference, "J");
+            assert_eq!(failure.accepted.len(), 1);
+            assert_eq!(failure.accepted["K"], targets["K"]);
         }
     }
 
@@ -1658,6 +2143,907 @@ mod tests {
             assert!(result["U"] == targets["U"] && result["Y"] == targets["Y"]);
             assert_ne!(result["X"], targets["X"]);
             assert_eq!(scene.checker.placement_solution_is_legal(&result).expect("legal"), !unrelated_failure);
+        }
+    }
+
+    fn trapped_relative_unit() -> PhysicalBoard {
+        let small = one_pad();
+        let blocker = footprint("blocker", Vec::new(), 6.0, 6.0);
+        let mut board = board(
+            "relative-unit-repair",
+            30.0,
+            30.0,
+            vec![small, blocker],
+            vec![
+                placement("U", "test/one-pad", 10.0, 10.0),
+                back("C", "test/one-pad", 20.0, 20.0),
+                back("X", "blocker", 10.0, 10.0),
+            ],
+            Vec::new(),
+        );
+        // U is on the opposite face, so it is a proximity anchor but never a
+        // physical blocker of C. X blocks every close pose and its region does
+        // not let it move far enough to clear one. Moving U and C together works.
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+        board.regions.push(region("blocker-slot", 6.95, 6.95, 6.1, 6.1));
+        board.placement_rules.push(ComponentPlacementRule {
+            region: Some("blocker-slot".to_owned()),
+            ..ComponentPlacementRule::new("X")
+        });
+        board
+    }
+
+    #[test]
+    fn unanchored_pin_relative_unit_can_use_distant_board_space_within_probe_budget() {
+        let mut board = board(
+            "distant-relative-unit",
+            100.0,
+            44.0,
+            vec![one_pad(), footprint("held-bank", Vec::new(), 68.0, 40.0)],
+            vec![
+                placement("U", "test/one-pad", 10.0, 22.0),
+                placement("C", "test/one-pad", 12.0, 22.0),
+                placement("K", "held-bank", 36.0, 22.0),
+            ],
+            Vec::new(),
+        );
+        board.placement_rules.push(fixed("K", 36.0, 22.0));
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+        let options = PlannerOptions::default().validated().unwrap();
+        assert_eq!(options.probe_limit(), 6144);
+        let scene = Scene::new(&board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let held: Poses = [("K".to_owned(), targets["K"].clone())].into_iter().collect();
+        assert!(scene.legal(&held["K"], &Poses::new()).unwrap());
+        assert!(
+            relative_candidates(&scene, &scene.relative, "U", &targets["U"], &held, &options, 250_000)
+                .unwrap()
+                .is_empty(),
+            "the companion has not been placed, so there is no local anchor"
+        );
+        let prefix: Vec<_> =
+            general_candidates(&scene, targets["U"].clone(), &options, scene.allowed_orientations("U"))
+                .take(options.probe_limit())
+                .collect();
+        assert_eq!(prefix.len(), options.probe_limit());
+        assert!(
+            prefix.iter().all(|pose| !scene.legal(pose, &held).unwrap()),
+            "the old nearest prefix misses all free material"
+        );
+        let witness = with(
+            &with(&held, &placement("U", "test/one-pad", 90.0, 22.0)),
+            &placement("C", "test/one-pad", 92.0, 22.0),
+        );
+        assert_eq!(scene.penalty(&witness).unwrap(), 0);
+        assert!(scene.checker.placement_solution_is_legal(&witness).unwrap(), "the distant pair is exactly legal");
+        let choice = best_legal_choice(
+            &scene,
+            "U",
+            &targets["U"],
+            &held,
+            &IndexMap::new(),
+            &options,
+            &spacing,
+            0,
+            Some(options.legalization_candidates as usize),
+        )
+        .unwrap()
+        .expect("bounded coverage must reach the free board area for an unanchored unit");
+        assert!(scene.legal(&choice, &held).unwrap());
+        assert!(choice.position.x_nm > mm(70.0));
+        let accepted = with(&held, &choice);
+        let cap = best_legal_choice(
+            &scene,
+            "C",
+            &targets["C"],
+            &accepted,
+            &IndexMap::new(),
+            &options,
+            &spacing,
+            0,
+            Some(options.legalization_candidates as usize),
+        )
+        .unwrap()
+        .expect("companion placement");
+        let result = with(&accepted, &cap);
+        assert_eq!(scene.penalty(&result).unwrap(), 0);
+        assert!(scene.checker.placement_solution_is_legal(&result).unwrap());
+        assert_eq!(result["K"], targets["K"]);
+    }
+
+    #[test]
+    fn joint_repair_domains_relocate_a_local_ic_only_pocket_to_a_distant_legal_pair() {
+        let mut board = board(
+            "unanchored-pair-repair-domain",
+            100.0,
+            44.0,
+            vec![one_pad()],
+            vec![placement("U", "test/one-pad", 10.0, 22.0), placement("C", "test/one-pad", 12.0, 22.0)],
+            Vec::new(),
+        );
+        // A 1.1 mm square local pocket holds this 1 mm IC, but not its
+        // capacitor. The remaining free material starts beyond X=70 mm.
+        for (name, x, y, width, height) in [
+            ("above", 0.0, 0.0, 70.0, 21.45),
+            ("below", 0.0, 22.55, 70.0, 21.45),
+            ("left", 0.0, 21.45, 9.45, 1.1),
+            ("right", 10.55, 21.45, 59.45, 1.1),
+        ] {
+            board.keepouts.push(
+                copper_physical::PlacementKeepout::new(name, region(name, x, y, width, height).outline, None, None)
+                    .unwrap(),
+            );
+        }
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+        let options = PlannerOptions::default().validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let chosen = best_legal_choice(
+            &scene,
+            "U",
+            &targets["U"],
+            &Poses::new(),
+            &IndexMap::new(),
+            &options,
+            &spacing,
+            0,
+            Some(options.legalization_candidates as usize),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(chosen.position, pt(10.0, 22.0), "the normal local IC choice succeeds");
+        let placed = [("U".to_owned(), chosen)].into_iter().collect();
+        let witness: Poses = [placement("U", "test/one-pad", 90.0, 22.0), placement("C", "test/one-pad", 92.0, 22.0)]
+            .into_iter()
+            .map(|p| (p.reference.clone(), p))
+            .collect();
+        assert!(scene.checker.placement_solution_is_legal(&witness).unwrap());
+        assert_eq!(scene.penalty(&witness).unwrap(), 0);
+        let repaired = exact_repair(&scene, "C", &placed, &["U".to_owned()], &targets, &options)
+            .unwrap()
+            .expect("joint domains must reach the distant compatible pair");
+        assert!(repaired["U"].position.x_nm > mm(70.0));
+        assert!(scene.checker.placement_solution_is_legal(&repaired).unwrap());
+        assert_eq!(scene.penalty(&repaired).unwrap(), 0);
+        let Legalized::Placed(result, _) = legalize(&scene, &targets, &targets, &options, &spacing, 0).unwrap() else {
+            panic!("the same bounded repair must recover ordinary legalization")
+        };
+        assert!(scene.checker.placement_solution_is_legal(&result).unwrap());
+        assert_eq!(scene.penalty(&result).unwrap(), 0);
+    }
+
+    #[test]
+    fn joint_repair_domains_keep_valid_held_anchor_rotations_and_probe_allowance() {
+        let mut board = board(
+            "joint-held-anchor",
+            30.0,
+            12.0,
+            vec![one_pad(), footprint("chip", vec![pad("1", -1.0, 0.0, 0.3, 0.3)], 2.0, 2.0)],
+            vec![
+                rotated("U", "chip", 5.0, 5.0, 90),
+                rotated("C", "test/one-pad", 5.0, 5.0, 270),
+                placement("K", "test/one-pad", 25.0, 5.0),
+            ],
+            Vec::new(),
+        );
+        board
+            .regions
+            .push(PlacementRegion { side: Some(BoardSide::Front), ..region("cap-pocket", 14.575, 7.075, 1.1, 1.1) });
+        board.placement_rules = vec![
+            ComponentPlacementRule {
+                allowed_orientations: vec![Decimal::from_i64(90)],
+                ..ComponentPlacementRule::new("U")
+            },
+            ComponentPlacementRule {
+                region: Some("cap-pocket".to_owned()),
+                allowed_orientations: vec![Decimal::from_i64(270)],
+                ..ComponentPlacementRule::new("C")
+            },
+            fixed("K", 25.0, 5.0),
+        ];
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 1.3));
+        let options = PlannerOptions::default().validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let held = rotated("U", "chip", 15.125, 5.375, 90);
+        let base: Poses = [("K".to_owned(), targets["K"].clone())].into_iter().collect();
+        let witness = with(&with(&base, &held), &rotated("C", "test/one-pad", 15.125, 7.625, 270));
+        assert!(
+            scene.checker.placement_solution_is_legal(&witness).unwrap(),
+            "{:?}",
+            copper_drc::legality::placement_rejection_reasons(&board, &witness).unwrap()
+        );
+        assert_eq!(scene.penalty(&witness).unwrap(), 0);
+        let mut diagnostic = PackingDiagnostics::default();
+        let result = pack(
+            &scene,
+            &["C".to_owned(), "U".to_owned()],
+            &base,
+            &targets,
+            &options,
+            true,
+            false,
+            None,
+            &[held.clone()],
+            Some(&mut diagnostic),
+        )
+        .unwrap()
+        .expect("the off-grid held anchor must remain a mutable domain candidate");
+        assert_eq!(result["U"], held);
+        assert_eq!(result["K"], base["K"], "immutable base cannot move");
+        assert_eq!(result["C"].rotation_degrees, Decimal::from_i64(270));
+        assert!(scene.checker.placement_solution_is_legal(&result).unwrap());
+        assert_eq!(scene.penalty(&result).unwrap(), 0);
+        assert_eq!(diagnostic.domains.len(), 2);
+        assert!(diagnostic.domains.values().all(|(probed, legal)| *probed <= options.probe_limit() && *legal > 0));
+        assert!(diagnostic.search_remaining.is_some_and(|remaining| remaining >= 0));
+    }
+
+    fn hierarchy_pocket_board() -> (PhysicalBoard, PlannerOptions) {
+        let mut poses = vec![placement("J", "large-header", 5.0, 5.0)];
+        for (i, (x, y)) in
+            [(3.0, 3.0), (5.0, 3.0), (7.0, 3.0), (3.0, 5.0), (5.0, 5.0), (7.0, 5.0), (3.0, 7.0), (5.0, 7.0)]
+                .into_iter()
+                .enumerate()
+        {
+            poses.push(placement(&format!("M/R{i}"), "test/one-pad", x, y));
+        }
+        let mut board = board(
+            "hierarchy-packing",
+            30.0,
+            10.0,
+            vec![one_pad(), footprint("large-header", Vec::new(), 8.0, 8.0)],
+            poses,
+            Vec::new(),
+        );
+        board.keepouts.push(
+            copper_physical::PlacementKeepout::new(
+                "right-lower",
+                region("right-lower", 10.0, 3.0, 20.0, 7.0).outline,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        board.placement_groups.push(
+            copper_pcb::board::PlacementGroup::new(
+                "module:M",
+                &(0..8).map(|i| format!("M/R{i}")).collect::<Vec<_>>(),
+                Some("M/R0"),
+                100,
+                "hierarchy",
+            )
+            .unwrap(),
+        );
+        let options = PlannerOptions {
+            legalization_candidates: 1,
+            exact_repair_limit: 2,
+            edge_clearance_nm: 250_000,
+            analytical_iterations: 0,
+            refinement_passes: 0,
+            escape_spacing_passes: 0,
+            ..PlannerOptions::default()
+        }
+        .validated()
+        .unwrap();
+        (board, options)
+    }
+
+    #[test]
+    fn relative_companion_area_order_preserves_the_only_large_pocket() {
+        // A free opposite-face anchor has a star larger than the repair budget.
+        // Eight small supports fit the narrow top shelf; the large support only
+        // fits the left pocket. Raw radius ordering fills that pocket first.
+        let mut poses = vec![back("U", "anchor", 5.0, 5.0), placement("L", "large", 5.0, 5.0)];
+        for i in 0..8 {
+            poses.push(placement(&format!("S{i}"), "test/one-pad", 5.0, 5.0));
+        }
+        let mut board = board(
+            "relative-area-packing",
+            30.0,
+            10.0,
+            vec![
+                one_pad(),
+                footprint("anchor", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 9.0, 9.0),
+                footprint("large", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 8.0, 8.0),
+            ],
+            poses,
+            Vec::new(),
+        );
+        board.keepouts.push(
+            copper_physical::PlacementKeepout::new(
+                "right-lower",
+                region("right-lower", 10.0, 3.0, 20.0, 7.0).outline,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        board.relative_rules.push(max_distance(("L", "1"), ("U", "1"), 10.0));
+        for i in 0..8 {
+            board.relative_rules.push(max_distance((&format!("S{i}"), "1"), ("U", "1"), 9.0));
+        }
+        let options = PlannerOptions {
+            edge_clearance_nm: 250_000,
+            analytical_iterations: 0,
+            refinement_passes: 0,
+            escape_spacing_passes: 0,
+            ..PlannerOptions::default()
+        }
+        .validated()
+        .unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let movable = targets.keys().cloned().collect::<Vec<_>>();
+        let order = relative_cluster_order(&scene, &movable, &targets);
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let Legalized::Placed(result, _) = legalize(&scene, &targets, &targets, &options, &spacing, 0).unwrap() else {
+            panic!("area ordering must fit the star without a larger repair allowance")
+        };
+        assert_eq!(&order[..2], &["U", "L"], "larger support needs its pocket before smaller tighter-radius supports");
+        assert!(scene.checker.placement_solution_is_legal(&result).unwrap());
+        assert_eq!(scene.penalty(&result).unwrap(), 0);
+    }
+
+    #[test]
+    fn relative_companion_area_order_uses_courtyards_and_exact_deterministic_ratios() {
+        for (large_radius, small_radius, first) in [
+            (mm(2.5), mm(2.0), "L"),
+            (mm(6.0), mm(5.0), "L"),
+            // Equal area-normalized radii retain the old tighter-radius tie.
+            (mm(4.0), mm(2.0), "S"),
+            // Squaring and comparing these radii must not overflow i128.
+            (i64::MAX, i64::MAX, "L"),
+        ] {
+            let mut large = footprint("large-court", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 1.0, 1.0);
+            large.courtyard = vec![pt(-1.0, -1.0), pt(-1.0, 1.0), pt(1.0, 1.0), pt(1.0, -1.0)];
+            let mut board = board(
+                "companion-ratios",
+                30.0,
+                30.0,
+                vec![one_pad(), large, footprint("anchor", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 5.0, 5.0)],
+                vec![
+                    placement("U", "anchor", 15.0, 15.0),
+                    placement("L", "large-court", 10.0, 10.0),
+                    placement("T", "test/one-pad", 10.0, 10.0),
+                    placement("S", "test/one-pad", 10.0, 10.0),
+                ],
+                Vec::new(),
+            );
+            for (reference, radius) in [("L", large_radius), ("S", small_radius), ("T", small_radius)] {
+                let mut rule = max_distance((reference, "1"), ("U", "1"), 1.0);
+                rule.distance_nm = Some(radius);
+                board.relative_rules.push(rule);
+            }
+            let options = PlannerOptions::default().validated().unwrap();
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let movable = targets.keys().cloned().collect::<Vec<_>>();
+            let ordered = relative_cluster_order(&scene, &movable, &targets);
+            assert_eq!(ordered[0], "U", "anchor selection is unchanged");
+            assert_eq!(ordered[1], first);
+            assert!(ordered.iter().position(|r| r == "S") < ordered.iter().position(|r| r == "T"));
+            // Fixed/rigid anchors enter this function outside the movable list.
+            // They must remain outside it, with identical companion ordering.
+            let companions = movable.into_iter().filter(|r| r != "U").collect::<Vec<_>>();
+            assert_eq!(relative_cluster_order(&scene, &companions, &targets), ordered[1..]);
+        }
+    }
+
+    fn legalize_hierarchy_pocket(board: &PhysicalBoard, options: &PlannerOptions) -> Legalized {
+        let scene = Scene::new(board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        legalize(&scene, &targets, &targets, options, &spacing, 0).unwrap()
+    }
+
+    #[test]
+    fn hierarchy_locality_must_not_strand_a_large_root_component_behind_module_passives() {
+        let (board, options) = hierarchy_pocket_board();
+        let scene = Scene::new(&board, options.policy());
+        assert_eq!(
+            adjacency(&scene)["M/R0"]["M/R1"],
+            100,
+            "logical grouping still contributes its original locality cost"
+        );
+        let mut flat = board.clone();
+        flat.placement_groups.clear();
+        let witness = match legalize_hierarchy_pocket(&flat, &options) {
+            Legalized::Placed(poses, _) => poses,
+            Legalized::Failed(failure) => panic!(
+                "flat witness: {} after {} poses: {}",
+                failure.failed_reference,
+                failure.accepted.len(),
+                failure.message
+            ),
+        };
+        assert!(Scene::new(&board, options.policy()).checker.placement_solution_is_legal(&witness).unwrap());
+        let Legalized::Placed(result, _) = legalize_hierarchy_pocket(&board, &options) else {
+            panic!("logical namespace must not give tiny members first claim on the only large pocket")
+        };
+        assert_eq!(result["J"], witness["J"]);
+        assert!(Scene::new(&board, options.policy()).checker.placement_solution_is_legal(&result).unwrap());
+    }
+
+    #[test]
+    fn authored_group_and_component_priorities_still_control_legalization_order() {
+        let (mut board, options) = hierarchy_pocket_board();
+        board.placement_groups[0].source = "constraint".to_owned();
+        assert!(
+            matches!(legalize_hierarchy_pocket(&board, &options), Legalized::Failed(ref f) if f.failed_reference == "J"),
+            "an authored group priority must retain its preference even when this bounded layout fails"
+        );
+        board.placement_rules.push(ComponentPlacementRule { priority: 150, ..ComponentPlacementRule::new("J") });
+        let Legalized::Placed(result, _) = legalize_hierarchy_pocket(&board, &options) else {
+            panic!("higher authored component priority gets the pocket")
+        };
+        assert!(Scene::new(&board, options.policy()).checker.placement_solution_is_legal(&result).unwrap());
+    }
+
+    #[test]
+    fn unanchored_coverage_is_bounded_unique_and_keeps_allowed_rotation_cycles() {
+        for width in [8.0, 100.0] {
+            for angles in [vec![90], vec![0, 90, 270], vec![0, 90, 180, 270]] {
+                let target = placement("U", "test/one-pad", 4.0, 4.0);
+                let mut board = board("coverage-budget", width, 8.0, vec![one_pad()], vec![target.clone()], Vec::new());
+                let orientations: Vec<_> = angles.into_iter().map(Decimal::from_i64).collect();
+                board.placement_rules.push(ComponentPlacementRule {
+                    allowed_orientations: orientations.clone(),
+                    ..ComponentPlacementRule::new("U")
+                });
+                let options =
+                    PlannerOptions { legalization_candidates: 1, ..PlannerOptions::default() }.validated().unwrap();
+                let scene = Scene::new(&board, options.policy());
+                let (candidates, nearest) = unanchored_candidates(&scene, &target, &options, &orientations);
+                assert!(candidates.len() <= options.probe_limit());
+                assert_eq!(candidates.iter().collect::<IndexSet<_>>().len(), candidates.len());
+                assert_eq!(candidates.len() % orientations.len(), 0);
+                assert_eq!(nearest % orientations.len(), 0);
+                for poses in candidates.chunks(orientations.len()) {
+                    for (pose, angle) in poses.iter().zip(&orientations) {
+                        assert_eq!(&pose.rotation_degrees, angle);
+                        assert_eq!(pose.position, poses[0].position);
+                    }
+                }
+                let ordinary: Vec<_> =
+                    general_candidates(&scene, target.clone(), &options, orientations.clone()).collect();
+                assert_eq!(&candidates[..nearest], &ordinary[..nearest], "nearby order is unchanged");
+                assert_eq!(
+                    candidates.last().unwrap().position,
+                    ordinary.last().unwrap().position,
+                    "coverage reaches the far end without losing orientations"
+                );
+                if ordinary.len() <= options.probe_limit() {
+                    assert_eq!(candidates, ordinary, "small domains retain the complete old stream");
+                }
+                assert_eq!(unanchored_candidates(&scene, &target, &options, &orientations), (candidates, nearest));
+            }
+        }
+    }
+
+    #[test]
+    fn unanchored_search_keeps_bounded_poses_when_a_rotation_cycle_exceeds_the_budget() {
+        let target = placement("U", "test/one-pad", 10.0, 10.0);
+        let mut board = board(
+            "many-orientations",
+            30.0,
+            30.0,
+            vec![one_pad()],
+            vec![target.clone(), placement("C", "test/one-pad", 12.0, 10.0)],
+            Vec::new(),
+        );
+        let orientations: Vec<_> = (0..65).map(Decimal::from_i64).collect();
+        board.placement_rules.push(ComponentPlacementRule {
+            allowed_orientations: orientations.clone(),
+            ..ComponentPlacementRule::new("U")
+        });
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+        let options = PlannerOptions { legalization_candidates: 1, ..PlannerOptions::default() }.validated().unwrap();
+        assert_eq!(options.probe_limit(), 64);
+        let scene = Scene::new(&board, options.policy());
+        let (candidates, nearest) = unanchored_candidates(&scene, &target, &options, &orientations);
+        let expected: Vec<_> =
+            general_candidates(&scene, target.clone(), &options, orientations).take(options.probe_limit()).collect();
+        assert_eq!(candidates, expected, "an incomplete rotation cycle must retain the old bounded prefix");
+        assert_eq!(nearest, candidates.len(), "there is no separate wide-search boundary");
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let choice =
+            best_legal_choice(&scene, "U", &target, &Poses::new(), &IndexMap::new(), &options, &spacing, 0, Some(1))
+                .unwrap()
+                .expect("a clear board must still admit the first permitted pose");
+        assert_eq!(choice, target);
+        assert!(scene.legal(&choice, &Poses::new()).unwrap());
+    }
+
+    #[test]
+    fn unanchored_nearby_success_keeps_the_existing_choice_before_distant_coverage() {
+        let mut board = board(
+            "nearby-choice",
+            100.0,
+            44.0,
+            vec![one_pad()],
+            vec![placement("U", "test/one-pad", 80.0, 20.0), placement("C", "test/one-pad", 82.0, 20.0)],
+            Vec::new(),
+        );
+        board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+        let options = PlannerOptions::default().validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        for seed in 0..4 {
+            let pose = best_legal_choice(
+                &scene,
+                "U",
+                &board.placements[0],
+                &Poses::new(),
+                &IndexMap::new(),
+                &options,
+                &spacing,
+                seed,
+                Some(96),
+            )
+            .unwrap()
+            .unwrap();
+            // With no held neighbours, the old nearest 96 poses are 24 sites;
+            // their lowest-y tie winner is three grid steps above the target.
+            // Distant sampling contains lower-y sites and must not replace it.
+            assert_eq!(pose.position, pt(80.0, 17.0));
+            assert_eq!(pose.rotation_degrees, Decimal::from_i64(0));
+            assert!(scene.legal(&pose, &Poses::new()).unwrap());
+        }
+    }
+
+    #[test]
+    fn local_repair_moves_the_complete_small_relative_unit_when_its_anchor_is_not_a_blocker() {
+        let board = trapped_relative_unit();
+        let options = repair_options();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let placed = without(&targets, "C");
+        let order = vec!["U".to_owned(), "X".to_owned()];
+        for pose in placed.values() {
+            assert!(scene.legal(pose, &without(&placed, &pose.reference)).expect("held geometry"));
+        }
+        let blocker_pack = pack_local_components(
+            &scene,
+            &["C".to_owned(), "X".to_owned()],
+            &without(&placed, "X"),
+            &targets,
+            &options,
+            true,
+            false,
+            &[targets["X"].clone()],
+        )
+        .expect("blocker-only repair");
+        assert!(blocker_pack.is_none(), "the old two-member neighborhood cannot solve the pair");
+        let result = exact_repair(&scene, "C", &placed, &order, &targets, &options)
+            .expect("repair")
+            .expect("the same two-member budget must include the movable proximity anchor");
+        assert_ne!(result["U"].position, targets["U"].position);
+        assert_eq!(result["X"], targets["X"]);
+        assert_eq!(scene.penalty(&result).expect("relative constraints"), 0);
+        assert!(scene.checker.placement_solution_is_legal(&result).expect("complete legality"));
+    }
+
+    #[test]
+    fn fixed_rigid_or_oversized_relative_units_do_not_displace_actual_blocker_selection() {
+        for exclusion in ["fixed", "rigid", "oversized"] {
+            let mut board = trapped_relative_unit();
+            let mut options = repair_options();
+            match exclusion {
+                "fixed" => {
+                    options.fixed_references.insert("U".to_owned());
+                }
+                "rigid" => {
+                    let fp = &board.footprints["test/one-pad"];
+                    board.rigid_clusters.push(
+                        RigidPlacementCluster {
+                            name: "held-macro".to_owned(),
+                            anchor_reference: "U".to_owned(),
+                            anchor_pad: None,
+                            members: vec![
+                                RigidPlacementMember::new(
+                                    "U",
+                                    &fp.name,
+                                    &footprint_geometry_digest(fp),
+                                    pt(0.0, 0.0),
+                                    &Decimal::from_i64(0),
+                                )
+                                .expect("member"),
+                            ],
+                            source: "repair regression".to_owned(),
+                            allowed_rotations: vec![Decimal::from_i64(0)],
+                            keepouts: Vec::new(),
+                            internal_clearance_nm: None,
+                            edge_openings: Vec::new(),
+                        }
+                        .normalized()
+                        .expect("cluster"),
+                    );
+                }
+                "oversized" => {
+                    board.placements.push(placement("Y", "test/one-pad", 20.0, 5.0));
+                    board.relative_rules.push(max_distance(("U", "1"), ("Y", "1"), 20.0));
+                }
+                _ => unreachable!(),
+            }
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let placed = without(&targets, "C");
+            let order = placed.keys().cloned().collect::<Vec<_>>();
+            assert!(
+                exact_repair(&scene, "C", &placed, &order, &targets, &options).expect("repair").is_none(),
+                "{exclusion}"
+            );
+            assert_eq!(placed, without(&targets, "C"), "failed repair leaves the held base unchanged");
+        }
+    }
+
+    #[test]
+    fn ordinary_unit_repair_includes_unplaced_supports_before_unrelated_blockers() {
+        let mut board = trapped_relative_unit();
+        for reference in ["C2", "C3", "C4"] {
+            board.placements.push(back(reference, "test/one-pad", 20.0, 20.0));
+            board.relative_rules.push(max_distance((reference, "1"), ("U", "1"), 2.0));
+        }
+        let original = board.clone();
+        let options = PlannerOptions { exact_repair_limit: 5, ..PlannerOptions::default() }.validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let held: Poses = ["U", "X"].into_iter().map(|r| (r.to_owned(), targets[r].clone())).collect();
+        let mut witness = targets.clone();
+        for (reference, position) in [
+            ("U", pt(20.0, 15.0)),
+            ("C", pt(20.0, 16.5)),
+            ("C2", pt(18.5, 15.0)),
+            ("C3", pt(21.5, 15.0)),
+            ("C4", pt(20.0, 13.5)),
+        ] {
+            witness.get_mut(reference).unwrap().position = position;
+        }
+        assert!(scene.checker.placement_solution_is_legal(&witness).unwrap());
+        assert_eq!(scene.penalty(&witness).unwrap(), 0);
+        let repaired = exact_repair(&scene, "C", &held, &["U".to_owned(), "X".to_owned()], &targets, &options)
+            .unwrap()
+            .expect("the five-member unit has a legal joint placement away from the trapped anchor");
+        assert_eq!(repaired.len(), targets.len(), "all three future supports participate in the same witness");
+        assert_eq!(repaired["X"], held["X"], "an unrelated blocker must not consume the unit's bounded slots");
+        assert_ne!(repaired["U"], held["U"]);
+        assert!(scene.checker.placement_solution_is_legal(&repaired).unwrap());
+        assert_eq!(scene.penalty(&repaired).unwrap(), 0);
+        assert_eq!(board, original);
+    }
+
+    #[test]
+    fn ordinary_unit_repair_with_an_impossible_future_support_leaves_held_poses_untouched() {
+        let mut board = trapped_relative_unit();
+        board.placements.push(back("C2", "test/one-pad", 10.0, 10.0));
+        board.relative_rules.push(max_distance(("C2", "1"), ("U", "1"), 2.0));
+        board.regions.push(region("impossible-support", 9.75, 9.75, 0.5, 0.5));
+        board.placement_rules.push(ComponentPlacementRule {
+            region: Some("impossible-support".to_owned()),
+            ..ComponentPlacementRule::new("C2")
+        });
+        let options = PlannerOptions { exact_repair_limit: 3, ..PlannerOptions::default() }.validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let held: Poses = ["U", "X"].into_iter().map(|r| (r.to_owned(), targets[r].clone())).collect();
+        let before = held.clone();
+        assert!(
+            exact_repair(&scene, "C", &held, &["U".to_owned(), "X".to_owned()], &targets, &options).unwrap().is_none(),
+            "the complete unit cannot accept a partial solution that ignores its future support"
+        );
+        assert_eq!(held, before);
+        let mut diagnostic = RepairDiagnostics::default();
+        assert!(
+            exact_repair_observed(
+                &scene,
+                "C",
+                &held,
+                &["U".to_owned(), "X".to_owned()],
+                &targets,
+                &options,
+                &mut diagnostic
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(diagnostic.packing.empty_reference.as_deref(), Some("C2"));
+        assert_eq!(diagnostic.packing.search_remaining, None, "an empty domain never started combination search");
+        assert_eq!(diagnostic.packing.domains["C2"].1, 0);
+        assert_eq!(diagnostic.references.len(), 3);
+        let value = diagnostic.value(Some(false));
+        assert_eq!(copper_json::parse(&copper_json::Dumps::new().dumps(&value)).unwrap(), value);
+    }
+
+    #[test]
+    fn bounded_repair_observation_preserves_exact_search_and_reports_remaining_work() {
+        let board = trapped_relative_unit();
+        let options = repair_options();
+        let scene = Scene::new(&board, options.policy());
+        let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        let held = without(&targets, "C");
+        let mut diagnostic = RepairDiagnostics::default();
+        let observed = exact_repair_observed(
+            &scene,
+            "C",
+            &held,
+            &["U".to_owned(), "X".to_owned()],
+            &targets,
+            &options,
+            &mut diagnostic,
+        )
+        .unwrap()
+        .unwrap();
+        let base: Poses = held
+            .iter()
+            .filter(|(r, _)| !diagnostic.references.contains(*r))
+            .map(|(r, p)| (r.clone(), p.clone()))
+            .collect();
+        let anchors: Vec<Placement> = diagnostic.references.iter().filter_map(|r| held.get(r).cloned()).collect();
+        let unobserved =
+            pack_local_components(&scene, &diagnostic.references, &base, &targets, &options, true, false, &anchors)
+                .unwrap()
+                .unwrap();
+        assert_eq!(observed, unobserved, "observation adds no candidates or search decisions");
+        assert_eq!(diagnostic.references.len(), 2);
+        assert!(diagnostic.packing.passes >= 1);
+        assert_eq!(diagnostic.packing.empty_reference, None);
+        assert!(diagnostic.packing.search_remaining.is_some_and(|remaining| remaining >= 0));
+        assert!(
+            diagnostic.packing.domains.values().all(|(sampled, legal)| *sampled <= options.probe_limit() && *legal > 0)
+        );
+        let value = diagnostic.value(Some(true));
+        assert_eq!(copper_json::parse(&copper_json::Dumps::new().dumps(&value)).unwrap(), value);
+    }
+
+    #[test]
+    fn coupled_group_order_avoids_repeating_a_star_under_an_independent_narrow_neighbour() {
+        let references: Vec<String> = ["U", "C1", "C2", "X"].into_iter().map(str::to_owned).collect();
+        let mut board = board(
+            "coupled-star-budget",
+            240.0,
+            220.0,
+            vec![one_pad()],
+            references.iter().map(|r| placement(r, "test/one-pad", 10.0, 10.0)).collect(),
+            Vec::new(),
+        );
+        board.relative_rules =
+            vec![max_distance(("U", "1"), ("C1", "1"), 1.7), max_distance(("U", "1"), ("C2", "1"), 1.7)];
+        let options = PlannerOptions::default();
+        let scene = Scene::new(&board, options.policy());
+        let pose = |r: &str, x, y| placement(r, "test/one-pad", x, y);
+        let mut domains = vec![
+            vec![pose("U", 10.0, 10.0)],
+            Vec::new(),
+            Vec::new(),
+            vec![pose("X", 10.0, 11.6), pose("X", 220.0, 200.0)],
+        ];
+        for index in 0..31 {
+            let x = 20.0 + 3.0 * f64::from(index);
+            domains[0].push(pose("U", x, 10.0));
+            domains[1].push(pose("C1", x, 100.0));
+            domains[2].push(pose("C2", x, 180.0));
+        }
+        domains[1].push(pose("C1", 10.0, 11.6));
+        domains[2].push(pose("C2", 11.6, 10.0));
+        let witness: Poses =
+            [domains[0][0].clone(), domains[1][31].clone(), domains[2][31].clone(), domains[3][1].clone()]
+                .into_iter()
+                .map(|p| (p.reference.clone(), p))
+                .collect();
+        assert!(scene.checker.placement_solution_is_legal(&witness).unwrap());
+        assert_eq!(scene.penalty(&witness).unwrap(), 0);
+        let pair_rules: IndexMap<_, _> =
+            [((0, 1), vec![&board.relative_rules[0]]), ((0, 2), vec![&board.relative_rules[1]])].into_iter().collect();
+        let sizes = relative_group_sizes(references.len(), pair_rules.keys().copied());
+        assert_eq!(sizes, [3, 3, 3, 1]);
+        let initial: IndexMap<usize, Vec<usize>> =
+            domains.iter().enumerate().map(|(i, poses)| (i, (0..poses.len()).collect())).collect();
+        let make_search = |relative_group_sizes| Search {
+            scene: &scene,
+            references: &references,
+            rules: scene.relative.clone(),
+            polygons: domains.iter().map(|poses| poses.iter().map(|p| scene.polygon(p)).collect()).collect(),
+            domains: domains.clone(),
+            pair_rules: pair_rules.clone(),
+            relative_group_sizes,
+            clashes: IndexMap::new(),
+            remaining: 300,
+            // Ranking may already be exhausted in a deeper real search. That
+            // does not grant more states or drop the remaining exact checks.
+            heuristic_remaining: 0,
+            exact_repair_candidates: options.exact_repair_candidates as usize,
+            component_clearance_nm: options.component_clearance_nm,
+        };
+        let mut previous_mrv = make_search(vec![1; references.len()]);
+        assert!(previous_mrv.solve(&initial, &Poses::new()).unwrap().is_none());
+        assert_eq!(previous_mrv.remaining, 0, "the narrow independent choice repeats an impossible star branch");
+        let mut grouped = make_search(sizes);
+        let result = grouped.solve(&initial, &Poses::new()).unwrap().expect("same candidates and state allowance");
+        assert!(grouped.remaining > 0);
+        assert_eq!(result["X"], domains[3][1], "the independent blocker remains movable and is relocated");
+        assert!(scene.checker.placement_solution_is_legal(&result).unwrap());
+        assert_eq!(scene.penalty(&result).unwrap(), 0);
+    }
+
+    #[test]
+    fn minimum_distance_peers_do_not_hide_a_distant_legal_region_from_greedy_or_joint_search() {
+        for with_future_support in [false, true] {
+            let mut board = board(
+                "minimum-distance-wide-coverage",
+                100.0,
+                40.0,
+                vec![one_pad()],
+                vec![placement("A", "test/one-pad", 10.0, 5.0), placement("U", "test/one-pad", 20.0, 20.0)],
+                Vec::new(),
+            );
+            // The held peer has a tiny legal pocket. Every local/ring proposal
+            // around the target is blocked, but ordinary material beyond X=70
+            // is legal and satisfies the exclusion distance.
+            for (name, x, y, width, height) in [
+                ("above", 0.0, 0.0, 70.0, 4.4),
+                ("below", 0.0, 5.6, 70.0, 34.4),
+                ("left", 0.0, 4.4, 9.4, 1.2),
+                ("right", 10.6, 4.4, 59.4, 1.2),
+            ] {
+                board.keepouts.push(
+                    copper_physical::PlacementKeepout::new(name, region(name, x, y, width, height).outline, None, None)
+                        .unwrap(),
+                );
+            }
+            let mut exclusion = max_distance(("U", "1"), ("A", "1"), 6.0);
+            exclusion.kind = RelativePlacementKind::MinDistance;
+            board.relative_rules.push(exclusion);
+            if with_future_support {
+                board.placements.push(placement("C", "test/one-pad", 22.0, 20.0));
+                board.relative_rules.push(max_distance(("C", "1"), ("U", "1"), 2.0));
+            }
+            let options = PlannerOptions::default().validated().unwrap();
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let held: Poses = [("A".to_owned(), targets["A"].clone())].into_iter().collect();
+            let old_relative =
+                relative_candidates(&scene, &scene.relative, "U", &targets["U"], &held, &options, 250_000).unwrap();
+            let old_general =
+                general_candidates(&scene, targets["U"].clone(), &options, scene.allowed_orientations("U"));
+            assert!(
+                !old_relative.into_iter().chain(old_general).take(options.probe_limit()).any(|pose| {
+                    scene.legal(&pose, &held).unwrap() && scene.penalty(&with(&held, &pose)).unwrap() == 0
+                }),
+                "the old held-peer classification spends its whole budget in the blocked local area"
+            );
+            assert!(!bounded_by_held_peer(&scene.relative, "U", &held));
+            let spacing =
+                EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+            let chosen = best_legal_choice(
+                &scene,
+                "U",
+                &targets["U"],
+                &held,
+                &IndexMap::new(),
+                &options,
+                &spacing,
+                0,
+                Some(options.legalization_candidates as usize),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(chosen.position.x_nm > mm(70.0));
+            assert!(scene.legal(&chosen, &held).unwrap());
+            assert_eq!(scene.penalty(&with(&held, &chosen)).unwrap(), 0);
+            let references: Vec<String> =
+                if with_future_support { vec!["U".into(), "C".into()] } else { vec!["U".into()] };
+            let mut diagnostic = PackingDiagnostics::default();
+            let packed =
+                pack_local_components_observed(&scene, &references, &held, &targets, &options, &mut diagnostic)
+                    .unwrap()
+                    .expect("the same bounded joint domain retains broad coverage");
+            assert_eq!(packed["A"], held["A"]);
+            assert_eq!(scene.penalty(&packed).unwrap(), 0, "minimum and maximum distances still hold exactly");
+            assert!(scene.checker.placement_solution_is_legal(&packed).unwrap());
+            assert!(diagnostic.domains.values().all(|(sampled, _)| *sampled <= options.probe_limit()));
         }
     }
 
