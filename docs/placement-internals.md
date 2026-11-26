@@ -234,13 +234,14 @@ instead preserves the complete rejected layout with the lowest relative penalty
 none is an unaccepted analytical proposal, and the issue locates a violated rule
 target or an illegal component when available. This complete snapshot takes
 precedence over shallower bounded failures and remains uncertified.
-Ordinary bounded-failure snapshots are emitted only for failed searches. A
-typed physical hard-macro rejection also retains the exact rejected tracks,
-vias and DRC findings, including when a different seed succeeds. Native issues
-locate those copper objects, not an arbitrary macro anchor. Its metadata states
-whether the overall placement search succeeded; such a discarded-seed artifact
-cannot be attached to a later unrelated run error. Neither kind is a
-placement/global routing result or a reusable placement checkpoint.
+Inspection snapshots are emitted only when the whole placement search fails.
+A typed physical hard-macro rejection retains the exact rejected tracks, vias
+and findings, with the actual implicated clusters and anchors. Native issues
+locate rejected copper when available. Successful searches retain failed-seed
+statistics but do not write failure snapshots. After a command succeeds, its
+previous generated inspection sibling is removed; malformed arguments, failed
+commands and unrelated files do not trigger deletion. Neither kind of snapshot
+is a placement/global routing result or a reusable placement checkpoint.
 
 Rigid groups first retain their nearest-first candidate search and ranking. If
 that search finds no legal pose, a movable group samples the remaining origin
@@ -290,16 +291,21 @@ the selected combination. References retain deterministic domain-size/name order
 each batch has at most `exact_repair_limit` members and uses the existing domain,
 search and heuristic budgets. `region_pack:REF,...` identifies the work. Regional
 rigid groups keep precedence, so these reservations cannot displace their
-accepted geometry. This also runs when there are no rigid groups. Separate
-batches are greedy with respect to earlier batches; this is bounded scheduling,
-not a complete global packing search.
+accepted geometry. On a board without rigid groups, early reservations can
+still protect a scarce landing, but exhaustion discards those preliminary poses
+and lets ordinary legalization try the same seed. `region_reservation_deferred`
+identifies that fallback. Boards without rigid groups or authored placement
+regions bypass this phase. Separate batches are greedy with respect to earlier
+batches; this is bounded scheduling, not a complete global packing search.
 
 A failed joint regional pack reports each observed initial sampled domain's
 raw-probe and individually legal-pose counts. An empty domain identifies its
 actual component; otherwise the report distinguishes exhausted joint-search
-work from no compatible sampled combination with work remaining. These are
-observations of the same search, not a second sampling pass or a proof about
-unsampled continuous poses. Failure snapshots remain inspection-only.
+work from no compatible sampled combination with work remaining.
+`region_pack_failed` carries the same bounded record as `bounded_packing` on a
+failed seed. These are observations of the same search, not a second sampling
+pass or a proof about unsampled continuous poses. Failure snapshots remain
+inspection-only.
 
 These reservations are candidate-owned mutable poses, never additions to source
 or phase locks. Ordinary legalization revalidates them against the final held
@@ -397,7 +403,9 @@ unbounded axis. Pin-relative greedy and joint searches therefore retain their
 existing bounded wide-coverage samples when no held maximum-distance peer
 exists, including when nearby supports have not been placed yet. All minimum,
 maximum and alignment checks still apply to every accepted pose; no additional
-raw probes are allowed.
+raw probes are allowed. The boundary between nearby and wide ordinary probes
+is measured within the ordinary fallback, after any relative prefix. Only a
+nearby pose satisfying all active relative rules skips the wide probes.
 
 When this repair removes a mutable pin-distance anchor from the held base,
 candidate generation must not forget its companions. Validated removed poses
@@ -513,7 +521,7 @@ explicit positive `seed_count` (`--placement-seeds` on `plan-layout` and
 `route-global`) bounds attempts instead.
 The private typed failure from exhausted mutable legalization/local repair,
 or exact physical DRC rejection of a resolved hard-macro trial at the
-decoupling-access preflight, discards one attempt and permits the next already
+macro/decoupling-access preflight, discards one attempt and permits the next already
 planned seed. A rejected later seed cannot erase a prior accepted candidate.
 The strict public macro materialization API still returns an error for that
 same copper; only the planner's typed trial API distinguishes it from malformed
@@ -521,6 +529,10 @@ source and structural errors. No rejected copper enters routing. Each attempt
 builds its own tentative placed map from source/fixed intent and keeps the
 existing per-member, local-repair and search bounds. No partial attempt is
 promoted, no budget is restarted within an attempt, and no extra seed is added.
+Host-zone overlap and a connected local return via missing its declared host
+plane at the trial pose are also typed candidate rejections. Missing authored
+vias, disconnected private pads, malformed ports and absent plane declarations
+remain hard errors. Macro acceptance runs even without decoupling links.
 
 Unrouted-source/unknown-lock/corridor prechecks, invalid fixed geometry, rigid
 contracts, malformed source and unexpected `PlacementAlgorithmError` failures

@@ -33,8 +33,8 @@ use copper_route::fanout::FanoutOptions;
 use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, Stage, run_routing_pipeline_staged};
 use copper_route::iteration_checkpoints::{
     PLACEMENT_CHECKPOINT, PlacementFailureArtifacts, PlacementReuse, StageState, StageTracker, created_utc_now,
-    load_placement_checkpoint, placement_checkpoint_text, placement_key, write_error_record_with_diagnostic,
-    write_placement_failure,
+    load_placement_checkpoint, placement_checkpoint_text, placement_key, remove_stale_placement_failure,
+    write_error_record_with_diagnostic, write_placement_failure,
 };
 use copper_route::plane::PlaneStitchOptions;
 use copper_route::progress::{ConsoleProgress, Progress, emit, text as text_value};
@@ -843,6 +843,12 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     }
     match outcome {
         Ok(Finished::Done { lines, exit }) => {
+            if exit == 0
+                && let Some(report) = arguments.path("--report")
+                && let Err(error) = remove_stale_placement_failure(Path::new(&report))
+            {
+                let _ = text::print(out, &format!("Stale placement failure diagnostic not removed: {error}"));
+            }
             for line in lines {
                 let _ = text::print(out, &line);
             }
@@ -1115,21 +1121,22 @@ fn route(
         let reusing = initial_placement.is_some();
         let mut on_stage = |stage: Stage<'_>| {
             if let Stage::PlacementFailure { board, diagnostic } = stage {
+                if diagnostic.search_succeeded {
+                    return;
+                }
                 if let Some(report) = arguments.path("--report") {
                     match write_placement_failure(Path::new(&report), board, diagnostic) {
                         Ok(artifact) => {
                             say(&format!("Inspection-only placement failure -> {}", artifact.state_filename));
-                            if !diagnostic.search_succeeded {
-                                *placement_failure = Some(artifact);
-                            }
+                            *placement_failure = Some(artifact);
                         }
                         Err(error) => say(&format!("Placement failure diagnostic not saved: {error}")),
                     }
                 }
                 return;
             }
-            // A rejected seed's standalone inspection artifact survives, but
-            // must never describe a later failure of the accepted candidate.
+            // A discarded placement trial must never describe a later routing
+            // failure of an accepted candidate.
             if matches!(stage, Stage::Placement(_)) {
                 *placement_failure = None;
             }

@@ -62,6 +62,52 @@ pub struct MacroRejection {
 }
 
 impl MacroRejection {
+    /// Prefer an implicated macro anchor; otherwise identify the ordinary pad
+    /// component actually named by DRC. No unrelated macro is a fallback.
+    pub fn failed_reference(&self) -> Option<&str> {
+        if let Some(cluster) = self.failed_clusters().into_iter().next() {
+            return Some(cluster.anchor_reference.as_str());
+        }
+        self.findings.iter().flat_map(|finding| &finding.objects).find_map(|object| {
+            let pad = object.strip_prefix("pad:")?;
+            self.board
+                .placements
+                .iter()
+                .filter(|pose| pad.starts_with(&format!("{}.", pose.reference)))
+                .max_by_key(|pose| pose.reference.len())
+                .map(|pose| pose.reference.as_str())
+        })
+    }
+
+    /// Owners of the actual rejected objects, in source order. A conflict can
+    /// involve two owners; never substitute the first unrelated cluster.
+    pub fn failed_clusters(&self) -> Vec<&RigidPlacementCluster> {
+        let objects: IndexSet<&str> = self.findings.iter().flat_map(|f| f.objects.iter().map(String::as_str)).collect();
+        let (mut track_start, mut via_start) = (0, 0);
+        let mut owners = Vec::new();
+        for hard in &self.board.hard_macros {
+            let tracks = track_start..track_start + hard.tracks.len();
+            let vias = via_start..via_start + hard.vias.len();
+            track_start = tracks.end;
+            via_start = vias.end;
+            let Some(cluster) = self.board.rigid_clusters.iter().find(|c| c.name == hard.cluster) else { continue };
+            if objects.contains(format!("macro:{}", hard.cluster).as_str())
+                || tracks.into_iter().any(|i| objects.contains(format!("track:{i}").as_str()))
+                || vias.into_iter().any(|i| objects.contains(format!("via:{i}").as_str()))
+                || hard.zones.iter().any(|z| objects.contains(z.id.as_str()))
+                || hard.polygons.iter().any(|p| objects.contains(format!("polygon:{}", p.id).as_str()))
+                || objects.iter().any(|object| {
+                    object.strip_prefix("pad:").is_some_and(|pad| {
+                        cluster.members.iter().any(|member| pad.starts_with(&format!("{}.", member.reference)))
+                    })
+                })
+            {
+                owners.push(cluster);
+            }
+        }
+        owners
+    }
+
     pub fn message(&self) -> String {
         format!(
             "hard-macro physical acceptance failed: {}",
@@ -110,6 +156,7 @@ fn try_materialize_macro_copper(board: PhysicalBoard) -> Result<MacroMaterializa
     if !board.tracks.is_empty() || !board.vias.is_empty() || !board.polygons.is_empty() {
         return fail("macro materialization must precede all routing and fill");
     }
+    validate_hard_macros(&board)?;
     let poses = placement_map(&board);
     if !cluster_placement_matches(&board, &poses)? {
         return fail("place the complete rigid macro before materializing copper");
@@ -122,18 +169,35 @@ fn try_materialize_macro_copper(board: PhysicalBoard) -> Result<MacroMaterializa
         zones.extend(resolved_macro_zones(&board, hard, &poses)?);
         polygons.extend(resolved_macro_polygons(&board, hard, &poses)?);
     }
-    let hosts: Vec<&CopperZone> = board.zones.iter().collect();
-    for hard in &board.hard_macros {
-        if let Some(conflict) = host_zone_macro_overlap(&board, hard, &hosts)? {
-            return fail(conflict.message());
-        }
-    }
+    let mut pose_findings = Vec::new();
+    let zone_owners: Vec<&str> =
+        board.hard_macros.iter().flat_map(|hard| hard.zones.iter().map(move |_| hard.cluster.as_str())).collect();
     for (index, zone) in zones.iter().enumerate() {
-        if zones[..index]
-            .iter()
-            .any(|other| zone_outlines_overlap(&zone.layers, &zone.outer, &other.layers, &other.outer))
-        {
-            return fail("private hard-macro zones overlap");
+        for (other_index, other) in zones[..index].iter().enumerate() {
+            if !zone_outlines_overlap(&zone.layers, &zone.outer, &other.layers, &other.outer) {
+                continue;
+            }
+            if zone_owners[index] == zone_owners[other_index] {
+                return fail("private hard-macro zones overlap");
+            }
+            pose_findings.push(
+                crate::Finding::error(
+                    "MACRO-ZONE-OVERLAP",
+                    format!(
+                        "private zones {} of macro {} and {} of macro {} overlap at this pose",
+                        repr(&zone.id),
+                        repr(zone_owners[index]),
+                        repr(&other.id),
+                        repr(zone_owners[other_index])
+                    ),
+                )
+                .objects([
+                    format!("macro:{}", zone_owners[index]),
+                    format!("macro:{}", zone_owners[other_index]),
+                    zone.id.clone(),
+                    other.id.clone(),
+                ]),
+            );
         }
     }
     let mut result = board.clone();
@@ -143,6 +207,24 @@ fn try_materialize_macro_copper(board: PhysicalBoard) -> Result<MacroMaterializa
     result.polygons = polygons;
     result.materialized_macros = board.hard_macros.iter().map(|m| m.cluster.clone()).collect();
     result.metadata.insert("fabrication_ready".to_owned(), "false".to_owned());
+    // Prove authored connectivity before returning a pose rejection: a host
+    // plane miss must not hide a malformed private net or port in another owner.
+    for hard in &board.hard_macros {
+        pose_findings.extend(prove_ports(&result, hard)?);
+    }
+    let hosts: Vec<&CopperZone> = board.zones.iter().collect();
+    for hard in &board.hard_macros {
+        if let Some(conflict) = host_zone_macro_overlap(&board, hard, &hosts)? {
+            pose_findings.push(
+                crate::Finding::error("MACRO-HOST-ZONE", conflict.message())
+                    .objects([format!("macro:{}", conflict.cluster), conflict.zone])
+                    .nets([conflict.net]),
+            );
+        }
+    }
+    if !pose_findings.is_empty() {
+        return Ok(MacroMaterialization::Rejected(Box::new(MacroRejection { board: result, findings: pose_findings })));
+    }
     copper_pcb::physicalize::revalidate(&mut result)?;
     let report =
         run_physical_drc(&result, Policy { require_completed_detailed_route: false, fail_on_warnings: false })?;
@@ -151,14 +233,15 @@ fn try_materialize_macro_copper(board: PhysicalBoard) -> Result<MacroMaterializa
     if !fatal.is_empty() {
         return Ok(MacroMaterialization::Rejected(Box::new(MacroRejection { board: result, findings: fatal })));
     }
-    for hard in &board.hard_macros {
-        prove_ports(&result, hard)?;
-    }
     Ok(MacroMaterialization::Accepted(result))
 }
 
 /// Port, plane-return and private-net continuity of one macro's actual copper.
-fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
+fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<Vec<crate::Finding>> {
+    let mut pose_findings = Vec::new();
+    let plane_miss = |message: String, net: &str| {
+        crate::Finding::error("MACRO-PLANE-CONTACT", message).objects([format!("macro:{}", hard.cluster)]).nets([net])
+    };
     let poses = placement_map(result);
     let geometry = resolved_macro_geometry(result, hard, &poses)?;
     let (tracks, vias, ports) = (&geometry.tracks, &geometry.vias, &geometry.ports);
@@ -218,10 +301,14 @@ fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
             }
             let span = &result.stackup.copper_layers;
             let mut usable: IndexMap<copper_physical::Point, String> = IndexMap::new();
+            let mut capable: IndexMap<copper_physical::Point, String> = IndexMap::new();
             for (index, via) in vias.iter().enumerate() {
                 let a = copper_pcb::hard_macros::layer_index(result, via.from_layer)?;
                 let b = copper_pcb::hard_macros::layer_index(result, via.to_layer)?;
                 let barrel = &span[a.min(b)..=a.max(b)];
+                if via.net == net.name && plane.layers.iter().any(|layer| barrel.contains(layer)) {
+                    capable.insert(via.position, graph.root(&format!("via:{index}")).to_owned());
+                }
                 let reaches = zones.iter().any(|zone| {
                     plane.layers.iter().any(|layer| {
                         zone.layers.contains(layer)
@@ -234,12 +321,26 @@ fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
                     usable.insert(via.position, graph.root(&format!("via:{index}")).to_owned());
                 }
             }
+            let capable_roots: IndexSet<&str> = capable.values().map(String::as_str).collect();
+            if bound
+                .iter()
+                .any(|pad| pad_roots(pad).is_none_or(|roots| roots.iter().any(|r| !capable_roots.contains(r))))
+            {
+                return fail(format!("macro plane return {} lacks a local via for a private pad", repr(&net.name)));
+            }
             let usable_roots: IndexSet<&str> = usable.values().map(String::as_str).collect();
             if bound
                 .iter()
                 .any(|pad| pad_roots(pad).is_none_or(|roots| roots.iter().any(|r| !usable_roots.contains(r))))
             {
-                return fail(format!("macro plane return {} lacks a local via for a private pad", repr(&net.name)));
+                pose_findings.push(plane_miss(
+                    format!(
+                        "macro {} plane return {} does not reach the declared host plane at this pose",
+                        repr(&hard.cluster),
+                        repr(&net.name)
+                    ),
+                    &net.name,
+                ));
             }
             for (pad, local) in &plane.dedicated_contacts {
                 let matching: Vec<&Via> = hard
@@ -251,7 +352,7 @@ fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
                     .collect();
                 let missing = matching.len() != 1 || {
                     let via = matching[0];
-                    match usable.get(&via.position) {
+                    match capable.get(&via.position) {
                         None => true,
                         Some(root) => graph
                             .pad_nodes
@@ -263,6 +364,9 @@ fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
                 };
                 if missing {
                     return fail(format!("macro dedicated plane contact for {pad} is missing"));
+                }
+                if !usable.contains_key(&matching[0].position) {
+                    pose_findings.push(plane_miss(format!("macro {} dedicated plane contact for {pad} does not reach the declared host plane at this pose", repr(&hard.cluster)), &net.name));
                 }
             }
             continue;
@@ -312,5 +416,5 @@ fn prove_ports(result: &PhysicalBoard, hard: &PhysicalHardMacro) -> Result<()> {
             return fail("macro port is not connected to its declared private pads");
         }
     }
-    Ok(())
+    Ok(pose_findings)
 }

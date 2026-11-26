@@ -2239,6 +2239,49 @@ pub fn finish_board(
     validate_references(board, match_groups, regions)
 }
 
+/// Source and stackup validity, shared by ordinary and immutable macro vias.
+/// Geometry relative to other copper belongs to DRC, not this source gate.
+pub(crate) fn validate_vias(board: &PhysicalBoard, vias: &[Via]) -> Result<()> {
+    let net_names: Vec<&str> = board.nets.iter().map(|net| net.name.as_str()).collect();
+    let layers = &board.stackup.copper_layers;
+    let technologies: IndexMap<&str, &ViaTechnology> =
+        board.stackup.via_technologies.iter().map(|t| (t.id.as_str(), t)).collect();
+    for via in vias {
+        if !net_names.contains(&via.net.as_str()) {
+            return Err(Error::Value(format!("via references unknown net {}", repr(&via.net))));
+        }
+        if !layers.contains(&via.from_layer) || !layers.contains(&via.to_layer) {
+            return fail("via uses a layer not present in the stackup");
+        }
+        if !technologies.is_empty() && via.technology.is_none() {
+            return fail("vias must select a technology when the stackup defines a catalog");
+        }
+        if let Some(name) = &via.technology {
+            let Some(technology) = technologies.get(name.as_str()) else {
+                return Err(Error::Value(format!("via references unknown technology {}", repr(name))));
+            };
+            let span: IndexSet<CopperLayer> = [via.from_layer, via.to_layer].into_iter().collect();
+            let declared: IndexSet<CopperLayer> = [technology.from_layer, technology.to_layer].into_iter().collect();
+            if span != declared {
+                return fail("via span does not match its selected technology");
+            }
+            if via.drill_nm < technology.minimum_drill_nm {
+                return fail("via drill is below its technology limit");
+            }
+            if (via.size_nm - via.drill_nm).div_euclid(2) < technology.minimum_annular_ring_nm {
+                return fail("via annular ring is below its technology limit");
+            }
+            let Some(depth) = crate::board::via_span_depth(&board.stackup, via.from_layer, via.to_layer) else {
+                return crate::not_implemented("a via layer outside the physical stack-up (Python crashes)");
+            };
+            if crate::board::exceeds_aspect_ratio(depth, via.drill_nm, &technology.maximum_aspect_ratio) {
+                return fail("via aspect ratio exceeds its technology limit");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_references(
     board: &PhysicalBoard,
     match_groups: &[(String, Vec<String>)],
@@ -2396,41 +2439,7 @@ fn validate_references(
             return Err(Error::Value(format!("track uses unavailable layer {}", repr(track.layer.value()))));
         }
     }
-    let technologies: IndexMap<&str, &ViaTechnology> =
-        board.stackup.via_technologies.iter().map(|t| (t.id.as_str(), t)).collect();
-    for via in &board.vias {
-        if !net_names.contains(&via.net.as_str()) {
-            return Err(Error::Value(format!("via references unknown net {}", repr(&via.net))));
-        }
-        if !layers.contains(&via.from_layer) || !layers.contains(&via.to_layer) {
-            return fail("via uses a layer not present in the stackup");
-        }
-        if !technologies.is_empty() && via.technology.is_none() {
-            return fail("vias must select a technology when the stackup defines a catalog");
-        }
-        if let Some(name) = &via.technology {
-            let Some(technology) = technologies.get(name.as_str()) else {
-                return Err(Error::Value(format!("via references unknown technology {}", repr(name))));
-            };
-            let span: IndexSet<CopperLayer> = [via.from_layer, via.to_layer].into_iter().collect();
-            let declared: IndexSet<CopperLayer> = [technology.from_layer, technology.to_layer].into_iter().collect();
-            if span != declared {
-                return fail("via span does not match its selected technology");
-            }
-            if via.drill_nm < technology.minimum_drill_nm {
-                return fail("via drill is below its technology limit");
-            }
-            if (via.size_nm - via.drill_nm).div_euclid(2) < technology.minimum_annular_ring_nm {
-                return fail("via annular ring is below its technology limit");
-            }
-            let Some(depth) = crate::board::via_span_depth(&board.stackup, via.from_layer, via.to_layer) else {
-                return crate::not_implemented("a via layer outside the physical stack-up (Python crashes)");
-            };
-            if crate::board::exceeds_aspect_ratio(depth, via.drill_nm, &technology.maximum_aspect_ratio) {
-                return fail("via aspect ratio exceeds its technology limit");
-            }
-        }
-    }
+    validate_vias(board, &board.vias)?;
     if crate::has_duplicates(regions) {
         return fail("physical placement region names must be unique");
     }

@@ -556,6 +556,44 @@ impl<'b> RoutingClearanceIndex<'b> {
             && self.clear(net, &shape, &[layer], 0))
     }
 
+    /// Copper added by a prospective plane contact. This overlay is queried
+    /// against previously checked surface paths without mutating the index.
+    pub(crate) fn contact_overlay(&self, tracks: &[TrackSegment], via: Option<&Via>) -> Result<Vec<CopperObject>> {
+        let mut overlay = Vec::with_capacity(tracks.len() + 2 * usize::from(via.is_some()));
+        for track in tracks {
+            let geometry = shape(vec![track.start, track.end], track.width_nm.div_euclid(2))?;
+            overlay.push(CopperObject::new(&track.net, vec![track.layer], geometry));
+        }
+        if let Some(via) = via {
+            let layers = self.via_layers(via.from_layer, via.to_layer);
+            let annulus = shape(vec![via.position], via.size_nm.div_euclid(2))?;
+            let drill = shape(vec![via.position], via.drill_nm.div_euclid(2))?;
+            overlay.push(CopperObject::new(&via.net, layers.clone(), annulus));
+            let mut hole = CopperObject::new(&via.net, layers, drill);
+            hole.clearance_nm = self.board.rules.minimum_hole_clearance_nm;
+            overlay.push(hole);
+        }
+        for object in &mut overlay {
+            object.breakout_land = self.breakout_land(&object.net, &object.shape);
+        }
+        Ok(overlay)
+    }
+
+    /// Only compare new copper with a track already checked against the index.
+    pub(crate) fn track_clears_overlay(&self, track: &TrackSegment, overlay: &[CopperObject]) -> Result<bool> {
+        let shape = shape(vec![track.start, track.end], track.width_nm.div_euclid(2))?;
+        let land = self.breakout_land(&track.net, &shape);
+        Ok(overlay.iter().all(|other| {
+            other.net == track.net
+                || !other.layers.contains(&track.layer)
+                || shapes_clear(
+                    &shape,
+                    &other.shape,
+                    self.rule_clearance(&track.net, land.as_deref(), other).max(other.clearance_nm),
+                )
+        }))
+    }
+
     /// `route_pieces`: prefer the requested width; use permitted neckdowns only if needed.
     ///
     /// This selects copper, not permission to commit it: callers still check

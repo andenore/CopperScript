@@ -4,6 +4,7 @@
 mod boards;
 
 use boards::*;
+use copper_drc::macros::{MacroMaterialization, try_materialize_hard_macros};
 use copper_pcb::board::*;
 use copper_pcb::hard_macros::{
     host_zone_macro_overlap, host_zone_overlaps_macro, resolved_macro_geometry, resolved_macro_zones,
@@ -129,4 +130,109 @@ fn a_declared_surface_notch_preserves_private_ownership_and_materializes_normall
         .expect("a real outline notch excludes the private surface region");
     assert_eq!(result.materialized_macros, vec!["power-owner"]);
     validate_hard_macros(&result).unwrap();
+}
+
+fn two_owner_fixture() -> PhysicalBoard {
+    let mut board = fixture();
+    board.zones[0].outer = rect(7.5, 9.5, 12.5, 14.5);
+    let mut first_cluster = board.rigid_clusters[0].clone();
+    first_cluster.name = "unrelated".into();
+    first_cluster.anchor_reference = "U_FIRST".into();
+    first_cluster.members[0].reference = "U_FIRST".into();
+    let mut first = board.hard_macros[0].clone();
+    first.cluster = first_cluster.name.clone();
+    first.tracks[0].net = "FIRST".into();
+    first.pad_bindings = vec![(PadReference::new("U_FIRST", "1"), "FIRST".into())];
+    first.zones[0].id = "first-zone".into();
+    first.zones[0].net = "FIRST".into();
+    board.placements.push(placement("U_FIRST", "test/one-pad", 22.0, 22.0));
+    board.nets.push(net("FIRST", &[("U_FIRST", "1")]));
+    board.rigid_clusters.insert(0, first_cluster);
+    board.hard_macros.insert(0, first);
+    board
+}
+
+#[test]
+fn host_overlap_rejects_only_the_pose_and_names_the_second_owner() {
+    let mut board = two_owner_fixture();
+    let MacroMaterialization::Rejected(rejection) = try_materialize_hard_macros(board.clone()).unwrap() else {
+        panic!("host overlap must reject this pose")
+    };
+    assert_eq!(rejection.findings[0].code, "MACRO-HOST-ZONE");
+    assert_eq!(
+        rejection.failed_clusters().iter().map(|c| c.anchor_reference.as_str()).collect::<Vec<_>>(),
+        vec!["U_OWNER"]
+    );
+    assert_eq!(rejection.board.tracks.len(), 2, "trial geometry remains inspectable");
+    board.placements[0].position = pt(18.0, 10.0);
+    assert!(matches!(try_materialize_hard_macros(board).unwrap(), MacroMaterialization::Accepted(_)));
+}
+
+fn plane_fixture() -> PhysicalBoard {
+    let mut board = fixture();
+    board.zones[0].layers = vec![In1];
+    board.zones[0].outer = rect(0.5, 0.5, 15.0, 29.5);
+    let hard = &mut board.hard_macros[0];
+    hard.zones.clear();
+    hard.protected_regions.clear();
+    hard.vias = vec![via("GND", (1.0, 0.0), 0.6, 0.3, Front, In1)];
+    hard.plane_returns = vec![MacroPlaneReturn {
+        net: "GND".into(),
+        layers: vec![In1],
+        pads: vec![PadReference::new("U_OWNER", "1")],
+        dedicated_contacts: vec![(PadReference::new("U_OWNER", "1"), pt(1.0, 0.0))],
+    }];
+    board
+}
+
+#[test]
+fn connected_local_return_outside_host_plane_is_a_pose_rejection() {
+    let mut board = plane_fixture();
+    assert!(matches!(try_materialize_hard_macros(board.clone()).unwrap(), MacroMaterialization::Accepted(_)));
+    board.placements[0].position = pt(20.0, 12.0);
+    let MacroMaterialization::Rejected(rejection) = try_materialize_hard_macros(board).unwrap() else {
+        panic!("plane miss must reject only this pose")
+    };
+    assert!(rejection.findings.iter().all(|f| f.code == "MACRO-PLANE-CONTACT"));
+    assert_eq!(rejection.failed_clusters()[0].anchor_reference, "U_OWNER");
+}
+
+#[test]
+fn malformed_return_topology_is_not_reclassified_as_a_pose_rejection() {
+    let mut board = plane_fixture();
+    board.placements[0].position = pt(20.0, 12.0);
+    board.hard_macros[0].plane_returns[0].dedicated_contacts[0].1 = pt(2.0, 0.0);
+    assert!(try_materialize_hard_macros(board.clone()).err().unwrap().to_string().contains("dedicated plane contact"));
+    board.hard_macros[0].vias.clear();
+    assert!(try_materialize_hard_macros(board).err().unwrap().to_string().contains("lacks a local via"));
+}
+
+#[test]
+fn overlapping_zones_between_owners_reject_the_pose_but_authored_self_overlap_is_fatal() {
+    let mut board = two_owner_fixture();
+    board.zones.clear();
+    board.placements[1].position = pt(12.5, 12.0);
+    let MacroMaterialization::Rejected(rejection) = try_materialize_hard_macros(board.clone()).unwrap() else {
+        panic!("cross-owner zone overlap must reject the pose")
+    };
+    assert!(rejection.findings.iter().any(|finding| finding.code == "MACRO-ZONE-OVERLAP"));
+    assert_eq!(rejection.failed_clusters().len(), 2);
+    board.placements[1].position = pt(22.0, 22.0);
+    assert!(matches!(try_materialize_hard_macros(board.clone()).unwrap(), MacroMaterialization::Accepted(_)));
+    let mut duplicate = board.hard_macros[0].zones[0].clone();
+    duplicate.id = "authored-self-overlap".into();
+    board.hard_macros[0].zones.push(duplicate);
+    assert!(try_materialize_hard_macros(board).err().unwrap().to_string().contains("private hard-macro zones overlap"));
+}
+
+#[test]
+fn malformed_via_technology_and_missing_pose_remain_source_errors_despite_host_overlap() {
+    let mut board = fixture();
+    let mut invalid = via("GND", (1.0, 0.0), 0.6, 0.3, Front, In1);
+    invalid.technology = Some("undeclared-microvia".into());
+    board.hard_macros[0].vias.push(invalid);
+    assert!(try_materialize_hard_macros(board.clone()).err().unwrap().to_string().contains("unknown technology"));
+    board.hard_macros[0].vias.clear();
+    board.placements.clear();
+    assert!(try_materialize_hard_macros(board).is_err());
 }

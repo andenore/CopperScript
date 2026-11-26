@@ -1,8 +1,48 @@
-Dated sections record measurements up to 2026-10-29, most of them on the
-former Python implementation and its C search kernel. The Python commands,
-scripts and `bench/` measurement drivers they name were removed with that
-implementation; current measurements use `copper bench` (see
+Dated sections record measurements from both implementations. Measurements on
+the former Python implementation and its C search kernel retain their original
+commands. Current measurements use `copper bench` (see
 [Profiling future runs](#profiling-future-runs)).
+
+## BysseControl-32 placement and plane-contact review (2026-11-26)
+
+Ran the Rust compilers with `--profile fast` on the same locked BysseControl-32
+board (`board.copper` SHA-256 `b95092d61d3f7d0c7e31a8457151896fb54ef40e6553d956fc75a42dcee85dd2`).
+The benchmark ran one board at a time with native verification, the four-layer
+JLCPCB profile, quick routing, a 5 mm plane contact radius, and the board's
+150-iteration / 600-second unified-router budget.
+
+| Measurement | Before lightgun changes (`c3074b3d`) | Pushed branch (`86c5b286`) | Review fixes (sources `7bc6b32c101b`) |
+| --- | ---: | ---: | ---: |
+| Recorded routing pipeline | 58.299 s | 61.510 s | 60.524 s |
+| Placement and global guides | 5.734 s | 6.330 s | 6.404 s |
+| Critical routing | 3.204 s | 3.110 s | 3.288 s |
+| Fanout finish to ordinary routing start (includes early stitching) | 0.120 s | 1.310 s | 0.270 s |
+| Whole benchmark wall time | 135.3 s | 65.6 s | 64.6 s |
+| Unified negotiation iterations | 8 | 8 | 8 |
+
+All three runs wrote the same PCB bytes (SHA-256
+`af5ec8aeb85dc57045d4c4bde9292870bb62c5a45dbdd866506cedbff76575da`), with
+312/312 connections, 351 vias, 12/12 verified bypasses, and zero native opens or
+DRC violations. All added 152 early plane vias with no pending pads. The
+patched router stopped with no conflicts and selected its eighth iteration. The
+first run spent much longer outside the recorded phases, so the wall-time
+difference does not establish a routing speedup.
+
+Both compilers also passed the five standard native ladder cases on the same
+sources: the two browser demos, nRF52, CopperLedRing, and CopperAssetTracker.
+The demos and nRF52 were byte-identical to the pre-lightgun outputs. CopperLedRing
+added one via and 3.291 mm of routed length, with the same PCB as the previously
+pushed compiler. CopperAssetTracker retained 270 vias, gained one track segment
+and 0.042 mm of routed length versus the pre-lightgun output, and used one fewer
+segment than the pushed compiler. Neither board gained any native opens or DRC
+violations. All of the patched AssetTracker negotiations ended without conflicts,
+with 8 iterations across 4 negotiations and at most 1 iteration without improvement.
+
+LedRing and AssetTracker exceeded the wall-time threshold on the first patched
+runs (76.1 s and 175.6 s against 5.6 s and 94.6 s). Their recorded pipeline
+times did not increase. One warm repeat passed the same native benchmark
+comparison (5.4 s and 93.2 s) and reproduced both patched PCB files byte for
+byte. The cause of the startup variation is unconfirmed.
 
 ## Generic fixes for the CopperProbe open connections (2026-10-25)
 

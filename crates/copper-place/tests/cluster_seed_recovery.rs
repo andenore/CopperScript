@@ -644,6 +644,28 @@ fn broad_regional_singleton_is_reserved_without_any_rigid_groups() {
     assert!(Scene::new(&board, options.policy()).checker.placement_solution_is_legal(&poses).unwrap());
 }
 
+#[test]
+fn failed_preliminary_region_pack_does_not_discard_an_ordinary_seed() {
+    let (mut board, mut options) = scarce_singleton(false);
+    board.placements.retain(|pose| pose.reference == "J");
+    board.relative_rules.clear();
+    board.regions[0].outline = rectangle(0.0, 0.0, 40.0, 30.0);
+    board.keepouts.push(PlacementKeepout::new("blocked-left", rectangle(0.0, 0.0, 28.0, 30.0), None, None).unwrap());
+    options.legalization_candidates = 1;
+    options.exact_repair_limit = 2;
+    let mut events = Vec::new();
+    let observer = RefCell::new(|stage: &str, _, _| events.push(stage.to_owned()));
+    // The first 64 regional pack probes all land near the target inside the
+    // keepout. Ordinary region legalization reaches the right-hand grid sites.
+    let candidates = generate_placement_candidates_with_progress(&board, &options, Some(&observer)).unwrap();
+    drop(observer);
+    assert!(events.contains(&"region_reservation_deferred:J".to_owned()));
+    assert!(events.contains(&"legalize:J".to_owned()));
+    let poses: Poses = candidates[0].placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+    assert!(poses["J"].position.x_nm > mm(28.0));
+    assert!(Scene::new(&board, options.policy()).checker.placement_solution_is_legal(&poses).unwrap());
+}
+
 fn mixed_regional_fixture() -> (PhysicalBoard, PlannerOptions) {
     let (mut board, mut options) = fixture();
     options.legalization_candidates = 96;
@@ -733,6 +755,10 @@ fn mixed_regional_packing_does_not_move_fixed_owners_or_accept_impossible_geomet
     assert_eq!(board, original);
     assert!(!failures.is_empty());
     assert!(failures.iter().all(|failure| failure.accepted["NARROW"] == original.placements[2]));
+    let packing = failures[0].bounded_packing.as_ref().expect("regional pack details");
+    assert_eq!(packing.get("empty_reference").and_then(copper_json::Value::as_str), Some("BROAD"));
+    assert_eq!(packing.get("outcome").and_then(copper_json::Value::as_str), Some("no_sampled_witness"));
+    assert!(packing.get("domains").and_then(copper_json::Value::as_array).is_some_and(|domains| !domains.is_empty()));
 }
 
 fn movable_driver_with_large_switch() -> (PhysicalBoard, PlannerOptions) {

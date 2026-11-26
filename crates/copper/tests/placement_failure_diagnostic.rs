@@ -8,7 +8,8 @@ use copper_json::{Object, Value};
 use copper_place::planner::PlacementFailureDiagnostic;
 use copper_place::scene::Poses;
 use copper_route::iteration_checkpoints::{
-    load_placement_checkpoint, write_error_record_with_diagnostic, write_placement_failure,
+    load_placement_checkpoint, remove_stale_placement_failure, write_error_record_with_diagnostic,
+    write_placement_failure,
 };
 use std::path::Path;
 use std::process::Command;
@@ -97,7 +98,7 @@ fn failed_geometry_views_natively_and_cannot_be_reused() {
 }
 
 #[test]
-fn a_discarded_seed_from_a_successful_search_cannot_describe_a_later_error() {
+fn a_successful_search_cannot_write_an_inspection_failure_artifact() {
     let source = board(
         "accepted-search",
         30.0,
@@ -119,25 +120,20 @@ fn a_discarded_seed_from_a_successful_search_cannot_describe_a_later_error() {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stale-seed-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let report = directory.join("route-report.json");
-    let artifact = write_placement_failure(&report, &source, &diagnostic).unwrap();
+    assert_eq!(
+        write_placement_failure(&report, &source, &diagnostic).err().unwrap().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    let mut failed = diagnostic;
+    failed.search_succeeded = false;
+    let artifact = write_placement_failure(&report, &source, &failed).unwrap();
     let state = directory.join(&artifact.state_filename);
-    assert!(state.exists(), "standalone trial artifact remains available");
-    let error = write_error_record_with_diagnostic(
-        &report,
-        &source.name,
-        "ValueError",
-        "unrelated routing failure",
-        None,
-        Object::new(),
-        Some(&artifact),
-    )
-    .unwrap();
-    let mut run = copper_report::issues::load_run(&error.to_string_lossy()).unwrap();
-    let record = run.report().unwrap().as_object().unwrap();
-    assert!(!record.contains_key("diagnostic_state"));
-    assert!(!record.contains_key("placement_failure"));
-    assert_eq!(record["message"], Value::from("unrelated routing failure"));
-    assert!(state.exists());
+    assert!(remove_stale_placement_failure(&report).unwrap());
+    assert!(!state.exists());
+    assert!(!remove_stale_placement_failure(&report).unwrap());
+    std::fs::write(&state, "unrelated user file").unwrap();
+    assert!(!remove_stale_placement_failure(&report).unwrap());
+    assert_eq!(std::fs::read_to_string(&state).unwrap(), "unrelated user file");
 }
 
 #[test]
@@ -230,7 +226,7 @@ fn rejected_macro_copper_views_natively_without_acquiring_a_certificate() {
     let report = directory.join("route-report.json");
     let artifact = write_placement_failure(&report, &source, &diagnostic).unwrap();
     assert_eq!(artifact.metadata["rejected_macro_copper"], Value::Bool(true));
-    assert!(artifact.metadata["note"].as_str().unwrap().contains("another seed may have succeeded"));
+    assert!(artifact.metadata["note"].as_str().unwrap().contains("every placement seed failed"));
     assert!(!artifact.metadata["physical_findings"].as_array().unwrap().is_empty());
     let error = write_error_record_with_diagnostic(
         &report,
@@ -263,4 +259,75 @@ fn rejected_macro_copper_views_natively_without_acquiring_a_certificate() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
     assert!(String::from_utf8_lossy(&output.stdout).contains("INSPECTION ONLY"));
     assert!(std::fs::read_to_string(svg).unwrap().contains("<svg"));
+}
+
+#[test]
+fn only_a_successful_command_removes_its_generated_failure_sibling() {
+    let source =
+        board("stale-run", 30.0, 30.0, vec![one_pad()], vec![placement("A", "test/one-pad", 5.0, 5.0)], Vec::new());
+    let diagnostic = PlacementFailureDiagnostic {
+        seed: 0,
+        failed_reference: "A".into(),
+        accepted: source.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect(),
+        proposal: None,
+        reason: "prior placement failure".into(),
+        physical_rejection: None,
+        bounded_packing: None,
+        search_succeeded: false,
+    };
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("failure-lifecycle-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let report = directory.join("run.json");
+    let artifact = write_placement_failure(&report, &source, &diagnostic).unwrap();
+    let state = directory.join(&artifact.state_filename);
+    let other_report = directory.join("other.json");
+    let other_artifact = write_placement_failure(&other_report, &source, &diagnostic).unwrap();
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let incomplete = Command::new(env!("CARGO_BIN_EXE_copper"))
+        .args(["route-board", "--report", report.to_str().unwrap()])
+        .current_dir(workspace)
+        .output()
+        .unwrap();
+    assert!(!incomplete.status.success());
+    assert!(state.exists(), "incomplete arguments cannot remove prior evidence");
+    let malformed = Command::new(env!("CARGO_BIN_EXE_copper"))
+        .args([
+            "route-board",
+            "examples/valid_board/board.copper",
+            "--report",
+            report.to_str().unwrap(),
+            "--stop-after",
+            "not-a-stage",
+        ])
+        .current_dir(workspace)
+        .output()
+        .unwrap();
+    assert!(!malformed.status.success());
+    assert!(state.exists(), "malformed arguments cannot remove prior evidence");
+    let output_path = directory.join("board.kicad_pcb");
+    let completed = Command::new(env!("CARGO_BIN_EXE_copper"))
+        .args([
+            "route-board",
+            "examples/valid_board/board.copper",
+            "--locked",
+            "--offline",
+            "--allow-proxy-footprints",
+            "--verify-plane-fill",
+            "none",
+            "--report",
+            report.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .current_dir(workspace)
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&completed.stdout),
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    assert!(!state.exists(), "successful rerun removes this report's generated diagnostic");
+    assert!(directory.join(other_artifact.state_filename).exists(), "other report artifacts are untouched");
 }

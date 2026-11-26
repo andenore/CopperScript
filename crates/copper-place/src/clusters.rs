@@ -58,13 +58,18 @@ pub(crate) enum ClusterPlacement {
 
 pub(crate) fn try_place_rigid_clusters(
     scene: &Scene,
-    targets: &Poses,
-    original: &Poses,
+    input_targets: &Poses,
+    input_original: &Poses,
     options: &PlannerOptions,
     spacing: &EscapeSpacingModel,
 ) -> Result<ClusterPlacement> {
     let board = scene.board;
-    let (mut targets, mut original) = (targets.clone(), original.clone());
+    let ordinary =
+        || ClusterPlacement::Placed(input_targets.clone(), input_original.clone(), options.clone(), Poses::new());
+    if board.rigid_clusters.is_empty() && !board.placement_rules.iter().any(|rule| rule.region.is_some()) {
+        return Ok(ordinary());
+    }
+    let (mut targets, mut original) = (input_targets.clone(), input_original.clone());
     let fixed = scene.fixed_placements(&original, &options.fixed_references);
     let members: IndexSet<String> =
         board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.clone())).collect();
@@ -89,6 +94,23 @@ pub(crate) fn try_place_rigid_clusters(
     // Unrelated fixed components are obstacles, not movable cluster companions.
     let mut placed: Poses =
         fixed.iter().filter(|(r, _)| !members.contains(*r)).map(|(r, p)| (r.clone(), p.clone())).collect();
+    if board.rigid_clusters.is_empty() {
+        // Regions are useful hints before greedy placement, but without a
+        // rigid group there is no geometry that requires a reservation. An
+        // exhausted preliminary batch must not discard an ordinary seed.
+        let narrow_failure =
+            reserve_regions(scene, &regions, &mut targets, &mut placed, &mut reservations, options, spacing)?;
+        let failure = if narrow_failure.is_some() {
+            narrow_failure
+        } else {
+            reserve_regional_components(scene, &broad_regions, &mut targets, &mut placed, &mut reservations, options)?
+        };
+        if let Some(failure) = failure {
+            scene.progress(&format!("region_reservation_deferred:{}", failure.failed_reference));
+            return Ok(ordinary());
+        }
+        return Ok(ClusterPlacement::Placed(targets, original, options.clone(), reservations));
+    }
     let mut obstacles: Vec<(&String, &Placement)> = placed.iter().collect();
     obstacles.sort_by(|a, b| a.0.cmp(b.0));
     for (index, (reference, pose)) in obstacles.iter().enumerate() {
@@ -524,6 +546,10 @@ fn reserve_regional_components(
                     diagnostic.search_remaining.unwrap_or(0)
                 )
             };
+            let packing = diagnostic.value(batch, Some(false));
+            if scene.observed() {
+                scene.progress(&format!("region_pack_failed:{}", copper_json::Dumps::new().dumps(&packing)));
+            }
             return Ok(Some(LegalizationFailure {
                 message: format!(
                     "cannot jointly reserve regional components {} within the existing packing budget: {cause}; {domains}",
@@ -531,7 +557,7 @@ fn reserve_regional_components(
                 ),
                 failed_reference: diagnostic.empty_reference.unwrap_or_else(|| batch[0].clone()),
                 accepted: placed.clone(),
-                bounded_packing: None,
+                bounded_packing: Some(packing),
             }));
         };
         for reference in batch {

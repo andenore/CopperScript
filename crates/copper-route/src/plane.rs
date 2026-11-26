@@ -303,11 +303,13 @@ fn surface_route_length(
     hypot((start.x_nm - end.x_nm) as f64, (start.y_nm - end.y_nm) as f64)
 }
 
-/// The ranked contact proposals of one land.
-struct Ranked {
-    choices: Vec<(i64, f64, Point, Vec<TrackSegment>, Option<Via>)>,
-    best_cost: f64,
-    best_region_rank: i64,
+/// The best ranked contact proposal of one land.
+struct RankedContact {
+    losses: usize,
+    region_rank: i64,
+    cost: f64,
+    target: Point,
+    contact: Contact,
 }
 
 /// The fixed context of one land's contact search.
@@ -330,179 +332,174 @@ struct LandSearch<'a> {
 
 type Contact = (Vec<TrackSegment>, Option<Via>);
 
-/// Read-only package exits, not reserved or emitted signal copper. The paths
-/// were checked once in the current contact frame and are reused for candidate
-/// comparisons; no signal search runs inside the contact candidate loop.
-struct SignalExits<'a> {
-    paths: Vec<Vec<Contact>>,
-    index: Option<RoutingClearanceIndex<'a>>,
-}
-
-impl SignalExits<'_> {
-    fn preserved(&mut self, net: &str, tracks: &[TrackSegment], via: Option<&Via>) -> Result<bool> {
-        let Some(index) = self.index.as_mut() else { return Ok(true) };
-        // The index baseline includes every previously committed occurrence as
-        // fixed. Only this prospective contact is removable by the net owner.
-        let result = (|| {
-            for track in tracks {
-                index.add_track(track.clone(), false, None)?;
-            }
-            if let Some(via) = via {
-                index.add_via(via.clone(), false, None)?;
-            }
-            for alternatives in &self.paths {
-                let mut survives = false;
-                for (path, via) in alternatives {
-                    let mut legal = match via {
-                        Some(via) => index.can_via(
-                            &via.net,
-                            via.position,
-                            via.size_nm,
-                            via.from_layer,
-                            via.to_layer,
-                            Some(via.drill_nm),
-                            false,
-                            None,
-                        )?,
-                        None => true,
-                    };
-                    for track in path {
-                        if !index.can_track(&track.net, track.start, track.end, track.width_nm, track.layer)? {
-                            legal = false;
-                            break;
-                        }
-                    }
-                    if legal {
-                        survives = true;
-                        break;
-                    }
-                }
-                if !survives {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        })();
-        index.remove(net);
-        result
+fn prefer_fewer_losses(best: &mut Option<(usize, Contact)>, losses: usize, contact: Contact) {
+    if best.as_ref().is_none_or(|(previous, _)| losses < *previous) {
+        *best = Some((losses, contact));
     }
 }
 
-/// Existing bounded surface/fanout domains, checked beyond the package collar.
-/// A witness is local accessibility evidence, never a complete net route.
-fn sampled_pin_exits(
-    board: &PhysicalBoard,
-    clearance: &RoutingClearanceIndex<'_>,
-    net: &str,
-    pose: &Placement,
-    pad: &FootprintPad,
-) -> Result<Vec<Contact>> {
-    use crate::boundary_access::{BoundaryAccessOptions, package_collar, surface_escapes};
-    use crate::fanout::{FanoutOptions, OutlineSites, legal_choices, package_candidates, two_leg_candidates};
-    let settings = BoundaryAccessOptions {
-        collar_margin_nm: board.rules.default_via_size_nm.max(BoundaryAccessOptions::default().collar_margin_nm),
-        maze_escapes: false,
-        ..BoundaryAccessOptions::default()
-    };
-    let start = transformed_local_point(pose, pad.position);
-    let side = side_layer(pose);
-    let area = package_collar(board, &pose.reference, settings.collar_margin_nm)?;
-    let mut paths = surface_escapes(board, clearance, net, start, side, area, &settings, false)?;
-    if paths.is_empty() {
-        paths = surface_escapes(board, clearance, net, start, side, area, &settings, true)?;
-    }
-    if !paths.is_empty() {
-        return Ok(paths.into_iter().map(|path| (path, None)).collect());
-    }
-    let rule = board.net_routing_rules.iter().find(|rule| rule.net == net);
-    let layers = copper_pcb::zones::routing_layers(board, net, rule);
-    if !layers.contains(&side) || layers.len() < 2 || rule.is_some_and(|r| r.max_vias == Some(0)) {
-        return Ok(Vec::new());
-    }
-    let other = *layers.iter().find(|layer| **layer != side).expect("two routing layers");
-    let options = FanoutOptions::default();
-    let outline = OutlineSites::new(&board.outline.vertices);
-    let mut witnesses = Vec::new();
-    for domain in 0..3 {
-        let endpoints = match domain {
-            0 => package_candidates(board, pose, pad, &options),
-            1 => two_leg_candidates(start, pose.position, &options),
-            _ => two_leg_candidates(
-                start,
-                pose.position,
-                &FanoutOptions {
-                    step_nm: options.refinement_step_nm,
-                    maximum_two_leg_candidates: options.maximum_refined_two_leg_candidates,
-                    ..options.clone()
-                },
-            ),
-        };
-        for (path, via) in legal_choices(board, clearance, net, start, pose, &endpoints, true, &outline)? {
-            if via.is_some()
-                && rule
-                    .and_then(|r| r.max_vias)
-                    .is_some_and(|limit| board.vias.iter().filter(|via| via.net == net).count() as i64 >= limit)
-            {
-                continue;
-            }
-            let endpoint = path.last().expect("nonempty fanout path").end;
-            // The transition alone is insufficient: prove a continuation beyond
-            // the package on its permitted destination routing layer.
-            for tail in surface_escapes(board, clearance, net, endpoint, other, area, &settings, false)? {
-                let mut joined = path.clone();
-                joined.extend(tail);
-                witnesses.push((joined, via.clone()));
-            }
-        }
-        if !witnesses.is_empty() {
-            break;
-        }
-    }
-    Ok(witnesses)
-}
-
-fn nearby_signal_exits(
-    board: &PhysicalBoard,
-    clearance: &RoutingClearanceIndex<'_>,
-    contact_net: &str,
+/// One eligible surface pin, with bounded escape samples computed on first use.
+struct SignalPin<'a> {
+    net: &'a str,
+    pose: &'a Placement,
     position: Point,
-    reach: i64,
-) -> Result<Vec<Vec<Contact>>> {
-    let poses: IndexMap<&str, &Placement> = board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
-    let mut witnesses = Vec::new();
-    for net in &board.nets {
-        let rule = board.net_routing_rules.iter().find(|rule| rule.net == net.name);
-        if net.name == contact_net
-            || net.pads.len() < 2
-            || board.zones.iter().any(|zone| zone.net == net.name)
-            || rule.is_some_and(|rule| rule.kind != copper_pcb::board::RouteKind::General)
-        {
-            continue;
-        }
-        let layers = copper_pcb::zones::routing_layers(board, &net.name, rule);
-        for reference in &net.pads {
-            let pose = poses[reference.component.as_str()];
-            if !layers.contains(&side_layer(pose)) {
+    paths: Option<Vec<Vec<TrackSegment>>>,
+}
+
+/// A stitch pass only adds copper. A cached path can become blocked but cannot
+/// become newly clear, so recheck it locally without repeating the exit search.
+/// Empty or stale samples make no claim about a pin's routability.
+struct SignalAccess<'a> {
+    pins: Vec<SignalPin<'a>>,
+    bins: IndexMap<(i64, i64), Vec<usize>>,
+}
+
+impl<'a> SignalAccess<'a> {
+    const BIN_SIZE_NM: i64 = 2_000_000;
+
+    fn new(board: &'a PhysicalBoard) -> Self {
+        let poses: IndexMap<&str, &Placement> = board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
+        let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
+        let plane_nets: IndexSet<&str> = board.zones.iter().map(|z| z.net.as_str()).collect();
+        let mut access = Self { pins: Vec::new(), bins: IndexMap::new() };
+        for net in &board.nets {
+            let rule = rules.get(net.name.as_str()).copied();
+            if net.pads.len() < 2
+                || plane_nets.contains(net.name.as_str())
+                || rule.is_some_and(|rule| rule.kind != copper_pcb::board::RouteKind::General)
+            {
                 continue;
             }
-            for pad in board.footprints[&pose.footprint]
-                .pads
-                .iter()
-                .filter(|pad| pad.number == reference.pad && pad.kind == PadKind::Smd)
-            {
-                let start = transformed_local_point(pose, pad.position);
-                // Contact candidates use square rings, not a Euclidean circle.
-                if (start.x_nm - position.x_nm).abs().max((start.y_nm - position.y_nm).abs()) > reach {
+            let layers = copper_pcb::zones::routing_layers(board, &net.name, rule);
+            for reference in &net.pads {
+                let pose = poses[reference.component.as_str()];
+                if !layers.contains(&side_layer(pose)) {
                     continue;
                 }
-                let paths = sampled_pin_exits(board, clearance, &net.name, pose, pad)?;
-                if !paths.is_empty() {
-                    witnesses.push(paths);
+                for pad in board.footprints[&pose.footprint]
+                    .pads
+                    .iter()
+                    .filter(|pad| pad.number == reference.pad && pad.kind == PadKind::Smd)
+                {
+                    let position = transformed_local_point(pose, pad.position);
+                    let key =
+                        (position.x_nm.div_euclid(Self::BIN_SIZE_NM), position.y_nm.div_euclid(Self::BIN_SIZE_NM));
+                    access.bins.entry(key).or_default().push(access.pins.len());
+                    access.pins.push(SignalPin { net: &net.name, pose, position, paths: None });
                 }
             }
         }
+        access
     }
-    Ok(witnesses)
+
+    fn preference(&mut self, position: Point, reach: i64) -> SignalPreference<'_, 'a> {
+        SignalPreference { access: self, position, reach, active: None }
+    }
+}
+
+/// Per-contact comparison against the same currently clear sampled paths.
+struct SignalPreference<'p, 'a> {
+    access: &'p mut SignalAccess<'a>,
+    position: Point,
+    reach: i64,
+    active: Option<Vec<(usize, Vec<usize>)>>,
+}
+
+impl SignalPreference<'_, '_> {
+    fn active_paths(&mut self, clearance: &RoutingClearanceIndex<'_>) -> Result<Vec<(usize, Vec<usize>)>> {
+        use crate::boundary_access::{BoundaryAccessOptions, package_collar, surface_escapes};
+        let board = clearance.board;
+        let settings = BoundaryAccessOptions {
+            collar_margin_nm: board.rules.default_via_size_nm.max(BoundaryAccessOptions::default().collar_margin_nm),
+            maze_escapes: false,
+            ..BoundaryAccessOptions::default()
+        };
+        let bins = |axis: i64| {
+            (axis - self.reach).div_euclid(SignalAccess::BIN_SIZE_NM)
+                ..=(axis + self.reach).div_euclid(SignalAccess::BIN_SIZE_NM)
+        };
+        let mut active = Vec::new();
+        for x in bins(self.position.x_nm) {
+            for y in bins(self.position.y_nm) {
+                let Some(ids) = self.access.bins.get(&(x, y)) else { continue };
+                for &id in ids {
+                    let pin = &mut self.access.pins[id];
+                    // The contact search uses square rings.
+                    if (self.position.x_nm - pin.position.x_nm)
+                        .abs()
+                        .max((self.position.y_nm - pin.position.y_nm).abs())
+                        > self.reach
+                    {
+                        continue;
+                    }
+                    let indices = if let Some(paths) = &pin.paths {
+                        let mut indices = Vec::new();
+                        'paths: for (i, path) in paths.iter().enumerate() {
+                            for t in path {
+                                if !clearance.can_track(pin.net, t.start, t.end, t.width_nm, t.layer)? {
+                                    continue 'paths;
+                                }
+                            }
+                            indices.push(i);
+                        }
+                        indices
+                    } else {
+                        let collar = package_collar(board, &pin.pose.reference, settings.collar_margin_nm)?;
+                        let paths = surface_escapes(
+                            board,
+                            clearance,
+                            pin.net,
+                            pin.position,
+                            side_layer(pin.pose),
+                            collar,
+                            &settings,
+                            false,
+                        )?;
+                        let indices = (0..paths.len()).collect();
+                        pin.paths = Some(paths);
+                        indices
+                    };
+                    if !indices.is_empty() {
+                        active.push((id, indices));
+                    }
+                }
+            }
+        }
+        Ok(active)
+    }
+
+    fn losses(
+        &mut self,
+        clearance: &RoutingClearanceIndex<'_>,
+        path: &[TrackSegment],
+        via: Option<&Via>,
+    ) -> Result<usize> {
+        if path.is_empty() && via.is_none() {
+            return Ok(0);
+        }
+        if self.active.is_none() {
+            self.active = Some(self.active_paths(clearance)?);
+        }
+        let active = self.active.as_ref().expect("initialized signal samples");
+        if active.is_empty() {
+            return Ok(0);
+        }
+        let overlay = clearance.contact_overlay(path, via)?;
+        let mut losses = 0;
+        'pins: for (pin, alternatives) in active {
+            let paths = self.access.pins[*pin].paths.as_ref().expect("sampled pin");
+            'paths: for &index in alternatives {
+                for track in &paths[index] {
+                    if !clearance.track_clears_overlay(track, &overlay)? {
+                        continue 'paths;
+                    }
+                }
+                continue 'pins;
+            }
+            losses += 1;
+        }
+        Ok(losses)
+    }
 }
 
 impl LandSearch<'_> {
@@ -598,21 +595,11 @@ impl LandSearch<'_> {
         &self,
         clearance: &RoutingClearanceIndex<'_>,
         preferred_via_uses: &IndexMap<Point, i64>,
+        signal_access: &mut SignalAccess<'_>,
     ) -> Result<(Option<Contact>, bool)> {
         let (net, position, side, options) = (self.net, self.position, self.side, self.options);
-        let mut frame = self.board.clone();
-        frame.tracks = self.committed_tracks.to_vec();
-        frame.vias = self.committed_vias.to_vec();
-        let paths = nearby_signal_exits(
-            &frame,
-            clearance,
-            net,
-            position,
-            options.maximum_radius_nm + options.maximum_detour_nm + self.via_size,
-        )?;
-        let frame = if paths.is_empty() { None } else { Some(frame) };
-        let index = frame.as_ref().map(RoutingClearanceIndex::new).transpose()?;
-        let mut exits = SignalExits { paths, index };
+        let mut exits =
+            signal_access.preference(position, options.maximum_radius_nm + options.maximum_detour_nm + self.via_size);
         let reference = PadReference { component: self.placement.reference.clone(), pad: self.pad.number.clone() };
         let preferred = if net == "GND" {
             options.preferred_ground_pads.as_ref().is_some_and(|pads| pads.contains(&reference))
@@ -634,8 +621,26 @@ impl LandSearch<'_> {
                             .any(|(a, b)| point_segment_distance_squared(position, *a, *b) <= near))
             })
             .collect();
-        let mut ranked = Ranked { choices: Vec::new(), best_cost: f64::INFINITY, best_region_rank: 1 };
-        let consider = |ranked: &mut Ranked, path: Vec<TrackSegment>, target: Point, via: Option<Via>| {
+        let outward = (
+            (position.x_nm - self.placement.position.x_nm) as f64,
+            (position.y_nm - self.placement.position.y_nm) as f64,
+        );
+        let outward_length = hypot(outward.0, outward.1);
+        let alignment = |target: Point| -> f64 {
+            let (dx, dy) = (target.x_nm - position.x_nm, target.y_nm - position.y_nm);
+            let span = hypot(dx as f64, dy as f64) * outward_length;
+            if span != 0.0 { (dx as f64 * outward.0 + dy as f64 * outward.1) / span } else { 0.0 }
+        };
+        let score = |target: Point| -> i64 {
+            if options.candidate_bias.is_none() {
+                clearance.terminal_preferences.score(net, side, &[position, target])
+            } else {
+                0
+            }
+        };
+        let mut fallback = None;
+        let mut ranked: Option<RankedContact> = None;
+        let consider = |ranked: &mut Option<RankedContact>, losses: usize, target: Point, (path, via): Contact| {
             let committed: Vec<&TrackSegment> = self.committed_tracks.iter().chain(path.iter()).collect();
             let routed = surface_route_length(net, side, self.width, position, target, &committed);
             let mut sum = 0.0;
@@ -647,10 +652,19 @@ impl LandSearch<'_> {
             cost += (preferred_via_uses.get(&target).copied().unwrap_or(0) * 400_000) as f64;
             let region_rank =
                 i64::from(!local_regions.is_empty() && !local_regions.iter().any(|zone| point_in_zone(target, zone)));
-            if (region_rank, cost).partial_cmp(&(ranked.best_region_rank, ranked.best_cost)) == Some(Ordering::Less) {
-                (ranked.best_region_rank, ranked.best_cost) = (region_rank, cost);
+            let better = ranked.as_ref().is_none_or(|best| {
+                (losses, region_rank, cost)
+                    .partial_cmp(&(best.losses, best.region_rank, best.cost))
+                    .expect("finite costs")
+                    .then_with(|| via.is_some().cmp(&best.contact.1.is_some()))
+                    .then_with(|| (-alignment(target)).partial_cmp(&-alignment(best.target)).expect("finite alignment"))
+                    .then_with(|| score(target).cmp(&score(best.target)))
+                    .then_with(|| (target.x_nm, target.y_nm).cmp(&(best.target.x_nm, best.target.y_nm)))
+                    == Ordering::Less
+            });
+            if better {
+                *ranked = Some(RankedContact { losses, region_rank, cost, target, contact: (path, via) });
             }
-            ranked.choices.push((region_rank, cost, target, path, via));
         };
         // Existing fanout and routed vias need not lie on the half-mm grid.
         let mut reusable: Vec<&Via> = self
@@ -670,23 +684,26 @@ impl LandSearch<'_> {
             match path {
                 Some(path) if path.is_empty() => return Ok((Some((path, None)), false)),
                 Some(path) => {
-                    if !exits.preserved(net, &path, None)? {
-                        continue;
-                    }
+                    let losses = exits.losses(clearance, &path, None)?;
                     if !preferred {
-                        return Ok((Some((path, None)), false));
+                        if losses == 0 {
+                            return Ok((Some((path, None)), false));
+                        }
+                        prefer_fewer_losses(&mut fallback, losses, (path, None));
+                    } else {
+                        consider(&mut ranked, losses, existing.position, (path, None));
                     }
-                    consider(&mut ranked, path, existing.position, None);
                 }
                 None => {}
             }
         }
         let reserved_region = self.zones.iter().any(|zone| zone.reserve_routing);
-        if reserved_region
-            && let Some(tail) = self.existing_via_zone_tail(clearance)?
-            && exits.preserved(net, &tail.0, tail.1.as_ref())?
-        {
-            return Ok((Some(tail), false));
+        if reserved_region && let Some(tail) = self.existing_via_zone_tail(clearance)? {
+            let losses = exits.losses(clearance, &tail.0, tail.1.as_ref())?;
+            if losses == 0 {
+                return Ok((Some(tail), false));
+            }
+            prefer_fewer_losses(&mut fallback, losses, tail);
         }
         let pad_shape = placed_pad_shape(position, self.pad, self.placement);
         let mut legal_via_targets: Vec<Point> = Vec::new();
@@ -726,11 +743,11 @@ impl LandSearch<'_> {
             }
             let distance_x = (candidate.x_nm - position.x_nm).abs();
             let distance_y = (candidate.y_nm - position.y_nm).abs();
-            if preferred
-                && !ranked.choices.is_empty()
-                && (local_regions.is_empty() || ranked.best_region_rank == 0)
-                && (distance_x.max(distance_y) as f64) > ranked.best_cost.min(2_000_000.0)
-            {
+            if ranked.as_ref().is_some_and(|best| {
+                best.losses == 0
+                    && (local_regions.is_empty() || best.region_rank == 0)
+                    && (distance_x.max(distance_y) as f64) > best.cost.min(2_000_000.0)
+            }) {
                 if radial {
                     break;
                 }
@@ -773,45 +790,25 @@ impl LandSearch<'_> {
                 legal_via_targets.push(candidate);
             }
             if let Some(path) = self.path(clearance, position, candidate, side, self.committed_tracks)? {
-                if !exits.preserved(net, &path, via.as_ref())? {
-                    continue;
-                }
+                let losses = exits.losses(clearance, &path, via.as_ref())?;
                 if !preferred {
-                    return Ok((Some((path, via)), false));
+                    if losses == 0 {
+                        return Ok((Some((path, via)), false));
+                    }
+                    prefer_fewer_losses(&mut fallback, losses, (path, via));
+                } else {
+                    consider(&mut ranked, losses, candidate, (path, via));
                 }
-                consider(&mut ranked, path, candidate, via);
             }
         }
-        if !ranked.choices.is_empty() {
-            let outward = (
-                (position.x_nm - self.placement.position.x_nm) as f64,
-                (position.y_nm - self.placement.position.y_nm) as f64,
-            );
-            let outward_length = hypot(outward.0, outward.1);
-            let alignment = |target: Point| -> f64 {
-                let (dx, dy) = (target.x_nm - position.x_nm, target.y_nm - position.y_nm);
-                let span = hypot(dx as f64, dy as f64) * outward_length;
-                if span != 0.0 { (dx as f64 * outward.0 + dy as f64 * outward.1) / span } else { 0.0 }
-            };
-            let score = |target: Point| -> i64 {
-                if options.candidate_bias.is_none() {
-                    clearance.terminal_preferences.score(net, side, &[position, target])
-                } else {
-                    0
-                }
-            };
-            let mut ordered: Vec<_> = ranked.choices.iter().collect();
-            ordered.sort_by(|a, b| {
-                (a.0, a.1)
-                    .partial_cmp(&(b.0, b.1))
-                    .expect("finite costs")
-                    .then((a.4.is_some()).cmp(&b.4.is_some()))
-                    .then((-alignment(a.2)).partial_cmp(&-alignment(b.2)).expect("finite alignment"))
-                    .then(score(a.2).cmp(&score(b.2)))
-                    .then((a.2.x_nm, a.2.y_nm).cmp(&(b.2.x_nm, b.2.y_nm)))
-            });
-            let (_, _, _, path, via) = ordered[0];
-            return Ok((Some((path.clone(), via.clone())), true));
+        if let Some(best) = ranked
+            && fallback.as_ref().is_none_or(|(losses, _)| best.losses < *losses)
+        {
+            return Ok((Some(best.contact), true));
+        }
+        if let Some((_, contact)) = fallback {
+            // The samples guide the choice, but cannot veto a legal contact.
+            return Ok((Some(contact), false));
         }
         // A dense package may have no legal straight, elbow, or short lateral
         // escape: search its small local neighborhood jointly over path and via.
@@ -834,7 +831,6 @@ impl LandSearch<'_> {
         };
         if let Some((tracks, candidate)) =
             surface_path_to_via(self.board, clearance, net, position, self.width, side, &search)?
-            && exits.preserved(net, &tracks, Some(&self.via(candidate)))?
         {
             return Ok((Some((tracks, Some(self.via(candidate)))), false));
         }
@@ -857,16 +853,11 @@ impl LandSearch<'_> {
             {
                 let mut via = self.via(position);
                 (via.size_nm, via.drill_nm, via.finish) = (size, drill, "filled-capped".to_owned());
-                if exits.preserved(net, &[], Some(&via))? {
-                    return Ok((Some((Vec::new(), Some(via))), false));
-                }
+                return Ok((Some((Vec::new(), Some(via))), false));
             }
         }
         let tail = if reserved_region { None } else { self.existing_via_zone_tail(clearance)? };
-        match tail {
-            Some(tail) if exits.preserved(net, &tail.0, tail.1.as_ref())? => Ok((Some(tail), false)),
-            _ => Ok((None, false)),
-        }
+        Ok((tail, false))
     }
 }
 
@@ -907,11 +898,14 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
     }
     let preferred_pads = options.preferred_ground_pads.clone().unwrap_or_default();
     let mut clearance = RoutingClearanceIndex::new(&board)?;
+    let mut signal_access = SignalAccess::new(&board);
     let placements: IndexMap<&str, &Placement> = board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
     let net_pads: IndexMap<&str, &Vec<PadReference>> = board.nets.iter().map(|n| (n.name.as_str(), &n.pads)).collect();
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let mut added_tracks: Vec<TrackSegment> = Vec::new();
     let mut added_vias: Vec<Via> = Vec::new();
+    let mut committed_tracks = board.tracks.clone();
+    let mut committed_vias = board.vias.clone();
     let mut targets: Vec<PadReference> = Vec::new();
     let permitted: IndexSet<&PadReference> = board.via_in_pad_rules.iter().map(|rule| &rule.pad).collect();
     let mut pending_lands: Vec<PendingContact> = Vec::new();
@@ -1120,8 +1114,6 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
                 } else {
                     &options
                 };
-                let committed_tracks: Vec<TrackSegment> = board.tracks.iter().chain(&added_tracks).cloned().collect();
-                let committed_vias: Vec<Via> = board.vias.iter().chain(&added_vias).cloned().collect();
                 let search = LandSearch {
                     board: &board,
                     net,
@@ -1138,7 +1130,7 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
                     committed_tracks: &committed_tracks,
                     committed_vias: &committed_vias,
                 };
-                let (choice, ranked) = search.choose(&clearance, &preferred_via_uses)?;
+                let (choice, ranked) = search.choose(&clearance, &preferred_via_uses, &mut signal_access)?;
                 if let Some((path, via)) = &choice
                     && ranked
                     && (!path.is_empty() || via.is_some())
@@ -1170,10 +1162,12 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
                 };
                 for track in &tracks {
                     added_tracks.push(track.clone());
+                    committed_tracks.push(track.clone());
                     clearance.add_track(track.clone(), false, None)?;
                 }
                 if let Some(via) = via {
                     added_vias.push(via.clone());
+                    committed_vias.push(via.clone());
                     clearance.add_via(via, false, None)?;
                 }
                 record_contact(
@@ -1259,20 +1253,11 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
                 .map(|(anchor, _)| *anchor)
                 .collect();
             anchors.sort_by_key(|anchor| (squared(*anchor, contact.position), anchor.x_nm, anchor.y_nm));
-            let committed: Vec<TrackSegment> = board.tracks.iter().chain(&added_tracks).cloned().collect();
-            let mut frame = board.clone();
-            frame.tracks = committed.clone();
-            frame.vias.extend(added_vias.iter().cloned());
-            let paths = nearby_signal_exits(
-                &frame,
-                &clearance,
-                &contact.net,
+            let mut exits = signal_access.preference(
                 contact.position,
                 options.maximum_contact_radius_nm + options.maximum_detour_nm + board.rules.default_via_size_nm,
-            )?;
-            let index = if paths.is_empty() { None } else { Some(RoutingClearanceIndex::new(&frame)?) };
-            let mut exits = SignalExits { paths, index };
-            let mut selected = None;
+            );
+            let mut selected: Option<(usize, Vec<TrackSegment>, Point)> = None;
             for anchor in anchors {
                 if let Some(path) = surface_path_detour(
                     &board,
@@ -1282,22 +1267,26 @@ pub fn stitch_zone_pads(board: &PhysicalBoard, options: Option<&PlaneStitchOptio
                     anchor,
                     contact.width_nm,
                     contact.side,
-                    &committed,
+                    &committed_tracks,
                     options.maximum_detour_nm,
                     500_000,
                 )? {
-                    if exits.preserved(&contact.net, &path, None)? {
-                        selected = Some((path, anchor));
+                    let losses = exits.losses(&clearance, &path, None)?;
+                    if selected.as_ref().is_none_or(|(previous, _, _)| losses < *previous) {
+                        selected = Some((losses, path, anchor));
+                    }
+                    if losses == 0 {
                         break;
                     }
                 }
             }
-            let Some((path, anchor)) = selected else {
+            let Some((_, path, anchor)) = selected else {
                 remaining.push(contact);
                 continue;
             };
             for track in &path {
                 added_tracks.push(track.clone());
+                committed_tracks.push(track.clone());
                 clearance.add_track(track.clone(), false, None)?;
             }
             let dependency = anchor_uses.get(&(contact.net.clone(), anchor, contact.side)).cloned();
@@ -1426,87 +1415,4 @@ pub fn repair_cut_off_plane_pads(
     }
     let remaining = cut_off(&estimate);
     Ok((current, remaining))
-}
-
-#[cfg(test)]
-mod signal_access_tests {
-    use super::*;
-    #[test]
-    #[ignore = "set COPPER_CRITICAL_INPUTS, COPPER_ACCESS_COMPONENT and COPPER_ACCESS_PAD for a saved-input diagnostic"]
-    fn saved_critical_input_keeps_selected_package_boundary_access() {
-        use copper_pcb::board::PadReference;
-        let path = std::env::var("COPPER_CRITICAL_INPUTS").unwrap();
-        let reference = PadReference::new(
-            &std::env::var("COPPER_ACCESS_COMPONENT").unwrap(),
-            &std::env::var("COPPER_ACCESS_PAD").unwrap(),
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let saved = copper_state::StateDocument::read(&text).unwrap();
-        let copper_state::StateValue::Map { entries, .. } = &saved.value else { panic!("critical input mapping") };
-        let encoded = &entries.iter().find(|(k, _)| k == &copper_state::StateValue::Str("board".into())).unwrap().1;
-        let before = copper_pcb::state_codec::board(encoded).unwrap();
-        let exits = |board: &copper_pcb::board::PhysicalBoard| {
-            let pose = board.placements.iter().find(|pose| pose.reference == reference.component).unwrap();
-            let pad = board.footprints[&pose.footprint].pads.iter().find(|pad| pad.number == reference.pad).unwrap();
-            let net = board.nets.iter().find(|net| net.pads.contains(&reference)).unwrap();
-            let index = RoutingClearanceIndex::new(board).unwrap();
-            sampled_pin_exits(board, &index, &net.name, pose, pad).unwrap().len()
-        };
-        let mut without_planes = saved.value.clone();
-        let copper_state::StateValue::Map { entries, .. } = &mut without_planes else { unreachable!() };
-        entries.retain(|(key, _)| key != &copper_state::StateValue::Str("plane_stitch_options".into()));
-        let selected = IndexSet::new();
-        let prepared = copper_route::critical::replay_critical(&without_planes, Some(&selected), 6000).unwrap();
-        let before_count = exits(&prepared.board);
-        eprintln!("raw paths={}, prepared paths={before_count}", exits(&before));
-        assert!(before_count > 0, "selected pin has no baseline sampled boundary witness");
-        let old_frame = if let Ok(path) = std::env::var("COPPER_BLOCKED_INPUTS") {
-            let old = copper_state::StateDocument::read(&std::fs::read_to_string(path).unwrap()).unwrap();
-            let copper_state::StateValue::Map { entries, .. } = &old.value else { panic!("saved mapping") };
-            let encoded = &entries.iter().find(|(k, _)| k == &copper_state::StateValue::Str("board".into())).unwrap().1;
-            let blocked = copper_pcb::state_codec::board(encoded).unwrap();
-            assert_eq!(exits(&blocked), 0, "old preparation must reproduce the blocked sampled domain");
-            Some(blocked)
-        } else {
-            None
-        };
-        let copper_state::StateValue::Map { entries, .. } = &saved.value else { unreachable!() };
-        let encoded = &entries
-            .iter()
-            .find(|(k, _)| k == &copper_state::StateValue::Str("plane_stitch_options".into()))
-            .unwrap()
-            .1;
-        let options = crate::critical::plane_stitch_options(encoded).unwrap();
-        let mut contact_frame = prepared.board.clone();
-        contact_frame.copper_keepouts.extend(options.keepouts.iter().cloned());
-        let contacts = stitch_zone_pads(&contact_frame, Some(&options)).unwrap();
-        if let Some(mut old) = old_frame {
-            old.copper_keepouts.extend(options.keepouts.iter().cloned());
-            let held = stitch_zone_pads(&old, Some(&options)).unwrap();
-            eprintln!(
-                "old held-contact check: stitched={}, pending={:?}, newly added vias={}, tracks={}",
-                held.stitched_pads.len(),
-                held.pending_pads,
-                held.added_via_count,
-                held.added_track_count
-            );
-            // The unified snapshot also includes the later post-critical contact pass.
-        }
-        eprintln!(
-            "prospective plane contacts: stitched={}, pending={:?}",
-            contacts.stitched_pads.len(),
-            contacts.pending_pads
-        );
-        let after = copper_route::critical::replay_critical(&saved.value, Some(&selected), 6000).unwrap();
-        let after_count = exits(&after.board);
-        eprintln!(
-            "selected package-boundary paths: before={before_count}, after={after_count}; plane vias={}, tracks={}",
-            after.plane_reservation_via_count, after.plane_reservation_track_count
-        );
-        assert!(after_count > 0, "plane preparation lost the selected package-boundary access");
-        assert_eq!(contacts.board.tracks, after.board.tracks);
-        assert_eq!(contacts.board.vias, after.board.vias);
-        assert!(after.board.tracks.starts_with(&before.tracks));
-        assert!(after.board.vias.starts_with(&before.vias));
-    }
 }

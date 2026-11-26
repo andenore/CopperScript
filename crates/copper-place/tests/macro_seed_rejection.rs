@@ -112,16 +112,7 @@ fn later_macro_copper_rejection_preserves_the_valid_earlier_seed() {
     assert_eq!(candidates[0].seed, 0);
     assert_eq!(candidates[0].statistics.failed_seed_attempts.len(), 1);
     assert_eq!(candidates[0].statistics.failed_seed_attempts[0].seed, 1);
-    assert_eq!(diagnostics.len(), 1);
-    let rejected = diagnostics[0].physical_rejection.as_ref().unwrap();
-    assert!(
-        rejected.findings.iter().any(|f| f.code == "DRC-CLEARANCE" || f.code == "DRC-SHORT"),
-        "{:?}",
-        rejected.findings
-    );
-    assert_eq!(rejected.board.tracks.len(), 2);
-    assert!(diagnostics[0].proposal.is_none());
-    assert!(diagnostics[0].search_succeeded);
+    assert!(diagnostics.is_empty(), "successful searches must not publish a failed-run snapshot");
     let mut accepted = board.clone();
     accepted.placements = candidates[0].placements.clone();
     materialize_hard_macros(accepted).expect("accepted seed passes the unchanged exact macro gate");
@@ -164,4 +155,49 @@ fn an_earlier_macro_rejection_does_not_prevent_a_later_valid_seed() {
     let mut accepted = board;
     accepted.placements = candidates[0].placements.clone();
     materialize_hard_macros(accepted).unwrap();
+}
+
+#[test]
+fn macro_acceptance_does_not_depend_on_unrelated_decoupling_links() {
+    let (mut board, options) = fixture();
+    board.decoupling_links.clear();
+    let candidates = generate_placement_candidates_with_diagnostics(&board, &options, None, None).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].seed, 0);
+    assert_eq!(candidates[0].statistics.failed_seed_attempts.len(), 1);
+}
+
+#[test]
+fn the_second_macro_is_reported_when_only_its_copper_fails() {
+    let (mut board, mut options) = fixture();
+    options.seed_count = Some(1);
+    board.hard_macros[1].vias.push(via("A_NET", (-5.0, 0.0), 0.6, 0.3, Front, Back));
+    let mut diagnostics = Vec::new();
+    let mut observe = |d: &copper_place::planner::PlacementFailureDiagnostic| diagnostics.push(d.clone());
+    assert!(generate_placement_candidates_with_diagnostics(&board, &options, None, Some(&mut observe)).is_err());
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].failed_reference, "B");
+    assert_eq!(
+        diagnostics[0]
+            .physical_rejection
+            .as_ref()
+            .unwrap()
+            .failed_clusters()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["B"]
+    );
+}
+
+#[test]
+fn an_ordinary_pad_short_is_not_attributed_to_an_unrelated_macro() {
+    let (mut board, _) = fixture();
+    board.footprints.get_mut("cap").unwrap().pads[0].position = pt(0.6, 0.0);
+    let MacroMaterialization::Rejected(rejection) = try_materialize_hard_macros(board).unwrap() else {
+        panic!("ordinary pad short must be retained by exact DRC")
+    };
+    assert!(rejection.findings.iter().any(|finding| finding.code == "DRC-SHORT"));
+    assert!(rejection.failed_clusters().is_empty());
+    assert_eq!(rejection.failed_reference(), Some("C"));
 }

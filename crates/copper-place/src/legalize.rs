@@ -296,7 +296,9 @@ pub fn candidate_positions(scene: &Scene, placement: &Placement, options: &Plann
     // A pose need fit at one allowed orientation, not at every orientation.
     // Union the signed origin domains; the consuming search still checks the
     // complete pose against exact geometry and the original work budget.
-    let domains: Vec<_> = orientations
+    // Symmetric courtyards can produce the same bounds for multiple rotations.
+    // The pose stream still tries every permitted angle at each sampled site.
+    let domains: IndexSet<_> = orientations
         .iter()
         .map(|orientation| {
             let candidate = Placement { rotation_degrees: orientation.clone(), ..placement.clone() };
@@ -1030,14 +1032,11 @@ struct RepairDiagnostics {
     packing: PackingDiagnostics,
 }
 
-impl RepairDiagnostics {
-    fn value(&self, result: Option<bool>) -> copper_json::Value {
+impl PackingDiagnostics {
+    pub(crate) fn value(&self, references: &[String], result: Option<bool>) -> copper_json::Value {
         use copper_json::{Object, Value};
         Value::Object(Object::from([
-            (
-                "selected_references".into(),
-                Value::Array(self.references.iter().map(|r| Value::from(r.as_str())).collect()),
-            ),
+            ("selected_references".into(), Value::Array(references.iter().map(|r| Value::from(r.as_str())).collect())),
             (
                 "outcome".into(),
                 Value::from(match result {
@@ -1046,13 +1045,12 @@ impl RepairDiagnostics {
                     Some(false) => "no_sampled_witness",
                 }),
             ),
-            ("passes".into(), Value::from(self.packing.passes as i64)),
-            ("final_pass".into(), Value::from(if self.packing.fine { "fine" } else { "coarse" })),
+            ("passes".into(), Value::from(self.passes as i64)),
+            ("final_pass".into(), Value::from(if self.fine { "fine" } else { "coarse" })),
             (
                 "domains".into(),
                 Value::Array(
-                    self.packing
-                        .domains
+                    self.domains
                         .iter()
                         .map(|(reference, (sampled, legal))| {
                             Value::Object(Object::from([
@@ -1064,12 +1062,15 @@ impl RepairDiagnostics {
                         .collect(),
                 ),
             ),
-            (
-                "empty_reference".into(),
-                self.packing.empty_reference.as_ref().map_or(Value::Null, |r| Value::from(r.as_str())),
-            ),
-            ("search_remaining".into(), self.packing.search_remaining.map_or(Value::Null, Value::from)),
+            ("empty_reference".into(), self.empty_reference.as_ref().map_or(Value::Null, |r| Value::from(r.as_str()))),
+            ("search_remaining".into(), self.search_remaining.map_or(Value::Null, Value::from)),
         ]))
+    }
+}
+
+impl RepairDiagnostics {
+    fn value(&self, result: Option<bool>) -> copper_json::Value {
+        self.packing.value(&self.references, result)
     }
 }
 
@@ -1526,10 +1527,14 @@ pub fn best_legal_choice(
     });
     for step in [250_000, 100_000] {
         let fallback: Candidates = general.take().unwrap_or_else(|| Box::new(std::iter::empty()));
-        let coverage_start = wide_start.take();
         let mut count = 0usize;
         let local_target = best.as_ref().map_or(target, |(_, pose)| pose).clone();
         let relative = relative_candidates(scene, &scene.relative, reference, &local_target, placed, options, step)?;
+        // The wide boundary is an index into the ordinary fallback. Offset it
+        // by the relative prefix before comparing to the combined probe index.
+        // A saturated relative search samples only the initial fallback quota;
+        // the boundary then remains beyond the shared budget.
+        let coverage_start = wide_start.take().map(|nearest| relative.len().saturating_add(nearest));
         let candidates: Candidates = if local {
             bounded_local_candidates(relative, options.probe_limit(), fallback)
         } else {
@@ -1542,7 +1547,7 @@ pub fn best_legal_choice(
             if coverage_start == Some(probe) {
                 // A normal nearby success keeps its existing ranking. Distant
                 // coverage only spends the reserved allowance on local failure.
-                if best.is_some() {
+                if best.as_ref().is_some_and(|(rank, _)| rank.0 == 0) {
                     break;
                 }
                 scene.progress(&format!("legalize_wide:{reference}"));
@@ -2692,6 +2697,32 @@ mod tests {
             assert_eq!(pose.rotation_degrees, Decimal::from_i64(0));
             assert!(scene.legal(&pose, &Poses::new()).unwrap());
         }
+    }
+
+    #[test]
+    fn relative_probes_do_not_shorten_the_nearby_ordinary_domain() {
+        let target = placement("U", "test/one-pad", 50.0, 20.0);
+        let peer = placement("P", "test/one-pad", 4.0, 60.0);
+        let mut board =
+            board("relative-prefix", 80.0, 70.0, vec![one_pad()], vec![target.clone(), peer.clone()], Vec::new());
+        board.placement_rules.push(ComponentPlacementRule {
+            fixed_rotation_degrees: Some(Decimal::from_i64(0)),
+            ..ComponentPlacementRule::new("U")
+        });
+        let mut exclusion = max_distance(("P", "1"), ("U", "1"), 2.0);
+        exclusion.kind = RelativePlacementKind::MinDistance;
+        board.relative_rules.push(exclusion);
+        let options = PlannerOptions { legalization_candidates: 1, ..PlannerOptions::default() }.validated().unwrap();
+        let scene = Scene::new(&board, options.policy());
+        let held: Poses = [(peer.reference.clone(), peer)].into_iter().collect();
+        let spacing = EscapeSpacingModel::new(&scene, options.escape_margin_nm, options.escape_transit_lanes).unwrap();
+        let selected = best_legal_choice(&scene, "U", &target, &held, &IndexMap::new(), &options, &spacing, 0, None)
+            .unwrap()
+            .unwrap();
+        // Eight exclusion-ring probes precede the 48 nearby ordinary probes.
+        // The first Y=15 site is in that nearby prefix, after combined probe 48.
+        assert_eq!(selected.position, pt(50.0, 15.0));
+        assert_eq!(scene.penalty(&with(&held, &selected)).unwrap(), 0);
     }
 
     #[test]

@@ -221,8 +221,10 @@ impl Router<'_, '_> {
         let mut retries = 0;
         let mut retried = false;
         let mut next_iteration = 1;
+        let mut termination = "iteration_limit";
         while next_iteration <= options.maximum_iterations {
             if self.expired() {
+                termination = "deadline";
                 break;
             }
             iteration = next_iteration;
@@ -307,12 +309,15 @@ impl Router<'_, '_> {
                     ));
                     continue;
                 }
+                termination = "no_conflicts";
                 break;
             }
             if options.stall_iterations != 0 && iteration - best_iteration >= options.stall_iterations {
+                termination = "stall_limit";
                 break;
             }
             if self.deadline.is_some_and(|deadline| std::time::Instant::now() > deadline) {
+                termination = "deadline";
                 break;
             }
             self.penalise(&conflicts);
@@ -334,9 +339,20 @@ impl Router<'_, '_> {
                 pending = names.iter().filter(|name| !failed.contains(*name) || retry).cloned().collect();
             }
             if pending.is_empty() {
+                termination = "no_pending_nets";
                 break;
             }
         }
+        events.push((
+            "unified_negotiation",
+            "finished",
+            vec![
+                ("iterations", int(iteration)),
+                ("best_iteration", int(best_iteration)),
+                ("iterations_without_improvement", int(iteration - best_iteration)),
+                ("reason", Value::Str(termination.to_owned())),
+            ],
+        ));
         let (snapshot, conflicts) = match best_snapshot {
             Some((_, snapshot, conflicts)) => (snapshot, conflicts),
             None => {

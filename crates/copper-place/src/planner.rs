@@ -108,7 +108,7 @@ fn improve_decoupling_placement(
     options: &PlannerOptions,
 ) -> Result<DecouplingPlacement> {
     let board = scene.board;
-    if board.decoupling_links.is_empty() {
+    if board.decoupling_links.is_empty() && board.hard_macros.is_empty() {
         return Ok(DecouplingPlacement::Accepted(refined.clone(), 0));
     }
     let mut fixed: IndexSet<String> = scene.fixed_placements(refined, &options.fixed_references).into_keys().collect();
@@ -124,7 +124,8 @@ fn improve_decoupling_placement(
     if let MacroMaterialization::Rejected(rejection) = copper_drc::macros::try_materialize_hard_macros(frame)? {
         return Ok(DecouplingPlacement::Rejected(rejection));
     }
-    if options.decoupling_placement_trials == 0
+    if board.decoupling_links.is_empty()
+        || options.decoupling_placement_trials == 0
         || board.decoupling_links.iter().all(|link| fixed.contains(&link.capacitor.component))
     {
         return Ok(DecouplingPlacement::Accepted(refined.clone(), 0));
@@ -157,9 +158,8 @@ pub fn generate_placement_candidates_with_progress<'a>(
     generate_placement_candidates_with_diagnostics(board, options, progress, None)
 }
 
-/// Observe the deepest bounded failure when the complete search fails. A
-/// rejected physical macro trial is also exposed when another seed succeeds;
-/// its snapshot is inspection only and never belongs to the accepted candidate.
+/// Observe the deepest bounded failure only when the complete search fails.
+/// Discarded seeds remain statistics of successful candidates, not artifacts.
 pub fn generate_placement_candidates_with_diagnostics<'a>(
     board: &'a PhysicalBoard,
     options: &PlannerOptions,
@@ -334,11 +334,7 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
             DecouplingPlacement::Accepted(poses, moves) => (poses, moves),
             DecouplingPlacement::Rejected(rejection) => {
                 let reason = rejection.message();
-                let reference = board
-                    .rigid_clusters
-                    .first()
-                    .map(|c| c.anchor_reference.clone())
-                    .unwrap_or_else(|| refined.keys().next().cloned().unwrap_or_default());
+                let reference = rejection.failed_reference().unwrap_or_default().to_owned();
                 failures.push(SeedFailure {
                     seed,
                     failed_reference: reference.clone(),
@@ -427,10 +423,6 @@ pub fn generate_placement_candidates_with_diagnostics<'a>(
             observer(diagnostic);
         }
         return error(message);
-    }
-    if let (Some(observer), Some(diagnostic)) = (&mut on_failure, &mut physical_diagnostic) {
-        diagnostic.search_succeeded = true;
-        observer(diagnostic);
     }
     if !failures.is_empty() {
         for candidate in &mut attempts {

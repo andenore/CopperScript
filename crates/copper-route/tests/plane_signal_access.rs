@@ -1,4 +1,4 @@
-//! Plane contact selection must not consume the last checked package exit.
+//! Prefer plane contacts that preserve sampled exits and retain legal fallbacks.
 mod support_planes;
 
 use copper_physical::CopperLayer;
@@ -108,20 +108,21 @@ fn nearby_package_contact_also_preserves_the_signal_exit() {
 }
 
 #[test]
-fn no_safe_explicit_contact_remains_pending() {
+fn the_only_legal_explicit_contact_is_kept_when_it_closes_a_sampled_exit() {
     let mut board = contact_board();
     board.zones[0].outer = rect(7.95, 7.45, 8.05, 7.55);
     let options = PlaneStitchOptions { require_explicit: true, maximum_radius_nm: nm(0.5), ..Default::default() };
+    assert!(!signal_exits(&board).is_empty());
     let stitched = stitch_zone_pads(&board, Some(&options)).unwrap();
-    assert_eq!(stitched.pending_pads, vec![pad_ref("U", "1")]);
-    assert!(stitched.stitched_pads.is_empty());
-    assert_eq!(stitched.added_via_count, 0);
-    assert_eq!(stitched.added_track_count, 0);
-    assert!(!signal_exits(&stitched.board).is_empty());
+    assert!(stitched.pending_pads.is_empty());
+    assert_eq!(stitched.stitched_pads, vec![pad_ref("U", "1")]);
+    assert_eq!(stitched.added_via_count, 1);
+    assert!(signal_exits(&stitched.board).is_empty());
+    assert!(hard_findings(&stitched.board).is_empty());
 }
 
 #[test]
-fn pending_anchor_retry_cannot_close_a_signal_exit() {
+fn anchor_retry_keeps_the_only_legal_connection_even_when_samples_are_closed() {
     let mut board = contact_board();
     board.footprints.get_mut("package").unwrap().pads[0].position = mm(-0.2, -0.75);
     board.copper_keepouts[0] = keepout("right", &[CopperLayer::Front], rect(8.65, 7.55, 10.0, 10.0));
@@ -162,7 +163,8 @@ fn pending_anchor_retry_cannot_close_a_signal_exit() {
     assert!(signal_exits(&unguarded).is_empty(), "old anchor retry closes the sampled exit");
     let stitched = stitch_zone_pads(&board, Some(&options)).unwrap();
     assert!(stitched.stitched_pads.contains(&pad_ref("ANCHOR", "1")));
-    assert!(stitched.pending_pads.contains(&pad_ref("U", "1")));
-    assert!(!signal_exits(&stitched.board).is_empty());
+    assert!(stitched.pending_pads.is_empty());
+    assert!(stitched.stitched_pads.contains(&pad_ref("U", "1")));
+    assert!(signal_exits(&stitched.board).is_empty());
     assert!(hard_findings(&stitched.board).is_empty(), "{:?}", hard_findings(&stitched.board));
 }

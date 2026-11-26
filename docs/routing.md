@@ -71,14 +71,14 @@ previous timed event. `copper bench` copies the timings into each board's
   `closure_check=target|source` in `copper issues`; routing results do not change.
 - **Post-processing.** Land closure, route smoothing, stub cleanup and
   single-layer via sweep; declared zones are stitched automatically.
-  Plane-contact selection preserves sampled local exits of nearby ordinary
-  signal pads. It reuses the bounded surface and fanout candidate domains,
-  including permitted via transitions with an exact continuation beyond the
-  package collar. Candidate contacts and same-net anchor retries must leave
-  at least one checked witness per sampled pad. These witnesses are not emitted
-  signal reservations or a global connectivity certificate. Existing source
-  copper remains immutable; an unavailable explicit contact remains pending.
-  Native final refill and connectivity checks remain authoritative.
+  Plane-contact selection prefers to preserve sampled surface exits of nearby
+  ordinary signal pads. Each stitch pass uses one spatial pad catalog, caches
+  bounded exit samples per pin, and checks candidate copper against those
+  samples without rebuilding the clearance index. If no sampled exit can be
+  preserved by a legal contact, the best legal contact is still used. The
+  samples are advisory, so an explicit contact remains pending only when the
+  contact search fails. Native final refill and connectivity checks remain
+  authoritative.
 - **Verification.** Exact physical DRC on the explicit copper, then a refill and
   DRC of the written board: CopperScript's own filler and DRC by default, or
   KiCad's with `--verify-plane-fill KICAD_CLI`. Opens the refill reports feed at
@@ -133,7 +133,9 @@ Exact negotiation feedback includes emitted proposals that intersect immutable
 source geometry. Only the offending mutable proposal receives history and is
 rerouted; its fixed blocker never becomes a negotiation participant. This covers
 search-raster mismatches without changing the final exact commit or ownership
-checks.
+checks. The `unified_negotiation` finish event reports the iteration count, the
+best iteration, and whether the run stopped at a stall, deadline, or another
+negotiation limit.
 
 Its 78 options are listed with types and defaults by
 `copper route-board --list-unified-options` and set with

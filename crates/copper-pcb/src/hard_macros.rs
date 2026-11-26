@@ -686,6 +686,7 @@ pub fn validate_hard_macros(board: &PhysicalBoard) -> Result<()> {
         let Some(cluster) = board.rigid_clusters.iter().find(|c| c.name == hard.cluster) else {
             return fail("hard macro requires an identity-bound placement cluster");
         };
+        crate::physicalize::validate_vias(board, &hard.vias)?;
         let mut layers: Vec<CopperLayer> = hard.required_layers.clone();
         layers.extend(hard.tracks.iter().map(|t| t.layer));
         layers.extend(hard.vias.iter().flat_map(|v| [v.from_layer, v.to_layer]));

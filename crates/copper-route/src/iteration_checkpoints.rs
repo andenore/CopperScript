@@ -42,6 +42,12 @@ pub fn write_placement_failure(
     board: &PhysicalBoard,
     diagnostic: &copper_place::planner::PlacementFailureDiagnostic,
 ) -> std::io::Result<PlacementFailureArtifacts> {
+    if diagnostic.search_succeeded {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "successful placement search has no failure artifact",
+        ));
+    }
     let mut shown = diagnostic.physical_rejection.as_ref().map_or_else(|| board.clone(), |r| r.board.clone());
     shown.placements.retain(|pose| diagnostic.accepted.contains_key(&pose.reference));
     for pose in &mut shown.placements {
@@ -69,9 +75,7 @@ pub fn write_placement_failure(
         omitted.len()
     );
     if diagnostic.physical_rejection.is_some() {
-        note.push_str(
-            " Includes rejected hard-macro trial copper, not accepted routing; another seed may have succeeded.",
-        );
+        note.push_str(" Includes rejected hard-macro trial copper, not accepted routing; every placement seed failed.");
     }
     let mut metadata = Object::from([
         ("stage".to_owned(), Value::from("placement_failure")),
@@ -87,6 +91,10 @@ pub fn write_placement_failure(
     ]);
     if let Some(rejection) = &diagnostic.physical_rejection {
         metadata.insert("rejected_macro_copper".to_owned(), Value::Bool(true));
+        metadata.insert(
+            "failed_clusters".to_owned(),
+            strings(rejection.failed_clusters().iter().map(|c| c.name.clone()).collect()),
+        );
         metadata.insert(
             "physical_findings".to_owned(),
             Value::Array(
@@ -111,14 +119,45 @@ pub fn write_placement_failure(
     }
     let state =
         StateDocument::new("pcbir.physical:PhysicalBoard", metadata.clone(), crate::state_codec::encode_board(&shown));
-    let stem = report_path.file_stem().and_then(|s| s.to_str()).unwrap_or("route-report");
-    let state_filename = format!("{stem}.placement-failure.state.json");
-    let path = report_path.with_file_name(&state_filename);
+    let path = placement_failure_path(report_path);
+    let state_filename = path.file_name().expect("generated sibling filename").to_string_lossy().into_owned();
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     copper_json::text::write_text(&path, &state.to_text())?;
     Ok(PlacementFailureArtifacts { state_filename, metadata })
+}
+
+fn placement_failure_path(report_path: &Path) -> PathBuf {
+    let stem = report_path.file_stem().and_then(|s| s.to_str()).unwrap_or("route-report");
+    report_path.with_file_name(format!("{stem}.placement-failure.state.json"))
+}
+
+/// Remove only this report's generated inspection sibling after a successful
+/// command. Never follow a symlink or delete an unrelated/malformed state file.
+/// Callers must not invoke this for argument errors, failed runs or output errors.
+pub fn remove_stale_placement_failure(report_path: &Path) -> std::io::Result<bool> {
+    let path = placement_failure_path(report_path);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let Ok(state) = StateDocument::read(&text) else { return Ok(false) };
+    if state.kind != "pcbir.physical:PhysicalBoard"
+        || state.metadata.get("stage").and_then(Value::as_str) != Some("placement_failure")
+        || state.metadata.get("inspection_only") != Some(&Value::Bool(true))
+        || !state.metadata.contains_key("failed_reference")
+        || !state.metadata.contains_key("accepted_references")
+    {
+        return Ok(false);
+    }
+    std::fs::remove_file(path)?;
+    Ok(true)
 }
 
 /// `StageTracker`: wraps a progress callback and remembers where a run got to.
