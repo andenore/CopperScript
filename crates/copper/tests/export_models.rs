@@ -113,6 +113,28 @@ fn a_part_model_file_is_copied_and_its_height_reaches_the_footprint() {
 }
 
 #[test]
+fn mechanical_holes_and_slots_get_no_generated_body() {
+    let board = "board B {\n    mechanical {\n        outline rectangle { width = 40mm; height = 30mm; }\n        hole H1 { position = (5mm,5mm); diameter = 3.2mm; }\n        slot K1 { start = (20mm,20mm); end = (26mm,20mm); width = 3mm; }\n    }\n    import p \"./parts\";\n    component U1: p.Widget { footprint = \"0805\"; }\n    component U2: p.Widget { footprint = \"0805\"; }\n    net N { U1.A; U2.A; }\n    net M { U1.B; U2.B; }\n}\n";
+    let part = widget("");
+    let (stdout, out) = export("export-mechanical-no-body", board, &[("parts/widget.copper", part.as_str())]);
+    let pcb = std::fs::read_to_string(out.join("b.kicad_pcb")).unwrap();
+    assert!(pcb.contains("np_thru_hole"), "the hole and slot are exported: {pcb}");
+    for footprint in pcb.split("\n  (footprint ").skip(1) {
+        let mechanical = footprint.starts_with("\"CopperScript:mechanical_");
+        assert_eq!(footprint.contains("(model "), !mechanical, "{footprint}");
+        assert_eq!(footprint.contains("\"CopperScriptBody\""), !mechanical, "{footprint}");
+    }
+    let shapes: Vec<String> = std::fs::read_dir(out.join("CopperScript.3dshapes"))
+        .expect("the model directory")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!shapes.iter().any(|name| name.starts_with("mechanical_")), "{shapes:?}");
+    let warning = stdout.lines().find(|line| line.contains("generated approximate bodies")).unwrap_or_default();
+    assert!(warning.contains("1 footprint(s)"), "only the 0805 parts use a generated body: {stdout}");
+    assert!(!warning.to_lowercase().contains("mechanical"), "cut-outs are not reported as bodies: {stdout}");
+}
+
+#[test]
 fn a_connector_part_gets_a_connector_body() {
     let part = widget("    category = \"connector.wire_to_board\";\n    height = 6 mm;");
     let (stdout, out) = export("export-connector-body", BOARD, &[("parts/widget.copper", part.as_str())]);

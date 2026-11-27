@@ -404,11 +404,24 @@ fn library_item_name(footprint: &PhysicalFootprint) -> String {
     format!("{safe}__{}", &footprint_geometry_digest(footprint)[..20])
 }
 
+/// Whether a footprint stands for an assembled object that needs a 3D body.
+/// Board-owned mechanical features (holes and slots exported as NPTH-only
+/// footprints, excluded from the BOM and position files) are cut-outs, not
+/// parts: a generated block body would cover the opening in 3D views.
+fn has_assembled_body(footprint: &PhysicalFootprint) -> bool {
+    let mechanical_cutout = footprint.exclude_from_bom
+        && footprint.exclude_from_pos_files
+        && !footprint.pads.is_empty()
+        && footprint.pads.iter().all(|pad| pad.kind == PadKind::NonPlatedThroughHole);
+    !mechanical_cutout || !footprint_models(footprint).is_empty()
+}
+
 /// The `(model ...)` entries of a footprint: its source references, else its
-/// generated fallback body (written to [`GENERATED_MODEL_DIRECTORY`]).
+/// generated fallback body (written to [`GENERATED_MODEL_DIRECTORY`]), else
+/// none for a mechanical cut-out.
 fn model_lines(footprint: &PhysicalFootprint, item: &str) -> Vec<String> {
     let mut models = footprint_models(footprint);
-    if models.is_empty() {
+    if models.is_empty() && has_assembled_body(footprint) {
         models.push(generated_model(item));
     }
     let triple = |v: [f64; 3]| format!("(xyz {} {} {})", v[0], v[1], v[2]);
@@ -725,12 +738,16 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
         ));
     }
     artifacts.extend(model_files);
-    // Every footprint names its generated body in BODY_PROPERTY, so every one
-    // gets the file: viewers that cannot read a footprint's own (STEP) model
-    // fall back to it. Only footprints without a model of their own use it in KiCad.
+    // Every footprint with an assembled body names its generated body in
+    // BODY_PROPERTY, so each gets the file: viewers that cannot read a
+    // footprint's own (STEP) model fall back to it. Only footprints without a
+    // model of their own use it in KiCad. Mechanical cut-outs get none.
     let mut generated_bodies: Vec<&str> = Vec::new();
     for (reference, name) in &names {
         let footprint = &board.footprints[reference];
+        if !has_assembled_body(footprint) {
+            continue;
+        }
         artifacts.push(artifact(format!("{GENERATED_MODEL_DIRECTORY}/{name}.wrl"), generate_body(footprint).to_wrl()));
         if footprint_models(footprint).is_empty() {
             generated_bodies.push(reference);
@@ -1171,16 +1188,18 @@ fn footprint_lines(
         lines.extend(property_lines(board_name, &placement.reference, "CopperScriptPath", path, 0, 0, fab, true));
     }
     let item = export_name.rsplit(':').next().unwrap_or(export_name);
-    lines.extend(property_lines(
-        board_name,
-        &placement.reference,
-        BODY_PROPERTY,
-        &generated_model(item).path,
-        0,
-        0,
-        fab,
-        true,
-    ));
+    if has_assembled_body(footprint) {
+        lines.extend(property_lines(
+            board_name,
+            &placement.reference,
+            BODY_PROPERTY,
+            &generated_model(item).path,
+            0,
+            0,
+            fab,
+            true,
+        ));
+    }
     let attribute = if footprint
         .pads
         .iter()
