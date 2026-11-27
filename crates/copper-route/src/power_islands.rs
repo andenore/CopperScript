@@ -665,6 +665,7 @@ fn plan_ball_grid_islands_with_cells(
                 minimum_island_area_nm2: Some(10_000_000_000_000),
                 reserve_routing: false,
                 allow_same_net_hard_macro_overlap: false,
+                stitch_pitch_nm: None,
             });
         }
     }
@@ -939,6 +940,7 @@ fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Res
                 minimum_island_area_nm2: Some(10_000_000_000_000),
                 reserve_routing: false,
                 allow_same_net_hard_macro_overlap: false,
+                stitch_pitch_nm: None,
             });
         }
     }

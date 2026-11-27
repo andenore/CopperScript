@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use copper_cam::board::{Layer, Pad, PadKind, PadShape, TrackPath};
+use copper_cam::board::{Layer, Pad, PadKind, PadShape, Shape, TrackPath};
 use copper_cam::geometry::flatten_arc;
 use copper_cam::poly::{self, Shapes};
 use copper_drc::emi::loop_model::ClosureKind;
@@ -85,6 +85,49 @@ pub fn loop_ports(input: &HotLoopInput) -> Result<LoopPorts, String> {
         })
         .collect();
     Ok(LoopPorts { pads, labels, port: layout.port, shorts, closures, legs: layout.legs })
+}
+
+/// The copper of a graphic on a copper layer: its stroke of `width`, and the area inside a filled polygon or circle.
+fn copper_drawing_shapes(shape: &Shape, width: f64, filled: bool, max_error: f64) -> Shapes {
+    match shape {
+        Shape::Line { start, end } => poly::capsule(*start, *end, width, max_error),
+        Shape::Arc { start, mid, end } => {
+            poly::polyline(&flatten_arc(*start, *mid, *end, max_error), width, false, max_error)
+        }
+        Shape::Circle { center, radius } => {
+            if filled {
+                poly::circle(*center, *radius as f64 + width / 2.0, max_error)
+            } else {
+                let ring = poly::circle(*center, *radius as f64, max_error);
+                let points: Vec<(f64, f64)> = ring[0][0].iter().map(|p| (p.x as f64, p.y as f64)).collect();
+                poly::polyline(&points, width, true, max_error)
+            }
+        }
+        Shape::Polygon(contour) => {
+            let mut points = contour.flattened(max_error);
+            if points.len() > 1 && points.first() == points.last() {
+                points.pop();
+            }
+            let mut shapes = if width > 0.0 { poly::polyline(&points, width, true, max_error) } else { Vec::new() };
+            if filled {
+                shapes.extend(poly::polygon(&points));
+            }
+            poly::union(&shapes)
+        }
+    }
+}
+
+/// The hot capacitor's return pad: the pad its closure shorts to pad 0 (the capacitor's supply pad). It is not always
+/// the last pad, since a synchronous buck's switch pad is appended after it.
+fn hot_capacitor_return_pad(ports: &LoopPorts) -> usize {
+    ports
+        .shorts
+        .iter()
+        .find_map(|&(a, b)| match (a, b) {
+            (r, 0) | (0, r) => Some(r),
+            _ => None,
+        })
+        .unwrap_or(ports.pads.len() - 1)
 }
 
 /// What the caller chooses.
@@ -501,6 +544,25 @@ pub fn build_layout(
             on_loop: external && loop_nets.contains(net),
         });
     }
+    // Copper graphics with a net (the polygons of a physical macro, exported as `gr_poly` on a copper layer) are
+    // copper of that net: without them a pad that only a macro polygon joins to its leg is an island.
+    for drawing in &cam.drawings {
+        let Layer::Copper(layer) = drawing.layer else { continue };
+        let Some(net) = drawing.net.as_ref().or_else(|| external.then_some(&floating)).filter(|n| nets.contains(*n))
+        else {
+            continue;
+        };
+        let shapes = copper_drawing_shapes(&drawing.shape, drawing.width as f64, drawing.filled, max_error);
+        if bounds_of(&shapes).is_none_or(|b| !overlaps(b, window)) {
+            continue;
+        }
+        counts.2 += shapes.len();
+        layout.layers[layer].conductors.push(Conductor {
+            net: net.clone(),
+            shapes,
+            on_loop: external && loop_nets.contains(net),
+        });
+    }
     let n_layers = cam.copper_count();
     for (_, pad) in cam.pads() {
         let Some(net) = pad.net.as_ref().or_else(|| external.then_some(&floating)).filter(|n| nets.contains(*n)) else {
@@ -907,11 +969,10 @@ pub fn build_layout(
         // branch currents of the conducted circuit leave the hot node.
         let p0 = layout.ports[0].clone();
         layout.ports[0] = crate::layout::PortDef { name: p0.name, plus: p0.minus, minus: p0.plus };
-        let supply_net = terminal_pads[0][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
-        let return_net =
-            terminal_pads[ports.pads.len() - 1][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
         let hot_supply_pad = 0;
-        let hot_return_pad = ports.pads.len() - 1;
+        let hot_return_pad = hot_capacitor_return_pad(ports);
+        let supply_net = terminal_pads[hot_supply_pad][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
+        let return_net = terminal_pads[hot_return_pad][0].net.clone().ok_or("the hot capacitor's pad has no net")?;
         for reference in &options.capacitor_ports {
             let alt = copper_pcb::kicad_pcb::kicad_reference(reference);
             let pads: Vec<&Pad> =
@@ -1111,4 +1172,58 @@ pub fn build_layout(
 /// Helper for tests and reports: the nets of a layout by layer, as `layer -> nets`.
 pub fn nets_by_layer(layout: &Layout) -> BTreeMap<String, BTreeSet<String>> {
     layout.layers.iter().map(|l| (l.name.clone(), l.conductors.iter().map(|c| c.net.clone()).collect())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use copper_drc::emi::loop_model::{LoopKind, LoopPortLayout};
+
+    use copper_cam::board::Shape;
+    use copper_cam::geometry::{Contour, Point};
+    use copper_cam::poly;
+
+    use super::{LoopPorts, copper_drawing_shapes, hot_capacitor_return_pad};
+
+    fn ports(pad_count: usize, switch_pad: bool) -> LoopPorts {
+        let layout = LoopPortLayout::buck("buck", LoopKind::Standard, pad_count, switch_pad).expect("buck layout");
+        let mut pads: Vec<(String, String)> = (0..pad_count).map(|k| (format!("P{k}"), "1".to_owned())).collect();
+        if layout.append_switch_pad {
+            pads.push(("U".to_owned(), "SW".to_owned()));
+        }
+        let labels = pads.iter().map(|(c, p)| format!("{c}.{p}")).collect();
+        LoopPorts {
+            pads,
+            labels,
+            port: layout.port,
+            shorts: layout.closures.iter().map(|c| c.terminals).collect(),
+            closures: Vec::new(),
+            legs: layout.legs,
+        }
+    }
+
+    #[test]
+    fn the_hot_capacitor_return_pad_is_the_one_shorted_to_its_supply_pad_not_the_appended_switch_pad() {
+        // Synchronous buck: capacitor, hot supply, hot return, capacitor return, then the switch pad appended.
+        let sync = ports(4, true);
+        assert_eq!(sync.pads.len(), 5);
+        assert_eq!(hot_capacitor_return_pad(&sync), 3);
+        // Without the switch pad, and the asynchronous loop with its catch diode: the last pad, as before.
+        assert_eq!(hot_capacitor_return_pad(&ports(4, false)), 3);
+        assert_eq!(hot_capacitor_return_pad(&ports(6, false)), 5);
+    }
+
+    #[test]
+    fn a_filled_copper_polygon_is_copper_over_its_whole_area() {
+        // A macro polygon (`gr_poly`, filled, no stroke) of 2 x 1 mm: its copper is the polygon itself.
+        let mm = |x: i64, y: i64| Point::new(x * 1_000_000, y * 1_000_000);
+        let contour = Contour::polygon(&[mm(0, 0), mm(2, 0), mm(2, 1), mm(0, 1)]);
+        let shapes = copper_drawing_shapes(&Shape::Polygon(contour.clone()), 0.0, true, 1_000.0);
+        let area: f64 = shapes.iter().map(|s| poly::shape_area(s)).sum::<f64>() * 1e-12;
+        assert!((area - 2.0).abs() < 1e-6, "{area} mm2");
+        // A stroke widens it; an unfilled polygon is only its outline.
+        let stroked = copper_drawing_shapes(&Shape::Polygon(contour.clone()), 200_000.0, true, 1_000.0);
+        assert!(stroked.iter().map(|s| poly::shape_area(s)).sum::<f64>() * 1e-12 > 2.5);
+        let outline = copper_drawing_shapes(&Shape::Polygon(contour), 200_000.0, false, 1_000.0);
+        assert!(outline.iter().map(|s| poly::shape_area(s)).sum::<f64>() * 1e-12 < 1.4);
+    }
 }

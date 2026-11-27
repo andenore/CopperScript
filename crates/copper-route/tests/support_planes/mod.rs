@@ -123,6 +123,7 @@ pub fn zone(id: &str, net: &str, layers: &[CopperLayer], outer: Vec<Point>) -> C
         minimum_island_area_nm2: Some(10_000_000_000_000),
         reserve_routing: false,
         allow_same_net_hard_macro_overlap: false,
+        stitch_pitch_nm: None,
     }
 }
 

@@ -33,7 +33,7 @@ Install the binary with `cargo install --locked --path crates/copper`.
 ## Build and test
 
 ```sh
-cargo build --release -p copper     # target/release/copper
+cargo build --release -p copperscript     # target/release/copper
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --release -- -D warnings
 # Fill the package caches once, so the tests run offline:

@@ -34,7 +34,7 @@ target directory, then writes ignored assets to `site/demo/pkg/`. Do not hand
 edit generated bindings. The Pages workflow builds them from the same source
 revision it publishes.
 
-Optional native parity check, after `cargo build --release -p copper`:
+Optional native parity check, after `cargo build --release -p copperscript`:
 
 ```console
 node scripts/check_demo.cjs target/release/copper

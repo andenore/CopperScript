@@ -45,6 +45,7 @@ fn source(name: &str) -> &'static str {
         "route-board" => include_str!("../route_board.rs"),
         "route-global" => include_str!("../route_global.rs"),
         "emi-check" => include_str!("../emi_check.rs"),
+        "coupling" => include_str!("../coupling.rs"),
         "si-check" => include_str!("../si_check.rs"),
         "sim" => include_str!("../sim.rs"),
         "state" => include_str!("../state.rs"),

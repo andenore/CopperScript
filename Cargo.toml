@@ -32,12 +32,17 @@ default-members = [
 ]
 
 [workspace.package]
-# Must match pyproject.toml: `agent-guide` reports it as package_version.
-version = "0.1.0"
+# `agent-guide` reports it as package_version; release tags are `v` + this.
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
-publish = false
+repository = "https://github.com/andenore/CopperScript"
+homepage = "https://andenore.github.io/CopperScript/"
+# Published to crates.io: the binary as `copperscript`, its libraries as `copper-*` (the two WebAssembly
+# adapters opt out). Internal path dependencies carry the version below; internal dev-dependencies are
+# path-only, so publishing strips them and no dev-dependency cycle reaches the registry.
+publish = true
 
 [workspace.dependencies]
 base64 = "0.22"
@@ -51,28 +56,28 @@ num-rational = "0.4"
 num-traits = "0.2"
 sha2 = "0.10"
 unicode-general-category = "1"
-copper-json = { path = "crates/copper-json" }
-copper-lang = { path = "crates/copper-lang" }
-copper-antenna = { path = "crates/copper-antenna" }
-copper-assembly = { path = "crates/copper-assembly" }
-copper-cam = { path = "crates/copper-cam" }
-copper-lsp = { path = "crates/copper-lsp" }
-copper-drc = { path = "crates/copper-drc" }
-copper-editor = { path = "crates/copper-editor" }
-copper-emi = { path = "crates/copper-emi" }
-copper-extract = { path = "crates/copper-extract" }
-copper-fullwave = { path = "crates/copper-fullwave" }
-copper-pcb = { path = "crates/copper-pcb" }
-copper-panel = { path = "crates/copper-panel" }
-copper-place = { path = "crates/copper-place" }
-copper-physical = { path = "crates/copper-physical" }
-copper-report = { path = "crates/copper-report" }
-copper-route = { path = "crates/copper-route" }
-copper-sim = { path = "crates/copper-sim" }
-copper-simulate = { path = "crates/copper-simulate" }
-copper-spice = { path = "crates/copper-spice" }
-copper-state = { path = "crates/copper-state" }
-copper-units = { path = "crates/copper-units" }
+copper-json = { path = "crates/copper-json", version = "0.3.0" }
+copper-lang = { path = "crates/copper-lang", version = "0.3.0" }
+copper-antenna = { path = "crates/copper-antenna", version = "0.3.0" }
+copper-assembly = { path = "crates/copper-assembly", version = "0.3.0" }
+copper-cam = { path = "crates/copper-cam", version = "0.3.0" }
+copper-lsp = { path = "crates/copper-lsp", version = "0.3.0" }
+copper-drc = { path = "crates/copper-drc", version = "0.3.0" }
+copper-editor = { path = "crates/copper-editor", version = "0.3.0" }
+copper-emi = { path = "crates/copper-emi", version = "0.3.0" }
+copper-extract = { path = "crates/copper-extract", version = "0.3.0" }
+copper-fullwave = { path = "crates/copper-fullwave", version = "0.3.0" }
+copper-pcb = { path = "crates/copper-pcb", version = "0.3.0" }
+copper-panel = { path = "crates/copper-panel", version = "0.3.0" }
+copper-place = { path = "crates/copper-place", version = "0.3.0" }
+copper-physical = { path = "crates/copper-physical", version = "0.3.0" }
+copper-report = { path = "crates/copper-report", version = "0.3.0" }
+copper-route = { path = "crates/copper-route", version = "0.3.0" }
+copper-sim = { path = "crates/copper-sim", version = "0.3.0" }
+copper-simulate = { path = "crates/copper-simulate", version = "0.3.0" }
+copper-spice = { path = "crates/copper-spice", version = "0.3.0" }
+copper-state = { path = "crates/copper-state", version = "0.3.0" }
+copper-units = { path = "crates/copper-units", version = "0.3.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

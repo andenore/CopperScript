@@ -153,9 +153,15 @@ pub fn is_sparse_module(module_path: &str) -> bool {
 
 const MODEL_SUFFIXES: [&str; 3] = [".step", ".stp", ".wrl"];
 
-/// Runs `git` and returns its standard output.
-fn run_git(arguments: &[&str], location: &Location) -> Result<Vec<u8>> {
-    let output = Command::new("git")
+/// Runs `git`, in `directory` when given, and returns its standard output.
+/// The directory is the child's working directory rather than `git -C`,
+/// which git before 1.8.5 rejects.
+fn run_git(directory: Option<&Path>, arguments: &[&str], location: &Location) -> Result<Vec<u8>> {
+    let mut command = Command::new("git");
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let output = command
         .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.longpaths=true"])
         .args(arguments)
         .output()
@@ -178,7 +184,6 @@ fn sparse_git_blob(
     location: &Location,
 ) -> Result<Vec<u8>> {
     let repository = directory.join("repo");
-    let text = paths::display(&repository);
     let is_commit = revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit());
     if !repository.is_dir() {
         std::fs::create_dir_all(directory)
@@ -191,20 +196,28 @@ fn sparse_git_blob(
             clone.extend(["--branch", revision]);
         }
         clone.extend([url, temporary_text.as_str()]);
-        let outcome = run_git(&clone, location).and_then(|_| {
-            if is_commit {
-                run_git(&["-C", &temporary_text, "fetch", "--quiet", "--depth", "1", "origin", revision], location)?;
-            }
-            std::fs::rename(&temporary, &repository)
-                .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))
-        });
+        let outcome = run_git(None, &clone, location)
+            .map_err(|mut failure| {
+                if failure.message.contains("filter=blob:none") {
+                    failure.hint =
+                        Some("3D models are read from a blobless clone, which needs git 2.19 or newer".to_owned());
+                }
+                failure
+            })
+            .and_then(|_| {
+                if is_commit {
+                    run_git(Some(&temporary), &["fetch", "--quiet", "--depth", "1", "origin", revision], location)?;
+                }
+                std::fs::rename(&temporary, &repository)
+                    .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))
+            });
         if temporary.exists() {
             let _ = std::fs::remove_dir_all(&temporary);
         }
         outcome?;
     }
     let object = format!("{}:{relative}", if is_commit { revision } else { "HEAD" });
-    run_git(&["-C", &text, "show", &object], location)
+    run_git(Some(&repository), &["show", &object], location)
         .map_err(|_| error("PKG004", format!("model {relative} does not exist at revision {revision}"), location))
 }
 
@@ -1212,8 +1225,12 @@ impl PackageResolver {
         let temporary = self.cache_root.join(format!("{cache_key}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temporary);
         let is_commit = version.len() == 40 && version.chars().all(|c| c.is_ascii_hexdigit());
-        let git = |arguments: &[&str]| -> Result<()> {
-            let output = Command::new("git")
+        let git = |directory: Option<&Path>, arguments: &[&str]| -> Result<()> {
+            let mut command = Command::new("git");
+            if let Some(directory) = directory {
+                command.current_dir(directory);
+            }
+            let output = command
                 .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.longpaths=true"])
                 .args(arguments)
                 .output()
@@ -1232,10 +1249,10 @@ impl PackageResolver {
             clone.extend(["--branch", version]);
         }
         clone.extend([url.as_str(), temporary_text.as_str()]);
-        let outcome = git(&clone).and_then(|()| {
+        let outcome = git(None, &clone).and_then(|()| {
             if is_commit {
-                git(&["-C", &temporary_text, "fetch", "--quiet", "--depth", "1", "origin", version])?;
-                git(&["-C", &temporary_text, "checkout", "--quiet", "--detach", version])?;
+                git(Some(&temporary), &["fetch", "--quiet", "--depth", "1", "origin", version])?;
+                git(Some(&temporary), &["checkout", "--quiet", "--detach", version])?;
             }
             std::fs::rename(&temporary, &destination)
                 .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))

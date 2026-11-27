@@ -85,6 +85,7 @@ pub mod pin_escape;
 pub mod plane;
 pub mod plane_estimate;
 pub mod plane_verify;
+pub mod pour_stitch;
 pub mod power_islands;
 pub mod progress;
 pub mod pypath;

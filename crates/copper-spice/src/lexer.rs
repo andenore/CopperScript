@@ -15,6 +15,18 @@ use crate::{Dialect, ErrorKind, Loc, SpiceError};
 pub struct Line {
     pub loc: Loc,
     pub text: String,
+    /// The same text with its case kept: for the one thing in a netlist that is not case-insensitive, a file
+    /// name (`.INCLUDE sub.inc` names `sub.inc`, which a case-sensitive file system does not find as `SUB.INC`).
+    pub original: String,
+}
+
+/// The word of `line` as written that upper-cases to `word` (a token of the card), or `word` itself when none
+/// does: the file name of an include card, with its case.
+pub fn written(line: &Line, word: &str) -> String {
+    line.original
+        .split_whitespace()
+        .find(|w| w.to_ascii_uppercase() == word)
+        .map_or_else(|| word.to_owned(), str::to_owned)
 }
 
 /// Split `source` into logical lines.
@@ -47,6 +59,8 @@ pub fn logical_lines(source: &str, file: &str, dialect: Dialect) -> Result<Vec<L
                 Some(last) => {
                     last.text.push(' ');
                     last.text.push_str(&upper(rest));
+                    last.original.push(' ');
+                    last.original.push_str(rest);
                 }
                 None => {
                     return Err(SpiceError::at(
@@ -61,7 +75,7 @@ pub fn logical_lines(source: &str, file: &str, dialect: Dialect) -> Result<Vec<L
         if text.is_empty() {
             continue;
         }
-        lines.push(Line { loc, text: upper(text) });
+        lines.push(Line { loc, text: upper(text), original: text.to_owned() });
     }
     Ok(lines)
 }
@@ -287,6 +301,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_include_file_name_keeps_the_case_it_is_written_in() {
+        let lines =
+            logical_lines(".INCLUDE models/Sub.inc\n.lib Parts.lib FAST\n+ \n", "t.lib", Dialect::Spice3).unwrap();
+        assert_eq!(lines[0].text, ".INCLUDE MODELS/SUB.INC");
+        assert_eq!(written(&lines[0], "MODELS/SUB.INC"), "models/Sub.inc");
+        assert_eq!(written(&lines[1], "PARTS.LIB"), "Parts.lib");
+        // A word the line does not hold comes back as given.
+        assert_eq!(written(&lines[0], "OTHER"), "OTHER");
+    }
+
+    #[test]
     fn numbers_with_suffixes() {
         let cases = [
             ("10", 10.0),
@@ -333,7 +358,8 @@ mod tests {
 
     #[test]
     fn tokens_keep_expressions_whole() {
-        let line = Line { loc: Loc::new("t", 1), text: "G1 1 2 VALUE = {LIMIT(V(A,B)*2, -1, 1)} X='P*2'".into() };
+        let text = "G1 1 2 VALUE = {LIMIT(V(A,B)*2, -1, 1)} X='P*2'";
+        let line = Line { loc: Loc::new("t", 1), text: text.into(), original: text.into() };
         let t = tokens(&line).unwrap();
         assert_eq!(
             t,

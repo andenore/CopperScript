@@ -1,0 +1,47 @@
+// Coupling probe, radio beside the feed: board.copper with the radio U1 moved
+// next to the antenna's feed land, so its feed line is short and never passes
+// the clock, and the two GND pours stitched every 5 mm. Not a qualified radio
+// design; no isolation, desense or regulatory claim. See README.md.
+board CouplingProbeRadioBesideFeed {
+    import parts "./parts";
+
+    component U1: parts.RfSource;
+    component ANT1: parts.AntennaFeed;
+    component U2: parts.ClockSource;
+    component U3: parts.ClockLoad;
+
+    net ANT_FEED { U1.RF; ANT1.FEED; }
+    net CLK { U2.OUT; U3.IN; }
+    net GND { U1.GND; U2.GND; U3.GND; }
+
+    constraint fixed_placement(U1) { x = 16.5mm; y = 7.5mm; rotation = 180; }
+    constraint fixed_placement(U2) { x = 21mm; y = 10mm; }
+    constraint fixed_placement(U3) { x = 37mm; y = 10mm; }
+    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; stitch_pitch = 5mm; }
+
+    constraint antenna(ANT1.FEED) {
+        name = "bt";
+        x = 18mm;
+        y = 0mm;
+        width = 22mm;
+        height = 6mm;
+        ground = GND;
+        bands = "2400 MHz-2483.5 MHz";
+        track_width = 1mm;
+        // The geometry tuned on examples/antenna_synthesis (same site).
+        geometry = "monopole height=5.3mm length=22.77mm";
+        tuned_for = "sha256:fadfbf76cc49b4c96fd35166b5b5f1fba257559bf999fd46f4ff095190e495ba";
+        // A synthetic receiver for EMI-RF-DESENSE: no real radio's figures.
+        sensitivity_dbm = -95;
+        desense_margin_db = 6;
+    }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric core { thickness = 1.51mm; er = 4.4; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+}

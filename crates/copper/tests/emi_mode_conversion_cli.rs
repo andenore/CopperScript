@@ -3,7 +3,7 @@
 //! `crates/copper-drc/tests/support/mode_conversion_board.rs` (the language has no tracks).
 //!
 //! Rewrite the file after changing the hand-placed copper:
-//! `COPPER_WRITE_EXAMPLE_STATE=1 cargo test -p copper --test emi_mode_conversion_cli`.
+//! `COPPER_WRITE_EXAMPLE_STATE=1 cargo test -p copperscript --test emi_mode_conversion_cli`.
 
 #[path = "../../copper-drc/tests/support/mode_conversion_board.rs"]
 mod board;

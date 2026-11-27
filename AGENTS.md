@@ -12,7 +12,7 @@ the verification and status updates it describes.
 
 CopperScript is the Rust `copper` binary (`crates/`). Install it with
 `cargo install --locked --path crates/copper`; build and test with `cargo build
---release -p copper` and `cargo test --workspace --release` (see
+--release -p copperscript` and `cargo test --workspace --release` (see
 [crates/README.md](crates/README.md)). The Python implementation was removed.
 
 Start with `copper agent-guide` in the active CLI environment. Request individual

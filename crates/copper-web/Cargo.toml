@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# A browser adapter built for the site, not a crates.io library.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

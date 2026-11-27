@@ -1,0 +1,6 @@
+// Synthetic two-land clock receiver. Not a reusable part.
+part ClockLoad {
+    footprint = "../source.kicad_mod";
+    pin IN { number = "1"; domains = "digital"; directions = "input"; }
+    pin GND { number = "2"; domains = "digital"; directions = "passive"; }
+}

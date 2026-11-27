@@ -1174,7 +1174,18 @@ time (not a positive current, a part whose topology is not a buck, a value
 above the switch pin's `current_peak`) and the warning
 `EMI_OPERATING_POINT_NO_CELL` for a component that is not a switching cell.
 The IR carries it as `component.properties.load_current` and the cell as
-`load_current`; `copper query BOARD emi` prints it. `emi-check` evaluates a
+`load_current`; `copper query BOARD emi` prints it.
+
+**Operating point on the rail.** A converter inside a library module cannot be
+annotated by the board (a module's params are the same for every instance), so
+a board with three instances of one buck module had no way to give each its
+load. The supply of the converter's output rail takes `load_current` as well:
+it is the board's own fact (what the rail's consumers draw), it names the
+instance through its net, and it needs no reach into the module. The
+component's value wins when both are declared; only a buck takes it, through
+the supply on its magnetic's output net. Overriding a module member's
+attributes from the board and per-instance module params were the alternatives:
+both would let a board change a library module from outside, for one attribute. `emi-check` evaluates a
 fixed-frequency buck in continuous conduction: the input current is a ramp
 from `I_out - dI/2` to `I_out + dI/2` in the on-time,
 `dI = (Vin - Vout) D / (L f)` with the power inductor's value (a stated

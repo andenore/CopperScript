@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use copper_lang::compiler::{Design, compile_design_file};
 use copper_lang::elaborate::elaborate;
-use copper_lang::emi::{self, AggressorClass, FrequencySource, Provenance};
+use copper_lang::emi::{self, AggressorClass, FrequencySource, LoadCurrentSource, Provenance};
 use copper_lang::erc::{self, Diagnostic, Severity};
 use copper_lang::model::{EmiRole, SwitchingFrequency, Topology};
 use copper_lang::serializer::{design_json, part_value};
@@ -827,6 +827,57 @@ fn load_current_is_a_component_attribute_that_reaches_the_ir_the_cell_and_the_qu
     let none = design("load-current-none", PARTS, BUCK);
     assert!(!design_json(&none).contains("load_current"));
     assert!(model(&none).cells[0].load_current.is_none());
+}
+
+/// `body` with a supply on the buck's output net VOUT that declares `load_current = value`.
+fn with_supply_load(body: &str, value: &str) -> String {
+    body.replace(
+        "supply VIN { voltage = 12V; external = true; }",
+        &format!("supply VIN {{ voltage = 12V; external = true; }}\n    supply VOUT {{ voltage = 5V; source = L1.B; load_current = {value}; }}"),
+    )
+}
+
+#[test]
+fn load_current_on_the_output_supply_is_the_operating_point_of_the_buck_that_feeds_it() {
+    // The supply carries it into the IR, and the cell whose magnetic feeds the supply's net takes it.
+    let compiled = design("supply-load", PARTS, &with_supply_load(BUCK, "600mA"));
+    let json = design_json(&compiled);
+    let supply = &compiled.electrical.supplies.iter().find(|s| s.name == "VOUT").expect("VOUT").load_current;
+    assert_eq!(supply.as_ref().map(ToString::to_string).as_deref(), Some("600 mA"));
+    assert!(json.contains("\"load_current\": {"), "{json}");
+    let cell = model(&compiled).cells.remove(0);
+    assert_eq!(cell.load_current.as_ref().map(ToString::to_string).as_deref(), Some("600 mA"));
+    assert_eq!(cell.load_current_source, Some(LoadCurrentSource::Supply("VOUT".to_owned())));
+    assert!(emi_diagnostics(&compiled).is_empty());
+    // The component's own load_current wins over the supply's.
+    let both = design("both-loads", PARTS, &with_load_current(&with_supply_load(BUCK, "600mA"), "2A"));
+    let cell = model(&both).cells.remove(0);
+    assert_eq!(cell.load_current.as_ref().map(ToString::to_string).as_deref(), Some("2 A"));
+    assert_eq!(cell.load_current_source, Some(LoadCurrentSource::Component));
+    // A supply without load_current leaves the cell without an operating point, and the IR as before.
+    let plain = BUCK.replace(
+        "supply VIN { voltage = 12V; external = true; }",
+        "supply VIN { voltage = 12V; external = true; }\n    supply VOUT { voltage = 5V; source = L1.B; }",
+    );
+    let compiled = design("supply-no-load", PARTS, &plain);
+    assert!(!design_json(&compiled).contains("load_current"));
+    let cell = model(&compiled).cells.remove(0);
+    assert!(cell.load_current.is_none() && cell.load_current_source.is_none());
+    // Only a buck takes it: on a boost the supply's load is not an operating point.
+    let parts = PARTS.replacen("category = \"power.regulator.buck\";", "topology = boost;", 1);
+    let boost = design("supply-load-boost", &parts, &with_supply_load(BUCK, "600mA"));
+    assert!(model(&boost).cells[0].load_current.is_none());
+}
+
+#[test]
+fn supply_load_current_errors_are_cmp213() {
+    for (name, value) in [("zero", "0A"), ("negative", "-1A"), ("voltage", "2V"), ("bare", "2")] {
+        expect_error(&format!("supply-load-{name}"), PARTS, &with_supply_load(BUCK, value), "CMP213");
+    }
+    // A load above the rail's current budget is refused.
+    let over =
+        with_supply_load(BUCK, "600mA").replace("load_current = 600mA;", "load_current = 600mA; current_max = 500mA;");
+    expect_error("supply-load-over-budget", PARTS, &over, "CMP213");
 }
 
 #[test]

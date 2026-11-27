@@ -1,0 +1,7 @@
+// Synthetic two-land RF source standing in for a radio's matched output.
+// Not a reusable part or a qualified RF component.
+part RfSource {
+    footprint = "../source.kicad_mod";
+    pin RF { number = "1"; domains = "analog"; directions = "passive"; }
+    pin GND { number = "2"; domains = "analog"; directions = "passive"; }
+}

@@ -155,7 +155,7 @@ Code. Close discards that buffer and restores disk-backed import analysis.
 
 ```sh
 cargo test -p copper-lsp
-cargo build --release -p copper
+cargo build --release -p copperscript
 COPPER_TEST_BIN=target/release/copper node --test tests/compiler-client.cjs tests/lsp-client.cjs
 npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
 node integrations/vscode/build.cjs

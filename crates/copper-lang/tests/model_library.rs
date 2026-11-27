@@ -185,7 +185,8 @@ fn a_loaded_board_binds_vendor_models_to_its_project_cache() {
     let message = copper_lang::spice_models::resolve(&spice).unwrap_err();
     assert!(message.starts_with("SIM108"), "{message}");
     assert!(message.contains("copper models add") && message.contains("download it yourself: x"), "{message}");
-    // The cache is the project's (the directory of the nearest copper.mod above the board).
-    let cache = directory.join(".copper-cache").join("spice").join(&hash);
+    // The cache is the project's (the directory of the nearest copper.mod above the board), named as the loader
+    // resolves it: on Windows the temporary directory is a short 8.3 path (RUNNER~1) the resolved one expands.
+    let cache = copper_lang::paths::resolve(&directory).join(".copper-cache").join("spice").join(&hash);
     assert!(message.contains(&copper_lang::paths::display(&cache)), "{message}");
 }

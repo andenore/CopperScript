@@ -581,6 +581,9 @@ fn unit_fields(
                         if let Some(budget) = &supply.current_peak_max {
                             fields.push(("current_peak_max", quantity_value(budget)));
                         }
+                        if let Some(load) = &supply.load_current {
+                            fields.push(("load_current", quantity_value(load)));
+                        }
                         object(fields)
                     })
                     .collect(),

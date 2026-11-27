@@ -171,6 +171,9 @@ pub struct CopperZone {
     pub minimum_island_area_nm2: Option<i64>,
     pub reserve_routing: bool,
     pub allow_same_net_hard_macro_overlap: bool,
+    /// `stitch_pitch`: join this zone's layers with a grid of vias at this pitch wherever its fill covers every
+    /// copper layer (route-board, after routing, before native fill verification). `None`: no grid.
+    pub stitch_pitch_nm: Option<i64>,
 }
 
 impl CopperZone {
@@ -178,6 +181,9 @@ impl CopperZone {
     pub fn validate(&self) -> Result<()> {
         if self.id.is_empty() || self.net.is_empty() || self.layers.is_empty() {
             return fail("a copper zone requires an id, net, and layer");
+        }
+        if self.stitch_pitch_nm.is_some_and(|pitch| pitch <= 0) {
+            return fail("a copper zone stitch_pitch must be positive");
         }
         if crate::has_duplicates(&self.layers) {
             return fail("copper zone layers must be unique");

@@ -131,7 +131,7 @@ fn a_model_over_the_budget_is_refused_before_the_solver_runs() {
 }
 
 #[test]
-#[ignore = "about 5 minutes (two coarse FDTD runs); run with `cargo test -p copper --test emi_fullwave_cli -- --ignored`"]
+#[ignore = "about 5 minutes (two coarse FDTD runs); run with `cargo test -p copperscript --test emi_fullwave_cli -- --ignored`"]
 fn the_buck_cell_gets_a_fullwave_inductance() {
     let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--fullwave", "--json"]);
     let Ok(Value::Object(report)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
@@ -180,7 +180,7 @@ fn the_buck_cell_gets_a_fullwave_inductance() {
 }
 
 #[test]
-#[ignore = "about 1 minute (one coarse FDTD run); run with `cargo test -p copper --test emi_fullwave_cli -- --ignored`"]
+#[ignore = "about 1 minute (one coarse FDTD run); run with `cargo test -p copperscript --test emi_fullwave_cli -- --ignored`"]
 fn a_single_mesh_run_says_so() {
     let output =
         copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--fullwave", "--fullwave-single-mesh", "--json"]);

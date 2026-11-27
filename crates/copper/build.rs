@@ -1,6 +1,7 @@
 //! The build identity of `copper`: the crate version and a SHA-256 of the
 //! workspace's Rust sources (`crates/**/*.rs`, LF-normalised, in path order),
-//! so a placement checkpoint records which build made it.
+//! so a placement checkpoint records which build made it. A build from the
+//! published package hashes that package's own sources instead.
 
 use std::path::{Path, PathBuf};
 
@@ -21,14 +22,19 @@ fn sources(directory: &Path, found: &mut Vec<PathBuf>) {
 }
 
 fn main() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates/").to_path_buf();
+    // In the workspace the digest covers every crate under `crates/`. A published package (`cargo install
+    // copperscript`) has no workspace around it: its parent is the registry's source directory, holding every
+    // crate on the machine, so there it covers this crate's own sources only.
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+    let workspace = manifest.parent().filter(|parent| parent.join("copper-lang").join("Cargo.toml").is_file());
+    let crates = workspace.map_or_else(|| manifest.clone(), Path::to_path_buf);
     println!("cargo:rerun-if-changed={}", crates.display());
     let mut found = Vec::new();
     sources(&crates, &mut found);
     let mut named: Vec<(String, PathBuf)> = found
         .into_iter()
         .map(|path| {
-            let relative = path.strip_prefix(&crates).expect("under crates/");
+            let relative = path.strip_prefix(&crates).expect("under the hashed directory");
             let name = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>();
             (name.join("/"), path)
         })

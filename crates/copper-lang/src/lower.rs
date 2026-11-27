@@ -2058,7 +2058,7 @@ pub fn supply(declaration: &NamedBlock) -> Result<Supply> {
     let attributes = &declaration.attributes;
     reject_unknown(
         attributes.keys(),
-        &["voltage", "net", "source", "external", "current_max", "current_peak_max"],
+        &["voltage", "net", "source", "external", "current_max", "current_peak_max", LOAD_CURRENT],
         location,
     )?;
     let voltage = quantity(required(attributes, "voltage", location)?, location)?;
@@ -2095,6 +2095,12 @@ pub fn supply(declaration: &NamedBlock) -> Result<Supply> {
     {
         return Err(error("CMP213", format!("current_peak_max {peak} is below current_max {mean}"), location));
     }
+    let load_current = budget(LOAD_CURRENT)?;
+    if let (Some(load), Some(mean)) = (&load_current, &current_max)
+        && load.base_value() > mean.base_value()
+    {
+        return Err(error("CMP213", format!("load_current {load} is above current_max {mean}"), location));
+    }
     Ok(Supply {
         name: declaration.name.clone(),
         voltage,
@@ -2103,6 +2109,7 @@ pub fn supply(declaration: &NamedBlock) -> Result<Supply> {
         externally_driven,
         current_max,
         current_peak_max,
+        load_current,
     })
 }
 
